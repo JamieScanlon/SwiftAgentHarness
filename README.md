@@ -4,8 +4,12 @@ A modern implementation of an Agent Harness written in Swift.
 
 ## Requirements
 
-- Swift 5.9 or later
+- Swift 6.0 or later
 - Deployment targets: **macOS 13+**, **iOS 16+**, **visionOS 1+**
+
+## Dependencies
+
+This package depends on **[SwiftAgentKit](https://github.com/JamieScanlon/SwiftAgentKit)**, a Swift framework for building AI agents (MCP, A2A, providers, and related tooling). SwiftPM resolves and links it automatically; you do not add SwiftAgentKit to your `Package.swift` unless you also import it directly in your app.
 
 ## Installation
 
