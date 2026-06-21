@@ -4,9 +4,9 @@ import PackageDescription
 let package = Package(
     name: "SwiftAgentHarness",
     platforms: [
-        .macOS(.v13),
-        .iOS(.v16),
-        .visionOS(.v1),
+        .macOS(.v15),
+        .iOS(.v18),
+        .visionOS(.v2)
     ],
     products: [
         .library(
@@ -17,13 +17,25 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git",from: "0.16.0"),
         // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "bf5afdcdda00eb1f684c4d0c2cd0f4b597e7e374"),
+//         .package(url: "https://github.com/JamieScanlon/OllamaKit.git", from: "1.0.7"),
+       .package(url: "https://github.com/JamieScanlon/OllamaKit.git", revision: "56f78f94c1684bffd2bf61d62f4eb539cd04645f"),
+                .package(url: "https://github.com/vapor/vapor.git", from: "4.121.4"),
+        // FIXME: The latest version of vapro is causing problems. Pinning to a working version.
+//        .package(url: "https://github.com/vapor/vapor.git", revision: "4014016aad591a120f244f9b9e8a57252b7e62b4"),
     ],
     targets: [
         .target(
             name: "SwiftAgentHarness",
             dependencies: [
+                .product(name: "OllamaKit", package: "OllamaKit"),
                 .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitOrchestrator", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitSkills", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),
+            ],
+            resources: [
+                .process("Backends/ExecutionEnvironments/manifests"),
             ]
         ),
         .testTarget(
@@ -32,6 +44,10 @@ let package = Package(
                 "SwiftAgentHarness",
                 .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitOrchestrator", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitSkills", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),
+                .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),
+                .product(name: "VaporTesting", package: "vapor"),
             ]
         ),
     ]

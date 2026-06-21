@@ -1,0 +1,1020 @@
+import Foundation
+import Logging
+import SwiftAgentKit
+import Testing
+@testable import SwiftAgentHarness
+
+@Suite("Context Engine")
+struct ContextEngineTests {
+    private func makeAssembleRequest(
+        messages: [Message],
+        conversation: ModelConversation,
+        enableContextTransform: Bool = false,
+        persistCompactionCheckpoint: Bool = false,
+        projectionPolicy: ContextEngineProjectionPolicyInput? = nil
+    ) -> ContextEngineAssembleRequest {
+        ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conversation,
+            phase: .initial,
+            gatingOverride: nil,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: enableContextTransform,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conversation.id,
+                modelID: conversation.model.id.uuidString,
+                modelName: conversation.model.modelName,
+                interactionMode: conversation.interactionMode,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: persistCompactionCheckpoint,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            projectionPolicy: projectionPolicy
+        )
+    }
+
+    @Test("DefaultContextEngine passthrough when context transform disabled")
+    func enginePassthroughDisabled() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let assembleReq = makeAssembleRequest(
+            messages: [],
+            conversation: conv,
+            persistCompactionCheckpoint: true
+        )
+        let result = await engine.assemble(request: assembleReq) { _ in
+            fatalError("transform must not run")
+        }
+        #expect(result.messages.isEmpty)
+        #expect(result.transformOutput == nil)
+        #expect(result.checkpointPersistence == nil)
+        #expect(result.transformFailed == false)
+        #expect(result.passthroughReason == "context_transform_disabled")
+    }
+
+    @Test("DefaultContextEngine assemble keeps tool pair closure across split boundaries")
+    func engineAssemblePreservesToolPairClosure() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let model = Model(
+            protocol: .openAIAPI,
+            modelName: "x",
+            serverURL: URL(string: "http://localhost:1")!,
+            capabilities: [.completion, .tools],
+            modelProtocol: .openAIAPI
+        )
+        let conversation = ModelConversation(model: model, messages: [], systemPrompt: "sys")
+        let toolCallID = "tc-engine-split-1"
+        let messages: [Message] = [
+            Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u1", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .assistant, content: "a1", timestamp: Date(), toolCalls: []),
+            Message(
+                id: UUID(),
+                role: .assistant,
+                content: "calling",
+                timestamp: Date(),
+                toolCalls: [ToolCall(name: "web-fetch", arguments: .object([:]), id: toolCallID)]
+            ),
+            Message(
+                id: UUID(),
+                role: .tool,
+                content: "payload",
+                timestamp: Date(),
+                toolCalls: [],
+                toolCallId: toolCallID
+            ),
+            Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .assistant, content: "a2", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u3", timestamp: Date(), toolCalls: []),
+        ]
+        let assembleReq = makeAssembleRequest(
+            messages: messages,
+            conversation: conversation,
+            enableContextTransform: true
+        )
+        let result = await engine.assemble(request: assembleReq) { input in
+            let splitBase = input.compactionSplitBaseMessages ?? input.messages
+            let segments = ContextCompactionCheckpointSupport.splitForCompaction(
+                splitBase,
+                config: assembleReq.compactionConfig,
+                modelContextLimitTokens: 200_000
+            )
+            #expect(segments.middle.contains(where: { $0.role == .tool && $0.toolCallId == toolCallID }))
+            return ContextTransformOutput(messages: input.messages, diagnostics: "noop", messageProvenance: nil)
+        }
+        var outstanding: [String: Int] = [:]
+        for message in result.messages {
+            if message.role == .assistant {
+                for toolCall in message.toolCalls {
+                    if let id = toolCall.id, !id.isEmpty {
+                        outstanding[id, default: 0] += 1
+                    }
+                }
+            } else if message.role == .tool, let id = message.toolCallId {
+                #expect((outstanding[id] ?? 0) > 0)
+                outstanding[id, default: 0] -= 1
+            }
+        }
+        #expect(outstanding.values.allSatisfy { $0 == 0 })
+    }
+
+    @Test("DefaultContextEngine lifecycle methods provide baseline no-op behavior")
+    func engineLifecycleNoopSurface() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conversationID = UUID()
+        let runID = UUID()
+        let boot = await engine.bootstrap(
+            request: ContextEngineBootstrapRequest(
+                conversationID: conversationID,
+                runID: runID
+            )
+        )
+        #expect(boot.initialized == true)
+
+        let ingestOne = await engine.ingest(
+            request: ContextEngineIngestRequest(
+                conversationID: conversationID,
+                message: Message(id: UUID(), role: .user, content: "u", timestamp: Date(), toolCalls: [])
+            )
+        )
+        #expect(ingestOne.ingestedCount == 1)
+
+        let ingestBatch = await engine.ingestBatch(
+            request: ContextEngineIngestBatchRequest(
+                conversationID: conversationID,
+                messages: [
+                    Message(id: UUID(), role: .user, content: "a", timestamp: Date(), toolCalls: []),
+                    Message(id: UUID(), role: .assistant, content: "b", timestamp: Date(), toolCalls: []),
+                ]
+            )
+        )
+        #expect(ingestBatch.ingestedCount == 2)
+
+        let prep = await engine.prepareSubagentSpawn(
+            request: ContextEnginePrepareSubagentSpawnRequest(
+                conversationID: conversationID,
+                runID: runID,
+                candidateToolNames: ["delegate.alpha", "delegate.beta"],
+                permissionPolicyByToolName: [
+                    "delegate.alpha": .auto,
+                    "delegate.beta": .askUser,
+                ],
+                trustLevelByToolName: [:],
+                preApprovedToolNames: Set(["delegate.beta"])
+            )
+        )
+        #expect(prep.approvedToolNames == ["delegate.alpha", "delegate.beta"])
+        #expect(prep.handoffArtifact?.conversationID == conversationID)
+        #expect(prep.handoffArtifact?.runID == runID)
+        #expect(prep.handoffArtifact?.approvedToolNames == ["delegate.alpha", "delegate.beta"])
+        #expect(prep.handoffArtifact?.policyFingerprint.isEmpty == false)
+        #expect(prep.checkpointInvalidation?.invalidatedKinds.contains(HarnessCheckpointInvalidationKind.systemPromptAssembly) == true)
+        #expect(prep.checkpointInvalidation?.invalidatedKinds.contains(HarnessCheckpointInvalidationKind.attachmentProjection) == true)
+
+        let ended = await engine.onSubagentEnded(
+            request: ContextEngineSubagentEndedRequest(
+                conversationID: conversationID,
+                runID: runID,
+                toolName: "delegate.alpha",
+                permissionPolicy: .auto,
+                trustLevel: .system
+            )
+        )
+        #expect(ended.acknowledged == true)
+        #expect(ended.continuationArtifact?.conversationID == conversationID)
+        #expect(ended.continuationArtifact?.toolName == "delegate.alpha")
+        #expect(ended.continuationArtifact?.policyFingerprint.isEmpty == false)
+        #expect(ended.checkpointInvalidation?.invalidatedKinds == [HarnessCheckpointInvalidationKind.memoryInjectionSnapshot])
+
+        let after = await engine.afterTurn(
+            request: ContextEngineAfterTurnRequest(
+                conversationID: conversationID,
+                runID: runID,
+                terminalReason: ConversationRunTerminalReason(category: .naturalStop, detail: "done")
+            )
+        )
+        #expect(after.completed == true)
+    }
+
+    @Test("DefaultContextEngine injects memory layer snapshot when memory service bootstraps")
+    func engineLifecycleAssemblyInjectsDeterministicMemory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-memory-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "project rule".write(to: root.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+        let memoryService = DefaultMemoryService(
+            config: .default,
+            userConfigDir: root.appendingPathComponent("user", isDirectory: true)
+        )
+        let engine = DefaultContextEngine(compactionCoordinator: nil, memoryService: memoryService, logger: nil)
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let baseMessages = [Message(id: UUID(), role: .system, content: "system", timestamp: Date(), toolCalls: [])]
+        let request = ContextEngineAssembleRequest(
+            messages: baseMessages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: nil,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: false,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0
+        )
+        let t1 = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let t2 = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let s1 = t1.memoryInjectionSnapshot
+        let s2 = t2.memoryInjectionSnapshot
+        #expect(s1 != nil)
+        #expect(s2 != nil)
+        #expect(s1?.memoryStoreVersion == s2?.memoryStoreVersion)
+        #expect(t1.messages.first?.role == .system)
+        #expect(t1.messages.first?.content.contains("[Memory Context]") == true)
+        #expect(t1.messages.first?.content.contains("project rule") == true)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("ContextEngineSlotResolver resolves noop slot and unknown falls back")
+    func contextEngineSlotResolverSemantics() async {
+        let coordinator = CompactionConcurrencyCoordinator()
+        let noop = ContextEngineSlotResolver.resolve(
+            slotID: "noop",
+            compactionCoordinator: coordinator,
+            logger: nil
+        )
+        #expect(noop != nil)
+        let unknown = ContextEngineSlotResolver.resolve(
+            slotID: "not_a_slot",
+            compactionCoordinator: coordinator,
+            logger: nil
+        )
+        #expect(unknown == nil)
+    }
+
+    @Test("DefaultContextEngine applies trust downgrade in projection policy stage")
+    func engineProjectionPolicyAppliesTrustDowngrade() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let oldLowTrust = Message(
+            id: UUID(),
+            role: .user,
+            content: "old low trust",
+            timestamp: Date(),
+            toolCalls: [],
+            inputTrustRaw: MessageInputTrust.scripted.rawValue
+        )
+        let assistant = Message(id: UUID(), role: .assistant, content: "ack", timestamp: Date(), toolCalls: [])
+        let latestLowTrust = Message(
+            id: UUID(),
+            role: .user,
+            content: "latest low trust",
+            timestamp: Date(),
+            toolCalls: [],
+            inputTrustRaw: MessageInputTrust.automation.rawValue
+        )
+        let assembleReq = makeAssembleRequest(
+            messages: [oldLowTrust, assistant, latestLowTrust],
+            conversation: conv,
+            projectionPolicy: ContextEngineProjectionPolicyInput(
+                requestInputTrustRaw: MessageInputTrust.scripted.rawValue,
+                safeDefaultTrustClass: .lowTrust,
+                downgradeLowTrustContext: true
+            )
+        )
+        let result = await engine.assemble(request: assembleReq) { _ in
+            fatalError("transform must not run")
+        }
+        #expect(result.messages.contains(where: { $0.id == assistant.id }))
+        #expect(result.messages.contains(where: { $0.id == latestLowTrust.id }))
+        #expect(!result.messages.contains(where: { $0.id == oldLowTrust.id }))
+        #expect(result.projectionArtifact?.resolvedRequestTrustClass == .lowTrust)
+    }
+
+    @Test("DefaultContextEngine emits system prompt checkpoint projection artifact")
+    func engineProjectionEmitsSystemPromptCheckpoint() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s",
+            interactionMode: .agent
+        )
+        let policy = ContextEngineProjectionPolicyInput(
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: ResolvedModeProfile(
+                    id: InteractionMode.agent.rawValue,
+                    interactionMode: .agent,
+                    assemblyKind: .agentBuild,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: true,
+                    builtInSeedVersion: ResolvedModeProfile.builtInSeedVersion,
+                    semanticLayerTags: []
+                ),
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: true,
+                includeDateTime: true,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            )
+        )
+        let assembleReq = makeAssembleRequest(
+            messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
+            conversation: conv,
+            projectionPolicy: policy
+        )
+        let result = await engine.assemble(request: assembleReq) { _ in
+            fatalError("transform must not run")
+        }
+        #expect(result.systemPromptCheckpoint?.conversationID == conv.id)
+        #expect(result.systemPromptCheckpoint?.fingerprint.isEmpty == false)
+        #expect(result.projectionArtifact?.systemPromptAssembly?.metadata["conversationID"] == conv.id.uuidString)
+    }
+
+    @Test("DefaultContextEngine applies mode context metadata switches in projection artifact")
+    func engineProjectionAppliesModeContextSwitches() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let resolved = ResolvedModeProfile(
+            id: "context.switch.profile",
+            interactionMode: .chat,
+            assemblyKind: .chat,
+            allowsProactiveCompactionTriggers: false,
+            appliesAgentBuildOrchestratorHarness: false,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            context: ModeProfileContextSlice(
+                compactionLevel: "full",
+                modeDirective: "Focus on code review only.",
+                sectionOverrides: [
+                    "tools": "Only cite tools when explicitly requested.",
+                ],
+                suppressSections: ["skills"],
+                memoryInjection: "off",
+                includeSkills: false,
+                includeToolGuidance: false
+            )
+        )
+        let policy = ContextEngineProjectionPolicyInput(
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: resolved,
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: false,
+                includeDateTime: true,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            )
+        )
+        let assembleReq = makeAssembleRequest(
+            messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
+            conversation: conv,
+            projectionPolicy: policy
+        )
+        let result = await engine.assemble(request: assembleReq) { _ in
+            fatalError("transform must not run")
+        }
+        let metadata = result.projectionArtifact?.systemPromptAssembly?.metadata ?? [:]
+        #expect(metadata["modeDirective"] == "Focus on code review only.")
+        #expect(metadata["modeCompactionLevel"] == "full")
+        #expect(metadata["modeMemoryInjection"] == "off")
+        #expect(metadata["modeIncludeSkills"] == "false")
+        #expect(metadata["modeIncludeToolGuidance"] == "false")
+        #expect(metadata["modeSuppressSections"]?.contains("skills") == true)
+        #expect(metadata["modeSectionOverride.tools"] == "Only cite tools when explicitly requested.")
+    }
+
+    @Test("System prompt checkpoint fingerprint changes with context override value changes")
+    func systemPromptFingerprintTracksContextOverrideValues() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let profileA = ResolvedModeProfile(
+            id: "fingerprint.profile",
+            interactionMode: .chat,
+            assemblyKind: .chat,
+            allowsProactiveCompactionTriggers: false,
+            appliesAgentBuildOrchestratorHarness: false,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            context: ModeProfileContextSlice(sectionOverrides: ["tools": "A"])
+        )
+        let profileB = ResolvedModeProfile(
+            id: "fingerprint.profile",
+            interactionMode: .chat,
+            assemblyKind: .chat,
+            allowsProactiveCompactionTriggers: false,
+            appliesAgentBuildOrchestratorHarness: false,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            context: ModeProfileContextSlice(sectionOverrides: ["tools": "B"])
+        )
+        let makeRequest: (ResolvedModeProfile) -> ContextEngineAssembleRequest = { profile in
+            makeAssembleRequest(
+                messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
+                conversation: conv,
+                projectionPolicy: ContextEngineProjectionPolicyInput(
+                    systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                        resolvedModeProfile: profile,
+                        strictAgentHarnessPrompts: true,
+                        includeAgentSkills: true,
+                        includeDateTime: true,
+                        toolPolicySignature: "toolsig",
+                        routingPolicyTools: [],
+                        routingPolicySkills: []
+                    )
+                )
+            )
+        }
+        let resultA = await engine.assemble(request: makeRequest(profileA)) { _ in
+            fatalError("transform must not run")
+        }
+        let resultB = await engine.assemble(request: makeRequest(profileB)) { _ in
+            fatalError("transform must not run")
+        }
+        #expect(resultA.systemPromptCheckpoint?.fingerprint != resultB.systemPromptCheckpoint?.fingerprint)
+    }
+
+    @Test("DefaultContextEngine emits attachment projection decisions and checkpoint")
+    func engineProjectionEmitsAttachmentProjectionCheckpoint() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let trusted = ConversationAttachmentDescriptor(
+            id: UUID(),
+            kind: "image",
+            name: "diagram.png",
+            mimeType: "image/png",
+            byteSize: 10_000,
+            trustRaw: AttachmentInputTrust.directUserEntry.rawValue
+        )
+        let lowTrust = ConversationAttachmentDescriptor(
+            id: UUID(),
+            kind: "document",
+            name: "generated.pdf",
+            mimeType: "application/pdf",
+            byteSize: 4_000_000,
+            trustRaw: AttachmentInputTrust.automation.rawValue
+        )
+        let policy = ContextEngineProjectionPolicyInput(
+            attachmentCatalog: [trusted, lowTrust],
+            modelSupportsVision: false,
+            attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(
+                enabled: true,
+                inlineByteLimit: 20_000,
+                summarizeByteLimit: 1_000_000
+            )
+        )
+        let assembleReq = makeAssembleRequest(
+            messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
+            conversation: conv,
+            projectionPolicy: policy
+        )
+        let result = await engine.assemble(request: assembleReq) { _ in
+            fatalError("transform must not run")
+        }
+        let checkpoint = try? #require(result.attachmentProjectionCheckpoint)
+        #expect(checkpoint?.conversationID == conv.id)
+        #expect(checkpoint?.decisions.count == 2)
+        let trustedDecision = checkpoint?.decisions.first(where: { $0.attachmentName == "diagram.png" })
+        let lowTrustDecision = checkpoint?.decisions.first(where: { $0.attachmentName == "generated.pdf" })
+        #expect(trustedDecision?.disposition == .summarize)
+        #expect(lowTrustDecision?.disposition == .searchOnly)
+    }
+
+    @Test("DefaultContextEngine emits pre-compaction memory flush spec after successful flush")
+    func engineEmitsPreCompactionMemoryFlushSpec() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-flush-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let flushedID = UUID()
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [flushedID]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+        let longBody = String(repeating: "token ", count: 8000)
+        var messages: [Message] = []
+        for index in 0..<12 {
+            messages.append(Message(id: UUID(), role: .user, content: "\(longBody) user \(index)", timestamp: Date(), toolCalls: []))
+            messages.append(Message(id: UUID(), role: .assistant, content: "\(longBody) assistant \(index)", timestamp: Date(), toolCalls: []))
+        }
+        messages.append(Message(id: UUID(), role: .user, content: "latest user", timestamp: Date(), toolCalls: []))
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true),
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16
+            )
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionCheckpointKind.summarizedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(result.preCompactionMemoryFlush?.conversationID == conv.id)
+        #expect(result.preCompactionMemoryFlush?.flushedMemoryEntryIDs == [flushedID])
+        #expect(await stubRunner.lastContext?.middleMessages.isEmpty == false)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("DefaultContextEngine skips pre-compaction flush when persistCompactionCheckpoint is false")
+    func engineSkipsPreCompactionFlushWhenPersistenceDisabled() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-flush-skip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [UUID()]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+        let longBody = String(repeating: "token ", count: 8000)
+        var messages: [Message] = []
+        for index in 0..<12 {
+            messages.append(Message(id: UUID(), role: .user, content: "\(longBody) user \(index)", timestamp: Date(), toolCalls: []))
+            messages.append(Message(id: UUID(), role: .assistant, content: "\(longBody) assistant \(index)", timestamp: Date(), toolCalls: []))
+        }
+        messages.append(Message(id: UUID(), role: .user, content: "latest user", timestamp: Date(), toolCalls: []))
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true),
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: false,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16
+            )
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionCheckpointKind.summarizedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(result.preCompactionMemoryFlush == nil)
+        #expect(await stubRunner.lastContext == nil)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("DefaultContextEngine omits pre-compaction memory flush spec when disabled")
+    func engineOmitsPreCompactionMemoryFlushWhenDisabled() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let request = ContextEngineAssembleRequest(
+            messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: nil,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: false,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: false,
+                maxFlushedMemoryEntries: 16
+            )
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        #expect(result.preCompactionMemoryFlush == nil)
+    }
+
+    @Test("DefaultContextEngine prepareSubagentSpawn emits deterministic handoff fingerprint")
+    func prepareSubagentSpawnDeterministicFingerprint() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conversationID = UUID()
+        let runID = UUID()
+        let request = ContextEnginePrepareSubagentSpawnRequest(
+            conversationID: conversationID,
+            runID: runID,
+            candidateToolNames: ["delegate.alpha", "delegate.beta"],
+            permissionPolicyByToolName: [
+                "delegate.alpha": .auto,
+                "delegate.beta": .askUser,
+            ],
+            trustLevelByToolName: [
+                "delegate.alpha": .system,
+                "delegate.beta": .knownParty,
+            ],
+            preApprovedToolNames: Set(["delegate.beta"])
+        )
+        let first = await engine.prepareSubagentSpawn(request: request)
+        let second = await engine.prepareSubagentSpawn(request: request)
+        #expect(first.approvedToolNames == second.approvedToolNames)
+        #expect(first.handoffArtifact?.policyFingerprint == second.handoffArtifact?.policyFingerprint)
+        #expect(first.checkpointInvalidation?.invalidatedKinds == second.checkpointInvalidation?.invalidatedKinds)
+    }
+
+    @Test("DefaultContextEngine onSubagentEnded invalidates attachment projection for non-system trust")
+    func onSubagentEndedNonSystemTrustInvalidation() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let result = await engine.onSubagentEnded(
+            request: ContextEngineSubagentEndedRequest(
+                conversationID: UUID(),
+                runID: UUID(),
+                toolName: "delegate.remote",
+                permissionPolicy: .askUser,
+                trustLevel: .unknownParty
+            )
+        )
+        #expect(result.acknowledged)
+        #expect(result.checkpointInvalidation?.invalidatedKinds.contains(HarnessCheckpointInvalidationKind.memoryInjectionSnapshot) == true)
+        #expect(result.checkpointInvalidation?.invalidatedKinds.contains(HarnessCheckpointInvalidationKind.attachmentProjection) == true)
+    }
+
+    @Test("DefaultContextEngine skips checkpoint persistence when savings below threshold")
+    func engineSkipsPersistenceWhenSavingsBelowThreshold() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let chunk = String(repeating: "z", count: 4_000)
+        var messages: [Message] = [
+            Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
+        ]
+        for idx in 0..<12 {
+            messages.append(Message(id: UUID(), role: .user, content: "u\(idx)-\(chunk)", timestamp: Date(), toolCalls: []))
+            messages.append(Message(id: UUID(), role: .assistant, content: "a\(idx)-\(chunk)", timestamp: Date(), toolCalls: []))
+        }
+        messages.append(Message(id: UUID(), role: .user, content: "latest", timestamp: Date(), toolCalls: []))
+        var compactionConfig = ContextCompactionConfiguration.default
+        compactionConfig.compactionMinPromptTokenSavingsFraction = 0.5
+        compactionConfig.middleMinCharactersForCompactionLLM = 0
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true),
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: compactionConfig,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 2_500,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionTransformer.prunedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(result.compactionLowSavings)
+        #expect(result.checkpointPersistence == nil)
+        #expect(result.transformOutput?.diagnostics == ContextCompactionTransformer.prunedDiagnostic)
+    }
+
+    @Test("DefaultContextEngine savings check ignores stale lastPromptTokens")
+    func engineSavingsCheckIgnoresStaleLastPromptTokens() async {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        let messages = longCompactionThreadForEngineTests()
+        var compactionConfig = ContextCompactionConfiguration.default
+        compactionConfig.compactionMinPromptTokenSavingsFraction = 0.03
+        compactionConfig.middleMinCharactersForCompactionLLM = 0
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true),
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: compactionConfig,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 2_500,
+            lastPromptTokens: 8_000,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0
+        )
+        let result = await engine.assemble(request: request) { input in
+            var outputMessages = input.messages
+            var bytesToDrop = 3_000
+            for index in outputMessages.indices.reversed() where bytesToDrop > 0 && outputMessages[index].content.count > 64 {
+                let drop = min(bytesToDrop, outputMessages[index].content.count - 32)
+                outputMessages[index] = Message(
+                    id: outputMessages[index].id,
+                    role: outputMessages[index].role,
+                    content: String(outputMessages[index].content.dropLast(drop)),
+                    timestamp: outputMessages[index].timestamp,
+                    toolCalls: outputMessages[index].toolCalls,
+                    toolCallId: outputMessages[index].toolCallId
+                )
+                bytesToDrop -= drop
+            }
+            return ContextTransformOutput(
+                messages: outputMessages,
+                diagnostics: ContextCompactionTransformer.prunedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(result.compactionLowSavings == false)
+        #expect(result.checkpointPersistence != nil)
+    }
+}
+
+private func longCompactionThreadForEngineTests() -> [Message] {
+    var messages: [Message] = [
+        Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
+    ]
+    let chunk = String(repeating: "z", count: 4_000)
+    for idx in 0..<12 {
+        messages.append(Message(id: UUID(), role: .user, content: "u\(idx)-\(chunk)", timestamp: Date(), toolCalls: []))
+        messages.append(Message(id: UUID(), role: .assistant, content: "a\(idx)-\(chunk)", timestamp: Date(), toolCalls: []))
+    }
+    messages.append(Message(id: UUID(), role: .user, content: "latest", timestamp: Date(), toolCalls: []))
+    return messages
+}
+
+private actor StubPreCompactionFlushRunner: PreCompactionMemoryFlushRunning {
+    let result: PreCompactionMemoryFlushResult
+    private(set) var lastContext: PreCompactionMemoryFlushContext?
+
+    init(result: PreCompactionMemoryFlushResult) {
+        self.result = result
+    }
+
+    func runSilentFlushIfNeeded(
+        context: PreCompactionMemoryFlushContext,
+        logger: Logger?
+    ) async -> PreCompactionMemoryFlushResult {
+        _ = logger
+        lastContext = context
+        return result
+    }
+}

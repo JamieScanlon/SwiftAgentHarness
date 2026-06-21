@@ -3,7 +3,6 @@ import CryptoKit
 import EasyJSON
 import Foundation
 import Logging
-import OllamaKit
 import SwiftData
 import SwiftAgentKit
 import SwiftAgentKitMCP
