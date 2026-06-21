@@ -14,12 +14,12 @@ import AppKit
 import UIKit
 #endif
 
-/// Thin session coordinator (L1): selection mirror, injected service refs, domain bundle access.
+/// Thin session coordinator: selection mirror, injected service refs, domain bundle access.
 ///
 /// Public contract: ``HarnessRuntimeSessionCoordinating`` + ``HarnessRuntimeSessionWiring``.
 /// Behavior lives in colocated harness services (`AgentRuntimeSessionService`, `ContextProjectionService`,
 /// `OrchestratorRuntimeService`, domain `*ServiceImpl`, etc.). REST/WebSocket clients use the Communication Layer.
-actor HarnessRuntimeSession {
+public actor HarnessRuntimeSession {
     
     struct Configuration {
         var enableTools: Bool = true

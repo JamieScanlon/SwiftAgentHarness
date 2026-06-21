@@ -573,7 +573,7 @@ extension APILayerChatRuntimeManaging {
  * ``capabilityRegistryTopicHub`` / ``capabilityRegistryPublisher`` feed ``tools/registry``, ``skills/registry``, and ``sub-agents/registry`` (see ``CapabilityRegistryPublishing``).
  * ``conversationsRegistryTopicHub`` / ``conversationsRegistryPublisher`` feed ``conversations/registry`` (account/session catalog changes).
  */
-actor APILayer {
+public actor APILayer {
     private struct APIRouteDiagnosticsMiddleware: AsyncMiddleware {
         let logger: Logger
 

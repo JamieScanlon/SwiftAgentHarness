@@ -10,7 +10,7 @@ enum ContextTransformInvocationPhase: Sendable {
 /// Persisted/config label for compaction summarizer behavior. The harness spec describes
 /// techniques in ``summarization-techniques.md``; only ``default`` runs the full ``compaction.md``
 /// pipeline. Other cases are aliases or narrow optional hooks—see per-case notes.
-enum ContextCompactionStrategy: String, Sendable, Codable {
+public enum ContextCompactionStrategy: String, Sendable, Codable {
     /// **Fully implemented.** Full compaction pipeline: token split, deterministic hygiene,
     /// session memory swap, summarizer (Ollama slot), REFERENCE ONLY framing, re-injection stub,
     /// derived + optional transcript compaction checkpoints. Includes iterative

@@ -21,7 +21,7 @@ struct LMStudioGetModelsResponseData: Codable, Sendable {
     var capabilities: [String]?
 }
 
-actor ModelManager {
+public actor ModelManager {
 
     @Published var activeModels: [Model] = []
     var logger: Logger?

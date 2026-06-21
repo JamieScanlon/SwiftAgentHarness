@@ -16,7 +16,7 @@ enum SubAgentTrustLevel: String, Codable, Sendable, Equatable {
     case unknownParty = "unknown-party"
 }
 
-struct SubAgentHostingPolicy: Sendable, Codable, Equatable {
+public struct SubAgentHostingPolicy: Sendable, Codable, Equatable {
     var hostPersonaID: String?
     var delegationAllowlist: [String]
     var authScopeTags: [String]
