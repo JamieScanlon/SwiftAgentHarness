@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CANONICAL="$ROOT/openapi/openapi.yaml"
-CLIENT_INPUT="$ROOT/Sources/SileniaAIClient/openapi.yaml"
+CLIENT_INPUT="$ROOT/Sources/SwiftAgentHarness/openapi.yaml"
 REL_TARGET="../../openapi/openapi.yaml"
 
 if [ ! -f "$CANONICAL" ]; then

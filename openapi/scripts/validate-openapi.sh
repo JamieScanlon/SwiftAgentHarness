@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lint OpenAPI with Spectral (optional Node/npx). Usage from repo root:
-#   bash SileniaAIServer/openapi/scripts/validate-openapi.sh
+#   bash SwiftAgentHarness/openapi/scripts/validate-openapi.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SPEC="$ROOT/openapi/openapi.yaml"

@@ -58,7 +58,7 @@ def rewrite_refs(node):
 
 bundle = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "SileniaRESTBindings",
+    "title": "SwiftAgentHarnessRESTBindings",
     "type": "object",
     "properties": {name: {"$ref": f"#/$defs/{name}"} for name in selected},
     "$defs": {name: rewrite_refs(schema) for name, schema in schemas.items()},

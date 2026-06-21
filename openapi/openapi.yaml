@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: SileniaAIServer HTTP API
+  title: SwiftAgentHarness HTTP API
   version: 1.33.0
   description: |
-    Control plane for SileniaAIServer (Vapor `/api` group). Does not include WebSocket `/ws` —
+    Control plane for SwiftAgentHarness (Vapor `/api` group). Does not include WebSocket `/ws` —
     see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
 
     **Dates:** `GET /conversations/{id}` uses ISO-8601 for `Date` fields. List endpoints may use
@@ -47,7 +47,7 @@ info:
 
     **v1.16.0:** **`GET/PUT/DELETE /conversations/{id}/engine-artifacts`** (+ keyed paths): raw-byte upload/download (**`application/octet-stream`**), JSON key listing, **`413`** when over configured max body size, **`501`** when harness artifact storage is unavailable. Strict tenancy: optional **`X-SAH-Authenticated-Owner`** (UUID) when **`requireAuthenticatedTenantOnAPI`** is enabled — see **`Documentation/CRUD_QUERY_API_INVENTORY.md`**.
 
-    **v1.17.0:** **`ConversationRunInfo`** parity with **`SileniaAICommon`**: **`terminalReason`**, **`markerKind`**, optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
+    **v1.17.0:** **`ConversationRunInfo`** parity with spec **`terminalReason`**, **`markerKind`**, optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
 
     **v1.19.0:** **`POST /conversations/{id}/branch`** HTTP strict preconditions: optional **`If-Match`** against parent transcript tail (**`msg-*`**, **`msg-none`** when empty); **`428`**/**`412`** when **`ServerConfig.httpPreconditionsStrictMode`** is enabled (same ETag family as send). Tenancy operator note: **`GET /conversations`** / **`GET /search`** do not auto-scope to **`X-SAH-Authenticated-Owner`** — supply **`owner`** query when **`requireAuthenticatedTenantOnAPI`** isolation is required (**`Documentation/CRUD_QUERY_API_INVENTORY.md`**).
 
@@ -2291,7 +2291,7 @@ components:
 
     ConversationPatch:
       type: object
-      description: Partial update; omitted keys leave fields unchanged (SileniaAICommon ConversationPatch).
+      description: Partial update; omitted keys leave fields unchanged.
       required: [expectedRevision]
       properties:
         topic:

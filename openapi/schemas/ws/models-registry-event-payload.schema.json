@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/models-registry-event-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/models-registry-event-payload.json",
   "title": "ModelsRegistryEventPayload",
   "description": "Granular per-model delta `value` for `kind == event` on topic `models/registry`. Snapshots continue to use ModelsRegistryPayload.",
   "type": "object",

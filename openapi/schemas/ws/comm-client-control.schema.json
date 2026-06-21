@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/comm-client-control.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/comm-client-control.json",
   "title": "CommClientControlMessage",
   "description": "Client → server subscribe / unsubscribe / ack control (`ModelWireModels`). Runtime-validated on `/ws` before Codable decode.",
   "oneOf": [

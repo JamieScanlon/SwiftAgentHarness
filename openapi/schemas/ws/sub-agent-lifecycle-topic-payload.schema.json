@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/sub-agent-lifecycle-topic-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/sub-agent-lifecycle-topic-payload.json",
   "title": "SubAgentLifecycleTopicPayload",
   "description": "Branch-scoped sub-agent lifecycle/state payload for `subagent/{conversationId}/{path}/{events|state}` topics.",
   "type": "object",

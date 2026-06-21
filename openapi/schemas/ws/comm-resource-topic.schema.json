@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/comm-resource-topic.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/comm-resource-topic.json",
   "title": "CommResourceTopicMessage",
   "description": "Server → client harness-shaped envelope for multiplexed topics. Every topic envelope carries top-level `seq`. Conversation transient events additionally include `runId` + `turnOrdinal` correlation fields.",
   "type": "object",

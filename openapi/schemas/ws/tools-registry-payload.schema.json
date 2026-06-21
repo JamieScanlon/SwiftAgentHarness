@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/tools-registry-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/tools-registry-payload.json",
   "title": "ToolsRegistryPayload",
   "description": "`value` for topic `tools/registry` (session-selected conversation).",
   "type": "object",

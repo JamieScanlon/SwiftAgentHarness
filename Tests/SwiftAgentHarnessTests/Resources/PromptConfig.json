@@ -3,7 +3,9 @@
     "includeCurrentDateTime": false,
     "includeAgentSkills": false
   },
-  "settings": {},
+  "settings": {
+    "skillsFolderPath": "/skills"
+  },
   "agentHarness": {
     "strictAgentHarnessPrompts": true
   },

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/models-registry-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/models-registry-payload.json",
   "title": "ModelsRegistryPayload",
   "description": "`value` for topic `models/registry`.",
   "type": "object",

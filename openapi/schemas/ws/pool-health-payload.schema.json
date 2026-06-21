@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/pool-health-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/pool-health-payload.json",
   "title": "PoolHealthPayload",
   "description": "`value` for topic `pool/health`.",
   "type": "object",

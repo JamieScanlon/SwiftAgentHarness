@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CANONICAL_DIR="$ROOT/openapi/schemas/ws"
-RUNTIME_DIR="$ROOT/Sources/SileniaAIServer/Resources/WSSchemas"
+RUNTIME_DIR="$ROOT/Sources/SwiftAgentHarness/Resources/WSSchemas"
 
 mkdir -p "$RUNTIME_DIR"
 

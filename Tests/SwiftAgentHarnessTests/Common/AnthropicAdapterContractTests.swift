@@ -1,0 +1,44 @@
+import Foundation
+import Testing
+@testable import SwiftAgentHarness
+
+@Suite("Anthropic adapter contract")
+struct AnthropicAdapterContractTests {
+    @Test("SSE parser maps thinking and text deltas")
+    func sseParserThinkingAndText() {
+        let thinkingJSON = """
+        {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"step"}}
+        """
+        let textJSON = """
+        {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}
+        """
+        let thinkingEvents = AnthropicSSEParser.events(fromJSONLine: thinkingJSON, eventName: nil)
+        let textEvents = AnthropicSSEParser.events(fromJSONLine: textJSON, eventName: nil)
+        #expect(thinkingEvents.count == 1)
+        #expect(textEvents.count == 1)
+        if case .thinkingDelta(let t)? = thinkingEvents.first {
+            #expect(t == "step")
+        } else {
+            Issue.record("expected thinking delta")
+        }
+        if case .contentDelta(let t)? = textEvents.first {
+            #expect(t == "hello")
+        } else {
+            Issue.record("expected text delta")
+        }
+    }
+
+    @Test("NormalizedEvent mapper projects reasoning fragments")
+    func normalizedReasoningFragment() {
+        let chunk = NormalizedEventMapper.streamChunk(
+            for: .reasoningDelta("hidden"),
+            availableTools: []
+        )
+        guard case .reasoning(let text)? = chunk.streamingFragment else {
+            Issue.record("expected reasoning fragment")
+            return
+        }
+        #expect(text == "hidden")
+        #expect(chunk.content.isEmpty)
+    }
+}

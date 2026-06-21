@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/sub-agents-registry-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/sub-agents-registry-payload.json",
   "title": "SubAgentsRegistryPayload",
   "description": "`value` for topic `sub-agents/registry` (v2: unified delegate registry entries plus compatibility tool rows).",
   "type": "object",

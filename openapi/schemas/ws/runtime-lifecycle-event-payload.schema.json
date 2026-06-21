@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/runtime-lifecycle-event-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/runtime-lifecycle-event-payload.json",
   "title": "RuntimeLifecycleEventPayload",
   "description": "Runtime lifecycle milestone payload embedded in conversation topic events (`semanticKind == runtimeLifecycle`).",
   "type": "object",

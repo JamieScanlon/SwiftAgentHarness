@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/model-content-delta-wire.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/model-content-delta-wire.json",
   "title": "ModelContentDeltaWire",
   "description": "Harness-aligned content delta for conversation/{id}/events (semanticKind contentDelta); Swift: ModelContentDeltaWire.",
   "type": "object",

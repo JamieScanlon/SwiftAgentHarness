@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/conversation-topic-event-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/conversation-topic-event-payload.json",
   "title": "ConversationTopicEventPayload",
   "description": "v1 payload for `conversation/{uuid}/events` (`ModelWireModels`). Harness-normalized deltas may extend `semanticKind` in a future revision.",
   "type": "object",

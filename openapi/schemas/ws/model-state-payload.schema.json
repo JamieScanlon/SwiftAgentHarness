@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/model-state-payload.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/model-state-payload.json",
   "title": "ModelStatePayload",
   "description": "`value` for topic `model/{uuid}/state`.",
   "type": "object",

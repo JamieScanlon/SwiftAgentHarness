@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://silenia.dev/schemas/ws/client-surface-intent-wire.json",
+  "$id": "https://swiftagentharness.dev/schemas/ws/client-surface-intent-wire.json",
   "title": "ClientSurfaceIntent",
   "description": "Structured client surface action (`semanticKind == surfaceIntent`).",
   "type": "object",

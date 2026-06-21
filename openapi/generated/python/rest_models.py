@@ -867,7 +867,7 @@ class FileUploadResponse(BaseModel):
     filePath: str
 
 
-class SileniaRESTBindings(BaseModel):
+class SwiftAgentHarnessRESTBindings(BaseModel):
     StatusResponse_1: Optional[StatusResponse] = Field(None, alias='StatusResponse')
     ModelInfo_1: Optional[ModelInfo] = Field(None, alias='ModelInfo')
     ListModelsResponse_1: Optional[ListModelsResponse] = Field(

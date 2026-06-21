@@ -1,6 +1,6 @@
 asyncapi: 2.6.0
 info:
-  title: Silenia WebSocket data plane
+  title: SwiftAgentHarness WebSocket data plane
   version: 1.0.0
   description: |
     Complements `openapi/openapi.yaml` (HTTP control plane). Text frames on `/ws` are JSON.
