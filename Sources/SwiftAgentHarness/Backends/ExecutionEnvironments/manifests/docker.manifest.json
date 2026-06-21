@@ -1,0 +1,16 @@
+{
+  "id": "docker",
+  "label": "Docker",
+  "sandboxBackends": [
+    {
+      "id": "docker",
+      "label": "Docker exec sandbox",
+      "workspaceModel": "host-canonical",
+      "capabilities": {
+        "browser": false,
+        "bindMounts": true,
+        "persistentRuntime": true
+      }
+    }
+  ]
+}

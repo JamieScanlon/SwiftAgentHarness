@@ -1,0 +1,224 @@
+import EasyJSON
+import Foundation
+import Logging
+import SwiftAgentKit
+
+struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
+    private let runtime: RuntimeStreamingOrchestrationService
+
+    init(runtime: RuntimeStreamingOrchestrationService) {
+        self.runtime = runtime
+    }
+
+    func dispatchTriggerMessage(
+        conversationID: UUID,
+        text: String,
+        systemReminder: String?,
+        inputTrustRaw: String?,
+        enableTools: Bool,
+        enableAgents: Bool,
+        originSurface: String?,
+        originSenderID: String?
+    ) async throws {
+        _ = try await runtime.apiSendMessageAndStreamResponse(
+            conversationID: conversationID,
+            text,
+            images: [],
+            enableTools: enableTools,
+            enableAgents: enableAgents,
+            expectedPreviousTailHarnessMessageID: nil,
+            inputTrustRaw: inputTrustRaw,
+            systemReminder: systemReminder,
+            originSurface: originSurface,
+            originSenderID: originSenderID
+        )
+    }
+}
+
+struct HarnessTriggerDedupeAdapter: TriggerDedupeChecking {
+    private let peek: @Sendable (String) async throws -> Bool
+    private let check: @Sendable (String, Int) async throws -> Bool
+
+    init(
+        peek: @escaping @Sendable (String) async throws -> Bool,
+        check: @escaping @Sendable (String, Int) async throws -> Bool
+    ) {
+        self.peek = peek
+        self.check = check
+    }
+
+    init(check: @escaping @Sendable (String, Int) async throws -> Bool) {
+        self.peek = { _ in false }
+        self.check = check
+    }
+
+    func dedupePeek(key: String) async throws -> Bool {
+        try await peek(key)
+    }
+
+    func dedupeCheckAndSet(key: String, ttlSeconds: Int) async throws -> Bool {
+        try await check(key, ttlSeconds)
+    }
+}
+
+struct TriggersRuntimeBundle: Sendable {
+    let dispatch: TriggerDispatchService
+    let scheduler: TriggerSchedulerService
+    let webhookAdapter: WebhookIngressAdapter
+    let webhookRouteStore: WebhookRouteStore
+    let scheduleTools: ScheduleToolProvider
+    let fileEventQueue: FileEventQueueService
+    let replay: TriggerReplayService
+    let channelRegistry: ChannelListenerRegistry
+    let outputRouter: TriggerSymmetricOutputRouter
+    let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
+    let runRegistry: TriggerDelegatedRunRegistry
+}
+
+enum TriggersRuntimeWiring {
+    struct DelegatedPorts: Sendable {
+        var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
+        var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
+        var lastAssistantText: @Sendable (UUID) async -> String?
+        var stampDelegatedHost: @Sendable (UUID, HarnessTrigger, String) async throws -> Void
+        var resolveParentConversation: @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?
+    }
+
+    struct Configuration: Sendable {
+        var dataDirectory: URL
+        var eventsDirectory: URL? = nil
+        var fileEventQueueEnabled: Bool = true
+        var channelsConfigURL: URL? = nil
+        var channelListenersEnabled: Bool = false
+        var staticWebhookRoutes: [WebhookRoute] = []
+        var schedulerIdentity: String = "sah-trigger-scheduler"
+    }
+
+    static func resolve(
+        configuration: Configuration,
+        runtime: RuntimeStreamingOrchestrationService,
+        dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
+        dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
+        createConversation: @escaping @Sendable (String?) async throws -> UUID,
+        resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
+        taskRuns: TriggerTaskRunPorts = .disabled,
+        delegatedPorts: DelegatedPorts,
+        logger: Logger
+    ) -> TriggersRuntimeBundle {
+        let auditURL = configuration.dataDirectory.appendingPathComponent("trigger_audit.jsonl")
+        let auditLog = TriggerAuditLog(logger: logger, jsonlURL: auditURL)
+        let dedupe = HarnessTriggerDedupeAdapter(peek: dedupePeek, check: dedupeCheckAndSet)
+        let idempotency = TriggerIdempotencyGate(dedupe: dedupe)
+        let rateLimit = TriggerRateLimitGate()
+        let costCeiling = TriggerCostCeilingGate()
+        let activationPolicy = TriggerActivationPolicy(
+            idempotency: idempotency,
+            rateLimit: rateLimit,
+            costCeiling: costCeiling,
+            auditLog: auditLog
+        )
+        let sessionIndex = TriggerSessionIndex(
+            createConversation: createConversation,
+            resolveConversationByTitle: resolveConversationByTitle,
+            stampDelegatedHost: delegatedPorts.stampDelegatedHost
+        )
+        let sessionRouter = TriggerSessionRouter(sessionIndex: sessionIndex)
+        let promptBuilder = TriggerPromptBuilder()
+        let runtimeAdapter = HarnessTriggerRuntimeAdapter(runtime: runtime)
+        let runRegistry = TriggerDelegatedRunRegistry()
+        let spawnAdapter = HarnessTriggerDelegatedSpawnAdapter(
+            spawnSubAgent: delegatedPorts.spawnSubAgent,
+            sendMessageAndRun: delegatedPorts.sendMessageAndRun,
+            lastAssistantText: delegatedPorts.lastAssistantText
+        )
+        let delegatedDispatch = TriggerDelegatedDispatchService(
+            spawn: spawnAdapter,
+            runRegistry: runRegistry,
+            logger: logger
+        )
+        let dispatch = TriggerDispatchService(
+            activationPolicy: activationPolicy,
+            sessionRouter: sessionRouter,
+            promptBuilder: promptBuilder,
+            runtime: runtimeAdapter,
+            delegatedDispatch: delegatedDispatch,
+            snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory)
+        )
+        let taskStore = ScheduledTaskStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
+        )
+        let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
+        let scheduler = TriggerSchedulerService(
+            store: taskStore,
+            dispatch: dispatch,
+            lockURL: lockURL,
+            config: TriggerSchedulerConfiguration(lockIdentity: configuration.schedulerIdentity),
+            taskRuns: taskRuns,
+            logger: logger
+        )
+        let dynamicStore = WebhookDynamicRouteStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
+        )
+        let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
+        let resolvedEventsDirectory = configuration.eventsDirectory
+            ?? FileEventQueueLayout.resolveEventsDirectory(dataDirectory: configuration.dataDirectory)
+        let channelIngress = ChannelIngressAdapter(dispatch: dispatch)
+        let channelRegistry = ChannelListenerRegistry.load(
+            dataDirectory: configuration.dataDirectory,
+            ingress: channelIngress,
+            logger: logger,
+            enabled: configuration.channelListenersEnabled,
+            configURL: configuration.channelsConfigURL
+        )
+        let webhookValidation = WebhookValidationGate(
+            routeStore: routeStore,
+            idempotency: idempotency,
+            rateLimit: rateLimit
+        )
+        let directDelivery = WebhookDirectDelivery(
+            channelRegistry: channelRegistry,
+            logger: logger
+        )
+        let webhookAdapter = WebhookIngressAdapter(
+            validationGate: webhookValidation,
+            dispatch: dispatch,
+            directDelivery: directDelivery,
+            idempotency: idempotency,
+            eventsDirectory: configuration.fileEventQueueEnabled ? resolvedEventsDirectory : nil
+        )
+        let scheduleTools = ScheduleToolProvider(scheduler: scheduler)
+        let fileEventQueue = FileEventQueueService(
+            eventsDirectory: resolvedEventsDirectory,
+            dispatch: dispatch,
+            taskStore: taskStore,
+            logger: logger,
+            enabled: configuration.fileEventQueueEnabled
+        )
+        let replay = TriggerReplayService(dispatch: dispatch, eventsDirectory: resolvedEventsDirectory)
+        let outputRouter = TriggerSymmetricOutputRouter(
+            channelRegistry: channelRegistry,
+            auditLog: auditLog,
+            logger: logger
+        )
+        let delegatedCompletionHandoff = TriggerDelegatedCompletionHandoff(
+            runRegistry: runRegistry,
+            outputRouter: outputRouter,
+            resolveParentConversation: delegatedPorts.resolveParentConversation,
+            lastAssistantText: delegatedPorts.lastAssistantText,
+            logger: logger
+        )
+        return TriggersRuntimeBundle(
+            dispatch: dispatch,
+            scheduler: scheduler,
+            webhookAdapter: webhookAdapter,
+            webhookRouteStore: routeStore,
+            scheduleTools: scheduleTools,
+            fileEventQueue: fileEventQueue,
+            replay: replay,
+            channelRegistry: channelRegistry,
+            outputRouter: outputRouter,
+            delegatedCompletionHandoff: delegatedCompletionHandoff,
+            runRegistry: runRegistry
+        )
+    }
+}

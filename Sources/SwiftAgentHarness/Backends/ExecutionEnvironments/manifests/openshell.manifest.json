@@ -1,0 +1,13 @@
+{
+  "id": "openshell",
+  "label": "OpenShell",
+  "workspaceModel": "mirror",
+  "capabilities": {
+    "browser": false,
+    "bindMounts": false,
+    "persistentRuntime": true
+  },
+  "adapterID": "tool-env.openshell.default",
+  "hostTools": ["openshell"],
+  "remoteTools": []
+}

@@ -1,0 +1,16 @@
+{
+  "id": "local",
+  "label": "Local host",
+  "sandboxBackends": [
+    {
+      "id": "local",
+      "label": "Local sandboxed host",
+      "workspaceModel": "host-canonical",
+      "capabilities": {
+        "browser": false,
+        "bindMounts": false,
+        "persistentRuntime": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "docker-browser",
+  "label": "Docker Browser",
+  "sandboxBackends": [
+    {
+      "id": "docker-browser",
+      "label": "Chromium browser sandbox",
+      "workspaceModel": "host-canonical",
+      "capabilities": {
+        "browser": true,
+        "bindMounts": false,
+        "persistentRuntime": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "ssh",
+  "label": "SSH",
+  "sandboxBackends": [
+    {
+      "id": "ssh",
+      "label": "SSH-accessible host",
+      "workspaceModel": "remote-canonical",
+      "hostTools": ["rsync"],
+      "remoteTools": ["rsync"],
+      "capabilities": {
+        "browser": false,
+        "bindMounts": false,
+        "persistentRuntime": true
+      }
+    }
+  ]
+}
