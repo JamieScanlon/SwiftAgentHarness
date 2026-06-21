@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/model-content-delta-wire.json",
+  "title": "ModelContentDeltaWire",
+  "description": "Harness-aligned content delta for conversation/{id}/events (semanticKind contentDelta); Swift: ModelContentDeltaWire.",
+  "type": "object",
+  "required": ["v", "kind"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema revision"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["text", "reasoning", "toolCall"]
+    },
+    "index": { "type": "integer", "description": "Optional block index for multiplexed assistant content" },
+    "text": { "type": "string", "description": "UTF-8 fragment for text or reasoning kinds" },
+    "toolName": { "type": "string" },
+    "toolCallId": { "type": "string" },
+    "toolArgumentsFragment": { "type": "string" }
+  },
+  "additionalProperties": true
+}

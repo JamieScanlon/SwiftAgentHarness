@@ -358,7 +358,7 @@ public struct ToolPolicyConfiguration: Sendable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ToolPolicyConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; tool policy unrestricted")
             return .unrestricted
         }
@@ -573,7 +573,7 @@ struct SubAgentHostingPolicyConfiguration: Sendable {
     }
 
     static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SubAgentHostingPolicyConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; sub-agent hosting policy disabled")
             return .empty
         }

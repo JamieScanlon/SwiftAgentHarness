@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/pool-health-payload.json",
+  "title": "PoolHealthPayload",
+  "description": "`value` for topic `pool/health`.",
+  "type": "object",
+  "required": ["queueDepth", "inFlight", "maxConcurrent", "updatedAt"],
+  "properties": {
+    "queueDepth": { "type": "integer" },
+    "inFlight": { "type": "integer" },
+    "maxConcurrent": { "type": "integer" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "errorRate": { "type": "number" },
+    "budgetRemaining": { "type": "number" },
+    "queueDepthByPriority": {
+      "type": "object",
+      "required": ["foreground", "background"],
+      "properties": {
+        "foreground": { "type": "integer" },
+        "background": { "type": "integer" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

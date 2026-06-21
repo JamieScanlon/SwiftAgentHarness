@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/skills-registry-payload.json",
+  "title": "SkillsRegistryPayload",
+  "description": "`value` for topic `skills/registry`.",
+  "type": "object",
+  "required": ["schemaVersion", "skills", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer" },
+    "conversationID": { "type": "string", "format": "uuid" },
+    "skills": { "type": "array" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

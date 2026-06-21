@@ -310,6 +310,13 @@ actor OrchestratorPool {
         pendingTeardownByKey.count
     }
 
+    func testing_drainPendingTeardowns() async {
+        let tasks = Array(pendingTeardownByKey.values)
+        for task in tasks {
+            await task.value
+        }
+    }
+
     // MARK: - Private
 
     private func entryID(forConversationID conversationID: UUID) -> UUID? {
@@ -426,16 +433,12 @@ actor OrchestratorPool {
         let prior = pendingTeardownByKey[key]
         let generation = (teardownGenerationByKey[key] ?? 0) + 1
         teardownGenerationByKey[key] = generation
-        let task = Task {
+        pendingTeardownByKey[key] = Task(priority: .userInitiated) {
             await prior?.value
             if let teardownHandler {
                 await teardownHandler(orchestrator)
             }
-        }
-        pendingTeardownByKey[key] = task
-        Task {
-            await task.value
-            finishPendingTeardown(key: key, generation: generation)
+            await self.finishPendingTeardown(key: key, generation: generation)
         }
     }
 

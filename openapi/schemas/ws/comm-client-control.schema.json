@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/comm-client-control.json",
+  "title": "CommClientControlMessage",
+  "description": "Client → server subscribe / unsubscribe / ack control (`ModelWireModels`). Runtime-validated on `/ws` before Codable decode.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "subscribe" },
+        "topic": {
+          "type": "string",
+          "description": "Resource topic, e.g. model/{uuid}/state, conversation/{uuid}/events"
+        },
+        "since": {
+          "type": "integer",
+          "description": "Optional replay cursor: last processed total-order seq for this topic (legacy). Mutually exclusive with sinceMessageSeq/sinceCheckpointSeq and resumeToken on conversation/{id}/events."
+        },
+        "sinceMessageSeq": {
+          "type": "integer",
+          "description": "Conversation events only: last processed message-stream seq (raw / non-checkpoint events). Omit to skip message replay. Mutually exclusive with since and resumeToken."
+        },
+        "sinceCheckpointSeq": {
+          "type": "integer",
+          "description": "Conversation events only: last processed checkpoint-stream seq. Omit to skip checkpoint replay. Mutually exclusive with since and resumeToken."
+        },
+        "resumeToken": {
+          "type": "string",
+          "description": "Opaque server-issued resume cursor (conversation/{id}/events). Mutually exclusive with since, sinceMessageSeq, and sinceCheckpointSeq."
+        }
+      },
+      "required": ["kind", "topic"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "unsubscribe" },
+        "topic": {
+          "type": "string",
+          "description": "Resource topic to leave."
+        }
+      },
+      "required": ["kind", "topic"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "ack" },
+        "topic": {
+          "type": "string",
+          "description": "Same topic string as outbound harness envelopes."
+        },
+        "upTo": {
+          "type": "integer",
+          "description": "Cumulative seq acknowledgements (consumed through upTo inclusive)."
+        }
+      },
+      "required": ["kind", "topic", "upTo"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "dedupe_check_and_set" },
+        "dedupeKey": {
+          "type": "string",
+          "description": "Idempotency key for inbound Comm/channel frames (harness dedupe sqlite when installed)."
+        },
+        "dedupeTtlSeconds": {
+          "type": "integer",
+          "description": "Optional TTL in seconds (minutes-scale); server clamps to configured bounds and applies a default when omitted."
+        }
+      },
+      "required": ["kind", "dedupeKey"],
+      "additionalProperties": false
+    }
+  ]
+}

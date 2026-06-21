@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/comm-resource-topic.json",
+  "title": "CommResourceTopicMessage",
+  "description": "Server → client harness-shaped envelope for multiplexed topics. Every topic envelope carries top-level `seq`. Conversation transient events additionally include `runId` + `turnOrdinal` correlation fields.",
+  "type": "object",
+  "required": ["kind", "topic", "trustClass", "originTrust", "seq"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["snapshot", "event", "lagging"]
+    },
+    "topic": { "type": "string" },
+    "trustClass": { "type": "string", "enum": ["trusted", "restricted"] },
+    "originTrust": {
+      "type": "string",
+      "enum": ["system", "user-direct", "user-deferred", "known-party", "unknown-party"]
+    },
+    "seq": { "type": "integer", "minimum": 0 },
+    "value": {
+      "description": "Topic-specific payload; absent for lagging."
+    },
+    "hint": {
+      "type": "string",
+      "description": "Present for `lagging` (e.g. resync)."
+    },
+    "messageSeq": { "type": "integer" },
+    "checkpointSeq": { "type": "integer" },
+    "runId": { "type": "string", "format": "uuid" },
+    "turnOrdinal": { "type": "integer", "minimum": 1 },
+    "resumeToken": {
+      "type": "string",
+      "description": "Optional server-minted resume cursor on conversation/{id}/events subscribe handshake (lagging/snapshot)."
+    }
+  },
+  "additionalProperties": false
+}

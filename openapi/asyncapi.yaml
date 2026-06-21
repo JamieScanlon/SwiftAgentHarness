@@ -1,0 +1,79 @@
+asyncapi: 2.6.0
+info:
+  title: Silenia WebSocket data plane
+  version: 1.0.0
+  description: |
+    Complements `openapi/openapi.yaml` (HTTP control plane). Text frames on `/ws` are JSON.
+    **Harness path:** `kind: subscribe` | `unsubscribe` | **`ack`** / `snapshot` / `event` / `lagging` with per-topic `seq` — see `schemas/ws/`.
+    **Payload shapes** for `CommResourceTopicMessage.value` are documented in sibling files (e.g.
+    `model-state-payload.schema.json`, `model-calls-payload.schema.json`, `conversation-state-payload.schema.json`, `tools-registry-payload.schema.json`, …).
+    Outbound server frames are harness-shaped only:
+    topic envelopes (`kind: snapshot|event|lagging`) and control responses
+    (`kind: error`, `kind: dedupe_result`).
+
+servers:
+  production:
+    url: "{origin}/ws"
+    protocol: ws
+    description: Same origin as REST; replace `{origin}` (e.g. ws://127.0.0.1:8080).
+    variables:
+      origin:
+        default: ws://127.0.0.1:8080
+
+channels:
+  comm:
+    description: Bidirectional WebSocket; each text frame is one JSON object.
+    publish:
+      message:
+        oneOf:
+          - $ref: "#/components/messages/CommClientControl"
+          - $ref: "#/components/messages/LegacyClientFrame"
+    subscribe:
+      message:
+        oneOf:
+          - $ref: "#/components/messages/CommResourceTopic"
+          - $ref: "#/components/messages/HarnessServerControlResponse"
+
+components:
+  messages:
+    CommClientControl:
+      name: commClientControl
+      title: Subscribe / unsubscribe
+      payload:
+        $ref: "./schemas/ws/comm-client-control.schema.json"
+    CommResourceTopic:
+      name: commResourceTopic
+      title: Topic snapshot, event, or lagging
+      payload:
+        $ref: "./schemas/ws/comm-resource-topic.schema.json"
+    LegacyClientFrame:
+      name: legacyClient
+      title: Legacy client frame (e.g. type — see ARCHITECTURE)
+      payload:
+        type: object
+        additionalProperties: true
+        description: |
+          Legacy request frames exclude retired control-plane mutations.
+          `send_message`, `send_trigger_message`, `patch_conversation`, `revert_to_message`, `split_conversation`, `stop_agent_build`, `spawn_sub_agent`, `resolve_tool_approval`, and `push_completion_announce` are removed and return deterministic error envelopes
+          instructing canonical REST routes. Message send/read control plane is REST-only on
+          `/api/conversations/{id}/messages` and `/api/conversations/{id}`; legacy `/api/messages`
+          aliases are removed. Trigger ingress API routes are removed and trigger dispatch stays
+          behind a separate non-API trigger gate boundary outside communication-layer scope.
+    HarnessServerControlResponse:
+      name: harnessServerControlResponse
+      title: Harness server control response
+      payload:
+        type: object
+        additionalProperties: true
+        required:
+          - kind
+        properties:
+          kind:
+            type: string
+            enum:
+              - error
+              - dedupe_result
+        description: |
+          Control-plane server responses:
+          - `{"kind":"error","message":"..."}` (optional `code`)
+          - `{"kind":"dedupe_result","firstSighting":true|false}`

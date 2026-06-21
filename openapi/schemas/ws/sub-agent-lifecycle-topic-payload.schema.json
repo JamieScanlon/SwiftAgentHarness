@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/sub-agent-lifecycle-topic-payload.json",
+  "title": "SubAgentLifecycleTopicPayload",
+  "description": "Branch-scoped sub-agent lifecycle/state payload for `subagent/{conversationId}/{path}/{events|state}` topics.",
+  "type": "object",
+  "required": ["schemaVersion", "parentConversationID", "entries", "updatedAt"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "parentConversationID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lifecycleID", "parentConversationID", "phase", "updatedAt"],
+        "properties": {
+          "lifecycleID": { "type": "string", "minLength": 1 },
+          "parentConversationID": { "type": "string", "format": "uuid" },
+          "childConversationID": { "type": "string", "format": "uuid" },
+          "delegateToolName": { "type": "string" },
+          "asyncHandleID": { "type": "string" },
+          "phase": {
+            "type": "string",
+            "enum": ["queued", "dispatching", "running", "awaiting-approval", "completing", "done", "failed"]
+          },
+          "eventTrustLevel": { "type": "string" },
+          "defaultTrustLevel": { "type": "string" },
+          "permissionPolicy": { "type": "string" },
+          "approvalRoute": {
+            "type": "string",
+            "enum": ["user", "parent"]
+          },
+          "completionAnnounceID": { "type": "string", "format": "uuid" },
+          "toolCallID": { "type": "string" },
+          "completionSource": { "type": "string" },
+          "completionUsage": {
+            "type": "object",
+            "properties": {
+              "promptTokens": { "type": "integer", "minimum": 0 },
+              "completionTokens": { "type": "integer", "minimum": 0 },
+              "totalTokens": { "type": "integer", "minimum": 0 },
+              "costUSD": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "error": { "type": "string" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

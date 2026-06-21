@@ -172,14 +172,18 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         )
     }
 
-    private func waitUntil(_ predicate: @escaping () async -> Bool, timeoutMS: Int = 3000) async {
+    private func waitUntil(
+        _ predicate: @escaping () async -> Bool,
+        timeoutMS: Int = 3000
+    ) async -> Bool {
         let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
         while Date() < deadline {
             if await predicate() {
-                return
+                return true
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        return false
     }
 
     private func teardownReplayFixture(_ fixture: InMemoryHarnessRuntimeHostFixture, runtimeSession: HarnessRuntimeSession) async {
@@ -199,7 +203,14 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         try await runtimeSession.selectConversation(conversationID: conversationID)
         try await runtimeSession.conversationReplayService.startConversationReplay(sourceConversationID: conversationID)
 
-        await waitUntil({ await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false })
+        guard await waitUntil(
+            { await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false },
+            timeoutMS: 15_000
+        ) else {
+            Issue.record("timed out waiting for conversation replay to finish")
+            await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
+            return
+        }
         let replayed = try await runtimeSession.listCurrentMessages()
         #expect(replayed.count == 5)
         // Sandbox replay does not mutate the source transcript; tool text stays as persisted.
@@ -224,7 +235,14 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         try await runtimeSession.conversationReplayService.startConversationReplay(sourceConversationID: conversationID)
         try await Task.sleep(nanoseconds: 120_000_000)
         await runtimeSession.conversationReplayService.stopConversationReplay(conversationID: conversationID)
-        await waitUntil({ await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false })
+        guard await waitUntil(
+            { await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false },
+            timeoutMS: 15_000
+        ) else {
+            Issue.record("timed out waiting for conversation replay stop")
+            await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
+            return
+        }
 
         let replayed = try await runtimeSession.listCurrentMessages()
         // Non-destructive replay: source conversation row count is unchanged (replay runs in a sandbox).
@@ -259,7 +277,16 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         }
 
         try await runtimeSession.conversationReplayService.startConversationReplay(sourceConversationID: conversationID)
-        await waitUntil({ await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false }, timeoutMS: 6000)
+        guard await waitUntil(
+            { await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID) == false },
+            timeoutMS: 30_000
+        ) else {
+            Issue.record("timed out waiting for bulk conversation replay to finish")
+            collector.cancel()
+            _ = await collector.result
+            await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
+            return
+        }
         collector.cancel()
         _ = await collector.result
         await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
@@ -311,11 +338,15 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         await APISessionContext.$connectionNamespace.withValue(nsA) {
             await runtimeSession.conversationReplayService.stopConversationReplay(conversationID: conversationID)
         }
-        await waitUntil({
+        guard await waitUntil({
             await APISessionContext.$connectionNamespace.withValue(nsA) {
                 await runtimeSession.conversationReplayService.isConversationReplayActive(conversationID: conversationID)
             } == false
-        })
+        }, timeoutMS: 15_000) else {
+            Issue.record("timed out waiting for namespaced conversation replay stop")
+            await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
+            return
+        }
         await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
     }
 }

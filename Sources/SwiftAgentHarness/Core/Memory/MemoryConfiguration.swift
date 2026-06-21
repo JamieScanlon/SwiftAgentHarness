@@ -57,7 +57,7 @@ struct MemoryConfiguration: Sendable, Equatable {
 
 enum MemoryConfigurationLoader {
     static func loadFromPromptConfigBundle(logger: Logger? = nil) -> MemoryConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json"),
+        guard let url = PromptConfigBundleResource.url(),
               let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let memory = json["memory"] as? [String: Any] else {

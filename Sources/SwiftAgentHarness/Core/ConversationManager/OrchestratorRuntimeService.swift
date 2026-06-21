@@ -258,9 +258,15 @@ actor OrchestratorRuntimeService {
             conversation = await selection.currentConversation()
         }
         guard let conversation else {
+            logger?.warning(
+                "[OrchestratorRuntimeService] setupOrchestrator: no active conversation; skipping orchestrator warm-up model=\(selectedModel.modelName)"
+            )
             return
         }
         guard let acquisition = await acquireOrchestrator(conversation: conversation, model: selectedModel) else {
+            logger?.warning(
+                "[OrchestratorRuntimeService] setupOrchestrator: failed to acquire orchestrator; skipping warm-up conversationID=\(conversation.id.uuidString) model=\(selectedModel.modelName)"
+            )
             return
         }
         await installedSessionCollaborator.startOrchestratorStateListeners(for: conversation.id)

@@ -1,0 +1,5 @@
+{
+  "kind": "subscribe",
+  "topic": "pool/health",
+  "foo": 1
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/conversation-state-payload.json",
+  "title": "ConversationStatePayload",
+  "description": "`value` for topic `conversation/{uuid}/state`.",
+  "type": "object",
+  "required": ["schemaVersion", "conversationID", "exists", "sessionSelected", "replayActive"],
+  "properties": {
+    "schemaVersion": { "type": "integer" },
+    "conversationID": { "type": "string", "format": "uuid" },
+    "exists": { "type": "boolean" },
+    "sessionSelected": { "type": "boolean" },
+    "topic": { "type": "string" },
+    "interactionMode": { "type": "string" },
+    "modeProfileID": { "type": "string" }
+    "modelID": { "type": "string", "format": "uuid" },
+    "modelName": { "type": "string" },
+    "messageCount": { "type": "integer" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "orchestration": { "type": "object" },
+    "replayActive": { "type": "boolean" },
+    "poolModelState": { "$ref": "model-state-payload.schema.json" },
+    "activeModelID": { "type": "string", "format": "uuid" },
+    "activeCallID": { "type": "string", "format": "uuid" },
+    "contextBudget": {
+      "type": "object",
+      "properties": {
+        "contextLimitTokens": { "type": "integer" },
+        "promptTokens": { "type": "integer" },
+        "remainingTokens": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "projectedCostUSD": { "type": "number" },
+    "lifecycle": { "type": "string" },
+    "parentConversationID": { "type": "string", "format": "uuid" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "resourceBudgetSnapshot": {
+      "type": "object",
+      "properties": {
+        "maxUSD": { "type": "number" },
+        "spentUSD": { "type": "number" },
+        "contextBudgetRemainingTokens": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "branchChildren": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "childConversationID": { "type": "string", "format": "uuid" },
+          "branchedAtMessageID": { "type": "string", "format": "uuid" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "resourceRunStatus": { "type": "string" },
+    "currentRunID": { "type": "string", "format": "uuid" }
+  },
+  "additionalProperties": true
+}

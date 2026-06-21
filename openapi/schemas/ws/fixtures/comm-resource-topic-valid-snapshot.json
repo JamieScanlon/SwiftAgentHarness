@@ -1,0 +1,13 @@
+{
+  "kind": "snapshot",
+  "topic": "pool/health",
+  "trustClass": "trusted",
+  "originTrust": "system",
+  "seq": 1,
+  "value": {
+    "queueDepth": 0,
+    "inFlight": 0,
+    "maxConcurrent": 8,
+    "updatedAt": "2025-01-01T00:00:00Z"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/conversation-topic-event-payload.json",
+  "title": "ConversationTopicEventPayload",
+  "description": "v1 payload for `conversation/{uuid}/events` (`ModelWireModels`). Harness-normalized deltas may extend `semanticKind` in a future revision.",
+  "type": "object",
+  "required": ["semanticKind"],
+  "properties": {
+    "semanticKind": {
+      "type": "string",
+      "enum": ["messagesRefresh", "orchestration", "contentDelta", "streamDone", "modelLifecycle", "runtimeLifecycle", "checkpoint", "surfaceIntent"]
+    },
+    "jsonUTF8": {
+      "type": "string",
+      "description": "Opaque JSON: message rows (messagesRefresh), orchestration snapshot (orchestration), ModelContentDeltaWire (contentDelta), ModelStatePayload (modelLifecycle), RuntimeLifecycleEventPayload (runtimeLifecycle), ConversationCheckpointTopicEventWire (checkpoint), or ClientSurfaceIntent (surfaceIntent). See model-content-delta-wire.schema.json, model-state-payload.schema.json, runtime-lifecycle-event-payload.schema.json, and client-surface-intent-wire.schema.json."
+    }
+  },
+  "additionalProperties": false
+}

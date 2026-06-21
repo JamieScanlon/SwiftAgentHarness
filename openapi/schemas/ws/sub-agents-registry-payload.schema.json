@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/sub-agents-registry-payload.json",
+  "title": "SubAgentsRegistryPayload",
+  "description": "`value` for topic `sub-agents/registry` (v2: unified delegate registry entries plus compatibility tool rows).",
+  "type": "object",
+  "required": ["schemaVersion", "agents", "entries", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 2 },
+    "conversationID": { "type": "string", "format": "uuid" },
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/availableToolInfo" }
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/subAgentRegistryEntry" }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "availableToolInfo": {
+      "type": "object",
+      "required": ["name", "description", "source"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "source": {
+          "type": "string",
+          "enum": ["local", "mcp", "a2a", "unknown"]
+        },
+        "normalizedSchemaFingerprint": { "type": "string" },
+        "normalizedSchemaVersion": { "type": "string" },
+        "normalizedTopLevelType": { "type": "string" },
+        "normalizedRequiredCount": { "type": "integer" },
+        "normalizedPropertyCount": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "subAgentRegistryEntry": {
+      "type": "object",
+      "required": [
+        "agentID",
+        "displayName",
+        "description",
+        "delegateToolName",
+        "source",
+        "transportKind",
+        "defaultTrustLevel",
+        "permissionPolicy",
+        "tool"
+      ],
+      "properties": {
+        "agentID": { "type": "string" },
+        "displayName": { "type": "string" },
+        "description": { "type": "string" },
+        "delegateToolName": { "type": "string" },
+        "source": {
+          "type": "string",
+          "enum": ["local", "mcp", "a2a", "unknown"]
+        },
+        "transportKind": { "type": "string" },
+        "useClasses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "maxRecursionDepth": { "type": "integer" },
+        "streaming": { "type": "boolean" },
+        "longRunning": { "type": "boolean" },
+        "defaultTrustLevel": {
+          "type": "string",
+          "enum": ["system", "user-deferred", "known-party", "unknown-party"]
+        },
+        "permissionPolicy": {
+          "type": "string",
+          "enum": ["auto", "ask-parent", "ask-user"]
+        },
+        "hostPersonaID": { "type": "string" },
+        "delegationAllowlist": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "authScopeTags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "routingDomain": { "type": "string" },
+        "tenantScope": { "type": "string" },
+        "tool": { "$ref": "#/$defs/availableToolInfo" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/model-calls-payload.json",
+  "title": "ModelCallsPayload",
+  "description": "`value` for topic `model/{uuid}/calls`.",
+  "type": "object",
+  "required": ["modelID", "active", "recent", "updatedAt"],
+  "properties": {
+    "modelID": { "type": "string", "format": "uuid" },
+    "active": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ModelCallRecord" }
+    },
+    "recent": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ModelCallRecord" }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "ModelCallRecord": {
+      "type": "object",
+      "required": ["callID", "phase", "startedAt", "updatedAt"],
+      "properties": {
+        "callID": { "type": "string", "format": "uuid" },
+        "logicalRequestID": { "type": "string", "format": "uuid" },
+        "rootCallID": { "type": "string", "format": "uuid" },
+        "attemptIndex": { "type": "integer", "minimum": 1 },
+        "conversationID": { "type": "string", "format": "uuid" },
+        "phase": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" },
+        "attempts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelCallAttemptRecord" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "ModelCallAttemptRecord": {
+      "type": "object",
+      "required": ["attemptIndex", "kind", "outcome", "observedAt"],
+      "properties": {
+        "attemptIndex": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "enum": ["retry", "bindingFailover", "modelSubstitution", "authProbeSkip", "promptCache"] },
+        "outcome": { "type": "string", "enum": ["continued", "succeeded", "terminalFailure", "skipped", "observed"] },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "providerID": { "type": "string" },
+        "endpointModelID": { "type": "string" },
+        "targetModelID": { "type": "string", "format": "uuid" },
+        "promptCacheMode": { "type": "string", "enum": ["none", "ephemeral", "persistent"] },
+        "promptCacheStablePrefixMessageCount": { "type": "integer", "minimum": 1 },
+        "promptCacheProviderSupportsNative": { "type": "boolean" },
+        "promptCacheProviderApplied": { "type": "boolean" },
+        "promptCacheEstimatedInputTokens": { "type": "integer", "minimum": 0 },
+        "promptCacheEstimatedCachedInputTokens": { "type": "integer", "minimum": 0 },
+        "promptCacheEstimatedCacheWriteTokens": { "type": "integer", "minimum": 0 },
+        "promptCacheEstimatedSavingsUSD": { "type": "number" },
+        "errorClass": { "type": "string" },
+        "errorCode": { "type": "string" },
+        "latencyMs": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

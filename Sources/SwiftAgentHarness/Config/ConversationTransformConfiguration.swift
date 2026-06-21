@@ -521,7 +521,7 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ConversationTransformConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; conversation transform defaults")
             return .default
         }

@@ -1,0 +1,100 @@
+{
+  "options": {
+    "includeCurrentDateTime": false,
+    "includeAgentSkills": false
+  },
+  "settings": {},
+  "agentHarness": {
+    "strictAgentHarnessPrompts": true
+  },
+  "toolPolicy": {},
+  "subAgentHostingPolicy": {
+    "entries": {
+      "Coding Agent": {
+        "hostPersonaID": "coding-agent",
+        "routingDomain": "engineering",
+        "tenantScope": "default",
+        "authScopeTags": ["repo:write"],
+        "delegationAllowlist": []
+      }
+    }
+  },
+  "modeProfiles": [
+    {
+      "id": "plan",
+      "interactionMode": "plan",
+      "assemblyKind": "planCollaboration",
+      "tools": {
+        "allow": [
+          "create_plan",
+          "edit_plan",
+          "add_plan_task",
+          "delete_plan_task",
+          "get_plan",
+          "exit_plan_mode",
+          "ask_user",
+          "think",
+          "finish",
+          "bash",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "glob",
+          "grep",
+          "process",
+          "process_send_keys"
+        ]
+      }
+    },
+    {
+      "id": "agent",
+      "interactionMode": "agent",
+      "assemblyKind": "agentBuild",
+      "tools": {
+        "allow": [
+          "add_plan_note",
+          "update_plan_task",
+          "get_plan",
+          "enter_plan_mode",
+          "declare_agent_build_complete",
+          "ask_user",
+          "think",
+          "finish",
+          "Coding Agent",
+          "bash",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "glob",
+          "grep",
+          "process",
+          "process_send_keys"
+        ]
+      },
+      "runtime": {
+        "termination": {
+          "recovery": {
+            "maxAttempts": 10,
+            "behavioralInjectAfterStalls": 2,
+            "behavioralRecoveryTemperature": 0.2
+          }
+        }
+      }
+    },
+    {
+      "id": "trigger-host",
+      "interactionMode": "chat",
+      "assemblyKind": "chat",
+      "tools": {
+        "allow": []
+      },
+      "skills": {
+        "allow": []
+      },
+      "subAgents": {
+        "allow": "*",
+        "maxDepth": 1
+      }
+    }
+  ]
+}

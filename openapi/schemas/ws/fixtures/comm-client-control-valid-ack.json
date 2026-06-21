@@ -1,0 +1,5 @@
+{
+  "kind": "ack",
+  "topic": "pool/health",
+  "upTo": 42
+}

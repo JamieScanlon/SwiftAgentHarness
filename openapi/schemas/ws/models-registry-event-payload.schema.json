@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/models-registry-event-payload.json",
+  "title": "ModelsRegistryEventPayload",
+  "description": "Granular per-model delta `value` for `kind == event` on topic `models/registry`. Snapshots continue to use ModelsRegistryPayload.",
+  "type": "object",
+  "required": ["changes", "updatedAt"],
+  "properties": {
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "modelID"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["added", "removed", "updated"]
+          },
+          "modelID": { "type": "string", "format": "uuid" },
+          "previous": {
+            "type": "object",
+            "properties": {
+              "routing": {
+                "type": "object",
+                "properties": {
+                  "rateLimit": {
+                    "type": "object",
+                    "required": ["requests", "tokens", "windowMs"],
+                    "properties": {
+                      "requests": { "type": "integer" },
+                      "tokens": { "type": "integer" },
+                      "windowMs": { "type": "integer" }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          },
+          "current": {
+            "type": "object",
+            "properties": {
+              "routing": {
+                "type": "object",
+                "properties": {
+                  "rateLimit": {
+                    "type": "object",
+                    "required": ["requests", "tokens", "windowMs"],
+                    "properties": {
+                      "requests": { "type": "integer" },
+                      "tokens": { "type": "integer" },
+                      "windowMs": { "type": "integer" }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

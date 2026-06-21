@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/conversations-registry-payload.json",
+  "title": "ConversationsRegistryPayload",
+  "description": "`value` for topic `conversations/registry` (account/session conversation catalog deltas).",
+  "type": "object",
+  "required": ["schemaVersion", "changes", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer" },
+    "accountID": { "type": "string" },
+    "changes": { "type": "array" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

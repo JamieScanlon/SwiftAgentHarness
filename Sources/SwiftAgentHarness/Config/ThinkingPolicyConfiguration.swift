@@ -19,7 +19,7 @@ public struct ThinkingPolicyConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ThinkingPolicyConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; thinking policy defaults")
             return .default
         }

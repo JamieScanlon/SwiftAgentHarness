@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/models-registry-payload.json",
+  "title": "ModelsRegistryPayload",
+  "description": "`value` for topic `models/registry`.",
+  "type": "object",
+  "required": ["models", "updatedAt"],
+  "properties": {
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "modelName": { "type": "string" },
+          "modelProtocol": { "type": "string" },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "rateLimit": {
+                "type": "object",
+                "required": ["requests", "tokens", "windowMs"],
+                "properties": {
+                  "requests": { "type": "integer" },
+                  "tokens": { "type": "integer" },
+                  "windowMs": { "type": "integer" }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

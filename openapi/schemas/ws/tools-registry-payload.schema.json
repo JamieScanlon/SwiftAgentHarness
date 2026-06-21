@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/tools-registry-payload.json",
+  "title": "ToolsRegistryPayload",
+  "description": "`value` for topic `tools/registry` (session-selected conversation).",
+  "type": "object",
+  "required": ["schemaVersion", "tools", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer" },
+    "conversationID": { "type": "string", "format": "uuid" },
+    "tools": { "type": "array" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

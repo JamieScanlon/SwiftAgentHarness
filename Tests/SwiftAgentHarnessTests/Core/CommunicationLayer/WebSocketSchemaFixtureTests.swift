@@ -6,11 +6,12 @@ import Testing
 struct WebSocketSchemaFixtureTests {
 
     private static var packageRootOpenAPISchemasWS: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "openapi/schemas/ws", directoryHint: .isDirectory)
+        var url = URL(fileURLWithPath: #filePath)
+        // Tests/SwiftAgentHarnessTests/Core/CommunicationLayer/<this file> → repo root
+        for _ in 0..<5 {
+            url.deleteLastPathComponent()
+        }
+        return url.appending(path: "openapi/schemas/ws", directoryHint: .isDirectory)
     }
 
     @Test func commClientControlValidFixturePassesValidator() throws {

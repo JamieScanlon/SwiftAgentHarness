@@ -6,8 +6,9 @@ import Testing
 
 @Suite("FileEventQueueIntegration")
 struct FileEventQueueIntegrationTests {
-    final class CaptureRuntime: TriggerRuntimeDispatching, @unchecked Sendable {
-        var texts: [String] = []
+    actor CaptureRuntime: TriggerRuntimeDispatching {
+        private(set) var texts: [String] = []
+
         func dispatchTriggerMessage(
             conversationID: UUID,
             text: String,
@@ -15,9 +16,9 @@ struct FileEventQueueIntegrationTests {
             inputTrustRaw: String?,
             enableTools: Bool,
             enableAgents: Bool,
-        originSurface: String?,
-        originSenderID: String?
-    ) async throws {
+            originSurface: String?,
+            originSenderID: String?
+        ) async throws {
             texts.append(text)
         }
     }
@@ -30,10 +31,14 @@ struct FileEventQueueIntegrationTests {
         await bundle.fileEventQueue.start()
         let event = dir.appendingPathComponent("drop.json")
         try JSONEncoder().encode(FileEventPayload(type: .immediate, text: "from file")).write(to: event)
-        try await waitUntil { runtime.texts.count == 1 }
+        guard try await waitUntil(timeoutNanoseconds: 10_000_000_000, condition: { await runtime.texts.count == 1 }) else {
+            Issue.record("timed out waiting for file-event dispatch")
+            return
+        }
         await bundle.fileEventQueue.stop()
-        #expect(runtime.texts.count == 1)
-        #expect(runtime.texts[0].contains("from file"))
+        let texts = await runtime.texts
+        #expect(texts.count == 1)
+        #expect(texts[0].contains("from file"))
     }
 
     @Test("webhook queue-only writes without dispatch")
@@ -68,7 +73,7 @@ struct FileEventQueueIntegrationTests {
             WebhookIngressRequest(routeName: "test", body: body, headers: ["X-Webhook-Signature": sig], deliveryID: "delivery-1")
         )
         #expect(result.decision == TriggerActivationDecision.admitted)
-        #expect(runtime.texts.isEmpty)
+        #expect(await runtime.texts.isEmpty)
         #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("delivery-1.json").path))
         #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("delivery-1.trust").path))
     }
@@ -104,7 +109,14 @@ struct FileEventQueueIntegrationTests {
             idempotency: idempotency,
             eventsDirectory: eventsDir
         )
-        let fileEventQueue = FileEventQueueService(eventsDirectory: eventsDir, dispatch: dispatch, taskStore: taskStore, logger: Logger(label: "test"))
+        let fileEventQueue = FileEventQueueService(
+            eventsDirectory: eventsDir,
+            dispatch: dispatch,
+            taskStore: taskStore,
+            logger: Logger(label: "test"),
+            debounceMilliseconds: 10,
+            watcherRetryDelayMilliseconds: 100
+        )
         let auditLog = TriggerAuditLog(logger: Logger(label: "test"))
         let outputRouter = TriggerSymmetricOutputRouter(
             channelRegistry: channelRegistry,
@@ -162,13 +174,13 @@ struct FileEventQueueIntegrationTests {
         timeoutNanoseconds: UInt64 = 3_000_000_000,
         pollNanoseconds: UInt64 = 25_000_000,
         condition: @escaping () async -> Bool
-    ) async throws {
+    ) async throws -> Bool {
         let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
         while DispatchTime.now().uptimeNanoseconds < deadline {
-            if await condition() { return }
+            if await condition() { return true }
             try await Task.sleep(nanoseconds: pollNanoseconds)
         }
-        Issue.record("timed out waiting for file-event dispatch")
+        return false
     }
 
     private func hmacHex(data: Data, secret: String) -> String {

@@ -27,7 +27,7 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolFailoverConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             return .specDefaults
         }
         guard let data = try? Data(contentsOf: url),

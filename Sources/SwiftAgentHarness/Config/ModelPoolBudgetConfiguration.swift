@@ -35,7 +35,7 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; model pool budget safe defaults")
             return .safeDefaults
         }

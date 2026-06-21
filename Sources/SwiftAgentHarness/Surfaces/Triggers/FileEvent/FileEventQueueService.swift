@@ -4,6 +4,8 @@ import Logging
 actor FileEventQueueService {
     private let eventsDirectory: URL
     private let enabled: Bool
+    private let debounceMilliseconds: Int
+    private let watcherRetryDelayMilliseconds: Int
     private let consume: FileEventConsumePipeline
     private let periodicSync: FileEventPeriodicSync
     private let scheduledSync: FileEventScheduledSync
@@ -19,10 +21,14 @@ actor FileEventQueueService {
         dispatch: TriggerDispatchService,
         taskStore: ScheduledTaskStore,
         logger: Logger,
-        enabled: Bool = true
+        enabled: Bool = true,
+        debounceMilliseconds: Int = FileEventQueueWatcher.debounceMilliseconds,
+        watcherRetryDelayMilliseconds: Int = FileEventQueueWatcher.watcherRetryDelayMilliseconds
     ) {
         self.eventsDirectory = eventsDirectory
         self.enabled = enabled
+        self.debounceMilliseconds = debounceMilliseconds
+        self.watcherRetryDelayMilliseconds = watcherRetryDelayMilliseconds
         self.logger = logger
         let ingress = FileEventIngressAdapter()
         self.parser = FileEventPayloadParser(logger: logger)
@@ -47,11 +53,14 @@ actor FileEventQueueService {
         )
         try? periodicSync.syncAllPeriodicFiles()
         await runStartupScan()
-        let debounceCoordinator = FileEventDebounceCoordinator { url in
+        let debounceCoordinator = FileEventDebounceCoordinator(debounceMilliseconds: debounceMilliseconds) { url in
             await self.handleDebouncedEvent(url)
         }
         debounce = debounceCoordinator
-        let watch = FileEventDirectoryWatchSource(eventsDirectory: eventsDirectory) { [weak self] url in
+        let watch = FileEventDirectoryWatchSource(
+            eventsDirectory: eventsDirectory,
+            retryDelayMilliseconds: watcherRetryDelayMilliseconds
+        ) { [weak self] url in
             Task { await self?.noteFilesystemEvent(url) }
         } onError: { [logger] error in
             logger.warning("file_event_watch_error error=\(String(describing: error))")

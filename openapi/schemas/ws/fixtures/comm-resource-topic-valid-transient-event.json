@@ -1,0 +1,13 @@
+{
+  "kind": "event",
+  "topic": "conversation/550e8400-e29b-41d4-a716-446655440000/events",
+  "trustClass": "restricted",
+  "originTrust": "unknown-party",
+  "seq": 12,
+  "value": {
+    "semanticKind": "contentDelta",
+    "jsonUTF8": "{\"kind\":\"text\",\"text\":\"hi\"}"
+  },
+  "runId": "550e8400-e29b-41d4-a716-446655440001",
+  "turnOrdinal": 1
+}

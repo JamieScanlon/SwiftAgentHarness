@@ -16,11 +16,11 @@ actor FileEventDebounceCoordinator {
     func noteEvent(eventURL: URL) {
         let key = eventURL.lastPathComponent
         pending[key]?.cancel()
-        pending[key] = Task {
+        pending[key] = Task(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: UInt64(debounceMilliseconds) * 1_000_000)
             guard !Task.isCancelled else { return }
             await onReady(eventURL)
-            self.clear(key: key)
+            await self.clear(key: key)
         }
     }
 

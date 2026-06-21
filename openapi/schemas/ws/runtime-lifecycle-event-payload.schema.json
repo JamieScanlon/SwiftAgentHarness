@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/runtime-lifecycle-event-payload.json",
+  "title": "RuntimeLifecycleEventPayload",
+  "description": "Runtime lifecycle milestone payload embedded in conversation topic events (`semanticKind == runtimeLifecycle`).",
+  "type": "object",
+  "required": ["schemaVersion", "name", "conversationID", "updatedAt"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "enum": [
+        "turn.started",
+        "loop.iterationStarted",
+        "model.callStarted",
+        "model.callCompleted",
+        "tool.callStarted",
+        "tool.callCompleted",
+        "tool.completionAnnounced",
+        "tool.usageSummary",
+        "tool.approvalRequired",
+        "tool.approvalResolved",
+        "tool.elevatedExecuted",
+        "loop.iterationCompleted",
+        "turn.completed",
+        "turn.cancelled",
+        "turn.bounded",
+        "subagent.orphaned"
+      ]
+    },
+    "conversationID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "runID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "iteration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "modelID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "toolName": {
+      "type": "string"
+    },
+    "approvalState": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "denied",
+        "pending"
+      ]
+    },
+    "policyReason": {
+      "type": "string"
+    },
+    "approvalSource": {
+      "type": "string"
+    },
+    "approvalReason": {
+      "type": "string"
+    },
+    "approvalRoute": {
+      "type": "string",
+      "enum": ["user", "parent"]
+    },
+    "approvalTitle": {
+      "type": "string"
+    },
+    "approvalDescription": {
+      "type": "string"
+    },
+    "approvalSeverity": {
+      "type": "string"
+    },
+    "approvalTimeoutMs": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "approvalTimeoutBehavior": {
+      "type": "string",
+      "enum": ["autoDeny", "autoApprove"]
+    },
+    "approvalResolutionKind": {
+      "type": "string",
+      "enum": ["manual", "timeoutDefault", "runtimeAuto"]
+    },
+    "originTrustLevel": {
+      "type": "string"
+    },
+    "parentConversationID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "childConversationID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "delegateHandleID": {
+      "type": "string"
+    },
+    "toolCallID": {
+      "type": "string"
+    },
+    "completionAnnounceID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "promptTokens": { "type": "integer", "minimum": 0 },
+        "completionTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "costUSD": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "argumentDigest": {
+      "type": "string"
+    },
+    "argumentByteCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "argumentRedaction": {
+      "type": "string"
+    },
+    "resultDigest": {
+      "type": "string"
+    },
+    "resultByteCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "resultRedaction": {
+      "type": "string"
+    },
+    "resultTruncated": {
+      "type": "boolean"
+    },
+    "executionEnvironmentKind": {
+      "type": "string"
+    },
+    "executionEnvironmentAdapterID": {
+      "type": "string"
+    },
+    "executionIsolationLevel": {
+      "type": "string"
+    },
+    "toolCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "toolNames": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "summaryText": {
+      "type": "string"
+    },
+    "terminalReason": {
+      "type": "object",
+      "required": ["category"],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["externalCancellation", "naturalStop", "boundedStop", "failure"]
+        },
+        "boundedReason": {
+          "type": "string",
+          "enum": [
+            "maxAgentIterations",
+            "userStopRequested",
+            "runawayEmptyAssistantStreak",
+            "repeatToolCallStreak",
+            "chattyAssistantLimit",
+            "maxContinuationRounds"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

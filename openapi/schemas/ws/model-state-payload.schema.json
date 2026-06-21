@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/model-state-payload.json",
+  "title": "ModelStatePayload",
+  "description": "`value` for topic `model/{uuid}/state`.",
+  "type": "object",
+  "required": ["phase", "thinking", "updatedAt"],
+  "properties": {
+    "phase": { "type": "string" },
+    "thinking": { "type": "boolean" },
+    "callId": { "type": "string", "format": "uuid" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "inFlightCount": { "type": "integer" },
+    "lastCompletedAt": { "type": "string", "format": "date-time" },
+    "accepting": { "type": "boolean" },
+    "status": { "type": "string", "enum": ["accepting", "saturated", "draining", "offline"] },
+    "concurrencyActive": { "type": "integer" },
+    "concurrencyLimit": { "type": "integer" },
+    "errorRate1m": { "type": "number" }
+  },
+  "additionalProperties": true
+}

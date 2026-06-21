@@ -48,6 +48,9 @@ let package = Package(
                 .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),
                 .product(name: "VaporTesting", package: "vapor"),
+            ],
+            resources: [
+                .copy("Resources/PromptConfig.json"),
             ]
         ),
     ]

@@ -1,0 +1,2964 @@
+openapi: 3.1.0
+info:
+  title: SileniaAIServer HTTP API
+  version: 1.33.0
+  description: |
+    Control plane for SileniaAIServer (Vapor `/api` group). Does not include WebSocket `/ws` —
+    see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
+
+    **Dates:** `GET /conversations/{id}` uses ISO-8601 for `Date` fields. List endpoints may use
+    numeric timestamps — see API/ARCHITECTURE.md.
+
+    **v1.1.0:** Conversation list query modes (`GET /conversations`), `PATCH /conversations/{id}`,
+    `GET /conversations/{id}/checkpoints/latest`, `DELETE` soft/hard query param; see `Documentation/CRUD_QUERY_API_INVENTORY.md`.
+
+    **v1.2.0:** `searchMode` on paged list, `POST /conversations/{id}/branch`, `POST …/checkpoints`,
+    optional `kind` on latest checkpoint, soft-delete retention + background purge (see `ServerConfig`).
+
+    **v1.3.0:** `GET /search` — harness-style cross-conversation message search (ranked hits + excerpts;
+    not SQLite FTS; see `CRUD_QUERY_API_INVENTORY.md`).
+
+    **v1.4.0:** Conversation mutations consolidated on `PATCH /conversations/{id}` (`ConversationPatch`), including
+    model ref and user system prompt; former `PUT` sub-routes removed.
+
+    **v1.5.0:** `GET /conversations/{id}/checkpoints/latest` returns a discriminated **`LatestCheckpointResponse`**
+    (`kind` + `checkpoint` oneOf: compaction, memory injection, tool trim, system prompt assembly).
+
+    **v1.6.0:** Conversation **run** resources: `GET /conversations/{id}/runs`, `GET …/runs/{runId}`, `POST …/runs/{runId}/cancel`;
+    `PATCH /conversations/{id}` may return **409** with **`ConversationRunConflictBody`** (`code`: **`mode_change_run_in_progress`**) when an interaction mode / phase change is requested during an active streaming run.
+
+    **v1.7.0:** `POST /messages` **`ChatRequest`** optional **`expectedPreviousTailHarnessMessageID`**.
+
+    **v1.8.0:** Paged **`GET /conversations`** and nested conversation controls were introduced for migration work.
+
+    **v1.9.0:** **`PATCH /conversations/{id}`** optional **`expectedRevision`** (optimistic concurrency); success returns **`controlPlaneRevision`**. **409** may return **`ConversationRevisionConflictBody`** (`code`: **`revision_mismatch`**). See **`Documentation/CONVERSATION_PATCH_REVISION.md`**.
+
+    **v1.10.0:** `POST /messages` **`ChatRequest`** optional **`inputTrust`** (user-message provenance; aligns with **`Message`** JSON **`inputTrust`** on **`GET /messages`**).
+
+    **v1.11.0:** Paged **`GET /conversations`** optional **`owner`** (UUID tenant filter; **400** if non-empty and not a valid UUID). Same **`owner`** semantics on **`GET /search`**. Paged list hits persisted rows via backend query.
+
+    **v1.12.0:** Send-path conflict harmonization: **`POST /messages`** and **`POST /messages/trigger`** return **409 + JSON** for append conflicts (`transcript_tail_mismatch`, `run_in_progress`) before stream commit; they no longer encode these conflicts as plain-text stream chunks. WebSocket parity adds **`patch_conversation`** with structured **`revision_mismatch`** (`ConversationRevisionConflictBody`) aligned with REST patch semantics.
+
+    **v1.13.0:** Run lifecycle durability without a standalone run table: **`GET /conversations/{id}/runs`** and **`GET /conversations/{id}/runs/{runId}`** survive restart.
+
+    **v1.14.0:** Run list/get projection is **transcript-derived** for **v2** harness conversations: segmentation walks **`HarnessSessionPersistence.readTranscriptEntries`** using persisted **`transcriptRunID`** on mirrored rows and terminal **`custom`** markers (`run_cancelled`, `run_orphaned`, `run_bounded`, `run_errored`). Conversations without the v2 transcript store return an empty run history on these routes. `POST …/runs/{runId}/cancel` semantics remain “active in-flight run only”.
+
+    **v1.15.0:** Per-client REST/WS session headers and cookies remain for request scoping and tenancy alignment.
+
+    **v1.16.0:** **`GET/PUT/DELETE /conversations/{id}/engine-artifacts`** (+ keyed paths): raw-byte upload/download (**`application/octet-stream`**), JSON key listing, **`413`** when over configured max body size, **`501`** when harness artifact storage is unavailable. Strict tenancy: optional **`X-SAH-Authenticated-Owner`** (UUID) when **`requireAuthenticatedTenantOnAPI`** is enabled — see **`Documentation/CRUD_QUERY_API_INVENTORY.md`**.
+
+    **v1.17.0:** **`ConversationRunInfo`** parity with **`SileniaAICommon`**: **`terminalReason`**, **`markerKind`**, optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
+
+    **v1.19.0:** **`POST /conversations/{id}/branch`** HTTP strict preconditions: optional **`If-Match`** against parent transcript tail (**`msg-*`**, **`msg-none`** when empty); **`428`**/**`412`** when **`ServerConfig.httpPreconditionsStrictMode`** is enabled (same ETag family as send). Tenancy operator note: **`GET /conversations`** / **`GET /search`** do not auto-scope to **`X-SAH-Authenticated-Owner`** — supply **`owner`** query when **`requireAuthenticatedTenantOnAPI`** isolation is required (**`Documentation/CRUD_QUERY_API_INVENTORY.md`**).
+
+    **v1.20.0:** Legacy websocket **`type:patch_conversation`** is removed (deterministic error envelope). Canonical control-plane patch mutation is **`PATCH /conversations/{id}`** only, with strict precondition support (**`If-Match`** → **`412`**/**`428`**) and structured **`type:error`** envelopes for bad ID/not found validation paths.
+
+    **v1.21.0:** Adds canonical in-place revert mutation **`POST /conversations/{id}/revert`** (chunked assistant stream; transcript-tail preconditions via **`If-Match`** → **`412`**/**`428`** in strict mode). Legacy websocket **`type:revert_to_message`** is removed with deterministic migration guidance to REST.
+
+    **v1.22.0:** Legacy websocket **`type:split_conversation`** is removed (deterministic error envelope). Canonical split control-plane mutation is **`POST /conversations/{id}/branch`** only.
+
+    **v1.23.0:** Legacy websocket **`type:stop_agent_build`** is removed (deterministic error envelope). Canonical stop mutation is **`POST /conversations/{id}/cancel`**.
+
+    **v1.24.0:** Legacy websocket **`type:spawn_sub_agent`** is removed (deterministic error envelope).
+
+    **v1.25.0:** Legacy websocket **`type:resolve_tool_approval`** is removed (deterministic error envelope). Canonical approval mutation is **`POST /conversations/{id}/tool-approvals`** with structured `type:error` envelopes for invalid ID/body/not found/unsupported paths.
+
+    **v1.26.0:** Legacy websocket **`type:push_completion_announce`** is removed (deterministic error envelope). Canonical completion ingestion mutation is **`POST /conversations/{id}/completion-announcements`** with structured `type:error` envelopes for invalid ID/body/not found/unsupported paths.
+
+    **v1.27.0:** Legacy REST aliases **`GET /messages`**, **`POST /messages`**, and **`POST /messages/agent_build/stop`** are removed. Canonical read/send/stop paths are **`GET /conversations/{id}`** (embedded `messages`), **`POST /conversations/{id}/messages`**, and **`POST /conversations/{id}/cancel`**.
+
+    **v1.27.1:** Trigger send routes (`POST /conversations/{id}/messages/trigger` and legacy `/messages/trigger`) are runtime ingress extensions outside communication-layer contract scope. External callers are expected to use a trigger gate enforcing idempotency, rate limits, authorization, and cost ceilings before dispatch.
+
+    **v1.27.2:** API trigger ingress is removed. `POST /messages/trigger` and `POST /conversations/{id}/messages/trigger` are no longer part of the HTTP API contract; trigger dispatch must come through the non-API trigger gate boundary.
+
+    **v1.27.3:** Replay control endpoints are removed from HTTP API (`POST /messages/replay/start`, `POST /messages/replay/stop`, `GET /messages/replay/status`). Harness replay semantics remain ordered history transfer on topic/data-plane surfaces.
+
+    **v1.27.4:** Conversation-scoped capability routes are removed (`GET /conversations/{id}/available-tools`, `GET /conversations/{id}/available-skills`). Canonical registry reads are global `GET /tools`, `GET /skills`, and `GET /sub-agents` with conditional `If-None-Match` / `304`.
+
+    **v1.27.5:** REST orchestration snapshot helpers are removed (`GET /conversations/{id}/orchestration-state`, `GET /conversations/{id}/turn-state`). Runtime state snapshots remain available on WebSocket topic `conversation/{id}/state`.
+
+    **v1.28.0:** HTTP control-plane parity and stricter defaults: adds **`POST /models/query`**, **`GET /conversations/{id}/events?since=`**, and canonical **`GET /search`**. Mutation preconditions are strict-by-default for guarded routes.
+
+    **v1.29.0:** Conversation read/projection parity: **`GET /conversations/{id}?includeDerived=true`** returns
+    the conversation snapshot plus persisted `rawEvents` and `derivedEvents`; **`POST /conversations/{id}/projection`**
+    returns the on-demand projected message view with projection metadata.
+
+    **v1.30.0:** Conversation mode profile pointer parity: create/patch payloads accept **`modeProfileID`** and
+    persisted conversation payloads may include this registry pointer alongside derived coarse **`interactionMode`**.
+
+    **v1.32.0:** **`ConversationPatch.expectedRevision`** is required on **`PATCH /conversations/{id}`** (last-write-wins without revision is removed).
+
+    **v1.33.0:** Tool listing split: **`GET /tools`** returns the global registered catalog (unfiltered); **`GET /conversations/{id}/tools`** returns effective tools for that conversation (mode profile, routing whitelist, disabled tools). Replaces removed **`GET /conversations/{id}/available-tools`**.
+
+    **v1.34.0:** Skill listing split: **`GET /conversations/{id}/skills`** returns effective skills for that conversation (mode profile, routing whitelist, disabled skills). Replaces removed **`GET /conversations/{id}/available-skills`** for picker/UI reads; global **`GET /skills`** remains the registry read with ETag support.
+
+    **v1.18.0:** **`Documentation/SESSION_SCOPING.md`** documents explicit conversation-id routing on REST and legacy WS control frames.
+
+servers:
+  - url: "{origin}/api"
+    description: Replace `{origin}` with server origin (scheme + host + port); paths below are relative to `/api`.
+    variables:
+      origin:
+        default: http://127.0.0.1:8080
+
+tags:
+  - name: Core
+    description: Status, prompts, models
+  - name: Conversations
+    description: Conversation CRUD and metadata
+  - name: Messages
+    description: Messages and replay control plane.
+  - name: Upload
+    description: File upload for chat attachments
+
+paths:
+  /status:
+    get:
+      operationId: getApiStatus
+      tags: [Core]
+      summary: Server health and session count
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /system_prompt/full:
+    get:
+      operationId: getFullSystemPrompt
+      tags: [Core]
+      summary: Expanded system prompt for the current session
+      parameters:
+        - name: userSystemPrompt
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullSystemPromptResponse"
+
+  /models:
+    get:
+      operationId: getApiModels
+      tags: [Core]
+      summary: List available models
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListModelsResponse"
+        "304":
+          description: Not modified for matching If-None-Match
+
+  /models/query:
+    post:
+      operationId: queryModels
+      tags: [Core]
+      summary: Resolve model reference into ranked matches
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryModelsRequest"
+      responses:
+        "200":
+          description: Query matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryModelsResponse"
+        "304":
+          description: Not modified for matching If-None-Match
+        "400":
+          description: Missing or invalid model reference input.
+
+  /models/{id}/state:
+    get:
+      operationId: getModelState
+      tags: [Core]
+      summary: Get schedulability-oriented model state snapshot
+      parameters:
+        - $ref: "#/components/parameters/ModelId"
+      responses:
+        "200":
+          description: Latest model state snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WireJSONObject"
+        "400":
+          description: Invalid model id or state unavailable.
+
+  /models/{id}/calls:
+    get:
+      operationId: getModelCalls
+      tags: [Core]
+      summary: Get active and recent call ledger for one model
+      parameters:
+        - $ref: "#/components/parameters/ModelId"
+      responses:
+        "200":
+          description: Model call ledger snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCallsResponse"
+        "400":
+          description: Invalid model id or calls unavailable.
+
+  /models/{id}/calls/events:
+    get:
+      operationId: streamModelCallEvents
+      tags: [Core]
+      summary: Stream model call ledger updates
+      parameters:
+        - $ref: "#/components/parameters/ModelId"
+      responses:
+        "200":
+          description: Server-sent event stream of model call snapshots
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid model id or event stream unavailable.
+
+  /conversations:
+    get:
+      operationId: listConversations
+      tags: [Conversations]
+      summary: List conversations (paged summaries)
+      description: |
+        Canonical conversation catalog list route. Returns `PagedConversationsResponse`
+        using the provided filters (or defaults when omitted).
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: searchMode
+          in: query
+          description: |
+            `substring` (default) matches topic, description, and tags. `fts` also scans message bodies
+            on persisted transcript rows (not SQLite FTS5).
+          schema:
+            $ref: "#/components/schemas/ConversationSearchMode"
+        - name: lifecycle
+          in: query
+          schema:
+            $ref: "#/components/schemas/ConversationLifecycleState"
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+        - name: includeDeleted
+          in: query
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          schema:
+            $ref: "#/components/schemas/ConversationListSort"
+        - name: updatedAfter
+          in: query
+          description: ISO8601 date-time filter (inclusive lower bound on `updatedAt`).
+          schema:
+            type: string
+        - name: updatedBefore
+          in: query
+          description: ISO8601 date-time filter (exclusive upper bound on `updatedAt`).
+          schema:
+            type: string
+        - name: owner
+          in: query
+          description: |
+            Optional UUID; when set, only conversations whose cached `ownerAccountID` matches. Omit for no owner filter.
+            A non-empty value that is not a valid UUID returns **400** (no silent unscoped list).
+
+            **Strict tenancy (`requireAuthenticatedTenantOnAPI`):** the server does **not** infer this from
+            **`X-SAH-Authenticated-Owner`** — pass **`owner=<principal UUID>`** when you need tenant-isolated catalog results.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Paged conversations response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagedConversationsResponse"
+        "400":
+          description: Invalid query parameters (e.g. malformed `owner` UUID).
+    post:
+      operationId: createConversation
+      tags: [Conversations]
+      summary: Create conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvoRequest"
+      responses:
+        "200":
+          description: Create result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationMutationResponse"
+        "400":
+          description: Invalid or unknown model reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /search:
+    get:
+      operationId: searchConversations
+      tags: [Conversations]
+      summary: Search message bodies across conversations
+      description: |
+        **`GET /search`** is distinct from paged `GET /conversations` with `search=` (metadata + optional in-memory list scan).
+
+        This endpoint returns **ranked message hits** with **excerpts** over persisted SwiftData `CachedMessage` rows (localized contains / AND-of-whitespace-terms; synchronous request-time scan — no separate FTS index).
+
+        **`kind=semantic`** is reserved; responses include `hits: []` and a `warning` until embeddings-backed search exists.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search text (whitespace splits AND terms).
+          schema:
+            type: string
+        - name: kind
+          in: query
+          description: "fulltext (default) or semantic (not implemented)."
+          schema:
+            $ref: "#/components/schemas/ConversationSearchKind"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: owner
+          in: query
+          description: |
+            When set, only conversations whose persisted `ownerAccountID` matches this UUID are included.
+            A non-empty value that is not a valid UUID returns **400**.
+
+            **Strict tenancy:** omitting **`owner`** does **not** auto-scope to the authenticated principal — pass **`owner=`** for isolation.
+          schema:
+            type: string
+            format: uuid
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: includeDeleted
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Ranked search hits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSearchResponse"
+        "400":
+          description: Missing or empty `q`, or malformed `owner` UUID.
+
+  /conversations/{id}/events:
+    get:
+      operationId: backfillConversationEvents
+      tags: [Conversations]
+      summary: Backfill conversation events from persisted transcript
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: since
+          in: query
+          required: false
+          description: Replay cursor (exclusive sequence) for legacy total-order backfill.
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Backfill lines plus replay metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationEventsBackfillResponse"
+        "304":
+          description: Not modified for matching If-None-Match
+        "400":
+          description: Invalid conversation id or backfill request.
+
+  /conversations/{id}/plan:
+    get:
+      operationId: getConversationPlan
+      tags: [Conversations]
+      summary: Server-local plan.md markdown
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Plan markdown JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationPlanResponse"
+        "404":
+          description: Not found
+
+  /conversations/{id}/tools:
+    get:
+      operationId: listConversationTools
+      tags: [Conversations]
+      summary: Effective tools for a conversation (mode/routing/disabled filtered)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Effective tool rows for the conversation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableToolInfo"
+        "404":
+          description: Conversation not found
+
+  /conversations/{id}/skills:
+    get:
+      operationId: listConversationSkills
+      tags: [Conversations]
+      summary: Effective skills for a conversation (mode/routing/disabled filtered)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Effective skill rows for the conversation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableSkillInfo"
+        "404":
+          description: Conversation not found
+
+  /conversations/{id}/slash-commands:
+    get:
+      operationId: listSlashCommands
+      tags: [Conversations]
+      summary: Slash command autocomplete rows
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Slash commands array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WireJSONObject"
+        "400":
+          description: Bad request / error JSON
+
+  /conversations/{id}/preview-context-compaction:
+    post:
+      operationId: postPreviewContextCompaction
+      tags: [Conversations]
+      summary: Non-persisting compaction preview (gated + auth header)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/ContextCompactionPreviewToken"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewContextCompactionRequest"
+      responses:
+        "200":
+          description: Preview result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WireJSONObject"
+        "401":
+          description: Missing/invalid preview token
+        "404":
+          description: Route disabled or not found
+        "501":
+          description: Not implemented on provider
+
+  /conversations/{id}/compact:
+    post:
+      operationId: postManualCompact
+      tags: [Conversations]
+      summary: Persisting manual compaction (gated + auth header)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/ContextCompactionPreviewToken"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManualContextCompactionRequest"
+      responses:
+        "200":
+          description: Compaction result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WireJSONObject"
+        "401":
+          description: Missing/invalid token
+        "404":
+          description: Disabled
+
+  /conversations/{id}/server-metadata:
+    get:
+      operationId: getConversationServerMetadata
+      tags: [Conversations]
+      summary: Optional server-only metadata blob
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Metadata JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WireJSONObject"
+        "404":
+          description: Not found
+
+  /conversations/{id}/branch:
+    post:
+      operationId: branchConversationAtUserMessage
+      tags: [Conversations]
+      summary: Fork conversation at a user message (control plane)
+      description: |
+        Canonical split control-plane replacement. Creates a new conversation from the transcript
+        prefix through the given user message, selects the fork, and does **not** start an LLM
+        streaming turn. Legacy websocket `type:split_conversation` is removed.
+
+        **HTTP preconditions:** When **`ServerConfig.httpPreconditionsStrictMode`** is enabled, send **`If-Match`** with the
+        parent transcript tail token (**`msg-{uuid}`** for the last message, **`msg-none`** when the transcript is empty),
+        matching **`POST /conversations/{id}/messages`**. Omitted header → **428**; stale token → **412**.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationBranchRequest"
+      responses:
+        "200":
+          description: New fork id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationBranchResponse"
+        "400":
+          description: Structured `type:error` envelope for invalid ID/body/anchor
+        "404":
+          description: Structured `type:error` envelope for unknown conversation
+        "412":
+          description: Stale If-Match (transcript tail mismatch)
+          headers:
+            ETag:
+              description: Current transcript tail token (quoted).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+        "428":
+          description: Strict precondition mode requires If-Match on this mutation
+          headers:
+            ETag:
+              description: Current transcript tail token when known (quoted).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionRequiredBody"
+
+  /conversations/{id}/revert:
+    post:
+      operationId: revertConversationAtUserMessage
+      tags: [Conversations]
+      summary: In-place revert to user message and regenerate (chunked streaming response)
+      description: |
+        Truncates the existing conversation transcript after `userMessageID` and starts a new assistant run from that anchor.
+        This is the canonical replacement for legacy websocket `type:revert_to_message`.
+
+        **HTTP preconditions:** When **`ServerConfig.httpPreconditionsStrictMode`** is enabled, send **`If-Match`** with the
+        current transcript tail token (**`msg-{uuid}`** for the last message, **`msg-none`** when empty).
+        Omitted header → **428**; stale token → **412**.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationRevertRequest"
+      responses:
+        "200":
+          description: Chunked assistant stream after successful in-place revert.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid request body or revert anchor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Unknown conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: Optimistic execution conflict (tail mismatch or run already in progress).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/TranscriptTailConflictBody"
+                  - $ref: "#/components/schemas/ConversationRunConflictBody"
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+        "428":
+          description: Strict precondition mode requires If-Match on this mutation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionRequiredBody"
+
+  /conversations/{id}/completion-announcements:
+    post:
+      operationId: pushCompletionAnnouncement
+      tags: [Conversations]
+      summary: Push a delegated completion announcement
+      description: |
+        Canonical announce ingestion route for delegated sub-agent completion events.
+        The server de-duplicates by `delegateHandleID` + `toolCallID` and fan-outs runtime/sub-agent lifecycle updates.
+        This is the canonical replacement for legacy websocket `type:push_completion_announce`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletionAnnounceTriggerRequest"
+      responses:
+        "200":
+          description: Completion announce accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompletionAnnounceTriggerResponse"
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Unknown conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: Completion announce ingestion unsupported in current runtime
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/tool-approvals:
+    post:
+      operationId: resolveToolApproval
+      tags: [Conversations]
+      summary: Resolve runtime tool approval decision
+      description: |
+        Canonical tool-approval resolution control-plane route.
+        This is the canonical replacement for legacy websocket `type:resolve_tool_approval`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolApprovalResolutionRequest"
+      responses:
+        "200":
+          description: Approval resolution accepted
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Unknown conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: Tool approval resolution unsupported in current runtime
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/checkpoints/invalidate:
+    post:
+      operationId: invalidateConversationCheckpoints
+      tags: [Conversations]
+      summary: Invalidate durable checkpoints for selected harness kinds
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationCheckpointInvalidateRequest"
+      responses:
+        "200":
+          description: Kinds that were applied (defaults expanded when body omitted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationCheckpointInvalidateResponse"
+        "404":
+          description: Unknown conversation
+
+  /conversations/{id}/checkpoints/latest:
+    get:
+      operationId: getLatestCheckpoint
+      tags: [Conversations]
+      summary: Latest valid harness checkpoint by kind
+      description: |
+        Returns the latest valid checkpoint for the requested harness `kind`, or 404 when none or the conversation
+        is missing. Top-level `kind` matches the query param (default `context_compaction`). The `checkpoint`
+        object shape depends on `kind` — see `LatestCheckpointResponse`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: kind
+          in: query
+          required: false
+          description: |
+            Harness checkpoint discriminant: `context_compaction` (default), `memory_injection_snapshot`,
+            `tool_result_trim`, `system_prompt_assembly`.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Checkpoint envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestCheckpointResponse"
+        "404":
+          description: No checkpoint or unknown conversation
+
+  /conversations/{id}/runs:
+    get:
+      operationId: listConversationRuns
+      tags: [Conversations]
+      summary: List derived runs for a conversation
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfNoneMatch"
+        - name: kinds
+          in: query
+          required: false
+          description: Filter by run kind from opening input trust class.
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ConversationRunKind"
+        - name: outcomes
+          in: query
+          required: false
+          description: Filter by terminal outcome.
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ConversationRunOutcome"
+        - name: since
+          in: query
+          required: false
+          description: Unix timestamp (milliseconds). Include runs that started strictly after this timestamp.
+          schema:
+            type: number
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          description: Max runs to return (default 50, max 200).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque continuation cursor from a prior list response.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paged run summaries (newest-first), derived from the durable transcript.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationRunListResponse"
+        "304":
+          description: Not modified when `If-None-Match` matches.
+        "400":
+          description: Invalid id or query parameters
+
+  /conversations/{id}/runs/{runId}:
+    get:
+      operationId: getConversationRun
+      tags: [Conversations]
+      summary: Get one run by id
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IfNoneMatch"
+        - name: detail
+          in: query
+          required: false
+          description: |
+            When truthy (`1`, `true`, or `yes`), include **`projectionDetail`** (transcript-derived assistant/tool rollups).
+            Omitted or false keeps the summary-only shape aligned with list responses.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run summary when found in transcript-derived run history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationRunInfo"
+        "304":
+          description: Not modified when `If-None-Match` matches.
+        "400":
+          description: Invalid id
+        "404":
+          description: Unknown conversation or run id not recorded
+
+  /conversations/{id}/runs/{runId}/cancel:
+    post:
+      operationId: cancelConversationRun
+      tags: [Conversations]
+      summary: Cancel the active run when run id matches the in-flight orchestration
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: Cancellation accepted or already cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelConversationRunResponse"
+        "409":
+          description: Requested run is not in flight or already ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelConversationRunConflictBody"
+        "400":
+          description: Invalid id
+        "404":
+          description: Unknown conversation
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+
+  /conversations/{id}/cancel:
+    post:
+      operationId: cancelCurrentConversationRun
+      tags: [Conversations]
+      summary: Canonical cancelRun route for in-flight run cancellation
+      description: |
+        Canonical replacement for legacy websocket `type:stop_agent_build`.
+        Caller scopes cancellation to an explicit `runId` in the request body.
+        Repeated cancel for the same run is idempotent and returns the same cancelled outcome.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelConversationRunRequest"
+      responses:
+        "200":
+          description: Cancellation accepted or already cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelConversationRunResponse"
+        "409":
+          description: Requested run is not in flight or already ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelConversationRunConflictBody"
+        "400":
+          description: Invalid conversation id or body
+        "404":
+          description: Unknown conversation
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+
+  /conversations/{id}/engine-artifacts:
+    get:
+      operationId: listEngineArtifacts
+      tags: [Conversations]
+      summary: List cached engine artifact keys for a conversation
+      description: |
+        Returns JSON `{ "keys": [string] }`. Requires harness-backed artifact storage for this conversation; otherwise **501**.
+        When strict authenticated tenancy is enabled, send **`X-SAH-Authenticated-Owner`** matching the conversation **`ownerAccountID`**.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Key list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineArtifactKeysResponse"
+        "400":
+          description: Invalid conversation id
+        "403":
+          description: Conversation not accessible for this authenticated owner (strict tenancy)
+        "401":
+          description: Authenticated owner required (strict tenancy)
+        "404":
+          description: Unknown conversation (strict tenancy — missing row)
+        "501":
+          description: Engine artifact store not available for this conversation
+    delete:
+      operationId: evictAllEngineArtifacts
+      tags: [Conversations]
+      summary: Delete all engine artifacts cached for a conversation
+      description: Idempotent **204**. Same tenancy and availability semantics as GET.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "204":
+          description: Evicted (or none present)
+        "400":
+          description: Invalid conversation id
+        "403":
+          description: Conversation not accessible for this authenticated owner (strict tenancy)
+        "401":
+          description: Authenticated owner required (strict tenancy)
+        "404":
+          description: Unknown conversation (strict tenancy)
+        "501":
+          description: Engine artifact store not available for this conversation
+
+  /conversations/{id}/engine-artifacts/{key}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - $ref: "#/components/parameters/EngineArtifactKey"
+    get:
+      operationId: getEngineArtifact
+      tags: [Conversations]
+      summary: Download one engine artifact (raw bytes)
+      responses:
+        "200":
+          description: Artifact bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid conversation id or artifact key
+        "403":
+          description: Conversation not accessible for this authenticated owner (strict tenancy)
+        "401":
+          description: Authenticated owner required (strict tenancy)
+        "404":
+          description: Unknown conversation or missing artifact
+        "501":
+          description: Engine artifact store not available for this conversation
+    put:
+      operationId: putEngineArtifact
+      tags: [Conversations]
+      summary: Upload or replace one engine artifact (raw body)
+      description: |
+        Request body is the artifact bytes. **`413`** when the body exceeds the configured maximum (**`ServerConfig.engineArtifactMaxUploadBytes`**).
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "204":
+          description: Stored
+        "400":
+          description: Invalid conversation id or artifact key
+        "403":
+          description: Conversation not accessible for this authenticated owner (strict tenancy)
+        "401":
+          description: Authenticated owner required (strict tenancy)
+        "404":
+          description: Unknown conversation (strict tenancy)
+        "413":
+          description: Payload too large
+        "501":
+          description: Engine artifact store not available for this conversation
+    delete:
+      operationId: deleteEngineArtifact
+      tags: [Conversations]
+      summary: Delete one cached engine artifact by key
+      responses:
+        "204":
+          description: Deleted (or key absent — still success)
+        "400":
+          description: Invalid conversation id or artifact key
+        "403":
+          description: Conversation not accessible for this authenticated owner (strict tenancy)
+        "401":
+          description: Authenticated owner required (strict tenancy)
+        "404":
+          description: Unknown conversation (strict tenancy)
+        "501":
+          description: Engine artifact store not available for this conversation
+
+  /conversations/{id}:
+    get:
+      operationId: getConversationById
+      tags: [Conversations]
+      summary: Get single conversation (ISO8601 dates)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: includeDerived
+          in: query
+          required: false
+          description: |
+            When truthy (`1`, `true`, `yes`, `on`), returns `ConversationReadWithDerivedResponse`
+            including persisted `rawEvents` + `derivedEvents`. Default (`false`) keeps the existing
+            `ModelConversation` snapshot shape.
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Conversation snapshot (default) or snapshot + persisted arrays (`includeDerived=true`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/WireJSONObject"
+                  - $ref: "#/components/schemas/ConversationReadWithDerivedResponse"
+        "304":
+          description: Not modified for matching If-None-Match
+        "404":
+          description: Not found
+    patch:
+      operationId: patchConversation
+      tags: [Conversations]
+      summary: Partial conversation update
+      description: |
+        Applies `ConversationPatch` (metadata, tools/skills, thinking, reasoning, lifecycle, model ref, user system prompt).
+        Success body includes `type` and `controlPlaneRevision` (see **`ConversationPatchResponse`**).
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationPatch"
+      responses:
+        "200":
+          description: Patch applied; returns new **`controlPlaneRevision`**
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationPatchResponse"
+        "409":
+          description: |
+            Conflict — active streaming run blocks mode/phase change (**`ConversationRunConflictBody`**),
+            or **`expectedRevision`** does not match (**`ConversationRevisionConflictBody`**).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ConversationRunConflictBody"
+                  - $ref: "#/components/schemas/ConversationRevisionConflictBody"
+        "400":
+          description: Error JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Error JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+        "428":
+          description: Strict precondition mode requires If-Match on this mutation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionRequiredBody"
+    delete:
+      operationId: deleteConversation
+      tags: [Conversations]
+      summary: Delete conversation (hard or soft)
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+        - name: hard
+          in: query
+          required: false
+          description: |
+            When `true` (default), permanently removes the conversation. When `false`, soft-deletes
+            (lifecycle **deleted**) without dropping rows immediately.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Deleted (or soft-delete applied)
+        "404":
+          description: Error JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+        "428":
+          description: Strict precondition mode requires If-Match on this mutation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionRequiredBody"
+
+  /conversations/{id}/projection:
+    post:
+      operationId: projectConversation
+      tags: [Conversations]
+      summary: On-demand conversation projection view
+      description: |
+        Control-plane projection endpoint for `project(id, config?)`.
+        Returns the projected message array plus projection metadata.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationProjectRequest"
+      responses:
+        "200":
+          description: Projection payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationProjectResponse"
+        "400":
+          description: Invalid id or request body
+        "404":
+          description: Unknown conversation
+        "501":
+          description: Projection unsupported in current provider/runtime
+
+  /conversations/{id}/messages:
+    post:
+      operationId: postConversationMessage
+      tags: [Messages]
+      summary: Canonical appendInput route
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "201":
+          description: |
+            Input append accepted. Returns run/message anchors for data-plane correlation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppendInputResponse"
+        "409":
+          description: Optimistic append conflict (tail mismatch or run already in progress).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/TranscriptTailConflictBody"
+                  - $ref: "#/components/schemas/ConversationRunConflictBody"
+        "412":
+          description: Stale If-Match value for strict preconditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionFailedBody"
+        "428":
+          description: Strict precondition mode requires If-Match on this mutation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPPreconditionRequiredBody"
+
+  /tools:
+    get:
+      operationId: listRegistryTools
+      tags: [Core]
+      summary: Global registered tool catalog (unfiltered)
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Tool registry array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableToolInfo"
+        "304":
+          description: Not modified for matching If-None-Match
+
+  /skills:
+    get:
+      operationId: listRegistrySkills
+      tags: [Core]
+      summary: Global skill registry rows
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Skill registry array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableSkillInfo"
+        "304":
+          description: Not modified for matching If-None-Match
+
+  /sub-agents:
+    get:
+      operationId: listRegistrySubAgents
+      tags: [Core]
+      summary: Global sub-agent registry rows
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Sub-agent registry array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WireJSONObject"
+        "304":
+          description: Not modified for matching If-None-Match
+
+  /modes:
+    get:
+      operationId: listRegistryModes
+      tags: [Core]
+      summary: Global mode profile catalog
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Mode profile catalog wrapper
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModesCatalogResponse"
+        "304":
+          description: Not modified for matching If-None-Match
+
+  /modes/reload:
+    post:
+      operationId: reloadRegistryModes
+      tags: [Core]
+      summary: Reload project-local mode profile config
+      responses:
+        "200":
+          description: Reload attempt result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reloaded]
+                properties:
+                  reloaded:
+                    type: boolean
+                    description: False when no project mode config directory is configured.
+
+  /upload:
+    post:
+      operationId: postUpload
+      tags: [Upload]
+      summary: Upload attachment (requires X-File-Name and Content-Type headers)
+      parameters:
+        - name: X-File-Name
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: Content-Type
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Stored file info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileUploadResponse"
+
+components:
+  parameters:
+    ConversationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    ModelId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    EngineArtifactKey:
+      name: key
+      in: path
+      required: true
+      description: |
+        Single path segment; server rejects `..`, slashes, and empty keys. UTF-8 opaque identifier chosen by the engine client.
+      schema:
+        type: string
+        minLength: 1
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Optimistic concurrency token (quoted ETag). Guarded mutations require **`If-Match`** by default and return
+        **428** (`HTTPPreconditionRequiredBody`) when omitted; mismatched tokens return **412**
+        (`HTTPPreconditionFailedBody`).
+      schema:
+        type: string
+
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: |
+        Cache validator for registry reads. Matching value returns **304 Not Modified**.
+      schema:
+        type: string
+
+    ContextCompactionPreviewToken:
+      name: X-SAH-Context-Compaction-Preview-Token
+      in: header
+      required: true
+      description: Shared authorization token for context-compaction preview/manual routes.
+      schema:
+        type: string
+
+  schemas:
+    WireJSONObject:
+      type: object
+      additionalProperties: true
+      description: Arbitrary JSON object matching Swift Codable wire encoding.
+
+    HTTPPreconditionRequiredBody:
+      type: object
+      required: [error, resourceUrl]
+      properties:
+        error:
+          type: string
+          enum: [precondition_required]
+        resourceUrl:
+          type: string
+          description: Canonical mutation URL for the precondition check.
+
+    HTTPPreconditionFailedBody:
+      type: object
+      required: [error, currentVersion, yourVersion, resourceUrl]
+      properties:
+        error:
+          type: string
+          enum: [precondition_failed]
+        currentVersion:
+          type: string
+          description: Normalized server ETag token (unquoted).
+        yourVersion:
+          type: string
+          description: Normalized client If-Match token (unquoted).
+        resourceUrl:
+          type: string
+
+    ToolListingSource:
+      type: string
+      enum: [local, mcp, a2a, unknown]
+
+    AvailableToolInfo:
+      type: object
+      required: [name, description, source]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        source:
+          $ref: "#/components/schemas/ToolListingSource"
+        normalizedSchemaFingerprint:
+          type: string
+        normalizedSchemaVersion:
+          type: string
+        normalizedTopLevelType:
+          type: string
+        normalizedRequiredCount:
+          type: integer
+        normalizedPropertyCount:
+          type: integer
+
+    AvailableSkillInfo:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    ModeProfileDTO:
+      type: object
+      required: [id, label]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        description:
+          type: [string, "null"]
+        symbol:
+          type: [string, "null"]
+        summary:
+          $ref: "#/components/schemas/ModeProfileSummary"
+
+    ModeProfileSummary:
+      type: object
+      properties:
+        toolPolicy:
+          type: [string, "null"]
+          description: Summary classification for tool policy (all, restricted, none).
+        compaction:
+          type: [string, "null"]
+          description: Context compaction level summary.
+        maxIterations:
+          type: [integer, "null"]
+          minimum: 1
+        modelTier:
+          type: [string, "null"]
+          description: Coarse model-tier hint for picker chips.
+
+    ModesCatalogResponse:
+      type: object
+      required: [profiles]
+      properties:
+        profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeProfileDTO"
+
+    StatusResponse:
+      type: object
+      required: [status, sessions]
+      properties:
+        status:
+          type: string
+        sessions:
+          type: integer
+
+    FullSystemPromptResponse:
+      type: object
+      required: [fullSystemPrompt]
+      properties:
+        fullSystemPrompt:
+          type: string
+
+    LLMCapability:
+      type: string
+      description: SwiftAgentKit LLMCapability raw values (intrinsic model gates).
+      enum:
+        - unknown
+        - completion
+        - tools
+        - insert
+        - vision
+        - audio
+        - embedding
+        - thinking
+        - reasoningRequired
+        - promptCacheEphemeral
+        - promptCachePersistent
+        - imageGeneration
+
+    ModelCostBudget:
+      type: object
+      properties:
+        inputPer1MUSD:
+          type: number
+          format: double
+        outputPer1MUSD:
+          type: number
+          format: double
+        cachedInputPer1MUSD:
+          type: number
+          format: double
+
+    ModelRateLimitMetadata:
+      type: object
+      required: [requests, tokens, windowMs]
+      properties:
+        requests:
+          type: integer
+        tokens:
+          type: integer
+        windowMs:
+          type: integer
+
+    ModelRoutingMetadata:
+      type: object
+      properties:
+        rateLimit:
+          $ref: "#/components/schemas/ModelRateLimitMetadata"
+
+    ModelInfo:
+      type: object
+      required: [id, modelName, modelProtocol, capabilities]
+      properties:
+        id:
+          type: string
+          format: uuid
+        modelName:
+          type: string
+        modelProtocol:
+          type: string
+          enum: [ollama, openAIAPI, lmStudio]
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/LLMCapability"
+        requestFeatures:
+          type: object
+          additionalProperties: true
+          description: SwiftAgentKit ModelRequestFeatures JSON (optional for older clients).
+        cost:
+          $ref: "#/components/schemas/ModelCostBudget"
+        routing:
+          $ref: "#/components/schemas/ModelRoutingMetadata"
+
+    ModelCallAttemptKind:
+      type: string
+      enum: [retry, bindingFailover, modelSubstitution, authProbeSkip, promptCache]
+
+    ModelCallAttemptOutcome:
+      type: string
+      enum: [continued, succeeded, terminalFailure, skipped, observed]
+
+    ModelCallAttemptRecord:
+      type: object
+      required: [attemptIndex, kind, outcome, observedAt]
+      properties:
+        attemptIndex:
+          type: integer
+          minimum: 1
+        kind:
+          $ref: "#/components/schemas/ModelCallAttemptKind"
+        outcome:
+          $ref: "#/components/schemas/ModelCallAttemptOutcome"
+        observedAt:
+          type: string
+          format: date-time
+        providerID:
+          type: string
+        endpointModelID:
+          type: string
+        targetModelID:
+          type: string
+          format: uuid
+        promptCacheMode:
+          type: string
+          enum: [none, ephemeral, persistent]
+        promptCacheStablePrefixMessageCount:
+          type: integer
+          minimum: 1
+        promptCacheProviderSupportsNative:
+          type: boolean
+        promptCacheProviderApplied:
+          type: boolean
+        promptCacheEstimatedInputTokens:
+          type: integer
+          minimum: 0
+        promptCacheEstimatedCachedInputTokens:
+          type: integer
+          minimum: 0
+        promptCacheEstimatedCacheWriteTokens:
+          type: integer
+          minimum: 0
+        promptCacheEstimatedSavingsUSD:
+          type: number
+          format: double
+        errorClass:
+          type: string
+        errorCode:
+          type: string
+        latencyMs:
+          type: number
+          format: double
+
+    ModelCallRecord:
+      type: object
+      required: [callID, phase, startedAt, updatedAt]
+      properties:
+        callID:
+          type: string
+          format: uuid
+        logicalRequestID:
+          type: string
+          format: uuid
+        rootCallID:
+          type: string
+          format: uuid
+        attemptIndex:
+          type: integer
+          minimum: 1
+        conversationID:
+          type: string
+          format: uuid
+        phase:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCallAttemptRecord"
+
+    ModelCallsPayload:
+      type: object
+      required: [modelID, active, recent, updatedAt]
+      properties:
+        modelID:
+          type: string
+          format: uuid
+        active:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCallRecord"
+        recent:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCallRecord"
+        updatedAt:
+          type: string
+          format: date-time
+
+    ModelCallsResponse:
+      type: object
+      required: [modelID, calls]
+      properties:
+        modelID:
+          type: string
+          format: uuid
+        calls:
+          $ref: "#/components/schemas/ModelCallsPayload"
+
+    ListModelsResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelInfo"
+
+    QueryModelsRequest:
+      type: object
+      properties:
+        modelRef:
+          type: string
+        modelID:
+          type: string
+          format: uuid
+        idOrQuery:
+          type: string
+      description: Provide at least one model reference input field.
+
+    QueryModelsResponse:
+      type: object
+      required: [matches]
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelInfo"
+
+    ConversationEventsBackfillResponse:
+      type: object
+      required: [conversationID, latestSeq, lagging, events]
+      properties:
+        conversationID:
+          type: string
+          format: uuid
+        since:
+          type: integer
+        latestSeq:
+          type: integer
+        lagging:
+          type: boolean
+        events:
+          type: array
+          description: JSON-encoded harness topic envelope lines.
+          items:
+            type: string
+
+    ConversationListSort:
+      type: string
+      enum:
+        - updatedAtDesc
+        - updatedAtAsc
+        - createdAtDesc
+        - createdAtAsc
+
+    ConversationSearchMode:
+      type: string
+      enum:
+        - substring
+        - fts
+
+    ConversationSearchKind:
+      type: string
+      enum:
+        - fulltext
+        - semantic
+
+    ConversationSearchHit:
+      type: object
+      required:
+        - conversationID
+        - messageID
+        - excerpt
+      properties:
+        conversationID:
+          type: string
+          format: uuid
+        messageID:
+          type: string
+          format: uuid
+        excerpt:
+          type: string
+        score:
+          type: number
+          format: double
+        rank:
+          type: integer
+        conversationTopic:
+          type: [string, "null"]
+
+    ConversationSearchResponse:
+      type: object
+      required:
+        - hits
+        - totalHitCount
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationSearchHit"
+        totalHitCount:
+          type: integer
+          description: Number of matching messages before applying offset/limit pagination.
+        warning:
+          type: [string, "null"]
+        nextOffset:
+          type: [integer, "null"]
+          description: Offset to request the next page when more hits exist.
+
+    ConversationLifecycleState:
+      type: string
+      enum:
+        - active
+        - suspended
+        - archived
+        - deleted
+
+    ConversationListSummary:
+      type: object
+      required:
+        - id
+        - modelName
+        - messageCount
+        - createdAt
+        - updatedAt
+        - lifecycle
+        - tags
+      properties:
+        id:
+          type: string
+          format: uuid
+        modelName:
+          type: string
+        topic:
+          type: [string, "null"]
+        description:
+          type: [string, "null"]
+        messageCount:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        lifecycle:
+          $ref: "#/components/schemas/ConversationLifecycleState"
+        tags:
+          type: array
+          items:
+            type: string
+        controlPlaneRevision:
+          type: integer
+          minimum: 0
+          description: Monotonic control-plane revision for PATCH optimistic concurrency.
+
+    PagedConversationsResponse:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationListSummary"
+        totalCount:
+          type: integer
+        nextOffset:
+          type: [integer, "null"]
+
+    ConversationBranchRequest:
+      type: object
+      required: [userMessageID]
+      properties:
+        userMessageID:
+          type: string
+          format: uuid
+
+    ConversationBranchResponse:
+      type: object
+      required: [conversationID]
+      properties:
+        conversationID:
+          type: string
+          format: uuid
+
+    ConversationRevertRequest:
+      type: object
+      required: [userMessageID]
+      properties:
+        userMessageID:
+          type: string
+          format: uuid
+        includeTools:
+          type: boolean
+          description: Optional runtime flag; defaults to `true` when omitted.
+        includeAgents:
+          type: boolean
+          description: Optional runtime flag; defaults to `true` when omitted.
+
+    SubAgentSpawnRequest:
+      type: object
+      properties:
+        context:
+          type: string
+          enum: [fork, isolated]
+          description: Launch context; defaults to `isolated` when omitted.
+        userMessageID:
+          type: string
+          format: uuid
+          description: Required when `context` is `fork` (same anchor as `POST …/branch`).
+        taskDescription:
+          type: string
+        prompt:
+          type: string
+        subagentType:
+          type: string
+        agentID:
+          type: string
+        agentRef:
+          type: string
+        agentQuery:
+          $ref: "#/components/schemas/SubAgentQuery"
+        hostPersonaID:
+          type: string
+        authScopeTags:
+          type: array
+          items: { type: string }
+        routingDomain:
+          type: string
+        tenantScope:
+          type: string
+        runInBackground:
+          type: boolean
+        modelRef:
+          $ref: "#/components/schemas/ModelRef"
+          description: Optional model override for `isolated`; ignored for `fork`.
+        userSystemPrompt:
+          type: string
+        topic:
+          type: string
+        description:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/WireJSONObject"
+        interactionMode:
+          type: string
+    SubAgentQuery:
+      type: object
+      properties:
+        text:
+          type: string
+        transportKinds:
+          type: array
+          items: { type: string }
+        useClasses:
+          type: array
+          items: { type: string }
+        permissionPolicies:
+          type: array
+          items: { type: string }
+        trustLevels:
+          type: array
+          items: { type: string }
+        requiresStreaming:
+          type: boolean
+        requiresLongRunning:
+          type: boolean
+        hostPersonaID:
+          type: string
+        authScopeTags:
+          type: array
+          items: { type: string }
+        routingDomain:
+          type: string
+        tenantScope:
+          type: string
+
+    CompletionAnnounceStatus:
+      type: string
+      enum: [done, failed]
+
+    CompletionAnnounceTriggerRequest:
+      type: object
+      required: [delegateHandleID, toolCallID, lifecycleID, status]
+      properties:
+        announceID:
+          type: string
+          format: uuid
+        delegateHandleID:
+          type: string
+        toolCallID:
+          type: string
+        lifecycleID:
+          type: string
+        parentConversationID:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/CompletionAnnounceStatus"
+        completedAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+        error:
+          type: string
+        toolMessageContent:
+          type: string
+
+    CompletionAnnounceTriggerResponse:
+      type: object
+      required: [announceID, status]
+      properties:
+        announceID:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted]
+
+    ToolApprovalRoute:
+      type: string
+      enum: [user, parent]
+
+    ToolApprovalResolutionStatus:
+      type: string
+      enum: [approved, denied, pending]
+
+    ToolApprovalResolutionRequest:
+      type: object
+      required: [toolName, status]
+      properties:
+        runID:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+        route:
+          $ref: "#/components/schemas/ToolApprovalRoute"
+        status:
+          $ref: "#/components/schemas/ToolApprovalResolutionStatus"
+        source:
+          type: string
+        reason:
+          type: string
+
+    ConversationCheckpointInvalidateRequest:
+      type: object
+      properties:
+        kinds:
+          type: array
+          items:
+            type: string
+          description: Harness kinds (e.g. `context_compaction`). Omit or empty → server default.
+
+    ConversationCheckpointInvalidateResponse:
+      type: object
+      required: [kinds]
+      properties:
+        kinds:
+          type: array
+          items:
+            type: string
+
+    InteractionModeChangedEventPayload:
+      type: object
+      required:
+        - fromMode
+        - toMode
+        - fromProfileID
+        - toProfileID
+        - fromPhase
+        - toPhase
+        - initiatedBy
+      properties:
+        fromMode:
+          type: string
+        toMode:
+          type: string
+        fromProfileID:
+          type: string
+        toProfileID:
+          type: string
+        fromPhase:
+          type: string
+        toPhase:
+          type: string
+        initiatedBy:
+          type: string
+          description: Source of the transition request (for example `api`, `websocket`, `internal`).
+        reason:
+          type: string
+
+    ConversationJournalEventWire:
+      type: object
+      required:
+        - eventID
+        - kind
+        - payloadJSON
+        - createdAt
+        - journalStream
+        - streamSequence
+      properties:
+        eventID:
+          type: integer
+        kind:
+          type: string
+        payloadJSON:
+          type: string
+          description: |
+            Opaque JSON payload for the journal event kind. For
+            `kind == "interaction_mode_changed"`, this JSON conforms to
+            `#/components/schemas/InteractionModeChangedEventPayload`.
+        basedOnEventID:
+          type: integer
+        coversStartEventID:
+          type: integer
+        coversEndEventID:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        journalStream:
+          type: string
+          enum: [raw, derived]
+        streamSequence:
+          type: integer
+
+    ConversationReadWithDerivedResponse:
+      type: object
+      required: [conversation, rawEvents, derivedEvents]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/WireJSONObject"
+        rawEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/WireJSONObject"
+        derivedEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationJournalEventWire"
+
+    ConversationProjectionConfig:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/WireJSONObject"
+
+    ConversationProjectRequest:
+      type: object
+      properties:
+        config:
+          $ref: "#/components/schemas/ConversationProjectionConfig"
+
+    ConversationProjectionMetadata:
+      type: object
+      required: [frontierEventID, rawEventCount, derivedEventCount]
+      properties:
+        frontierEventID:
+          type: integer
+        rawEventCount:
+          type: integer
+        derivedEventCount:
+          type: integer
+        config:
+          $ref: "#/components/schemas/ConversationProjectionConfig"
+
+    ConversationProjectResponse:
+      type: object
+      required: [projectedMessages, metadata]
+      properties:
+        projectedMessages:
+          type: array
+          items:
+            $ref: "#/components/schemas/WireJSONObject"
+        metadata:
+          $ref: "#/components/schemas/ConversationProjectionMetadata"
+
+    ConversationPatch:
+      type: object
+      description: Partial update; omitted keys leave fields unchanged (SileniaAICommon ConversationPatch).
+      required: [expectedRevision]
+      properties:
+        topic:
+          type: string
+        description:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/WireJSONObject"
+        interactionMode:
+          type: string
+          enum: [chat, plan, agent]
+        modeProfileID:
+          type: string
+          description: Optional persisted mode registry pointer (`ModeRegistry` profile id).
+        disabledToolNames:
+          type: array
+          items:
+            type: string
+        disabledSkillNames:
+          type: array
+          items:
+            type: string
+        routingModelOptions:
+          $ref: "#/components/schemas/ConversationRoutingModelOptions"
+        lifecycle:
+          $ref: "#/components/schemas/ConversationLifecycleState"
+        modelRef:
+          type: string
+          description: Canonical model ref (UUID or registry slug).
+        userSystemPrompt:
+          type: string
+          description: Persisted user system prompt fragment for the conversation.
+        expectedRevision:
+          type: integer
+          minimum: 0
+          description: Must match server `controlPlaneRevision` or receive 409 `revision_mismatch`.
+        routingToolPolicy:
+          $ref: "#/components/schemas/ConversationExplicitToolPolicy"
+
+    ConversationExplicitToolPolicy:
+      type: object
+      required: [kind, tools, skills]
+      description: |
+        Conversation-level routing tool/skill policy (harness `routing.toolWhitelist`).
+        Intersects with mode profile `tools.allow` — both must permit a tool for it to be available.
+      properties:
+        kind:
+          type: string
+          enum: [allowlist, denylist]
+        tools:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: string
+
+    ThinkingLevel:
+      type: string
+      enum: [off, minimal, low, medium, high, xhigh]
+
+    ThinkingConfig:
+      description: Conversation thinking configuration (`disabled` | `adaptive` | `{ level, budgetTokens? }`).
+      oneOf:
+        - type: string
+          enum: [disabled, adaptive]
+        - type: object
+          required: [level]
+          properties:
+            level:
+              $ref: "#/components/schemas/ThinkingLevel"
+            budgetTokens:
+              type: integer
+              minimum: 0
+
+    ConversationRoutingModelOptions:
+      type: object
+      properties:
+        thinkingConfig:
+          $ref: "#/components/schemas/ThinkingConfig"
+
+    ConversationPatchResponse:
+      type: object
+      required: [type, controlPlaneRevision]
+      properties:
+        type:
+          type: string
+          enum: [update]
+        controlPlaneRevision:
+          type: integer
+          minimum: 0
+
+    ContextCompactionSyntheticMessageWire:
+      type: object
+      required: [id, role, content]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+        content:
+          type: string
+
+    ContextCompactionCheckpointWire:
+      type: object
+      required:
+        - schemaVersion
+        - kind
+        - coveredMessageIDs
+        - syntheticMessages
+        - configFingerprint
+        - basedOnEventID
+        - createdAt
+      properties:
+        schemaVersion:
+          type: integer
+        kind:
+          type: string
+        coveredMessageIDs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        syntheticMessages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextCompactionSyntheticMessageWire"
+        configFingerprint:
+          type: string
+        basedOnEventID:
+          type: integer
+        basedOnTailMessageID:
+          type: string
+          format: uuid
+          description: Optional; omitted when null on the wire.
+        createdAt:
+          type: number
+          description: |
+            Swift `Date` default JSON encoding (seconds since reference date) unless server changes encoder.
+
+    LatestCheckpointResponse:
+      type: object
+      required: [kind, eventID, checkpoint]
+      properties:
+        kind:
+          type: string
+          enum:
+            - context_compaction
+            - memory_injection_snapshot
+            - tool_result_trim
+            - system_prompt_assembly
+        eventID:
+          type: integer
+        checkpoint:
+          description: Shape matches `kind` (discriminated union).
+          oneOf:
+            - $ref: "#/components/schemas/ContextCompactionCheckpointWire"
+            - $ref: "#/components/schemas/MemoryInjectionSnapshotCheckpointWire"
+            - $ref: "#/components/schemas/ToolResultTrimCheckpointWire"
+            - $ref: "#/components/schemas/SystemPromptAssemblyCheckpointWire"
+
+    ConversationRunWireStatus:
+      type: string
+      enum:
+        - running
+        - completed
+        - cancelled
+        - failed
+
+    ConversationRunTerminalCategory:
+      type: string
+      enum:
+        - externalCancellation
+        - naturalStop
+        - boundedStop
+        - failure
+
+    ConversationRunBoundedReason:
+      type: string
+      enum:
+        - maxAgentIterations
+        - userStopRequested
+        - runawayEmptyAssistantStreak
+        - repeatToolCallStreak
+        - chattyAssistantLimit
+        - maxContinuationRounds
+
+    ConversationRunTerminalReason:
+      type: object
+      required: [category]
+      properties:
+        category:
+          $ref: "#/components/schemas/ConversationRunTerminalCategory"
+        boundedReason:
+          $ref: "#/components/schemas/ConversationRunBoundedReason"
+        detail:
+          type: string
+          description: Optional human-readable sub-detail.
+
+    ConversationRunToolRollup:
+      type: object
+      required: [distinctToolNames, totalToolCallSlots]
+      properties:
+        distinctToolNames:
+          type: array
+          items:
+            type: string
+          description: Sorted distinct tool names observed on assistant rows in this run.
+        totalToolCallSlots:
+          type: integer
+          minimum: 0
+          description: Total tool-name slots across assistant rows (one row may declare multiple tools).
+
+    ConversationRunProjectionDetail:
+      type: object
+      required: [assistantMessageCount]
+      properties:
+        assistantMessageCount:
+          type: integer
+          minimum: 0
+          description: Assistant transcript rows attributed to this run; **`toolRollup`** is present only when at least one tool-name slot exists on those rows.
+        toolRollup:
+          $ref: "#/components/schemas/ConversationRunToolRollup"
+
+    ConversationRunTokenRollup:
+      type: object
+      required: [promptTokens, completionTokens, totalTokens]
+      properties:
+        promptTokens:
+          type: integer
+          minimum: 0
+        completionTokens:
+          type: integer
+          minimum: 0
+        totalTokens:
+          type: integer
+          minimum: 0
+          description: Authoritative run total from persisted completion usage (falls back to prompt+completion when source omits explicit total).
+
+    ConversationRunCostRollup:
+      type: object
+      required: [usd]
+      properties:
+        usd:
+          type: number
+          minimum: 0
+          description: Authoritative per-run USD sum over persisted completion usage rows.
+
+    ConversationRunOutcome:
+      type: string
+      enum:
+        - completed
+        - cancelled
+        - errored
+        - bounded
+        - open
+
+    ConversationRunKind:
+      type: string
+      enum:
+        - live
+        - trigger
+        - channel
+        - delegate
+
+    ConversationRunErrorDetails:
+      type: object
+      required: [class, message]
+      properties:
+        class:
+          type: string
+          description: Stable terminal error class (`run_errored`, `run_orphaned`, etc.).
+        message:
+          type: string
+          description: Human-readable detail for errored terminal outcomes.
+
+    ConversationRunInfo:
+      type: object
+      description: |
+        Canonical run projection aligned to harness `runs.md`: boundary anchors, terminal outcome,
+        and per-run iteration/tool counts. **`tokenRollup`** / **`costRollup`** remain authoritative sums
+        over persisted run usage rows and may be present on both list/get surfaces. **`projectionDetail`** is included
+        only when **`GET /conversations/{id}/runs/{runId}?detail=1`** requests transcript-derived rollups
+        (omitted on list **`GET …/runs`**).
+      required: [id, conversationID, outcome, iterationCount, toolCallCount, firstMessageId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversationID:
+          type: string
+          format: uuid
+        outcome:
+          $ref: "#/components/schemas/ConversationRunOutcome"
+        startedAt:
+          description: ISO8601 when known; omitted when unknown.
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+          description: Set when the run reached a terminal outcome (omitted while **`open`**).
+        iterationCount:
+          type: integer
+          minimum: 0
+          description: Number of assistant iterations observed in this run segment.
+        toolCallCount:
+          type: integer
+          minimum: 0
+          description: Total tool-call slots observed on assistant rows in this run segment.
+        firstMessageId:
+          type: string
+          description: Entry id anchor for the opening user message that started the run.
+        lastMessageId:
+          type: [string, "null"]
+          description: Entry id anchor for terminal closure (`null` while run outcome is `open`).
+        cancellationReason:
+          type: [string, "null"]
+          description: Present for cancelled outcomes.
+        errorDetails:
+          $ref: "#/components/schemas/ConversationRunErrorDetails"
+        tokenRollup:
+          $ref: "#/components/schemas/ConversationRunTokenRollup"
+        costRollup:
+          $ref: "#/components/schemas/ConversationRunCostRollup"
+        projectionDetail:
+          $ref: "#/components/schemas/ConversationRunProjectionDetail"
+
+    ConversationRunListResponse:
+      type: object
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationRunInfo"
+        cursor:
+          type: [string, "null"]
+          description: Opaque continuation cursor for next page.
+        total:
+          type: integer
+          minimum: 0
+          description: Advisory total count of runs that matched the filter.
+
+    AppendInputResponse:
+      type: object
+      required: [runId, messageId]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+
+    CancelConversationRunRequest:
+      type: object
+      required: [runId]
+      properties:
+        runId:
+          type: string
+          format: uuid
+
+    CancelConversationRunResponse:
+      type: object
+      required: [runId, outcome]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        outcome:
+          $ref: "#/components/schemas/ConversationRunOutcome"
+
+    CancelConversationRunConflictCode:
+      type: string
+      enum: [run_not_in_flight, run_already_ended]
+
+    CancelConversationRunConflictBody:
+      type: object
+      required: [code, runId]
+      properties:
+        code:
+          $ref: "#/components/schemas/CancelConversationRunConflictCode"
+        runId:
+          type: string
+          format: uuid
+        outcome:
+          $ref: "#/components/schemas/ConversationRunOutcome"
+
+    EngineArtifactKeysResponse:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: string
+          description: Sorted stable key names for artifacts cached under this conversation.
+
+    ConversationRunConflictBody:
+      type: object
+      required: [code, conversationID, activeRunID]
+      properties:
+        code:
+          type: string
+          enum: [run_in_progress, mode_change_run_in_progress]
+        conversationID:
+          type: string
+          format: uuid
+        activeRunID:
+          type: string
+          format: uuid
+
+    ConversationRevisionConflictBody:
+      type: object
+      required: [code, conversationID, expectedRevision, currentRevision]
+      properties:
+        code:
+          type: string
+          enum: [revision_mismatch]
+        conversationID:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          minimum: 0
+        currentRevision:
+          type: integer
+          minimum: 0
+
+    MemoryInjectionSnapshotCheckpointWire:
+      type: object
+      required:
+        - schemaVersion
+        - basedOnEventID
+        - injectionFingerprint
+        - snapshotJSON
+        - scopeMessageIDs
+        - createdAt
+      properties:
+        schemaVersion:
+          type: integer
+        basedOnEventID:
+          type: integer
+        injectionFingerprint:
+          type: string
+        snapshotJSON:
+          type: string
+        scopeMessageIDs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        createdAt:
+          type: number
+
+    ToolResultTrimCheckpointWire:
+      type: object
+      required:
+        - schemaVersion
+        - basedOnEventID
+        - coveredMessageIDs
+        - trimmedToolCallIds
+        - configFingerprint
+        - createdAt
+      properties:
+        schemaVersion:
+          type: integer
+        basedOnEventID:
+          type: integer
+        coveredMessageIDs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        trimmedToolCallIds:
+          type: array
+          items:
+            type: string
+        configFingerprint:
+          type: string
+        createdAt:
+          type: number
+
+    SystemPromptAssemblyCheckpointWire:
+      type: object
+      required:
+        - schemaVersion
+        - basedOnEventID
+        - assemblyFingerprint
+        - createdAt
+      properties:
+        schemaVersion:
+          type: integer
+        basedOnEventID:
+          type: integer
+        assemblyFingerprint:
+          type: string
+        createdAt:
+          type: number
+
+    ChatRequest:
+      type: object
+      required: [message, imageNames]
+      properties:
+        conversationID:
+          type: string
+          description: |
+            Legacy request field. Canonical send routing uses path id on
+            `POST /conversations/{id}/messages`; this field is ignored by that route.
+        message:
+          type: string
+        imageNames:
+          type: array
+          items:
+            type: string
+        includeTools:
+          type: boolean
+        includeAgents:
+          type: boolean
+        expectedPreviousTailHarnessMessageID:
+          type: string
+          format: uuid
+          description: |
+            When set, the server rejects the send if the active transcript tail’s harness-visible message id
+            does not match (HTTP 409 + `TranscriptTailConflictBody`). Omit for legacy single-client behavior.
+        inputTrust:
+          type: string
+          description: |
+            Optional user-input trust string. Known values include `direct_user_entry`, `automation`,
+            and `scripted`. Unknown non-empty values are accepted for forward compatibility and mapped
+            to the server trust-policy safe default class.
+
+    TranscriptTailConflictBody:
+      type: object
+      required: [code, conversationID, expectedTailMessageID]
+      properties:
+        code:
+          type: string
+          enum: [transcript_tail_mismatch]
+        conversationID:
+          type: string
+          format: uuid
+        expectedTailMessageID:
+          type: string
+          format: uuid
+        actualTailMessageID:
+          description: Omitted when the transcript was empty but the client expected a tail id.
+          type: [string, "null"]
+          format: uuid
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [error]
+        message:
+          type: string
+
+    SimpleTypeResponse:
+      type: object
+      properties:
+        type:
+          type: string
+
+    ConversationMutationResponse:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [create, copy]
+        conversationID:
+          type: string
+
+    ModelRef:
+      type: string
+      description: |
+        Canonical addressing for a registered model. Either a UUID matching
+        `Model.id` or a slug matching the canonical `Model.modelName`
+        (the primary `ProviderBinding.endpointModelId`).
+
+    ConvoRequest:
+      type: object
+      properties:
+        modelRef:
+          $ref: "#/components/schemas/ModelRef"
+          description: Create model selector. Accepts UUID or slug.
+        userSystemPrompt:
+          type: string
+        topic:
+          type: string
+        description:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/WireJSONObject"
+        interactionMode:
+          type: string
+        modeProfileID:
+          type: string
+
+    UpdateToolOverridesRequest:
+      type: object
+      required: [disabledToolNames]
+      properties:
+        disabledToolNames:
+          type: array
+          items:
+            type: string
+
+    UpdateSkillOverridesRequest:
+      type: object
+      required: [disabledSkillNames]
+      properties:
+        disabledSkillNames:
+          type: array
+          items:
+            type: string
+
+    UpdateConversationMetadataRequest:
+      type: object
+      properties:
+        topic:
+          type: string
+        description:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/WireJSONObject"
+        interactionMode:
+          type: string
+        modeProfileID:
+          type: string
+
+    PreviewContextCompactionRequest:
+      type: object
+      properties:
+        forceRunCompactionLLM:
+          type: boolean
+        ignoreTokenThreshold:
+          type: boolean
+        compactionSummarizerDebugOutputPath:
+          type: string
+
+    ManualContextCompactionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+
+    ConversationPlanResponse:
+      type: object
+      required: [markdown]
+      properties:
+        markdown:
+          type: string
+
+    FileUploadResponse:
+      type: object
+      required: [filename, size, contentType, filePath]
+      properties:
+        filename:
+          type: string
+        size:
+          type: integer
+        contentType:
+          type: string
+        filePath:
+          type: string

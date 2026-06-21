@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silenia.dev/schemas/ws/client-surface-intent-wire.json",
+  "title": "ClientSurfaceIntent",
+  "description": "Structured client surface action (`semanticKind == surfaceIntent`).",
+  "type": "object",
+  "required": ["kind", "filePath"],
+  "properties": {
+    "v": { "type": "integer", "minimum": 1 },
+    "kind": { "type": "string", "enum": ["openFileForEdit"] },
+    "filePath": { "type": "string" },
+    "scope": { "type": "string" },
+    "label": { "type": "string" }
+  },
+  "additionalProperties": false
+}

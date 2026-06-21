@@ -83,7 +83,7 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> AgentHarnessConfiguration {
-        guard let url = Bundle.module.url(forResource: "PromptConfig", withExtension: "json") else {
+        guard let url = PromptConfigBundleResource.url() else {
             logger?.warning("PromptConfig.json not found; agent harness defaults")
             return .default
         }

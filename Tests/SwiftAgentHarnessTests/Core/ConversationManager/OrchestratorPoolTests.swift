@@ -464,7 +464,7 @@ struct OrchestratorPoolTests {
             await pool.evictIdle()
         }
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await pool.testing_drainPendingTeardowns()
         #expect(await tracker.count() == 4)
         #expect(await pool.testing_pendingTeardownCount() == 0)
     }
