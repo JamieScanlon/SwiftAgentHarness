@@ -74,12 +74,12 @@ public enum SessionPersistenceConfiguration {
     }
 
     /// Periodic transcript integrity sweep for post-boot corruption. Env: `SAH_SESSION_TRANSCRIPT_VERIFY_PERIODIC`.
-    static var transcriptVerifyPeriodicEnabled: Bool {
+    public static var transcriptVerifyPeriodicEnabled: Bool {
         ProcessInfo.processInfo.environment["SAH_SESSION_TRANSCRIPT_VERIFY_PERIODIC"] != "0"
     }
 
     /// Interval between periodic transcript integrity sweeps. Env: `SAH_SESSION_TRANSCRIPT_VERIFY_INTERVAL_SECONDS`.
-    static var transcriptVerifyPeriodicIntervalSeconds: Int {
+    public static var transcriptVerifyPeriodicIntervalSeconds: Int {
         parsePositiveIntEnv("SAH_SESSION_TRANSCRIPT_VERIFY_INTERVAL_SECONDS", default: 3600)
     }
 

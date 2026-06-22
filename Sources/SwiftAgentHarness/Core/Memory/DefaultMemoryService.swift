@@ -235,7 +235,7 @@ public actor DefaultMemoryService: MemoryServicing {
         _ = messages
     }
 
-    func drainPendingWork(timeoutMs: Int) async {
+    public func drainPendingWork(timeoutMs: Int) async {
         await extractor.drain(timeoutMs: timeoutMs)
     }
 

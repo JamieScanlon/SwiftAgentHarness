@@ -21,7 +21,7 @@ public enum HarnessRuntimeSessionFactory {
         let subAgentSpawnService: SubAgentSpawnService
         let toolApprovalRuntimeService: ToolApprovalRuntimeService
         let slashCommandDispatchService: SlashCommandDispatchService
-        let conversationReplayService: ConversationReplayService
+        public let conversationReplayService: ConversationReplayService
         let conversationDomainServices: ConversationDomainServiceBundle
         let conversationToolDataService: ConversationToolDataService
         let conversationToolModePolicyRuntimeService: ConversationToolModePolicyRuntimeService

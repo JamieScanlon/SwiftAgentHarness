@@ -751,7 +751,7 @@ public actor APILayer {
     }
 
     /// Refreshes ``conversation/{id}/state`` when REST or streaming paths change session or metadata (subscribe-gated).
-    func refreshConversationStateOnWire(
+    public func refreshConversationStateOnWire(
         conversationID: UUID,
         orchestrationOverride: ConversationOrchestrationState? = nil
     ) async {

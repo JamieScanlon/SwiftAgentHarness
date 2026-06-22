@@ -32,6 +32,7 @@ public protocol DelegateCostTracking: BudgetAccounting, BudgetReporting {
     ) async
     func hydrate(from seeds: [BudgetLedgerHydrationSeed]) async
     func setConversationMaxUSD(conversationID: UUID, maxUSD: Double?) async
+    func setActivePolicy(_ policy: BudgetPolicy) async
 }
 
 /// Process-wide model pool cost ledger: main-loop dispatches, compaction, memory recall, and sub-agent spend.
@@ -59,7 +60,7 @@ public actor ModelPoolCostLedger: DelegateCostTracking {
     }
 
     /// Primes policy-derived reporting state so hydrated totals can surface on wire before first dispatch.
-    func setActivePolicy(_ policy: BudgetPolicy) async {
+    public func setActivePolicy(_ policy: BudgetPolicy) async {
         if case .enabled(_, _, let maxUSDGlobal, _, _) = policy {
             hasSeenEnabledPolicy = true
             activeGlobalCapUSD = maxUSDGlobal

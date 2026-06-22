@@ -1,33 +1,33 @@
 import Foundation
 
-struct WebhookRouteStore: Sendable {
+public struct WebhookRouteStore: Sendable {
     private let staticRoutes: [WebhookRoute]
     private let dynamicStore: WebhookDynamicRouteStore
 
-    init(staticRoutes: [WebhookRoute] = [], dynamicStore: WebhookDynamicRouteStore) {
+    public init(staticRoutes: [WebhookRoute] = [], dynamicStore: WebhookDynamicRouteStore) {
         self.staticRoutes = staticRoutes
         self.dynamicStore = dynamicStore
     }
 
-    func route(named name: String) throws -> WebhookRoute? {
+    public func route(named name: String) throws -> WebhookRoute? {
         if let s = staticRoutes.first(where: { $0.name == name }) {
             return s
         }
         return try dynamicStore.route(named: name)
     }
 
-    func allRoutes() throws -> [WebhookRoute] {
+    public func allRoutes() throws -> [WebhookRoute] {
         let dynamic = try dynamicStore.load()
         let staticNames = Set(staticRoutes.map(\.name))
         return staticRoutes + dynamic.filter { !staticNames.contains($0.name) }
     }
 }
 
-struct WebhookDynamicRouteStore: Sendable {
+public struct WebhookDynamicRouteStore: Sendable {
     private let fileURL: URL
     private let lock = NSLock()
 
-    init(fileURL: URL) {
+    public init(fileURL: URL) {
         self.fileURL = fileURL
     }
 

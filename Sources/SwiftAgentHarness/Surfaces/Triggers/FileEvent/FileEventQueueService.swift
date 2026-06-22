@@ -43,7 +43,7 @@ public actor FileEventQueueService {
         self.scheduledSync = FileEventScheduledSync(eventsDirectory: eventsDirectory, taskStore: taskStore, logger: logger)
     }
 
-    func start() async {
+    public func start() async {
         guard enabled else { return }
         harnessStartTime = Date()
         try? FileManager.default.createDirectory(at: eventsDirectory, withIntermediateDirectories: true)

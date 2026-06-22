@@ -82,7 +82,7 @@ public actor HarnessRuntimeSession {
     var conversationTopicPublicationRuntimeService: ConversationTopicPublicationRuntimeService {
         services.conversationTopicPublicationRuntimeService
     }
-    var conversationReplayService: ConversationReplayService { services.conversationReplayService }
+    public var conversationReplayService: ConversationReplayService { services.conversationReplayService }
     var conversationToolDataService: ConversationToolDataService { services.conversationToolDataService }
     var conversationToolModePolicyRuntimeService: ConversationToolModePolicyRuntimeService { services.conversationToolModePolicyRuntimeService }
     private var subAgentPool: any SubAgentPooling { services.subAgentPool }
@@ -504,7 +504,7 @@ public actor HarnessRuntimeSession {
 
     // MARK: Setup
     
-    internal func resetConversationsFromCatalog(availableModels: [Model]) async throws {
+    public func resetConversationsFromCatalog(availableModels: [Model]) async throws {
         try await conversationStartupService.resetConversationsFromCatalog(availableModels: availableModels)
     }
     
@@ -520,6 +520,18 @@ public actor HarnessRuntimeSession {
 
     public func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) {
         subAgentLifecyclePublisher = publisher
+    }
+
+    public func setActivePolicy(_ policy: BudgetPolicy) async {
+        await delegateCostTracker?.setActivePolicy(policy)
+    }
+
+    public func drainPendingWork(timeoutMs: Int) async {
+        guard let defaultEngine = contextEngine as? DefaultContextEngine,
+              let memoryService = defaultEngine.memoryService else {
+            return
+        }
+        await memoryService.drainPendingWork(timeoutMs: timeoutMs)
     }
 
     internal func setDelegateCostTracker(_ tracker: (any DelegateCostTracking)?) {

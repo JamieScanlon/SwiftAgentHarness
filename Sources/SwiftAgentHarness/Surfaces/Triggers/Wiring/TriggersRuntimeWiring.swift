@@ -65,23 +65,37 @@ public struct TriggersRuntimeBundle: Sendable {
     let dispatch: TriggerDispatchService
     public let scheduler: TriggerSchedulerService
     public let webhookAdapter: WebhookIngressAdapter
-    let webhookRouteStore: WebhookRouteStore
+    public let webhookRouteStore: WebhookRouteStore
     public let scheduleTools: ScheduleToolProvider
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
     let outputRouter: TriggerSymmetricOutputRouter
-    let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
+    public let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
     let runRegistry: TriggerDelegatedRunRegistry
 }
 
 public enum TriggersRuntimeWiring {
     public struct DelegatedPorts: Sendable {
-        var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
-        var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
-        var lastAssistantText: @Sendable (UUID) async -> String?
-        var stampDelegatedHost: @Sendable (UUID, HarnessTrigger, String) async throws -> Void
-        var resolveParentConversation: @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?
+        public var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
+        public var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
+        public var lastAssistantText: @Sendable (UUID) async -> String?
+        public var stampDelegatedHost: @Sendable (UUID, HarnessTrigger, String) async throws -> Void
+        public var resolveParentConversation: @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?
+
+        public init(
+            spawnSubAgent: @escaping @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID,
+            sendMessageAndRun: @escaping @Sendable (UUID, String) async throws -> Void,
+            lastAssistantText: @escaping @Sendable (UUID) async -> String?,
+            stampDelegatedHost: @escaping @Sendable (UUID, HarnessTrigger, String) async throws -> Void,
+            resolveParentConversation: @escaping @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?
+        ) {
+            self.spawnSubAgent = spawnSubAgent
+            self.sendMessageAndRun = sendMessageAndRun
+            self.lastAssistantText = lastAssistantText
+            self.stampDelegatedHost = stampDelegatedHost
+            self.resolveParentConversation = resolveParentConversation
+        }
     }
 
     public struct Configuration: Sendable {

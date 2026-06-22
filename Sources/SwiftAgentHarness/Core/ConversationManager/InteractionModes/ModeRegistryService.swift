@@ -38,7 +38,7 @@ public actor ModeRegistryService {
         Self.validateMachineSubAgentProfiles(in: profiles, diagnostics: &diagnostics)
     }
 
-    func missingMachineSubAgentProfileIDs() -> [String] {
+    public func missingMachineSubAgentProfileIDs() -> [String] {
         ConversationLineageInference.machineSubAgentModeProfileIDs
             .filter { profiles[$0] == nil }
             .sorted()

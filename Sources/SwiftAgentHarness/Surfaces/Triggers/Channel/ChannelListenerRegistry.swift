@@ -49,14 +49,14 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
         )
     }
 
-    func start() async {
+    public func start() async {
         guard enabled else { return }
         for service in services.values {
             await service.start()
         }
     }
 
-    func stop() async {
+    public func stop() async {
         for service in services.values {
             await service.stop()
         }

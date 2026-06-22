@@ -158,4 +158,17 @@ struct PublicAPISurfaceTests {
         await api.setWebSocketOutboundFlowConfiguration(WebSocketOutboundFlowConfiguration())
         await api.stop()
     }
+
+    @Test("Fourth-batch public wiring types and members are accessible")
+    func fourthBatchExports() {
+        _ = TriggersRuntimeWiring.DelegatedPorts(
+            spawnSubAgent: { _, _, _ in UUID() },
+            sendMessageAndRun: { _, _ in },
+            lastAssistantText: { _ in nil },
+            stampDelegatedHost: { _, _, _ in },
+            resolveParentConversation: { _ in nil }
+        )
+        _ = SessionPersistenceConfiguration.transcriptVerifyPeriodicEnabled
+        _ = SessionPersistenceConfiguration.transcriptVerifyPeriodicIntervalSeconds
+    }
 }

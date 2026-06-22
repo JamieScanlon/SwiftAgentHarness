@@ -74,7 +74,7 @@ public actor TriggerSchedulerService {
         self.logger = logger
     }
 
-    func start() {
+    public func start() {
         guard tickTask == nil else { return }
         tickTask = Task { [weak self] in
             guard let self else { return }
