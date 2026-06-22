@@ -190,8 +190,7 @@ public struct SystemPrompt: Sendable {
 
     /// Whether `options.includeAgentSkills` is enabled in PromptConfig (defaults to `true` if unset).
     public static func loadIncludeAgentSkillsFromConfig() -> Bool {
-        guard let url = PromptConfigBundleResource.url(),
-              let jsonData = try? Data(contentsOf: url, options: []),
+        guard let jsonData = PromptConfigBundleResource.data(),
               let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
               let optionsObject = jsonResult["options"] as? [String: Any],
               let includeAgentSkills = optionsObject["includeAgentSkills"] as? Bool else {
@@ -202,8 +201,7 @@ public struct SystemPrompt: Sendable {
 
     /// Whether `options.includeCurrentDateTime` is enabled in PromptConfig (defaults to `true` if unset).
     public static func loadIncludeCurrentDateTimeFromConfig() -> Bool {
-        guard let url = PromptConfigBundleResource.url(),
-              let jsonData = try? Data(contentsOf: url, options: []),
+        guard let jsonData = PromptConfigBundleResource.data(),
               let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
               let optionsObject = jsonResult["options"] as? [String: Any],
               let includeCurrentDateTime = optionsObject["includeCurrentDateTime"] as? Bool else {
@@ -217,8 +215,7 @@ public struct SystemPrompt: Sendable {
         let fallback = """
 You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {{subAgentRootConversationID}}. Your conversation ID is {{subAgentConversationID}}. Parent conversation: {{subAgentParentConversationID}}. Work only within this sub-agent thread; do not switch conversations or assume the user's foreground selection.
 """
-        guard let url = PromptConfigBundleResource.url(),
-              let jsonData = try? Data(contentsOf: url, options: []),
+        guard let jsonData = PromptConfigBundleResource.data(),
               let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
               let sections = jsonResult["lineagePromptSections"] as? [String: Any],
               let template = sections["subAgent"] as? String,
@@ -230,10 +227,7 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
 
     /// Loads the skills folder path from PromptConfig.json. Use when creating a SkillLoader with a root URL before SystemPrompt is initialized.
     public static func loadSkillsFolderPathFromConfig() throws -> String? {
-        guard let url = PromptConfigBundleResource.url() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonData = try? Data(contentsOf: url, options: []) else {
+        guard let jsonData = PromptConfigBundleResource.data() else {
             throw PromptsConfigError.fileNotFound
         }
         guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
@@ -252,10 +246,7 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
     }
 
     private static func loadConfigFromBundle() throws -> PromptConfigValues {
-        guard let url = PromptConfigBundleResource.url() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonData = try? Data(contentsOf: url, options: []) else {
+        guard let jsonData = PromptConfigBundleResource.data() else {
             throw PromptsConfigError.fileNotFound
         }
         guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {

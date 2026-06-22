@@ -25,8 +25,7 @@ public struct PublishingGovernanceConfiguration: Sendable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> PublishingGovernanceConfiguration {
-        guard let url = PromptConfigBundleResource.url(),
-              let data = try? Data(contentsOf: url),
+        guard let data = PromptConfigBundleResource.data(),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let block = json["publishingGovernance"] as? [String: Any]
         else {

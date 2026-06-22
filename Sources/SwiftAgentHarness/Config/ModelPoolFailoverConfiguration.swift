@@ -27,11 +27,10 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolFailoverConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             return .specDefaults
         }
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let settings = root["settings"] as? [String: Any] else {
             return .specDefaults
         }
