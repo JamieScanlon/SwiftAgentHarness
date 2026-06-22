@@ -15,8 +15,8 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git",from: "0.16.0"),
-        // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "bf5afdcdda00eb1f684c4d0c2cd0f4b597e7e374"),
+        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git",from: "0.17.0"),
+        // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "1f20dea5099bbb49bd77a876e2b111bbb7cf79aa"),
         .package(url: "https://github.com/JamieScanlon/OllamaKit.git", from: "1.0.8"),
     //    .package(url: "https://github.com/JamieScanlon/OllamaKit.git", revision: "56f78f94c1684bffd2bf61d62f4eb539cd04645f"),
         .package(url: "https://github.com/vapor/vapor.git", from: "4.121.4"),
