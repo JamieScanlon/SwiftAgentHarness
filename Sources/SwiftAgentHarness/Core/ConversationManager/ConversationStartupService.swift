@@ -123,20 +123,20 @@ public actor ConversationStartupService: StartupServicing {
         }
     }
 
-    func budgetLedgerHydrationSeeds() async -> [BudgetLedgerHydrationSeed] {
+    public func budgetLedgerHydrationSeeds() async -> [BudgetLedgerHydrationSeed] {
         await deps.persistenceDomain.budgetLedgerHydrationSeeds()
     }
 
-    func setConversationTopicPublisher(_ publisher: (any ConversationTopicPublishing)?) async {
+    public func setConversationTopicPublisher(_ publisher: (any ConversationTopicPublishing)?) async {
         conversationTopicPublisher = publisher
         await runtimeLifecyclePublication.setConversationTopicPublisher(publisher)
     }
 
-    func setTraceTopicPublisher(_ publisher: (any TraceTopicPublishing)?) async {
+    public func setTraceTopicPublisher(_ publisher: (any TraceTopicPublishing)?) async {
         await runtimeLifecyclePublication.setTraceTopicPublisher(publisher)
     }
 
-    func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) async {
+    public func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) async {
         subAgentLifecyclePublisher = publisher
     }
 
@@ -161,7 +161,7 @@ public actor ConversationStartupService: StartupServicing {
         await subAgentA2AManagerProvider?.setManager(a2aManager)
     }
 
-    func setACPManager(_ acpManager: ACPManager, delegateBoxes: [String: SubAgentACPClientDelegateBox]) async {
+    public func setACPManager(_ acpManager: ACPManager, delegateBoxes: [String: SubAgentACPClientDelegateBox]) async {
         self.acpManager = acpManager
         await subAgentACPManagerProvider?.setBootstrap(manager: acpManager, delegateBoxes: delegateBoxes)
     }
@@ -170,14 +170,14 @@ public actor ConversationStartupService: StartupServicing {
         await subAgentACPManagerProvider?.setDelegateFactory(factory)
     }
 
-    func conversationWireCurrentRunID(conversationID: UUID) async -> UUID {
+    public func conversationWireCurrentRunID(conversationID: UUID) async -> UUID {
         let lifecycleSnapshot = await orchestrationCore.lifecycleSnapshot(for: conversationID)
         return await deps.persistenceDomain.modelConversation(id: conversationID)?.currentRunID
             ?? lifecycleSnapshot.currentStreamingRunID
             ?? UUID()
     }
 
-    func purgeSoftDeletedPastRetention(retentionDays: Int, now: Date = Date()) async throws -> Int {
+    public func purgeSoftDeletedPastRetention(retentionDays: Int, now: Date = Date()) async throws -> Int {
         guard retentionDays > 0 else { return 0 }
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: now) else { return 0 }
         let staleIDs = await deps.persistenceDomain.conversations
@@ -191,7 +191,7 @@ public actor ConversationStartupService: StartupServicing {
         return purged
     }
 
-    func runDerivedArtifactRetentionSweep(
+    public func runDerivedArtifactRetentionSweep(
         policy: DerivedArtifactRetentionPolicy
     ) async throws -> DerivedArtifactRetentionSweepResult {
         try await deps.persistenceDomain.runDerivedArtifactRetentionSweep(policy: policy)

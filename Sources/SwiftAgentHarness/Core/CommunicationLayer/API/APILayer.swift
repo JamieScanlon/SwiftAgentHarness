@@ -3,6 +3,7 @@ import EasyJSON
 import Logging
 import SwiftAgentKit
 import SwiftAgentKitMCP
+import SwiftAgentKitACP
 import Synchronization
 import Vapor
 
@@ -670,7 +671,12 @@ public actor APILayer {
         await startupService.setMCPManager(mcpManager)
     }
 
-    func setContextCompactionPreviewSettings(_ settings: ContextCompactionPreviewAPISettings) {
+    public func setACPManager(_ acpManager: ACPManager, delegateBoxes: [String: SubAgentACPClientDelegateBox]) async {
+        guard let startupService else { return }
+        await startupService.setACPManager(acpManager, delegateBoxes: delegateBoxes)
+    }
+
+    public func setContextCompactionPreviewSettings(_ settings: ContextCompactionPreviewAPISettings) {
         self.contextCompactionPreviewSettings = settings
     }
 
@@ -682,37 +688,37 @@ public actor APILayer {
         self.tenancyPolicySettings = settings
     }
 
-    func setEngineArtifactRESTSettings(maxUploadBytes: Int) {
+    public func setEngineArtifactRESTSettings(maxUploadBytes: Int) {
         self.engineArtifactMaxUploadBytes = max(1024, maxUploadBytes)
     }
 
-    func setWebSocketOutboundFlowConfiguration(_ configuration: WebSocketOutboundFlowConfiguration) {
+    public func setWebSocketOutboundFlowConfiguration(_ configuration: WebSocketOutboundFlowConfiguration) {
         websocketOutboundFlowConfiguration = configuration
     }
 
-    func setWebSocketOutboundSchemaEnforcementConfiguration(_ configuration: WebSocketOutboundSchemaEnforcementConfiguration) {
+    public func setWebSocketOutboundSchemaEnforcementConfiguration(_ configuration: WebSocketOutboundSchemaEnforcementConfiguration) {
         websocketOutboundSchemaEnforcementConfiguration = configuration
     }
 
     /// HMAC secret for `conversation/{id}/events` resume tokens (`SAH_WS_RESUME_TOKEN_SECRET`-style). When nil or empty, resume tokens are rejected.
-    func setWebSocketResumeTokenHMACSecret(_ secret: String?) {
+    public func setWebSocketResumeTokenHMACSecret(_ secret: String?) {
         websocketResumeTokenHMACSecret = secret
     }
 
     /// Default and cap (seconds) for inbound ``CommClientMessage/dedupeCheckAndSet`` TTL when clients omit `dedupeTtlSeconds`.
-    func setWebSocketInboundDedupeTtlPolicy(defaultSeconds: Int, maxSeconds: Int) {
+    public func setWebSocketInboundDedupeTtlPolicy(defaultSeconds: Int, maxSeconds: Int) {
         websocketInboundDedupeDefaultTtlSeconds = max(60, defaultSeconds)
         websocketInboundDedupeMaxTtlSeconds = max(websocketInboundDedupeDefaultTtlSeconds, maxSeconds)
     }
 
     /// Wires the model pool state topic hub and coordinator for WebSocket `model/{id}/state` subscriptions.
-    func setModelStateWireResources(hub: ModelStateTopicHub, coordinator: ModelInvocationCoordinator) {
+    public func setModelStateWireResources(hub: ModelStateTopicHub, coordinator: ModelInvocationCoordinator) {
         self.modelStateTopicHub = hub
         self.modelInvocationCoordinator = coordinator
     }
 
     /// Wires the conversation events topic hub for WebSocket `conversation/{id}/events` subscriptions.
-    func setConversationEventsWireResources(hub: ConversationEventsTopicHub) {
+    public func setConversationEventsWireResources(hub: ConversationEventsTopicHub) {
         self.conversationEventsTopicHub = hub
     }
 
@@ -739,7 +745,7 @@ public actor APILayer {
     }
 
     /// Test wiring when only ``ConversationStateTopicHub`` is injected (no full communication aggregate).
-    func setConversationStateWireResources(hub: ConversationStateTopicHub) {
+    public func setConversationStateWireResources(hub: ConversationStateTopicHub) {
         self.conversationStateTopicHub = hub
         conversationStatePublisher = ConversationStateHubOnlyPublisher(hub: hub)
     }
@@ -841,7 +847,7 @@ public actor APILayer {
     }
 
     /// Broadcasts a server-scoped mode registry invalidation marker (`mode_registry_changed`) when subscribers exist.
-    func publishModeRegistryChangedOnWire() async {
+    public func publishModeRegistryChangedOnWire() async {
         guard let traceTopicHub else { return }
         guard await traceTopicHub.hasSubscribers(forTopic: TraceTopicFormat.serverTopic) else { return }
         let payload = TraceTopicPayload(

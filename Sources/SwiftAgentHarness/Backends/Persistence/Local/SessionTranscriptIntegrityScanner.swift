@@ -6,11 +6,11 @@ import Foundation
 import Logging
 import SQLite3
 
-enum SessionTranscriptIntegrityScanner {
+public enum SessionTranscriptIntegrityScanner {
     private static let sampleCap = 32
     private static let damagedRatioThreshold = 0.5
 
-    static func runTranscriptIntegrityMaintenance(
+    public static func runTranscriptIntegrityMaintenance(
         root: URL,
         verifyAndRepair: Bool,
         logger: Logger? = nil,
@@ -19,7 +19,7 @@ enum SessionTranscriptIntegrityScanner {
         try integrityReport(root: root, verifyAndRepair: verifyAndRepair, now: now, logger: logger)
     }
 
-    static func integrityReport(
+    public static func integrityReport(
         root: URL,
         verifyAndRepair: Bool,
         now: Date = Date(),
@@ -180,8 +180,8 @@ enum SessionTranscriptIntegrityScanner {
     }
 }
 
-enum SessionTranscriptIntegrityMaintenance {
-    static func logReport(_ report: SessionTranscriptIntegrityReport, phase: String, logger: Logger?) {
+public enum SessionTranscriptIntegrityMaintenance {
+    public static func logReport(_ report: SessionTranscriptIntegrityReport, phase: String, logger: Logger?) {
         let summary =
             "SAH_SESSION_TRANSCRIPT_INTEGRITY phase=\(phase) conversations=\(report.conversationCount) " +
             "autoRepaired=\(report.autoRepairedCount) quarantined=\(report.quarantinedCount) " +

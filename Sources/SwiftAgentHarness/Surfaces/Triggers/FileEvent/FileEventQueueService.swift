@@ -1,7 +1,7 @@
 import Foundation
 import Logging
 
-actor FileEventQueueService {
+public actor FileEventQueueService {
     private let eventsDirectory: URL
     private let enabled: Bool
     private let debounceMilliseconds: Int

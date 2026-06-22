@@ -80,11 +80,18 @@ enum WebhookDeliverOnlyValidation {
     }
 }
 
-struct WebhookIngressRequest: Sendable {
-    var routeName: String
-    var body: Data
-    var headers: [String: String]
-    var deliveryID: String?
+public struct WebhookIngressRequest: Sendable {
+    public var routeName: String
+    public var body: Data
+    public var headers: [String: String]
+    public var deliveryID: String?
+
+    public init(routeName: String, body: Data, headers: [String: String], deliveryID: String? = nil) {
+        self.routeName = routeName
+        self.body = body
+        self.headers = headers
+        self.deliveryID = deliveryID
+    }
 }
 
 enum WebhookValidationFailure: Error, Equatable {

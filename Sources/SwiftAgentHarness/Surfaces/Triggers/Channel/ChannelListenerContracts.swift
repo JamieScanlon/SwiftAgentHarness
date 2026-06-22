@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChannelId: String, Sendable, Codable {
+public enum ChannelId: String, Sendable, Codable {
     case slack
     case telegram
     case discord

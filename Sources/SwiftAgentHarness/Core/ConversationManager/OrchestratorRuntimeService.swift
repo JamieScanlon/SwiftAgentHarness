@@ -86,7 +86,7 @@ public actor OrchestratorRuntimeService {
         self.toolData = toolData
     }
 
-    nonisolated func installAdditionalToolProviders(_ factory: @escaping HarnessToolProviderFactory) {
+    nonisolated public func installAdditionalToolProviders(_ factory: @escaping HarnessToolProviderFactory) {
         precondition(self.additionalToolProviderFactory == nil, "Additional tool providers already installed")
         self.additionalToolProviderFactory = factory
     }
@@ -94,10 +94,18 @@ public actor OrchestratorRuntimeService {
     nonisolated func installChannelRegistry(_ registry: any ChannelListenerLooking, holder: ChannelRegistryHolder? = nil) {
         precondition(self.channelRegistry == nil, "ChannelListenerLooking already installed")
         self.channelRegistry = registry
-        holder?.registry = registry
+        holder?.assign(registry)
     }
 
-    nonisolated func installTopicPublication(_ topics: ConversationTopicPublicationPort) {
+    nonisolated public func installChannelRegistry(_ registry: ChannelListenerRegistry, holder: ChannelRegistryHolder? = nil) {
+        installChannelRegistry(registry as any ChannelListenerLooking, holder: holder)
+    }
+
+    public func resolvedChannelRegistry() -> ChannelListenerRegistry? {
+        channelRegistry as? ChannelListenerRegistry
+    }
+
+    nonisolated public func installTopicPublication(_ topics: ConversationTopicPublicationPort) {
         precondition(self.topicPublication == nil, "ConversationTopicPublicationPort already installed")
         self.topicPublication = topics
     }

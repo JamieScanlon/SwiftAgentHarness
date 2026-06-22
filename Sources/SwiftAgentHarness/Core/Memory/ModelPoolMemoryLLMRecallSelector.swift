@@ -3,13 +3,13 @@ import Foundation
 import Logging
 import SwiftAgentKit
 
-struct ModelPoolMemoryLLMRecallSelector: MemoryLLMRecallSelecting {
+public struct ModelPoolMemoryLLMRecallSelector: MemoryLLMRecallSelecting {
     private let scheduler: any ModelCallScheduling
     private let modelName: String
     private let serverURL: URL
     private let logger: Logger?
 
-    init(
+    public init(
         scheduler: any ModelCallScheduling,
         modelName: String,
         serverURL: URL,
@@ -70,7 +70,7 @@ Memory manifest (headers only):
         return Self.parseFilenames(from: response.content, allowed: Set(request.manifestEntries.map(\.filename)))
     }
 
-    static func modelID(model: String, serverURL: URL) -> UUID {
+    public static func modelID(model: String, serverURL: URL) -> UUID {
         let modelToken = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let endpointToken = serverURL.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let key = "memory-recall-selector|\(endpointToken)|\(modelToken)"

@@ -1,14 +1,14 @@
 import CryptoKit
 import Foundation
 
-struct WebhookIngressAdapter: Sendable {
+public struct WebhookIngressAdapter: Sendable {
     let validationGate: WebhookValidationGate
     let dispatch: TriggerDispatchService
     let directDelivery: WebhookDirectDelivery
     let idempotency: TriggerIdempotencyGate
     let eventsDirectory: URL?
 
-    func ingest(_ request: WebhookIngressRequest) async throws -> TriggerActivationResult {
+    public func ingest(_ request: WebhookIngressRequest) async throws -> TriggerActivationResult {
         let (route, payload) = try await validationGate.validate(request)
         let rendered = WebhookPromptTemplate.render(template: route.promptTemplate, payload: payload)
         if route.deliverOnly {

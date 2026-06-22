@@ -3,14 +3,14 @@ import SwiftAgentKit
 
 /// UTF-8 JSON encoding for `conversation/{id}/events` payloads (`messagesRefresh` semantic kind).
 /// Keeps wire shape aligned with canonical message-row encoding.
-enum ConversationTopicWireEncoding {
+public enum ConversationTopicWireEncoding {
     private static func encodeContentDeltaWireJSONUTF8(_ wire: ModelContentDeltaWire) -> String {
         let data = try! JSONEncoder().encode(wire)
         return String(data: data, encoding: .utf8) ?? "{\"v\":1,\"kind\":\"text\"}"
     }
 
     /// Harness-shaped text fragment for `semanticKind == contentDelta` (`jsonUTF8` holds ``ModelContentDeltaWire``).
-    static func contentDeltaTextFragmentPayload(
+    public static func contentDeltaTextFragmentPayload(
         text: String,
         blockIndex: Int? = nil,
         runId: UUID? = nil,
@@ -21,7 +21,7 @@ enum ConversationTopicWireEncoding {
     }
 
     /// Reasoning channel fragment (`kind == reasoning`).
-    static func contentDeltaReasoningFragmentPayload(
+    public static func contentDeltaReasoningFragmentPayload(
         text: String,
         blockIndex: Int? = nil,
         runId: UUID? = nil,
@@ -32,7 +32,7 @@ enum ConversationTopicWireEncoding {
     }
 
     /// Tool-call streaming fragment (`kind == toolCall`).
-    static func contentDeltaToolCallFragmentPayload(
+    public static func contentDeltaToolCallFragmentPayload(
         toolName: String?,
         toolCallId: String?,
         argumentsFragment: String?,
@@ -52,11 +52,11 @@ enum ConversationTopicWireEncoding {
     }
 
     /// Typed delta → topic payload (pool/runtime calls this after normalization).
-    static func contentDeltaPayload(wire: ModelContentDeltaWire) -> ConversationTopicEventPayload {
+    public static func contentDeltaPayload(wire: ModelContentDeltaWire) -> ConversationTopicEventPayload {
         ConversationTopicEventPayload.contentDeltaJSONUTF8(encodeContentDeltaWireJSONUTF8(wire))
     }
 
-    static func modelLifecyclePayload(payload: ModelStatePayload) -> ConversationTopicEventPayload {
+    public static func modelLifecyclePayload(payload: ModelStatePayload) -> ConversationTopicEventPayload {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try! encoder.encode(payload)
@@ -64,7 +64,7 @@ enum ConversationTopicWireEncoding {
         return ConversationTopicEventPayload.modelLifecycleJSONUTF8(utf8)
     }
 
-    static func runtimeLifecyclePayload(payload: RuntimeLifecycleEventPayload) -> ConversationTopicEventPayload {
+    public static func runtimeLifecyclePayload(payload: RuntimeLifecycleEventPayload) -> ConversationTopicEventPayload {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try! encoder.encode(payload)
@@ -73,14 +73,14 @@ enum ConversationTopicWireEncoding {
     }
 
     /// Same UTF-8 JSON array used by `messagesRefresh` snapshots and persisted replay payloads.
-    static func messagesJSONArrayUTF8(from messages: [Message]) -> String {
+    public static func messagesJSONArrayUTF8(from messages: [Message]) -> String {
         let rows = messages.map { $0.toJSON(includeImageData: false, includeThumbData: true) }
         let data = try! JSONSerialization.data(withJSONObject: rows)
         return String(data: data, encoding: .utf8) ?? "[]"
     }
 
     /// UTF-8 JSON for `messagesRefresh`: array, or object with `messages` + optional `latestTranscriptSequence` (store cursor; distinct from hub `seq`).
-    static func messagesRefreshJSONUTF8(from messages: [Message], latestTranscriptSequence: Int?) -> String {
+    public static func messagesRefreshJSONUTF8(from messages: [Message], latestTranscriptSequence: Int?) -> String {
         let rows = messages.map { $0.toJSON(includeImageData: false, includeThumbData: true) }
         if let seq = latestTranscriptSequence {
             let obj: [String: Any] = ["messages": rows, "latestTranscriptSequence": seq]
@@ -91,22 +91,22 @@ enum ConversationTopicWireEncoding {
         return String(data: data, encoding: .utf8) ?? "[]"
     }
 
-    static func messagesRefreshPayload(messages: [Message], latestTranscriptSequence: Int? = nil) -> ConversationTopicEventPayload {
+    public static func messagesRefreshPayload(messages: [Message], latestTranscriptSequence: Int? = nil) -> ConversationTopicEventPayload {
         ConversationTopicEventPayload.messagesRefreshJSONUTF8(messagesRefreshJSONUTF8(from: messages, latestTranscriptSequence: latestTranscriptSequence))
     }
 
-    static func messagesRefreshPayload(messages: [Message]) -> ConversationTopicEventPayload {
+    public static func messagesRefreshPayload(messages: [Message]) -> ConversationTopicEventPayload {
         messagesRefreshPayload(messages: messages, latestTranscriptSequence: nil)
     }
 
     /// Checkpoint lifecycle notification for `conversation/{id}/events` (`semanticKind == checkpoint`).
-    static func checkpointTopicPayload(wire: ConversationCheckpointTopicEventWire) -> ConversationTopicEventPayload {
+    public static func checkpointTopicPayload(wire: ConversationCheckpointTopicEventWire) -> ConversationTopicEventPayload {
         let data = try! JSONEncoder().encode(wire)
         let utf8 = String(data: data, encoding: .utf8) ?? "{}"
         return ConversationTopicEventPayload.checkpointJSONUTF8(utf8)
     }
 
-    static func surfaceIntentPayload(intent: ClientSurfaceIntent) -> ConversationTopicEventPayload {
+    public static func surfaceIntentPayload(intent: ClientSurfaceIntent) -> ConversationTopicEventPayload {
         let data = try! JSONEncoder().encode(intent)
         let utf8 = String(data: data, encoding: .utf8) ?? "{}"
         return ConversationTopicEventPayload.surfaceIntentJSONUTF8(utf8)

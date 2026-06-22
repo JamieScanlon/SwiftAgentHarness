@@ -63,7 +63,7 @@ public actor OrchestratorSessionRuntimeService {
 
     private var logger: Logger? { deps.logger }
 
-    func installTriggerDelegatedCompletionHandoff(_ handoff: TriggerDelegatedCompletionHandoff) {
+    public func installTriggerDelegatedCompletionHandoff(_ handoff: TriggerDelegatedCompletionHandoff) {
         triggerDelegatedCompletionHandoff = handoff
     }
 

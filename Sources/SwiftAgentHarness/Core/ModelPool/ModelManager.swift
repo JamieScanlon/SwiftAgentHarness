@@ -350,7 +350,7 @@ public actor ModelManager {
         return nil
     }
 
-    func addModels(_ models: [Model]) async throws {
+    public func addModels(_ models: [Model]) async throws {
         for model in models {
             if registryByID[model.id] == nil {
                 registryByID[model.id] = ModelRegistryEntry.from(model: model)

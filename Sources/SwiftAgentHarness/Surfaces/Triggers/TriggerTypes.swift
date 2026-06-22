@@ -78,7 +78,7 @@ public enum TriggerRoutingMode: String, Codable, Sendable, Equatable {
     case delegated
 }
 
-enum TriggerActivationDecision: String, Codable, Sendable, Equatable {
+public enum TriggerActivationDecision: String, Codable, Sendable, Equatable {
     case admitted
     case dedupHit = "dedup-hit"
     case rateLimited = "rate-limited"
@@ -86,13 +86,19 @@ enum TriggerActivationDecision: String, Codable, Sendable, Equatable {
     case overBudget = "over-budget"
 }
 
-struct TriggerActivationResult: Sendable, Equatable {
-    var decision: TriggerActivationDecision
-    var sessionID: UUID?
-    var deliverOnlyOutcome: WebhookDeliverOnlyOutcome? = nil
+public struct TriggerActivationResult: Sendable, Equatable {
+    public var decision: TriggerActivationDecision
+    public var sessionID: UUID?
+    public var deliverOnlyOutcome: WebhookDeliverOnlyOutcome? = nil
+
+    public init(decision: TriggerActivationDecision, sessionID: UUID?, deliverOnlyOutcome: WebhookDeliverOnlyOutcome? = nil) {
+        self.decision = decision
+        self.sessionID = sessionID
+        self.deliverOnlyOutcome = deliverOnlyOutcome
+    }
 }
 
-enum WebhookDeliverOnlyOutcome: Sendable, Equatable {
+public enum WebhookDeliverOnlyOutcome: Sendable, Equatable {
     case success
     case deliveryFailed(reason: String)
     case targetMissing

@@ -7,8 +7,8 @@ import Foundation
 
 /// Holds weak refs to in-process ``ProcessAwareTranscriptWriteLock`` instances that currently hold `flock`.
 /// Use of @unchecked Sendable is valid here
-final class TranscriptLockSignalRegistry: @unchecked Sendable {
-    static let shared = TranscriptLockSignalRegistry()
+public final class TranscriptLockSignalRegistry: @unchecked Sendable {
+    public static let shared = TranscriptLockSignalRegistry()
 
     private let mutex = NSLock()
     private var boxes: [WeakTranscriptLockBox] = []
@@ -29,7 +29,7 @@ final class TranscriptLockSignalRegistry: @unchecked Sendable {
     }
 
     /// Invoke from CLI / server shutdown (e.g. SIGINT handler on main queue) before tearing down the process.
-    func unlockAllRegisteredLocks() {
+    public func unlockAllRegisteredLocks() {
         mutex.lock()
         let snapshot = boxes
         boxes.removeAll()

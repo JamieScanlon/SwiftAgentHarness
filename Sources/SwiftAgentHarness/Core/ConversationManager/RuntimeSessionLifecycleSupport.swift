@@ -119,7 +119,7 @@ extension HarnessRuntimeSession {
         await persistenceDomain.evictRegistryForTesting()
     }
 
-    internal func budgetLedgerHydrationSeeds() async -> [BudgetLedgerHydrationSeed] {
+    public func budgetLedgerHydrationSeeds() async -> [BudgetLedgerHydrationSeed] {
         await conversationStartupService.budgetLedgerHydrationSeeds()
     }
 
@@ -159,7 +159,7 @@ extension HarnessRuntimeSession {
         return normalized.contains(delegateToolName.lowercased())
     }
 
-    internal func conversationWireCurrentRunID(conversationID: UUID) async -> UUID {
+    public func conversationWireCurrentRunID(conversationID: UUID) async -> UUID {
         await conversationStartupService.conversationWireCurrentRunID(conversationID: conversationID)
     }
 }

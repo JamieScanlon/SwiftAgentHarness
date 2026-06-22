@@ -1,6 +1,6 @@
 import Foundation
 
-protocol ConversationTopicPublicationPort: Sendable {
+public protocol ConversationTopicPublicationPort: Sendable {
     func publishCheckpointInvalidationOnTopic(conversationID: UUID, invalidatedKinds: [String]) async
     func publishContextCompactionCheckpointTopic(spec: ContextCompactionCheckpointPersistenceSpec) async
     func publishConversationTopicEventIfConfigured(

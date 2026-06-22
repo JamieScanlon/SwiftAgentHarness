@@ -12,8 +12,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var teamMemoryEnabled: Bool
     var dreamingCron: String
     var dreamingMinScore: Double
-    var recallSelectorModel: String
-    var recallSelectorOllamaServerURL: URL
+    public var recallSelectorModel: String
+    public var recallSelectorOllamaServerURL: URL
     var activeMemoryModel: String
     var activeMemoryOllamaServerURL: URL
     var extractionRecentMessageCount: Int
@@ -27,7 +27,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var activeMemorySituationalTimeoutMs: Int
     var activeMemorySituationalTTLMs: Int
 
-    static let `default` = MemoryConfiguration(
+    public static let `default` = MemoryConfiguration(
         enabled: true,
         managedInstructionsPath: nil,
         extractionEnabled: true,

@@ -3,8 +3,8 @@ import Foundation
 import Logging
 import SwiftAgentKitACP
 
-enum HarnessACPManagerBootstrap {
-    static func initialize(
+public enum HarnessACPManagerBootstrap {
+    public static func initialize(
         manager: ACPManager,
         configFileURL: URL,
         logger: Logger? = nil

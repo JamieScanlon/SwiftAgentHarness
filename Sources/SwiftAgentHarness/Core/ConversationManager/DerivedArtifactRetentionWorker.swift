@@ -1,13 +1,13 @@
 import Foundation
 
-struct DerivedArtifactRetentionPolicy: Sendable {
-    var supersededOnly: Bool
-    var pruneOrphans: Bool
-    var batchLimit: Int
-    var ttlSecondsForDerivedEvents: Double?
-    var ttlSecondsForSnapshots: Double?
+public struct DerivedArtifactRetentionPolicy: Sendable {
+    public var supersededOnly: Bool
+    public var pruneOrphans: Bool
+    public var batchLimit: Int
+    public var ttlSecondsForDerivedEvents: Double?
+    public var ttlSecondsForSnapshots: Double?
 
-    init(
+    public init(
         supersededOnly: Bool = true,
         pruneOrphans: Bool = true,
         batchLimit: Int = 500,
@@ -22,13 +22,13 @@ struct DerivedArtifactRetentionPolicy: Sendable {
     }
 }
 
-struct DerivedArtifactRetentionSweepResult: Sendable, Equatable {
-    var deletedDerivedEvents: Int = 0
-    var deletedSnapshots: Int = 0
-    var deletedOrphanDerivedEvents: Int = 0
-    var deletedOrphanSnapshots: Int = 0
+public struct DerivedArtifactRetentionSweepResult: Sendable, Equatable {
+    public var deletedDerivedEvents: Int = 0
+    public var deletedSnapshots: Int = 0
+    public var deletedOrphanDerivedEvents: Int = 0
+    public var deletedOrphanSnapshots: Int = 0
 
-    var totalDeletedRows: Int {
+    public var totalDeletedRows: Int {
         deletedDerivedEvents + deletedSnapshots + deletedOrphanDerivedEvents + deletedOrphanSnapshots
     }
 }

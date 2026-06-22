@@ -44,7 +44,7 @@ public actor ModeRegistryService {
             .sorted()
     }
 
-    func setOnDidMutate(_ handler: @escaping @Sendable () -> Void) {
+    public func setOnDidMutate(_ handler: @escaping @Sendable () -> Void) {
         onDidMutate = handler
     }
 
@@ -68,7 +68,7 @@ public actor ModeRegistryService {
         return true
     }
 
-    func resolve(modeId: String) throws -> ResolvedModeProfile {
+    public func resolve(modeId: String) throws -> ResolvedModeProfile {
         guard let profile = profiles[modeId] else {
             throw ModeRegistryError.unknownMode(id: modeId)
         }
@@ -112,7 +112,7 @@ public actor ModeRegistryService {
             }
     }
 
-    func configurationDiagnostics() -> [String] {
+    public func configurationDiagnostics() -> [String] {
         diagnostics
     }
 

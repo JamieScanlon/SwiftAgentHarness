@@ -5,7 +5,7 @@ protocol ChannelListenerLooking: Sendable {
     func listener(for channel: ChannelId) async -> (any ChannelListener)?
 }
 
-actor ChannelListenerRegistry: ChannelListenerLooking {
+public actor ChannelListenerRegistry: ChannelListenerLooking {
     private let dataDirectory: URL
     private let ingress: ChannelIngressAdapter
     private let logger: Logger

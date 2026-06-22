@@ -63,13 +63,13 @@ struct HarnessTriggerDedupeAdapter: TriggerDedupeChecking {
 
 public struct TriggersRuntimeBundle: Sendable {
     let dispatch: TriggerDispatchService
-    let scheduler: TriggerSchedulerService
-    let webhookAdapter: WebhookIngressAdapter
+    public let scheduler: TriggerSchedulerService
+    public let webhookAdapter: WebhookIngressAdapter
     let webhookRouteStore: WebhookRouteStore
-    let scheduleTools: ScheduleToolProvider
-    let fileEventQueue: FileEventQueueService
+    public let scheduleTools: ScheduleToolProvider
+    public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
-    let channelRegistry: ChannelListenerRegistry
+    public let channelRegistry: ChannelListenerRegistry
     let outputRouter: TriggerSymmetricOutputRouter
     let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
     let runRegistry: TriggerDelegatedRunRegistry

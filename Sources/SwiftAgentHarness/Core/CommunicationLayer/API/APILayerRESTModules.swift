@@ -8,10 +8,16 @@ import Logging
 import SwiftAgentKit
 import Vapor
 
-struct ContextCompactionPreviewAPISettings: Sendable {
-    var isRouteEnabled: Bool
-    var authToken: String?
-    static let disabled = ContextCompactionPreviewAPISettings(isRouteEnabled: false, authToken: nil)
+public struct ContextCompactionPreviewAPISettings: Sendable {
+    public var isRouteEnabled: Bool
+    public var authToken: String?
+
+    public init(isRouteEnabled: Bool, authToken: String?) {
+        self.isRouteEnabled = isRouteEnabled
+        self.authToken = authToken
+    }
+
+    public static let disabled = ContextCompactionPreviewAPISettings(isRouteEnabled: false, authToken: nil)
 }
 
 public struct HTTPPreconditionPolicySettings: Sendable {

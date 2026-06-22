@@ -2,16 +2,16 @@ import EasyJSON
 import Foundation
 import SwiftAgentKit
 
-struct ScheduleToolProvider: ToolProvider {
+public struct ScheduleToolProvider: ToolProvider {
     private let scheduler: TriggerSchedulerService
 
-    init(scheduler: TriggerSchedulerService) {
+    public init(scheduler: TriggerSchedulerService) {
         self.scheduler = scheduler
     }
 
-    var name: String { "ScheduleTools" }
+    public var name: String { "ScheduleTools" }
 
-    func availableTools() async -> [ToolDefinition] {
+    public func availableTools() async -> [ToolDefinition] {
         [
             ToolDefinition(
                 name: "schedule_create",
@@ -49,7 +49,7 @@ struct ScheduleToolProvider: ToolProvider {
         ]
     }
 
-    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+    public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         do {
             let content: String
             switch toolCall.name {

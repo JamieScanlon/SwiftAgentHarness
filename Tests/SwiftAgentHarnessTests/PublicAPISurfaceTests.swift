@@ -135,4 +135,27 @@ struct PublicAPISurfaceTests {
         )
         #expect(record.jobId == "job")
     }
+
+    @Test("Third-batch public wiring types and members are accessible")
+    func thirdBatchExports() async throws {
+        let memory = MemoryConfiguration.default
+        #expect(memory.recallSelectorModel == MemoryConfiguration.default.recallSelectorModel)
+        _ = ModelPoolMemoryLLMRecallSelector(
+            scheduler: ModelCallScheduler(),
+            modelName: memory.recallSelectorModel,
+            serverURL: memory.recallSelectorOllamaServerURL
+        )
+        _ = DerivedArtifactRetentionPolicy()
+        _ = ContextCompactionPreviewAPISettings(isRouteEnabled: false, authToken: nil)
+        _ = ConversationTopicWireEncoding.messagesRefreshPayload(messages: [])
+        _ = TranscriptLockSignalRegistry.shared
+        let modeRegistry = ModeRegistryService()
+        await modeRegistry.setOnDidMutate {}
+        _ = try await modeRegistry.resolve(modeId: InteractionMode.chat.rawValue)
+        _ = await modeRegistry.configurationDiagnostics()
+        let api = APILayer(port: 0)
+        await api.setContextCompactionPreviewSettings(.disabled)
+        await api.setWebSocketOutboundFlowConfiguration(WebSocketOutboundFlowConfiguration())
+        await api.stop()
+    }
 }

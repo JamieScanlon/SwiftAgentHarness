@@ -117,29 +117,49 @@ struct SessionBlobIntegrityReport: Sendable, Equatable {
     var hardDeletedTrashCount: Int
 }
 
-enum TranscriptDamageClass: String, Sendable, Equatable, Codable {
+public enum TranscriptDamageClass: String, Sendable, Equatable, Codable {
     case clean
     case tailConfined
     case structural
     case missingFile
 }
 
-enum TranscriptMaintenanceAction: String, Sendable, Equatable {
+public enum TranscriptMaintenanceAction: String, Sendable, Equatable {
     case none
     case autoRepaired
     case quarantined
     case verifyFailed
 }
 
-struct TranscriptVerifyReport: Sendable, Equatable {
-    var conversationID: UUID
-    var catalogLatestSequence: Int
-    var lastCleanJSONLSequence: Int
-    var isTailConfined: Bool
-    var isLosslesslyRepairable: Bool
-    var damageClass: TranscriptDamageClass
-    var reason: String?
-    var maintenanceAction: TranscriptMaintenanceAction
+public struct TranscriptVerifyReport: Sendable, Equatable {
+    public var conversationID: UUID
+    public var catalogLatestSequence: Int
+    public var lastCleanJSONLSequence: Int
+    public var isTailConfined: Bool
+    public var isLosslesslyRepairable: Bool
+    public var damageClass: TranscriptDamageClass
+    public var reason: String?
+    public var maintenanceAction: TranscriptMaintenanceAction
+
+    public init(
+        conversationID: UUID,
+        catalogLatestSequence: Int,
+        lastCleanJSONLSequence: Int,
+        isTailConfined: Bool,
+        isLosslesslyRepairable: Bool,
+        damageClass: TranscriptDamageClass,
+        reason: String? = nil,
+        maintenanceAction: TranscriptMaintenanceAction
+    ) {
+        self.conversationID = conversationID
+        self.catalogLatestSequence = catalogLatestSequence
+        self.lastCleanJSONLSequence = lastCleanJSONLSequence
+        self.isTailConfined = isTailConfined
+        self.isLosslesslyRepairable = isLosslesslyRepairable
+        self.damageClass = damageClass
+        self.reason = reason
+        self.maintenanceAction = maintenanceAction
+    }
 }
 
 enum SessionTranscriptIntegrityState: String, Codable, Sendable {
@@ -152,19 +172,35 @@ struct SessionTranscriptIntegrity: Sendable, Equatable, Codable {
     var reason: String?
 }
 
-enum SessionTranscriptIntegritySeverity: String, Sendable, Equatable {
+public enum SessionTranscriptIntegritySeverity: String, Sendable, Equatable {
     case normal
     case elevated
     case storeAbsentSuspected
 }
 
-struct SessionTranscriptIntegrityReport: Sendable, Equatable {
-    var conversationCount: Int
-    var autoRepairedCount: Int
-    var quarantinedCount: Int
-    var verifyFailedCount: Int
-    var severity: SessionTranscriptIntegritySeverity
-    var samples: [TranscriptVerifyReport]
+public struct SessionTranscriptIntegrityReport: Sendable, Equatable {
+    public var conversationCount: Int
+    public var autoRepairedCount: Int
+    public var quarantinedCount: Int
+    public var verifyFailedCount: Int
+    public var severity: SessionTranscriptIntegritySeverity
+    public var samples: [TranscriptVerifyReport]
+
+    public init(
+        conversationCount: Int,
+        autoRepairedCount: Int,
+        quarantinedCount: Int,
+        verifyFailedCount: Int,
+        severity: SessionTranscriptIntegritySeverity,
+        samples: [TranscriptVerifyReport]
+    ) {
+        self.conversationCount = conversationCount
+        self.autoRepairedCount = autoRepairedCount
+        self.quarantinedCount = quarantinedCount
+        self.verifyFailedCount = verifyFailedCount
+        self.severity = severity
+        self.samples = samples
+    }
 }
 
 // MARK: - List / search

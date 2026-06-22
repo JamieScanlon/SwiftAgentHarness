@@ -6,6 +6,7 @@ import SwiftData
 import SwiftAgentKit
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
+import SwiftAgentKitACP
 import SwiftAgentKitOrchestrator
 import SwiftAgentKitSkills
 #if canImport(AppKit)
@@ -71,6 +72,10 @@ public actor HarnessRuntimeSession {
     }
 
     public var orchestratorRuntimeService: OrchestratorRuntimeService { services.orchestratorRuntimeService }
+
+    public func setACPManager(_ acpManager: ACPManager, delegateBoxes: [String: SubAgentACPClientDelegateBox]) async {
+        await conversationStartupService.setACPManager(acpManager, delegateBoxes: delegateBoxes)
+    }
 
     internal var conversationMessagingRuntimeService: ConversationMessagingRuntimeService { services.conversationMessagingRuntimeService }
     public var orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService { services.orchestratorSessionRuntimeService }
@@ -503,17 +508,17 @@ public actor HarnessRuntimeSession {
         try await conversationStartupService.resetConversationsFromCatalog(availableModels: availableModels)
     }
     
-    internal func setConversationTopicPublisher(_ publisher: (any ConversationTopicPublishing)?) async {
+    public func setConversationTopicPublisher(_ publisher: (any ConversationTopicPublishing)?) async {
         conversationTopicPublisher = publisher
         await conversationStartupService.setConversationTopicPublisher(publisher)
         await runtimeLifecyclePublicationService.setConversationTopicPublisher(publisher)
     }
 
-    internal func setTraceTopicPublisher(_ publisher: (any TraceTopicPublishing)?) async {
+    public func setTraceTopicPublisher(_ publisher: (any TraceTopicPublishing)?) async {
         await runtimeLifecyclePublicationService.setTraceTopicPublisher(publisher)
     }
 
-    internal func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) {
+    public func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) {
         subAgentLifecyclePublisher = publisher
     }
 
@@ -905,12 +910,12 @@ public actor HarnessRuntimeSession {
     }
 
     /// Hard-deletes conversations in `.deleted` lifecycle whose ``updatedAt`` is before the retention cutoff.
-    internal func purgeSoftDeletedPastRetention(retentionDays: Int, now: Date = Date()) async throws -> Int {
+    public func purgeSoftDeletedPastRetention(retentionDays: Int, now: Date = Date()) async throws -> Int {
         try await conversationStartupService.purgeSoftDeletedPastRetention(retentionDays: retentionDays, now: now)
     }
 
     /// Runs one bounded physical prune cycle for superseded derived artifacts/checkpoints.
-    internal func runDerivedArtifactRetentionSweep(
+    public func runDerivedArtifactRetentionSweep(
         policy: DerivedArtifactRetentionPolicy
     ) async throws -> DerivedArtifactRetentionSweepResult {
         try await conversationStartupService.runDerivedArtifactRetentionSweep(policy: policy)

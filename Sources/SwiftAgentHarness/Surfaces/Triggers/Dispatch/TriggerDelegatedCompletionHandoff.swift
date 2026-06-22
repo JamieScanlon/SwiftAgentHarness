@@ -3,7 +3,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 
-struct TriggerDelegatedCompletionHandoff: Sendable {
+public struct TriggerDelegatedCompletionHandoff: Sendable {
     private let runRegistry: TriggerDelegatedRunRegistry
     private let outputRouter: TriggerSymmetricOutputRouter
     private let resolveParentConversation: @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?

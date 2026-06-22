@@ -30,7 +30,7 @@ public struct TriggerTaskRunPorts: Sendable {
     )
 }
 
-actor TriggerSchedulerService {
+public actor TriggerSchedulerService {
     private let store: ScheduledTaskStore
     private let deliver: @Sendable (HarnessTrigger) async throws -> TriggerActivationResult
     private let lockURL: URL
