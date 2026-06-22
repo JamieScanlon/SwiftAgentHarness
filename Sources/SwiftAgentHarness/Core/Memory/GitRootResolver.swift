@@ -29,6 +29,7 @@ enum GitRootResolver {
     private static func resolveGitRoot(for cwd: String, fileManager: FileManager) -> String? {
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else { return nil }
+        #if os(macOS) || os(Linux)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", cwd, "rev-parse", "--show-toplevel"]
@@ -48,6 +49,9 @@ enum GitRootResolver {
         } catch {
             return nil
         }
+        #else
+        return nil
+        #endif
     }
 
     static func isInsideCanonicalGitRoot(path: String, canonicalRoot: String) -> Bool {
