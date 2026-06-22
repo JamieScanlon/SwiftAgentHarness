@@ -10,6 +10,8 @@ public enum HarnessACPManagerBootstrap {
         logger: Logger? = nil
     ) async throws -> [String: SubAgentACPClientDelegateBox] {
         let config = try ACPConfigHelper.parseACPConfig(fileURL: configFileURL)
+
+        #if os(macOS) || os(Linux) || os(Windows)
         var delegateBoxes: [String: SubAgentACPClientDelegateBox] = [:]
         var clients: [ACPClient] = []
 
@@ -47,6 +49,15 @@ public enum HarnessACPManagerBootstrap {
 
         try await manager.initialize(clients: clients)
         return delegateBoxes
+        #else
+        if !config.agentBootCalls.isEmpty {
+            logger?.warning(
+                "[HarnessACPManagerBootstrap] local ACP stdio agents are not supported on this platform; skipping count=\(config.agentBootCalls.count)"
+            )
+        }
+        try await manager.initialize(clients: [])
+        return [:]
+        #endif
     }
 
     private static func environmentDictionary(from json: JSON) -> [String: String] {

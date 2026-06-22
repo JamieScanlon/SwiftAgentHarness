@@ -46,7 +46,7 @@ public enum HarnessHostPaths {
             return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
         }
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            ?? fileManager.sahHomeDirectory.appendingPathComponent("Library/Application Support", isDirectory: true)
         let directoryName = resolvedApplicationSupportDirectoryName()
         return base.appendingPathComponent(directoryName, isDirectory: true)
     }
@@ -62,7 +62,7 @@ public enum HarnessHostPaths {
     }
 
     public static func userSettingsURL(fileManager: FileManager = .default) -> URL {
-        fileManager.homeDirectoryForCurrentUser
+        fileManager.sahHomeDirectory
             .appendingPathComponent(layout.userSettingsDirectoryName, isDirectory: true)
             .appendingPathComponent("settings.json")
     }

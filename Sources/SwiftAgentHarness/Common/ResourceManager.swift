@@ -50,7 +50,7 @@ struct DefaultFileSystemProvider: FileSystemProviding {
     }
     
     var homeDirectoryForCurrentUser: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager.default.sahHomeDirectory
     }
     
     var applicationSupportDirectory: URL {
