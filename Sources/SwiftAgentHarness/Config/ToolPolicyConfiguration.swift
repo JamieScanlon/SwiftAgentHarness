@@ -358,12 +358,8 @@ public struct ToolPolicyConfiguration: Sendable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ToolPolicyConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; tool policy unrestricted")
-            return .unrestricted
-        }
-        guard let data = try? Data(contentsOf: url) else {
-            logger?.warning("Failed to read PromptConfig.json; tool policy unrestricted")
             return .unrestricted
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -573,12 +569,8 @@ struct SubAgentHostingPolicyConfiguration: Sendable {
     }
 
     static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SubAgentHostingPolicyConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; sub-agent hosting policy disabled")
-            return .empty
-        }
-        guard let data = try? Data(contentsOf: url) else {
-            logger?.warning("Failed to read PromptConfig.json; sub-agent hosting policy disabled")
             return .empty
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

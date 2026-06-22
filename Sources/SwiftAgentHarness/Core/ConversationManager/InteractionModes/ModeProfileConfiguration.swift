@@ -30,8 +30,7 @@ public struct ModeProfileConfiguration: Sendable {
     static let empty = ModeProfileConfiguration(profiles: [], diagnostics: [])
 
     static func loadFromPromptConfigBundle() -> ModeProfileConfiguration {
-        guard let url = PromptConfigBundleResource.url(),
-              let data = try? Data(contentsOf: url),
+        guard let data = PromptConfigBundleResource.data(),
               let root = try? JSONDecoder().decode(JSON.self, from: data),
               case .object(let json) = root,
               let modeProfiles = json["modeProfiles"]

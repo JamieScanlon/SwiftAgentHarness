@@ -83,12 +83,11 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> AgentHarnessConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; agent harness defaults")
             return .default
         }
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let harness = json["agentHarness"] as? [String: Any]
         else {
             return .default

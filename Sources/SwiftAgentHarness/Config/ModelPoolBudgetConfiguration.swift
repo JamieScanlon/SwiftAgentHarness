@@ -35,12 +35,11 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; model pool budget safe defaults")
             return .safeDefaults
         }
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let settings = root["settings"] as? [String: Any] else {
             return .safeDefaults
         }

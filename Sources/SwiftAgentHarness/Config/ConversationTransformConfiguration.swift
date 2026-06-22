@@ -521,12 +521,11 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ConversationTransformConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; conversation transform defaults")
             return .default
         }
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let block = json["conversationTransforms"] as? [String: Any]
         else {
             return .default

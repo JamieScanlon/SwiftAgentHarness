@@ -203,4 +203,50 @@ struct PublicAPISurfaceTests {
         }
         _ = (checkSession, checkStartup)
     }
+
+    @Test("Sixth-batch services, session, spawn, and split gateway exports are accessible")
+    func sixthBatchExports() async {
+        let checkServices: @Sendable (HarnessRuntimeSessionFactory.Services) -> Void = { services in
+            _ = services.conversationStartupService
+            _ = services.subAgentSpawnService
+            _ = services.subAgentCompletionRuntimeService
+            _ = services.channelRegistryHolder
+        }
+        let checkSession: @Sendable (HarnessRuntimeSession) async throws -> Void = { session in
+            _ = await session.subAgentSpawnService
+            _ = await session.subAgentCompletionRuntimeService
+            _ = try await session.serviceHarnessDedupePeek(key: "k")
+            _ = try await session.serviceHarnessDedupeCheckAndSet(key: "k", ttlSeconds: 60)
+            _ = try await session.serviceResolveConversationByTitle("title")
+            _ = await session.modelConversation(id: UUID())
+            let createConversation: @Sendable (HarnessRuntimeSession, Model) async throws -> UUID = { session, model in
+                try await session.createConversation(with: model, userSystemPrompt: "sys")
+            }
+            _ = createConversation
+            let trigger = HarnessTrigger(
+                id: "t1",
+                source: .api,
+                payload: "hello",
+                initiator: TriggerInitiator(kind: .external),
+                trust: .knownParty
+            )
+            try await session.stampTriggerHostConversation(
+                conversationID: UUID(),
+                trigger: trigger,
+                sessionKey: "session-key"
+            )
+        }
+        let checkSpawn: @Sendable (SubAgentSpawnService) async throws -> Void = { spawn in
+            _ = try await spawn.spawnSubAgentViaPool(
+                parentConversationID: UUID(),
+                request: SubAgentSpawnRequest(context: .isolated, taskDescription: "task"),
+                modelOverride: nil,
+                bypassDelegateAllowList: true
+            )
+        }
+        let checkSplitGateway: @Sendable (HarnessRuntimeGraph) -> Void = { graph in
+            _ = SplitGatewayServiceFactory.makeConversationAdapter(runtimeGraph: graph)
+        }
+        _ = (checkServices, checkSession, checkSpawn, checkSplitGateway)
+    }
 }

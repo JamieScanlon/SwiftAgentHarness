@@ -78,7 +78,7 @@ public actor SubAgentSpawnService {
         SubAgentExecutionCoordinator(subAgentPool: subAgentPool)
     }
 
-    func spawnSubAgentViaPool(
+    public func spawnSubAgentViaPool(
         parentConversationID: UUID,
         request: SubAgentSpawnRequest,
         modelOverride: Model?,

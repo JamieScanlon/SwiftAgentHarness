@@ -33,8 +33,7 @@ struct SubAgentCustomEndpointConfiguration: Sendable {
     }
 
     static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SubAgentCustomEndpointConfiguration {
-        guard let url = PromptConfigBundleResource.url(),
-              let data = try? Data(contentsOf: url),
+        guard let data = PromptConfigBundleResource.data(),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .empty
         }

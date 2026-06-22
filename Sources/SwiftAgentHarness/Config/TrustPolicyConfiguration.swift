@@ -43,11 +43,10 @@ public struct TrustPolicyConfiguration: Sendable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> TrustPolicyConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             return .disabled
         }
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let block = json["trustPolicy"] as? [String: Any]
         else {
             return .disabled

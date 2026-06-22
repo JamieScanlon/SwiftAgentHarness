@@ -7,7 +7,7 @@ import Foundation
 import SwiftAgentKit
 
 /// API-facing conversation boundary that composes domain services and HarnessRuntimeSession-owned residual seams.
-final class APILayerConversationAdapter: APILayerConversationManaging, Sendable {
+public final class APILayerConversationAdapter: APILayerConversationManaging, Sendable {
     private let catalog: any ConversationCatalogServicing
     private let controlPlane: any ConversationControlPlaneServicing
     private let lifecycle: any ConversationLifecycleServicing

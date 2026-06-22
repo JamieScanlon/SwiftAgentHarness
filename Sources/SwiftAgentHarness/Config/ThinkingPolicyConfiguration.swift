@@ -19,12 +19,11 @@ public struct ThinkingPolicyConfiguration: Sendable, Equatable {
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ThinkingPolicyConfiguration {
-        guard let url = PromptConfigBundleResource.url() else {
+        guard let data = PromptConfigBundleResource.data() else {
             logger?.warning("PromptConfig.json not found; thinking policy defaults")
             return .default
         }
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let settings = root["settings"] as? [String: Any] else {
             return .default
         }
