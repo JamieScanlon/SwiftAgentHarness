@@ -39,7 +39,7 @@ struct ContextProjectionServiceTests {
             registryEntryProvider: nil,
             rankedRegistryEntriesProvider: nil,
             delegateCostTracker: nil,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             logger: nil
         )
     }
@@ -262,7 +262,7 @@ struct ContextProjectionServiceTests {
             registryEntryProvider: nil,
             rankedRegistryEntriesProvider: nil,
             delegateCostTracker: nil,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             logger: nil
         )
         let service = await makeService(
@@ -353,7 +353,7 @@ struct ContextProjectionServiceTests {
             registryEntryProvider: nil,
             rankedRegistryEntriesProvider: nil,
             delegateCostTracker: nil,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             logger: nil
         )
         let service = await makeService(
@@ -421,7 +421,7 @@ private func makeLowSavingsProjectionService() async throws -> (
         registryEntryProvider: nil,
         rankedRegistryEntriesProvider: nil,
         delegateCostTracker: nil,
-        runtimeExecutorFactory: AgentRuntimeExecutorFactories.default,
+        runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
         logger: nil
     )
     let services = HarnessRuntimeSessionFactory.makeForTesting(deps: deps)

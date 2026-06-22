@@ -313,7 +313,7 @@ enum HarnessConversationTestFixtures {
             contextEngine: contextEngine,
             modeRegistry: ModeRegistryTestSupport.makePort(),
             runtimeLaneConfiguration: .default,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal
         )
         return HarnessRuntimeHostFixture(host: host, services: services, local: local, root: root, stack: stack)
     }

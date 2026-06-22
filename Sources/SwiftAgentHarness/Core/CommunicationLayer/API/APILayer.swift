@@ -2,6 +2,7 @@ import Foundation
 import EasyJSON
 import Logging
 import SwiftAgentKit
+import SwiftAgentKitMCP
 import Synchronization
 import Vapor
 
@@ -657,15 +658,27 @@ public actor APILayer {
         self.triggerWebhookRegistrar = registrar
     }
 
+    private var startupService: ConversationStartupService?
+
+    /// Binds the harness startup service for composition-root wiring (``setMCPManager(_:)``, etc.).
+    public func setStartupService(_ startup: ConversationStartupService) {
+        startupService = startup
+    }
+
+    public func setMCPManager(_ mcpManager: MCPManager) async {
+        guard let startupService else { return }
+        await startupService.setMCPManager(mcpManager)
+    }
+
     func setContextCompactionPreviewSettings(_ settings: ContextCompactionPreviewAPISettings) {
         self.contextCompactionPreviewSettings = settings
     }
 
-    func setHTTPPreconditionPolicySettings(_ settings: HTTPPreconditionPolicySettings) {
+    public func setHTTPPreconditionPolicySettings(_ settings: HTTPPreconditionPolicySettings) {
         self.httpPreconditionPolicySettings = settings
     }
 
-    func setTenancyPolicySettings(_ settings: TenancyPolicySettings) {
+    public func setTenancyPolicySettings(_ settings: TenancyPolicySettings) {
         self.tenancyPolicySettings = settings
     }
 

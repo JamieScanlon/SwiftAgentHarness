@@ -140,11 +140,11 @@ public actor ConversationStartupService: StartupServicing {
         subAgentLifecyclePublisher = publisher
     }
 
-    func setResourceManager(_ resourceManager: ResourceManager) async {
+    public func setResourceManager(_ resourceManager: ResourceManager) async {
         self.resourceManager = resourceManager
     }
 
-    func setMCPManager(_ mcpManager: MCPManager) async {
+    public func setMCPManager(_ mcpManager: MCPManager) async {
         self.mcpManager = mcpManager
     }
 
@@ -156,7 +156,7 @@ public actor ConversationStartupService: StartupServicing {
         subAgentACPManagerProvider = provider
     }
 
-    func setA2AManager(_ a2aManager: A2AManager) async {
+    public func setA2AManager(_ a2aManager: A2AManager) async {
         self.a2aManager = a2aManager
         await subAgentA2AManagerProvider?.setManager(a2aManager)
     }

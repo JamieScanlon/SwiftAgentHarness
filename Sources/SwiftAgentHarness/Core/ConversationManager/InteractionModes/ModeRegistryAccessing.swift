@@ -57,26 +57,26 @@ public protocol ModeRegistryAccessing: Sendable {
 }
 
 /// Forwards ``ModeRegistryAccessing`` calls to ``ModeRegistryService``.
-final class ModeRegistryPortAdapter: ModeRegistryAccessing, Sendable {
+public final class ModeRegistryPortAdapter: ModeRegistryAccessing, Sendable {
     private let service: ModeRegistryService
 
-    init(service: ModeRegistryService) {
+    public init(service: ModeRegistryService) {
         self.service = service
     }
 
-    func register(_ profile: ResolvedModeProfile, replacing: Bool) async throws {
+    public func register(_ profile: ResolvedModeProfile, replacing: Bool) async throws {
         try await service.register(profile, replacing: replacing)
     }
 
-    func reloadProjectConfig() async -> Bool {
+    public func reloadProjectConfig() async -> Bool {
         await service.reloadProjectConfig()
     }
 
-    func resolve(modeId: String) async throws -> ResolvedModeProfile {
+    public func resolve(modeId: String) async throws -> ResolvedModeProfile {
         try await service.resolve(modeId: modeId)
     }
 
-    func resolveReportingFallback(
+    public func resolveReportingFallback(
         modeId: String,
         logger: Logger?,
         fallbackModeId: String
@@ -84,15 +84,15 @@ final class ModeRegistryPortAdapter: ModeRegistryAccessing, Sendable {
         await service.resolveReportingFallback(modeId: modeId, logger: logger, fallbackModeId: fallbackModeId)
     }
 
-    func registeredModeIDs() async -> [String] {
+    public func registeredModeIDs() async -> [String] {
         await service.registeredModeIDs()
     }
 
-    func profilesForPicker() async -> [ModeProfilePickerRow] {
+    public func profilesForPicker() async -> [ModeProfilePickerRow] {
         await service.profilesForPicker()
     }
 
-    func configurationDiagnostics() async -> [String] {
+    public func configurationDiagnostics() async -> [String] {
         await service.configurationDiagnostics()
     }
 }

@@ -1,11 +1,16 @@
 import Foundation
 
 /// API ingress for sub-agent lifecycle and completion (replaces session-backed host adapter).
-struct SubAgentAPIIngressService: SubAgentLifecycleOrchestrationHosting, SubAgentCompletionIngressHosting {
-    let spawn: SubAgentSpawnService
-    let completion: SubAgentCompletionRuntimeService
+public struct SubAgentAPIIngressService: SubAgentLifecycleOrchestrationHosting, SubAgentCompletionIngressHosting {
+    public let spawn: SubAgentSpawnService
+    public let completion: SubAgentCompletionRuntimeService
 
-    func hostSpawnSubAgent(
+    public init(spawn: SubAgentSpawnService, completion: SubAgentCompletionRuntimeService) {
+        self.spawn = spawn
+        self.completion = completion
+    }
+
+    public func hostSpawnSubAgent(
         parentConversationID: UUID,
         request: SubAgentSpawnRequest,
         modelOverride: Model?
@@ -17,22 +22,22 @@ struct SubAgentAPIIngressService: SubAgentLifecycleOrchestrationHosting, SubAgen
         )
     }
 
-    func hostLifecycleSnapshot(conversationID: UUID, pathSegments: [String]) async -> SubAgentLifecycleTopicPayload {
+    public func hostLifecycleSnapshot(conversationID: UUID, pathSegments: [String]) async -> SubAgentLifecycleTopicPayload {
         await spawn.lifecycleSnapshot(conversationID: conversationID, pathSegments: pathSegments)
     }
 
-    func hostListActiveInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo] {
+    public func hostListActiveInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo] {
         await spawn.listActiveInvocations(parentConversationID: parentConversationID)
     }
 
-    func hostCancelInvocation(parentConversationID: UUID, lifecycleID: String) async throws {
+    public func hostCancelInvocation(parentConversationID: UUID, lifecycleID: String) async throws {
         try await spawn.cancelInvocation(
             parentConversationID: parentConversationID,
             lifecycleID: lifecycleID
         )
     }
 
-    func hostPushCompletionAnnouncement(
+    public func hostPushCompletionAnnouncement(
         _ announce: CompletionAnnouncePayload,
         toolMessageContent: String?
     ) async {
@@ -42,15 +47,15 @@ struct SubAgentAPIIngressService: SubAgentLifecycleOrchestrationHosting, SubAgen
         )
     }
 
-    func hostRetryPendingAnnouncements() async {
+    public func hostRetryPendingAnnouncements() async {
         await completion.retryPendingCompletionAnnouncements()
     }
 
-    func hostReconcileUnresolvedAnnouncementsOnStartup() async {
+    public func hostReconcileUnresolvedAnnouncementsOnStartup() async {
         await completion.reconcileUnresolvedCompletionAnnouncementsOnStartup()
     }
 
-    func hostRecoverActiveRemoteTransportsOnStartup() async {
+    public func hostRecoverActiveRemoteTransportsOnStartup() async {
         await spawn.recoverActiveRemoteSubAgentTransportsOnStartup()
         await spawn.publishOrphanedSubAgentNotificationsAfterStartup()
     }

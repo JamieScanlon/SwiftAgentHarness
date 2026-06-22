@@ -2,7 +2,7 @@ import Foundation
 import SwiftAgentKit
 
 /// Sub-agent completion announcement ingestion and startup reconciliation (Slice 4 migration).
-actor SubAgentCompletionRuntimeService {
+public actor SubAgentCompletionRuntimeService {
     private let deps: ConversationRuntimeDependencies
     private let orchestrationCore: AgentRuntimeOrchestrationCore
     private let messaging: ConversationMessagingPort

@@ -864,7 +864,7 @@ public actor ResourceManager {
     ///
     /// This is useful on startup to restore knowledge of previously stored resources.
     /// In-memory resources that exist in the current index are preserved.
-    func rebuildIndex() throws {
+    public func rebuildIndex() throws {
         logger?.info("[ResourceManager] Rebuilding resource index from disk...")
         
         var newIndex: [UUID: ResourceMetadata] = [:]

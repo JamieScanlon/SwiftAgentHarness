@@ -85,13 +85,31 @@ public enum TriggersRuntimeWiring {
     }
 
     public struct Configuration: Sendable {
-        var dataDirectory: URL
-        var eventsDirectory: URL? = nil
-        var fileEventQueueEnabled: Bool = true
-        var channelsConfigURL: URL? = nil
-        var channelListenersEnabled: Bool = false
-        var staticWebhookRoutes: [WebhookRoute] = []
-        var schedulerIdentity: String = "sah-trigger-scheduler"
+        public var dataDirectory: URL
+        public var eventsDirectory: URL? = nil
+        public var fileEventQueueEnabled: Bool = true
+        public var channelsConfigURL: URL? = nil
+        public var channelListenersEnabled: Bool = false
+        public var staticWebhookRoutes: [WebhookRoute] = []
+        public var schedulerIdentity: String = "sah-trigger-scheduler"
+
+        public init(
+            dataDirectory: URL,
+            eventsDirectory: URL? = nil,
+            fileEventQueueEnabled: Bool = true,
+            channelsConfigURL: URL? = nil,
+            channelListenersEnabled: Bool = false,
+            staticWebhookRoutes: [WebhookRoute] = [],
+            schedulerIdentity: String = "sah-trigger-scheduler"
+        ) {
+            self.dataDirectory = dataDirectory
+            self.eventsDirectory = eventsDirectory
+            self.fileEventQueueEnabled = fileEventQueueEnabled
+            self.channelsConfigURL = channelsConfigURL
+            self.channelListenersEnabled = channelListenersEnabled
+            self.staticWebhookRoutes = staticWebhookRoutes
+            self.schedulerIdentity = schedulerIdentity
+        }
     }
 
     public static func resolve(

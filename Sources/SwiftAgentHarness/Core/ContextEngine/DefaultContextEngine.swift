@@ -5,11 +5,24 @@ import SwiftAgentKit
 
 /// Default harness-aligned Context Engine: builds transform inputs via ``ContextCompactionInputBuilder``,
 /// invokes the injected transformer, and emits checkpoint persistence specs for initial-phase compaction.
-struct DefaultContextEngine: ContextEngine, Sendable {
+public struct DefaultContextEngine: ContextEngine, Sendable {
     private let compactionCoordinator: CompactionConcurrencyCoordinator?
-    internal let memoryService: DefaultMemoryService?
+    public let memoryService: DefaultMemoryService?
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
     private let logger: Logger?
+
+    public init(
+        compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
+        memoryService: DefaultMemoryService? = nil,
+        logger: Logger? = nil
+    ) {
+        self.init(
+            compactionCoordinator: compactionCoordinator,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: nil,
+            logger: logger
+        )
+    }
 
     init(
         compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
@@ -29,12 +42,12 @@ struct DefaultContextEngine: ContextEngine, Sendable {
         self.logger = logger
     }
 
-    func bootstrap(request: ContextEngineBootstrapRequest) async -> ContextEngineBootstrapResult {
+    public func bootstrap(request: ContextEngineBootstrapRequest) async -> ContextEngineBootstrapResult {
         _ = request
         return ContextEngineBootstrapResult(initialized: true)
     }
 
-    func ingest(request: ContextEngineIngestRequest) async -> ContextEngineIngestResult {
+    public func ingest(request: ContextEngineIngestRequest) async -> ContextEngineIngestResult {
         _ = request
         return ContextEngineIngestResult(ingestedCount: 1)
     }
@@ -42,12 +55,12 @@ struct DefaultContextEngine: ContextEngine, Sendable {
     /// Lifecycle hook for non-default `ContextEngine` slots: the pipeline awaits this before every
     /// `assemble` / `compact` so alternate implementations can inject per-turn state without forking
     /// `ContextAssemblyPipeline`. The default slot is a no-op.
-    func ingestBatch(request: ContextEngineIngestBatchRequest) async -> ContextEngineIngestResult {
+    public func ingestBatch(request: ContextEngineIngestBatchRequest) async -> ContextEngineIngestResult {
         _ = request
         return ContextEngineIngestResult(ingestedCount: request.messages.count)
     }
 
-    func assemble(
+    public func assemble(
         request: ContextEngineAssembleRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextEngineAssembleResult {
@@ -120,14 +133,14 @@ struct DefaultContextEngine: ContextEngine, Sendable {
         )
     }
 
-    func compact(
+    public func compact(
         request: ContextEngineCompactRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextEngineCompactResult {
         await assemble(request: request.assemble, performTransform: performTransform)
     }
 
-    func afterTurn(request: ContextEngineAfterTurnRequest) async -> ContextEngineAfterTurnResult {
+    public func afterTurn(request: ContextEngineAfterTurnRequest) async -> ContextEngineAfterTurnResult {
         if let memoryService,
            let session = await memoryService.sessionContext(for: request.conversationID) {
             let wrote = await memoryService.writeObserver().hadMainAgentWrites(conversationID: request.conversationID)
@@ -145,7 +158,7 @@ struct DefaultContextEngine: ContextEngine, Sendable {
         return ContextEngineAfterTurnResult(completed: true)
     }
 
-    func prepareSubagentSpawn(
+    public func prepareSubagentSpawn(
         request: ContextEnginePrepareSubagentSpawnRequest
     ) async -> ContextEnginePrepareSubagentSpawnResult {
         let approved = request.candidateToolNames.filter { toolName in
@@ -192,7 +205,7 @@ struct DefaultContextEngine: ContextEngine, Sendable {
         )
     }
 
-    func onSubagentEnded(
+    public func onSubagentEnded(
         request: ContextEngineSubagentEndedRequest
     ) async -> ContextEngineSubagentEndedResult {
         let fingerprint = subagentPolicyFingerprint(
@@ -221,7 +234,7 @@ struct DefaultContextEngine: ContextEngine, Sendable {
         )
     }
 
-    func projectedContextBudget(
+    public func projectedContextBudget(
         request: ContextEngineProjectedContextBudgetRequest
     ) async -> ConversationContextBudget? {
         let projected = applyProjectionPolicy(

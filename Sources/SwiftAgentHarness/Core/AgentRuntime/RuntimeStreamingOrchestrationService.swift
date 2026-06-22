@@ -2,9 +2,19 @@ import Foundation
 import SwiftAgentKit
 
 /// Runtime-owned APILayer streaming boundary wired to agent runtime and replay services.
-final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, Sendable {
+public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, Sendable {
     private let agentRuntime: any AgentRuntimeStreamingServicing & AgentRuntimeRunControlling
     private let conversationReplay: ConversationReplayService
+
+    public convenience init(
+        agentRuntimeSessionService: AgentRuntimeSessionService,
+        conversationReplay: ConversationReplayService
+    ) {
+        self.init(
+            agentRuntime: agentRuntimeSessionService,
+            conversationReplay: conversationReplay
+        )
+    }
 
     init(
         agentRuntime: any AgentRuntimeStreamingServicing & AgentRuntimeRunControlling,
@@ -14,11 +24,11 @@ final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, S
         self.conversationReplay = conversationReplay
     }
 
-    func apiMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]> {
+    public func apiMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]> {
         try await agentRuntime.serviceRuntimeMessageStream(for: conversationID)
     }
 
-    func apiSendMessageAndStreamResponse(
+    public func apiSendMessageAndStreamResponse(
         conversationID: UUID,
         _ text: String,
         images: [Message.Image],
@@ -46,7 +56,7 @@ final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, S
         )
     }
 
-    func apiRevertToUserMessageAndStreamResponse(
+    public func apiRevertToUserMessageAndStreamResponse(
         conversationID: UUID,
         messageID: UUID,
         enableTools: Bool,
@@ -59,7 +69,7 @@ final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, S
         )
     }
 
-    func apiSplitConversationAtUserMessage(
+    public func apiSplitConversationAtUserMessage(
         conversationID: UUID,
         messageID: UUID,
         enableTools: Bool,
@@ -72,46 +82,46 @@ final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeManaging, S
         )
     }
 
-    func apiCancelMessageStream() async {
+    public func apiCancelMessageStream() async {
         await agentRuntime.cancelMessageStreamForAPI()
     }
 
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
+    public func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
         await agentRuntime.setOrchestrationStateOutOfBandPush(id: id, push: push)
     }
 
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {
+    public func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {
         await agentRuntime.clearOrchestrationStateOutOfBandPush(id: id)
     }
 
-    func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws {
+    public func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws {
         try await conversationReplay.serviceRuntimeStartConversationReplay(
             sourceConversationID: conversationID,
             configuration: .init(enableTools: enableTools, enableAgents: enableAgents)
         )
     }
 
-    func apiStopConversationReplay(conversationID: UUID) async {
+    public func apiStopConversationReplay(conversationID: UUID) async {
         await conversationReplay.stopConversationReplay(conversationID: conversationID)
     }
 
-    func apiIsConversationReplayActive(conversationID: UUID) async -> Bool {
+    public func apiIsConversationReplayActive(conversationID: UUID) async -> Bool {
         await conversationReplay.isConversationReplayActive(conversationID: conversationID)
     }
 
-    func apiRequestTurnLoopStop(conversationID: UUID) async {
+    public func apiRequestTurnLoopStop(conversationID: UUID) async {
         await agentRuntime.requestTurnLoopStop(conversationID: conversationID)
     }
 
-    func apiCancelRun(conversationID: UUID, runID: UUID) async throws {
+    public func apiCancelRun(conversationID: UUID, runID: UUID) async throws {
         try await agentRuntime.cancelActiveRunForAPI(conversationID: conversationID, runID: runID)
     }
 
-    func apiListConversationRuns(conversationID: UUID, filter: ConversationRunListFilter) async -> ConversationRunListResponse {
+    public func apiListConversationRuns(conversationID: UUID, filter: ConversationRunListFilter) async -> ConversationRunListResponse {
         await agentRuntime.listRunsForAPI(conversationID: conversationID, filter: filter)
     }
 
-    func apiGetConversationRun(conversationID: UUID, runID: UUID, includeProjectionDetail: Bool) async -> ConversationRunInfo? {
+    public func apiGetConversationRun(conversationID: UUID, runID: UUID, includeProjectionDetail: Bool) async -> ConversationRunInfo? {
         await agentRuntime.getRunForAPI(
             conversationID: conversationID,
             runID: runID,

@@ -4,7 +4,7 @@ import SwiftAgentKit
 import SwiftAgentKitOrchestrator
 
 /// Sub-agent spawn, lifecycle tracking, and runtime coordination (Slice 4 migration).
-actor SubAgentSpawnService {
+public actor SubAgentSpawnService {
     private let deps: ConversationRuntimeDependencies
     private let orchestratorRuntime: any SubAgentOrchestratorRuntimeServicing
     private let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping

@@ -50,16 +50,38 @@ public struct ContextCompactionCachePolicy: Sendable {
 }
 
 public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
-    let enabled: Bool
-    let maxImagesPerMessage: Int
-    let documentCharacterThreshold: Int
-    let imagePlaceholder: String
-    let documentPlaceholder: String
+    public let enabled: Bool
+    public let maxImagesPerMessage: Int
+    public let documentCharacterThreshold: Int
+    public let imagePlaceholder: String
+    public let documentPlaceholder: String
+
+    public init(
+        enabled: Bool,
+        maxImagesPerMessage: Int,
+        documentCharacterThreshold: Int,
+        imagePlaceholder: String,
+        documentPlaceholder: String
+    ) {
+        self.enabled = enabled
+        self.maxImagesPerMessage = maxImagesPerMessage
+        self.documentCharacterThreshold = documentCharacterThreshold
+        self.imagePlaceholder = imagePlaceholder
+        self.documentPlaceholder = documentPlaceholder
+    }
 }
 
 public struct ContextCompactionDeterministicHygienePolicy: Sendable {
-    let toolResultPruningEnabled: Bool
-    let attachmentDocumentHygiene: ContextCompactionAttachmentDocumentHygienePolicy
+    public let toolResultPruningEnabled: Bool
+    public let attachmentDocumentHygiene: ContextCompactionAttachmentDocumentHygienePolicy
+
+    public init(
+        toolResultPruningEnabled: Bool,
+        attachmentDocumentHygiene: ContextCompactionAttachmentDocumentHygienePolicy
+    ) {
+        self.toolResultPruningEnabled = toolResultPruningEnabled
+        self.attachmentDocumentHygiene = attachmentDocumentHygiene
+    }
 }
 
 public enum ContextCompactionIdentifierPreservationMode: String, Sendable {
@@ -69,8 +91,13 @@ public enum ContextCompactionIdentifierPreservationMode: String, Sendable {
 }
 
 public struct ContextCompactionIdentifierPreservationPolicy: Sendable {
-    let mode: ContextCompactionIdentifierPreservationMode
-    let customInstructions: String?
+    public let mode: ContextCompactionIdentifierPreservationMode
+    public let customInstructions: String?
+
+    public init(mode: ContextCompactionIdentifierPreservationMode, customInstructions: String?) {
+        self.mode = mode
+        self.customInstructions = customInstructions
+    }
 }
 
 public struct ConversationTransformMetadata: Sendable {

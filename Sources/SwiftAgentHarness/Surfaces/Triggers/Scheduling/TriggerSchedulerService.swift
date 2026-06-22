@@ -8,12 +8,22 @@ struct TriggerSchedulerConfiguration: Sendable {
 }
 
 /// Durable run-delivery queue ports (`SessionBackend.appendTaskRun` / `latestUndeliveredTaskRun` / `markTaskRunDelivered`).
-struct TriggerTaskRunPorts: Sendable {
-    var append: @Sendable (_ jobId: String, _ payload: Data, _ idempotencyKey: String?) async throws -> UUID
-    var latestUndelivered: @Sendable (_ jobId: String) async throws -> SessionHarnessTaskRunRecord?
-    var markDelivered: @Sendable (_ runId: UUID) async throws -> Void
+public struct TriggerTaskRunPorts: Sendable {
+    public var append: @Sendable (_ jobId: String, _ payload: Data, _ idempotencyKey: String?) async throws -> UUID
+    public var latestUndelivered: @Sendable (_ jobId: String) async throws -> SessionHarnessTaskRunRecord?
+    public var markDelivered: @Sendable (_ runId: UUID) async throws -> Void
 
-    static let disabled = TriggerTaskRunPorts(
+    public init(
+        append: @escaping @Sendable (_ jobId: String, _ payload: Data, _ idempotencyKey: String?) async throws -> UUID,
+        latestUndelivered: @escaping @Sendable (_ jobId: String) async throws -> SessionHarnessTaskRunRecord?,
+        markDelivered: @escaping @Sendable (_ runId: UUID) async throws -> Void
+    ) {
+        self.append = append
+        self.latestUndelivered = latestUndelivered
+        self.markDelivered = markDelivered
+    }
+
+    public static let disabled = TriggerTaskRunPorts(
         append: { _, _, _ in UUID() },
         latestUndelivered: { _ in nil },
         markDelivered: { _ in }

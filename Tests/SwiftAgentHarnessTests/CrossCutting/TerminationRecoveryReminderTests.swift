@@ -34,7 +34,7 @@ struct TerminationRecoveryReminderTests {
             registryEntryProvider: nil,
             rankedRegistryEntriesProvider: nil,
             delegateCostTracker: nil,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             logger: nil
         )
         let service = AgentRuntimeSessionService(

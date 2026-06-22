@@ -1,12 +1,12 @@
 import EasyJSON
 import Foundation
 
-enum TriggerHostConversationMetadata {
-    static let triggerHostKey = "triggerHost"
-    static let sessionKeyKey = "triggerSessionKey"
-    static let triggerFingerprintKey = "triggerFingerprint"
+public enum TriggerHostConversationMetadata {
+    public static let triggerHostKey = "triggerHost"
+    public static let sessionKeyKey = "triggerSessionKey"
+    public static let triggerFingerprintKey = "triggerFingerprint"
 
-    static func fingerprintJSON(trigger: HarnessTrigger, sessionKey: String) -> JSON? {
+    public static func fingerprintJSON(trigger: HarnessTrigger, sessionKey: String) -> JSON? {
         let payload: [String: JSON] = [
             "id": .string(trigger.id),
             "source": .string(trigger.source.rawValue),
@@ -17,7 +17,7 @@ enum TriggerHostConversationMetadata {
         return .object(payload)
     }
 
-    static func stampHostMetadata(
+    public static func stampHostMetadata(
         existing: JSON?,
         trigger: HarnessTrigger,
         sessionKey: String
@@ -35,20 +35,20 @@ enum TriggerHostConversationMetadata {
     }
 
     /// Minimal host marker for isolated trigger sessions created before full trigger context is stamped.
-    static func minimalHostMetadata(sessionKey: String) -> JSON {
+    public static func minimalHostMetadata(sessionKey: String) -> JSON {
         .object([
             triggerHostKey: .boolean(true),
             sessionKeyKey: .string(sessionKey),
         ])
     }
 
-    static func isTriggerHost(_ metadata: JSON?) -> Bool {
+    public static func isTriggerHost(_ metadata: JSON?) -> Bool {
         guard let metadata, case .object(let object) = metadata else { return false }
         guard case .boolean(let value) = object[triggerHostKey] else { return false }
         return value
     }
 
-    static func isFullyConfiguredTriggerHost(
+    public static func isFullyConfiguredTriggerHost(
         metadata: JSON?,
         lineageKind: ConversationLineageKind,
         origin: ConversationOrigin
@@ -59,13 +59,13 @@ enum TriggerHostConversationMetadata {
         return true
     }
 
-    static func sessionKey(from metadata: JSON?) -> String? {
+    public static func sessionKey(from metadata: JSON?) -> String? {
         guard let metadata, case .object(let object) = metadata else { return nil }
         guard case .string(let value) = object[sessionKeyKey] else { return nil }
         return value
     }
 
-    static func triggerFromFingerprint(_ metadata: JSON?) -> HarnessTrigger? {
+    public static func triggerFromFingerprint(_ metadata: JSON?) -> HarnessTrigger? {
         guard let metadata, case .object(let object) = metadata else { return nil }
         guard case .object(let fingerprint) = object[triggerFingerprintKey] else { return nil }
         guard case .string(let id) = fingerprint["id"],

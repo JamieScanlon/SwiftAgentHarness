@@ -80,14 +80,14 @@ struct SubAgentLifecycleOrchestrationService: SubAgentLifecycleOrchestrationServ
     }
 }
 
-struct SubAgentCompletionIngressService: SubAgentCompletionIngressServicing {
+public struct SubAgentCompletionIngressService: SubAgentCompletionIngressServicing {
     private let host: any SubAgentCompletionIngressHosting
 
-    init(host: any SubAgentCompletionIngressHosting) {
+    public init(host: any SubAgentCompletionIngressHosting) {
         self.host = host
     }
 
-    func pushCompletionAnnouncement(
+    public func pushCompletionAnnouncement(
         _ announce: CompletionAnnouncePayload,
         toolMessageContent: String?
     ) async {
@@ -97,15 +97,15 @@ struct SubAgentCompletionIngressService: SubAgentCompletionIngressServicing {
         )
     }
 
-    func retryPendingAnnouncements() async {
+    public func retryPendingAnnouncements() async {
         await host.hostRetryPendingAnnouncements()
     }
 
-    func reconcileUnresolvedAnnouncementsOnStartup() async {
+    public func reconcileUnresolvedAnnouncementsOnStartup() async {
         await host.hostReconcileUnresolvedAnnouncementsOnStartup()
     }
 
-    func recoverActiveRemoteTransportsOnStartup() async {
+    public func recoverActiveRemoteTransportsOnStartup() async {
         await host.hostRecoverActiveRemoteTransportsOnStartup()
     }
 }

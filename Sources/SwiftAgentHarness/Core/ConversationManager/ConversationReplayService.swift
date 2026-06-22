@@ -3,7 +3,7 @@ import Foundation
 import SwiftAgentKit
 
 /// Conversation transcript replay (sandbox lifecycle, transform hooks, finalize).
-actor ConversationReplayService {
+public actor ConversationReplayService {
     typealias Configuration = HarnessRuntimeSession.Configuration
 
     private let replayProcessingDebugModeEnabled = true

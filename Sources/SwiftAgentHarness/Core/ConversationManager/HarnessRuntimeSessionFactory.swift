@@ -9,7 +9,7 @@ public enum HarnessRuntimeSessionFactory {
         let selection: ConversationSelectionAccessAdapter
         let sessionProjection: SessionProjectionPortAdapter
         let topics: ConversationTopicPublicationPortAdapter
-        let agentRuntimeSessionService: AgentRuntimeSessionService
+        public let agentRuntimeSessionService: AgentRuntimeSessionService
         let orchestrationCore: AgentRuntimeOrchestrationCore
         let subAgentCompletionRuntimeService: SubAgentCompletionRuntimeService
         let runtimeLifecyclePublicationService: RuntimeLifecyclePublicationService
@@ -17,7 +17,7 @@ public enum HarnessRuntimeSessionFactory {
         let contextProjectionService: ContextProjectionService
         let skillActivationService: SkillActivationService
         let subAgentPool: any SubAgentPooling
-        let orchestratorRuntimeService: OrchestratorRuntimeService
+        public let orchestratorRuntimeService: OrchestratorRuntimeService
         let subAgentSpawnService: SubAgentSpawnService
         let toolApprovalRuntimeService: ToolApprovalRuntimeService
         let slashCommandDispatchService: SlashCommandDispatchService
@@ -29,9 +29,9 @@ public enum HarnessRuntimeSessionFactory {
         let conversationTopicPublicationRuntimeService: ConversationTopicPublicationRuntimeService
         let conversationSelectionRuntimeService: ConversationSelectionRuntimeService
         let sessionProjectionRuntimeService: SessionProjectionRuntimeService
-    let orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService
-    let channelRegistryHolder: ChannelRegistryHolder
-}
+        let orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService
+        let channelRegistryHolder: ChannelRegistryHolder
+    }
 
     static func makeForTesting(
         deps: ConversationRuntimeDependencies,

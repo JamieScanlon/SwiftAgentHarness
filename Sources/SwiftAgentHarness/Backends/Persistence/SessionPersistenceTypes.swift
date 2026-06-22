@@ -511,13 +511,13 @@ struct SessionCatalogRecord: Sendable, Equatable {
 }
 
 /// One durable task/cron enqueue record (JSONL line under `cron/runs/` + row in `harness_tasks`).
-struct SessionHarnessTaskRunRecord: Sendable, Equatable, Codable {
-    var runId: UUID
-    var jobId: String
-    var createdAt: Date
+public struct SessionHarnessTaskRunRecord: Sendable, Equatable, Codable {
+    public var runId: UUID
+    public var jobId: String
+    public var createdAt: Date
     /// Opaque job payload (encoded as base64 in JSONL).
-    var payload: Data
-    var idempotencyKey: String?
+    public var payload: Data
+    public var idempotencyKey: String?
 
     enum CodingKeys: String, CodingKey {
         case runId
@@ -527,7 +527,7 @@ struct SessionHarnessTaskRunRecord: Sendable, Equatable, Codable {
         case idempotencyKey
     }
 
-    init(runId: UUID, jobId: String, createdAt: Date, payload: Data, idempotencyKey: String?) {
+    public init(runId: UUID, jobId: String, createdAt: Date, payload: Data, idempotencyKey: String?) {
         self.runId = runId
         self.jobId = jobId
         self.createdAt = createdAt
@@ -535,7 +535,7 @@ struct SessionHarnessTaskRunRecord: Sendable, Equatable, Codable {
         self.idempotencyKey = idempotencyKey
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         runId = try c.decode(UUID.self, forKey: .runId)
         jobId = try c.decode(String.self, forKey: .jobId)
@@ -545,7 +545,7 @@ struct SessionHarnessTaskRunRecord: Sendable, Equatable, Codable {
         idempotencyKey = try c.decodeIfPresent(String.self, forKey: .idempotencyKey)
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(runId, forKey: .runId)
         try c.encode(jobId, forKey: .jobId)

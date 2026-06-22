@@ -19,9 +19,24 @@ protocol AgentRuntimeCoordinatorServicing: Actor {
 
 typealias AgentRuntimeExecutorFactory = @Sendable (_ runtime: any AgentRuntimeCoordinatorServicing) -> any AgentRuntimeExecuting
 
-enum AgentRuntimeExecutorFactories {
-    static let `default`: AgentRuntimeExecutorFactory = { runtime in
+public enum AgentRuntimeExecutorFactories {
+    public typealias Factory = @Sendable (_ runtime: AgentRuntimeSessionService) -> AgentRuntimeCoordinator
+
+    public static let `default`: Factory = { runtime in
         AgentRuntimeCoordinator(runtime: runtime)
+    }
+
+    static func adapt(_ factory: @escaping Factory) -> AgentRuntimeExecutorFactory {
+        { runtime in
+            guard let session = runtime as? AgentRuntimeSessionService else {
+                preconditionFailure("AgentRuntimeExecutorFactories requires AgentRuntimeSessionService runtime")
+            }
+            return factory(session)
+        }
+    }
+
+    static var defaultInternal: AgentRuntimeExecutorFactory {
+        adapt(`default`)
     }
 }
 
@@ -32,17 +47,41 @@ protocol AgentRuntimeExecuting: Sendable {
 }
 
 /// Stateless per-invocation runtime input.
-struct AgentRuntimeTurnConfiguration: Sendable {
-    var enableTools: Bool = true
-    var enableAgents: Bool = true
-    var allowEscalatedTools: Bool = false
-    var preApprovedToolNames: Set<String> = []
-    var expectedPreviousTailHarnessMessageID: UUID? = nil
-    var inputTrustRaw: String? = nil
-    var resolvedInputTrustClass: TrustPolicyClass? = nil
-    var ephemeralSystemReminder: String? = nil
-    var originSurface: String? = nil
-    var originSenderID: String? = nil
+public struct AgentRuntimeTurnConfiguration: Sendable {
+    public var enableTools: Bool
+    public var enableAgents: Bool
+    public var allowEscalatedTools: Bool
+    public var preApprovedToolNames: Set<String>
+    public var expectedPreviousTailHarnessMessageID: UUID?
+    public var inputTrustRaw: String?
+    public var resolvedInputTrustClass: TrustPolicyClass?
+    public var ephemeralSystemReminder: String?
+    public var originSurface: String?
+    public var originSenderID: String?
+
+    public init(
+        enableTools: Bool = true,
+        enableAgents: Bool = true,
+        allowEscalatedTools: Bool = false,
+        preApprovedToolNames: Set<String> = [],
+        expectedPreviousTailHarnessMessageID: UUID? = nil,
+        inputTrustRaw: String? = nil,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
+        ephemeralSystemReminder: String? = nil,
+        originSurface: String? = nil,
+        originSenderID: String? = nil
+    ) {
+        self.enableTools = enableTools
+        self.enableAgents = enableAgents
+        self.allowEscalatedTools = allowEscalatedTools
+        self.preApprovedToolNames = preApprovedToolNames
+        self.expectedPreviousTailHarnessMessageID = expectedPreviousTailHarnessMessageID
+        self.inputTrustRaw = inputTrustRaw
+        self.resolvedInputTrustClass = resolvedInputTrustClass
+        self.ephemeralSystemReminder = ephemeralSystemReminder
+        self.originSurface = originSurface
+        self.originSenderID = originSenderID
+    }
 }
 
 struct AgentRuntimeRunContext {

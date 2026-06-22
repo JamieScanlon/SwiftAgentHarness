@@ -9,10 +9,10 @@ import SwiftAgentKit
 /// - Trigger fires when `total_prompt_tokens > proactiveThresholdTokens`.
 /// - `total_prompt_tokens` comes from the previous successful LLM response (`lastPromptTokens`)
 ///   when available; otherwise estimated from the outgoing payload via `charactersPerToken`.
-enum ContextCompactionPolicy: Sendable {
+public enum ContextCompactionPolicy: Sendable {
     /// Resolves advanced summarization strategy only; provider/backend selection is handled by
     /// compaction-provider factory seams during transformer construction.
-    static func resolvedStrategy(
+    public static func resolvedStrategy(
         config: ContextCompactionConfiguration,
         branchParentConversationID: UUID?,
         explicitFocusQuery: String?
@@ -30,7 +30,7 @@ enum ContextCompactionPolicy: Sendable {
         }
     }
 
-    static func resolvedCachePolicy(config: ContextCompactionConfiguration) -> ContextCompactionCachePolicy {
+    public static func resolvedCachePolicy(config: ContextCompactionConfiguration) -> ContextCompactionCachePolicy {
         ContextCompactionCachePolicy(
             enabled: config.cacheAwarePruningEnabled,
             stablePrefixMessageCount: max(0, config.cacheStablePrefixMessageCount),
@@ -38,7 +38,7 @@ enum ContextCompactionPolicy: Sendable {
         )
     }
 
-    static func resolvedDeterministicHygienePolicy(
+    public static func resolvedDeterministicHygienePolicy(
         config: ContextCompactionConfiguration
     ) -> ContextCompactionDeterministicHygienePolicy {
         ContextCompactionDeterministicHygienePolicy(
@@ -53,7 +53,7 @@ enum ContextCompactionPolicy: Sendable {
         )
     }
 
-    static func resolvedSplitOptions(
+    public static func resolvedSplitOptions(
         modelContextLimitTokens: Int,
         config: ContextCompactionConfiguration
     ) -> ContextCompactionSplitOptions {
@@ -70,7 +70,7 @@ enum ContextCompactionPolicy: Sendable {
         )
     }
 
-    static func resolvedSummaryBudgetTokens(
+    public static func resolvedSummaryBudgetTokens(
         tokensCompressed: Int,
         config: ContextCompactionConfiguration
     ) -> Int {
@@ -80,7 +80,7 @@ enum ContextCompactionPolicy: Sendable {
         return config.compactionSummaryBudgetTokens
     }
 
-    static func focusedCompactionInstructionBlock(topic: String) -> String {
+    public static func focusedCompactionInstructionBlock(topic: String) -> String {
         let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         return """
@@ -90,7 +90,7 @@ enum ContextCompactionPolicy: Sendable {
         """
     }
 
-    static func resolvedPreCompactionMemoryFlushPolicy(
+    public static func resolvedPreCompactionMemoryFlushPolicy(
         config: ContextCompactionConfiguration
     ) -> ContextEnginePreCompactionMemoryFlushPolicyInput {
         ContextEnginePreCompactionMemoryFlushPolicyInput(
@@ -99,7 +99,7 @@ enum ContextCompactionPolicy: Sendable {
         )
     }
 
-    static func resolvedIdentifierPreservationPolicy(
+    public static func resolvedIdentifierPreservationPolicy(
         config: ContextCompactionConfiguration
     ) -> ContextCompactionIdentifierPreservationPolicy {
         let mode = ContextCompactionIdentifierPreservationMode(
@@ -116,14 +116,14 @@ enum ContextCompactionPolicy: Sendable {
     }
 
     /// Rough token estimate: UTF-8 byte count divided by `charactersPerToken`, summed across the messages.
-    static func estimatedMiddleTokens(_ middle: [Message], charactersPerToken: Double) -> Int {
+    public static func estimatedMiddleTokens(_ middle: [Message], charactersPerToken: Double) -> Int {
         estimatedTotalPromptTokens(messages: middle, charactersPerToken: charactersPerToken)
     }
 
     /// Total prompt token estimate over an entire outgoing payload (head + middle + tail + system).
     /// Computed identically to ``estimatedMiddleTokens`` but documented as the right helper for the
     /// proactive trigger when no real `lastPromptTokens` is available.
-    static func estimatedTotalPromptTokens(messages: [Message], charactersPerToken: Double) -> Int {
+    public static func estimatedTotalPromptTokens(messages: [Message], charactersPerToken: Double) -> Int {
         let divisor = max(0.5, charactersPerToken)
         let raw = messages.reduce(0) { $0 + $1.content.utf8.count }
         return Int(ceil(Double(raw) / divisor))
@@ -137,7 +137,7 @@ enum ContextCompactionPolicy: Sendable {
     /// Note: `lastActualPromptTokens` is a single field on `HarnessRuntimeSession` that resets on every
     /// orchestrator rebuild (model change OR conversation switch). The first turn after a switch
     /// therefore uses the estimate path. See `HarnessRuntimeSession.lastPromptTokens`.
-    static func resolvedTotalPromptTokens(
+    public static func resolvedTotalPromptTokens(
         messages: [Message],
         lastActualPromptTokens: Int?,
         charactersPerToken: Double
@@ -149,7 +149,7 @@ enum ContextCompactionPolicy: Sendable {
     }
 
     /// `model_context_window − proactiveOutputReserveTokens`, clamped to ≥ 1.
-    static func effectiveContextWindow(
+    public static func effectiveContextWindow(
         modelContextLimitTokens: Int,
         config: ContextCompactionConfiguration
     ) -> Int {
@@ -158,7 +158,7 @@ enum ContextCompactionPolicy: Sendable {
 
     /// Proactive trigger threshold: `effective_context_window − proactiveSafetyBufferTokens`,
     /// clamped to ≥ 1. The trigger fires when total prompt tokens strictly exceed this value.
-    static func proactiveThresholdTokens(
+    public static func proactiveThresholdTokens(
         modelContextLimitTokens: Int,
         config: ContextCompactionConfiguration
     ) -> Int {
@@ -170,7 +170,7 @@ enum ContextCompactionPolicy: Sendable {
     }
 
     /// True when total prompt tokens exceed ``proactiveThresholdTokens``.
-    static func proactiveTriggerFires(
+    public static func proactiveTriggerFires(
         messages: [Message],
         modelContextLimitTokens: Int,
         lastActualPromptTokens: Int?,
@@ -190,7 +190,7 @@ enum ContextCompactionPolicy: Sendable {
 
     /// Context window floor for metrics on ``ContextTransformInput/effectiveContextLimitTokens``:
     /// the smaller of the agent's max context and the summarizer's configured max.
-    static func effectiveContextLimitForCompactionTrigger(
+    public static func effectiveContextLimitForCompactionTrigger(
         agentContextLimitTokens: Int,
         summarizerContextLimitTokens: Int
     ) -> Int {

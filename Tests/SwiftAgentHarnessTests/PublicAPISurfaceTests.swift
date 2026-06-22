@@ -27,21 +27,46 @@ struct PublicAPISurfaceTests {
 
     @Test("Context compaction exports are constructible")
     func contextCompactionExports() {
+        let config = ContextCompactionConfiguration.default
         let cachePolicy = ContextCompactionCachePolicy(
             enabled: true,
             stablePrefixMessageCount: 4,
             ttlSeconds: 60
+        )
+        let attachmentHygiene = ContextCompactionAttachmentDocumentHygienePolicy(
+            enabled: true,
+            maxImagesPerMessage: 2,
+            documentCharacterThreshold: 500,
+            imagePlaceholder: "[image]",
+            documentPlaceholder: "[document]"
+        )
+        let hygiene = ContextCompactionDeterministicHygienePolicy(
+            toolResultPruningEnabled: true,
+            attachmentDocumentHygiene: attachmentHygiene
+        )
+        let identifierPreservation = ContextCompactionIdentifierPreservationPolicy(
+            mode: .strict,
+            customInstructions: nil
+        )
+        let memoryFlush = ContextEnginePreCompactionMemoryFlushPolicyInput(
+            enabled: false,
+            maxFlushedMemoryEntries: 32
         )
         let scheduling = ContextCompactionLLMScheduling(
             scheduler: ModelCallScheduler(),
             modelID: UUID()
         )
         let transformer = ContextCompactionTransformer.makeProduction(
-            config: .default,
+            config: config,
             scheduling: scheduling
         )
         #expect(cachePolicy.enabled)
+        #expect(hygiene.toolResultPruningEnabled)
+        #expect(identifierPreservation.mode == .strict)
+        #expect(memoryFlush.maxFlushedMemoryEntries == 32)
         #expect(transformer is ContextCompactionTransformer)
+        #expect(ContextCompactionPolicy.resolvedCachePolicy(config: config).enabled == config.cacheAwarePruningEnabled)
+        #expect(ContextCompactionPolicy.resolvedDeterministicHygienePolicy(config: config).toolResultPruningEnabled == config.deterministicToolResultPruningEnabled)
     }
 
     @Test("ModelManager and ModelPoolCostLedger initializers are public")
@@ -73,5 +98,41 @@ struct PublicAPISurfaceTests {
         let acquired = await coordinator.tryAcquire(for: UUID())
         #expect(acquired)
         await coordinator.release(for: UUID())
+    }
+
+    @Test("Second-batch public wiring types are constructible")
+    func secondBatchExports() {
+        _ = ModeRegistryPortAdapter(service: ModeRegistryService())
+        _ = DefaultContextEngine()
+        _ = AgentRuntimeExecutorFactories.default
+        _ = AgentRuntimeTurnConfiguration(enableTools: true)
+        _ = HTTPPreconditionPolicySettings(strictMode: true)
+        _ = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: false)
+        _ = TriggerTaskRunPorts(
+            append: { _, _, _ in UUID() },
+            latestUndelivered: { _ in nil },
+            markDelivered: { _ in }
+        )
+        _ = TriggersRuntimeWiring.Configuration(dataDirectory: URL(fileURLWithPath: "/tmp"))
+        let trigger = HarnessTrigger(
+            id: "t1",
+            source: .api,
+            payload: "hello",
+            initiator: TriggerInitiator(kind: .external),
+            trust: .knownParty
+        )
+        _ = TriggerHostConversationMetadata.stampHostMetadata(
+            existing: nil,
+            trigger: trigger,
+            sessionKey: "session-key"
+        )
+        let record = SessionHarnessTaskRunRecord(
+            runId: UUID(),
+            jobId: "job",
+            createdAt: Date(),
+            payload: Data(),
+            idempotencyKey: nil
+        )
+        #expect(record.jobId == "job")
     }
 }

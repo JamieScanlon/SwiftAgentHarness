@@ -1,37 +1,37 @@
 import Foundation
 
-enum WebhookSignatureScheme: String, Codable, Sendable, Equatable {
+public enum WebhookSignatureScheme: String, Codable, Sendable, Equatable {
     case githubSHA256 = "github-sha256"
     case gitlabToken = "gitlab-token"
     case genericHMAC = "generic-hmac"
 }
 
-enum WebhookRouteSource: String, Codable, Sendable, Equatable {
+public enum WebhookRouteSource: String, Codable, Sendable, Equatable {
     case `static`
     case dynamic
 }
 
-struct WebhookRoute: Codable, Sendable, Equatable, Identifiable {
-    var name: String
-    var secret: String
-    var signatureScheme: WebhookSignatureScheme
-    var promptTemplate: String
-    var trust: CommEnvelopeOriginTrust
-    var delivery: String
-    var deliverOnly: Bool
-    var rateLimitPerMin: Int
-    var maxBodyBytes: Int
-    var enabled: Bool
-    var source: WebhookRouteSource
-    var routingMode: TriggerRoutingMode
-    var delegate: TriggerDelegateProfile?
-    var deliveryWebhookURL: String?
-    var deliverExtra: [String: String]? = nil
-    var includeKnownPartySecurityPreamble: Bool? = nil
+public struct WebhookRoute: Codable, Sendable, Equatable, Identifiable {
+    public var name: String
+    public var secret: String
+    public var signatureScheme: WebhookSignatureScheme
+    public var promptTemplate: String
+    public var trust: CommEnvelopeOriginTrust
+    public var delivery: String
+    public var deliverOnly: Bool
+    public var rateLimitPerMin: Int
+    public var maxBodyBytes: Int
+    public var enabled: Bool
+    public var source: WebhookRouteSource
+    public var routingMode: TriggerRoutingMode
+    public var delegate: TriggerDelegateProfile?
+    public var deliveryWebhookURL: String?
+    public var deliverExtra: [String: String]? = nil
+    public var includeKnownPartySecurityPreamble: Bool? = nil
 
-    var id: String { name }
+    public var id: String { name }
 
-    init(
+    public init(
         name: String,
         secret: String,
         signatureScheme: WebhookSignatureScheme = .genericHMAC,

@@ -1,6 +1,6 @@
 import Foundation
 
-enum TriggerSource: String, Codable, Sendable, Equatable {
+public enum TriggerSource: String, Codable, Sendable, Equatable {
     case cron
     case webhook
     case channel
@@ -9,38 +9,43 @@ enum TriggerSource: String, Codable, Sendable, Equatable {
     case delegate
 }
 
-enum TriggerPayloadFormat: String, Codable, Sendable, Equatable {
+public enum TriggerPayloadFormat: String, Codable, Sendable, Equatable {
     case json
     case text
     case structured
 }
 
-enum TriggerInitiatorKind: String, Codable, Sendable, Equatable {
+public enum TriggerInitiatorKind: String, Codable, Sendable, Equatable {
     case user
     case system
     case external
     case agent
 }
 
-struct TriggerInitiator: Codable, Sendable, Equatable {
-    var kind: TriggerInitiatorKind
-    var id: String?
+public struct TriggerInitiator: Codable, Sendable, Equatable {
+    public var kind: TriggerInitiatorKind
+    public var id: String?
+
+    public init(kind: TriggerInitiatorKind, id: String? = nil) {
+        self.kind = kind
+        self.id = id
+    }
 }
 
-struct HarnessTrigger: Codable, Sendable, Equatable {
-    var id: String
-    var source: TriggerSource
-    var sourceMetadata: [String: String]
-    var receivedAt: Int64
-    var payload: String
-    var payloadFormat: TriggerPayloadFormat
-    var initiator: TriggerInitiator
-    var trust: CommEnvelopeOriginTrust
-    var enableTools: Bool
-    var enableAgents: Bool
-    var routingMode: TriggerRoutingMode
+public struct HarnessTrigger: Codable, Sendable, Equatable {
+    public var id: String
+    public var source: TriggerSource
+    public var sourceMetadata: [String: String]
+    public var receivedAt: Int64
+    public var payload: String
+    public var payloadFormat: TriggerPayloadFormat
+    public var initiator: TriggerInitiator
+    public var trust: CommEnvelopeOriginTrust
+    public var enableTools: Bool
+    public var enableAgents: Bool
+    public var routingMode: TriggerRoutingMode
 
-    init(
+    public init(
         id: String,
         source: TriggerSource,
         sourceMetadata: [String: String] = [:],
@@ -67,7 +72,7 @@ struct HarnessTrigger: Codable, Sendable, Equatable {
     }
 }
 
-enum TriggerRoutingMode: String, Codable, Sendable, Equatable {
+public enum TriggerRoutingMode: String, Codable, Sendable, Equatable {
     case isolated
     case threaded
     case delegated

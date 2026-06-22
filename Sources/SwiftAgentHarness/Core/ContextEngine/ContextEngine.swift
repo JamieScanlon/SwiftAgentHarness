@@ -11,10 +11,10 @@ public struct ContextMemoryInjectionSnapshotSpec: Sendable {
 
 /// Optional policy input for pre-compaction memory flush behavior.
 public struct ContextEnginePreCompactionMemoryFlushPolicyInput: Sendable {
-    let enabled: Bool
-    let maxFlushedMemoryEntries: Int
+    public let enabled: Bool
+    public let maxFlushedMemoryEntries: Int
 
-    init(enabled: Bool = false, maxFlushedMemoryEntries: Int = 64) {
+    public init(enabled: Bool = false, maxFlushedMemoryEntries: Int = 64) {
         self.enabled = enabled
         self.maxFlushedMemoryEntries = max(1, maxFlushedMemoryEntries)
     }

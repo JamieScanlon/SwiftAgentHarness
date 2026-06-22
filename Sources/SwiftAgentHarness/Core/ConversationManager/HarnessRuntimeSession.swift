@@ -47,8 +47,8 @@ public actor HarnessRuntimeSession {
     
     /// Shared infrastructure bag for extracted harness services (Step 8 migration).
     internal let runtimeDependencies: ConversationRuntimeDependencies
-    let services: HarnessRuntimeSessionFactory.Services
-    var agentRuntimeSessionService: AgentRuntimeSessionService { services.agentRuntimeSessionService }
+    public let services: HarnessRuntimeSessionFactory.Services
+    public var agentRuntimeSessionService: AgentRuntimeSessionService { services.agentRuntimeSessionService }
     internal var contextProjectionService: ContextProjectionService { services.contextProjectionService }
     internal var toolApprovalRuntimeService: ToolApprovalRuntimeService { services.toolApprovalRuntimeService }
     internal var skillActivationService: SkillActivationService { services.skillActivationService }
@@ -56,8 +56,22 @@ public actor HarnessRuntimeSession {
     var subAgentSpawnService: SubAgentSpawnService { services.subAgentSpawnService }
     var subAgentCompletionRuntimeService: SubAgentCompletionRuntimeService { services.subAgentCompletionRuntimeService }
     internal var runtimeLifecyclePublicationService: RuntimeLifecyclePublicationService { services.runtimeLifecyclePublicationService }
-    var conversationStartupService: ConversationStartupService { services.conversationStartupService }
-    var orchestratorRuntimeService: OrchestratorRuntimeService { services.orchestratorRuntimeService }
+    public var conversationStartupService: ConversationStartupService { services.conversationStartupService }
+
+    public func setMCPManager(_ mcpManager: MCPManager) async {
+        await conversationStartupService.setMCPManager(mcpManager)
+    }
+
+    public func setResourceManager(_ resourceManager: ResourceManager) async {
+        await conversationStartupService.setResourceManager(resourceManager)
+    }
+
+    public func setA2AManager(_ a2aManager: A2AManager) async {
+        await conversationStartupService.setA2AManager(a2aManager)
+    }
+
+    public var orchestratorRuntimeService: OrchestratorRuntimeService { services.orchestratorRuntimeService }
+
     internal var conversationMessagingRuntimeService: ConversationMessagingRuntimeService { services.conversationMessagingRuntimeService }
     public var orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService { services.orchestratorSessionRuntimeService }
     var conversationTopicPublicationRuntimeService: ConversationTopicPublicationRuntimeService {
@@ -108,7 +122,7 @@ public actor HarnessRuntimeSession {
         delegateCostTracker: (any DelegateCostTracking)? = nil,
         callScheduler: any ModelCallScheduling = ModelCallScheduler(),
         invocationCoordinator: any ModelInvocationLifecycleTracking = ModelInvocationCoordinator(),
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.default,
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         contextEngineSlotID: String = "default",
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         compactionProviderFactory: (any ContextCompactionProviderFactoring)? = nil,
@@ -208,7 +222,7 @@ public actor HarnessRuntimeSession {
             contextEngine: contextEngine,
             modeRegistry: modeRegistry,
             runtimeLaneConfiguration: runtimeLaneConfiguration,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal
         )
     }
 
@@ -308,7 +322,7 @@ public actor HarnessRuntimeSession {
         contextEngine: (any ContextEngine)?,
         modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService()),
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.default
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
     ) {
         let alignedFactory = StandardModelLLMFactory.aligningAccounting(
             factory: llmFactory,
@@ -451,7 +465,7 @@ public actor HarnessRuntimeSession {
         harnessSessionPersistenceOverride: (any HarnessSessionPersistence)? = nil,
         modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService()),
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.default
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
     ) {
         let stack = ConversationPersistenceStack.makeForTesting(
             container: container,

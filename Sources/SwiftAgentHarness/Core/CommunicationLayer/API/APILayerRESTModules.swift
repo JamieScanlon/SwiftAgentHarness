@@ -14,14 +14,18 @@ struct ContextCompactionPreviewAPISettings: Sendable {
     static let disabled = ContextCompactionPreviewAPISettings(isRouteEnabled: false, authToken: nil)
 }
 
-struct HTTPPreconditionPolicySettings: Sendable {
+public struct HTTPPreconditionPolicySettings: Sendable {
     /// When true, guarded mutation routes require `If-Match` and return `428` when absent.
-    var strictMode: Bool
+    public var strictMode: Bool
+
+    public init(strictMode: Bool) {
+        self.strictMode = strictMode
+    }
 
     /// Canonical default: strict preconditions enabled for guarded mutation routes.
-    static let `default` = HTTPPreconditionPolicySettings(strictMode: true)
+    public static let `default` = HTTPPreconditionPolicySettings(strictMode: true)
     /// Convenience preset matching canonical strict-mode defaults.
-    static let disabled = HTTPPreconditionPolicySettings.default
+    public static let disabled = HTTPPreconditionPolicySettings.default
 }
 
 struct APILayerRouteDependencies: Sendable {

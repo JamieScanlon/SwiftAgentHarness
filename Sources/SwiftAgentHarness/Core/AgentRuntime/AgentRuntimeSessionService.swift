@@ -5,7 +5,7 @@ import SwiftAgentKit
 import SwiftAgentKitOrchestrator
 
 /// Agent-runtime session state and streaming orchestration (Slice 3 migration).
-actor AgentRuntimeSessionService {
+public actor AgentRuntimeSessionService {
     typealias Configuration = HarnessRuntimeSession.Configuration
 
     let deps: ConversationRuntimeDependencies

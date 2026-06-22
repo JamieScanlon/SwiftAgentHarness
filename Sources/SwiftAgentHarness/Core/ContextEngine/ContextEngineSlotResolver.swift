@@ -7,8 +7,8 @@ enum ContextEngineSlotID: String {
     case noop = "noop"
 }
 
-enum ContextEngineSlotResolver {
-    static func resolve(
+public enum ContextEngineSlotResolver {
+    public static func resolve(
         slotID: String,
         compactionCoordinator: CompactionConcurrencyCoordinator,
         logger: Logger?

@@ -8,7 +8,7 @@ import SwiftAgentKitOrchestrator
 import SwiftAgentKitSkills
 
 /// Orchestrator construction, tool-manager wiring, and MCP/A2A lifecycle (Slice G).
-actor OrchestratorRuntimeService {
+public actor OrchestratorRuntimeService {
     struct DispatchPrimaryModelResolution: Sendable {
         let model: Model
         let entry: ModelRegistryEntry?

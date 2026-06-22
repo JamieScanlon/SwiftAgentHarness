@@ -2,8 +2,12 @@ import Foundation
 import SwiftAgentKit
 
 /// HarnessRuntimeSession-backed runtime coordinator that owns one canonical runTurn entrypoint.
-struct AgentRuntimeCoordinator: AgentRuntimeExecuting {
+public struct AgentRuntimeCoordinator: AgentRuntimeExecuting {
     private let runCore: @Sendable (AgentRuntimeRunContext, AgentRuntimeLifecycleEmitter) async throws -> ConversationRunTerminalReason
+
+    public init(runtime: AgentRuntimeSessionService) {
+        self.init(runtime: runtime as any AgentRuntimeCoordinatorServicing)
+    }
 
     init(runtime: any AgentRuntimeCoordinatorServicing) {
         self.runCore = { context, lifecycleEmitter in

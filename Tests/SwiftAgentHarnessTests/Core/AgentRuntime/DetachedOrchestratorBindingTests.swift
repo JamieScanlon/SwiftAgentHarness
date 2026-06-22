@@ -68,7 +68,7 @@ struct OrchestratorPoolBindingTests {
 
     private func makeSession(
         container: ModelContainer,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.default
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
     ) -> HarnessRuntimeSession {
         HarnessRuntimeSession(
             container: container,

@@ -4,10 +4,14 @@ import Vapor
 /// When ``requireAuthenticatedOwnerOnMutations`` is true, REST/WS mutations require
 /// ``APISessionContext/authenticatedOwnerAccountID`` (typically from ``X-SAH-Authenticated-Owner``)
 /// and conversation rows must carry the same ``ModelConversation/ownerAccountID``.
-struct TenancyPolicySettings: Sendable {
-    var requireAuthenticatedOwnerOnMutations: Bool
+public struct TenancyPolicySettings: Sendable {
+    public var requireAuthenticatedOwnerOnMutations: Bool
 
-    static let disabled = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: false)
+    public init(requireAuthenticatedOwnerOnMutations: Bool) {
+        self.requireAuthenticatedOwnerOnMutations = requireAuthenticatedOwnerOnMutations
+    }
+
+    public static let disabled = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: false)
 }
 
 enum APILayerTenancyResponses {
