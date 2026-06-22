@@ -195,6 +195,11 @@ struct PublicAPISurfaceTests {
                 conversationReplay: session.conversationReplayService,
                 orchestratorRuntime: session.orchestratorRuntimeService
             )
+            await startup.shutdownOrchestratorAndToolRuntimes(
+                agentRuntime: session.agentRuntimeSessionService,
+                conversationReplay: session.conversationReplayService,
+                orchestratorRuntime: session.orchestratorRuntimeService
+            )
         }
         _ = (checkSession, checkStartup)
     }

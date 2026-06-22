@@ -209,7 +209,7 @@ public actor ConversationStartupService: StartupServicing {
         )
     }
 
-    func shutdownOrchestratorAndToolRuntimes(
+    public func shutdownOrchestratorAndToolRuntimes(
         agentRuntime: AgentRuntimeSessionService,
         conversationReplay: ConversationReplayService,
         orchestratorRuntime: OrchestratorRuntimeService
