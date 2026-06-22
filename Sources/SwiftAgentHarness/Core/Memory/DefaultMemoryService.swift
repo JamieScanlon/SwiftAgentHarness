@@ -239,7 +239,7 @@ public actor DefaultMemoryService: MemoryServicing {
         await extractor.drain(timeoutMs: timeoutMs)
     }
 
-    func shutdown() async {
+    public func shutdown() async {
         await providerRegistry.shutdownAll()
     }
 

@@ -171,4 +171,31 @@ struct PublicAPISurfaceTests {
         _ = SessionPersistenceConfiguration.transcriptVerifyPeriodicEnabled
         _ = SessionPersistenceConfiguration.transcriptVerifyPeriodicIntervalSeconds
     }
+
+    @Test("Fifth-batch startup and shutdown members are accessible")
+    func fifthBatchExports() async {
+        let report = SessionTranscriptIntegrityReport(
+            conversationCount: 0,
+            autoRepairedCount: 0,
+            quarantinedCount: 0,
+            verifyFailedCount: 0,
+            severity: .normal,
+            samples: []
+        )
+        let checkSession: @Sendable (HarnessRuntimeSession) async throws -> Void = { session in
+            try await session.resetConversationsFromCatalog(availableModels: [])
+            await session.refreshTranscriptIntegrityFlagsAfterMaintenance(report: report)
+            await session.shutdown()
+        }
+        let checkStartup: @Sendable (ConversationStartupService, HarnessRuntimeSession) async throws -> Void = { startup, session in
+            try await startup.resetConversationsFromCatalog(availableModels: [])
+            await startup.refreshTranscriptIntegrityFlagsAfterMaintenance(report: report)
+            await startup.shutdown(
+                agentRuntime: session.agentRuntimeSessionService,
+                conversationReplay: session.conversationReplayService,
+                orchestratorRuntime: session.orchestratorRuntimeService
+            )
+        }
+        _ = (checkSession, checkStartup)
+    }
 }

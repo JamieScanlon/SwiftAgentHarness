@@ -538,6 +538,22 @@ public actor HarnessRuntimeSession {
         delegateCostTracker = tracker
     }
 
+    public func refreshTranscriptIntegrityFlagsAfterMaintenance(report: SessionTranscriptIntegrityReport) async {
+        await conversationStartupService.refreshTranscriptIntegrityFlagsAfterMaintenance(report: report)
+    }
+
+    public func shutdown() async {
+        if let defaultEngine = contextEngine as? DefaultContextEngine,
+           let memoryService = defaultEngine.memoryService {
+            await memoryService.shutdown()
+        }
+        await conversationStartupService.shutdown(
+            agentRuntime: agentRuntimeSessionService,
+            conversationReplay: conversationReplayService,
+            orchestratorRuntime: orchestratorRuntimeService
+        )
+    }
+
     /// Stops MCP stdio subprocesses and A2A boot processes via ``SwiftAgentKitOrchestrator/shutdown()`` when an orchestrator exists; otherwise shuts down managers directly.
     internal func shutdownOrchestratorAndToolRuntimes() async {
         await conversationStartupService.shutdownOrchestratorAndToolRuntimes(

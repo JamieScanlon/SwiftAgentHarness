@@ -37,11 +37,11 @@ extension ConversationPersistenceDomain {
         stack.conversationManager.replaceConversationInRegistry(conversation)
     }
 
-    func resetConversationsFromCatalog(availableModels: [Model]) throws {
+    public func resetConversationsFromCatalog(availableModels: [Model]) throws {
         try stack.conversationManager.resetConversationsFromCatalog(availableModels: availableModels)
     }
 
-    func refreshTranscriptIntegrityFromMaintenance(report: SessionTranscriptIntegrityReport) throws {
+    public func refreshTranscriptIntegrityFromMaintenance(report: SessionTranscriptIntegrityReport) throws {
         try stack.conversationManager.refreshTranscriptIntegrityFromMaintenance(report: report)
     }
 

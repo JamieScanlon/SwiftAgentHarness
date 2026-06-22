@@ -91,7 +91,7 @@ public actor ConversationStartupService: StartupServicing {
         acpManager
     }
 
-    func resetConversationsFromCatalog(availableModels: [Model]) async throws {
+    public func resetConversationsFromCatalog(availableModels: [Model]) async throws {
         if SessionPersistenceConfiguration.transcriptVerifyOnStartup,
            let root = SessionPersistenceConfiguration.sessionStoreRoot {
             let report = try SessionTranscriptIntegrityScanner.runTranscriptIntegrityMaintenance(
@@ -111,7 +111,7 @@ public actor ConversationStartupService: StartupServicing {
         await sessionProjection.replaceAllProjectedMessages(projectedByConversationID)
     }
 
-    func refreshTranscriptIntegrityFlagsAfterMaintenance(report: SessionTranscriptIntegrityReport) async {
+    public func refreshTranscriptIntegrityFlagsAfterMaintenance(report: SessionTranscriptIntegrityReport) async {
         do {
             try await deps.persistenceDomain.refreshTranscriptIntegrityFromMaintenance(report: report)
             for sample in report.samples {
@@ -195,6 +195,18 @@ public actor ConversationStartupService: StartupServicing {
         policy: DerivedArtifactRetentionPolicy
     ) async throws -> DerivedArtifactRetentionSweepResult {
         try await deps.persistenceDomain.runDerivedArtifactRetentionSweep(policy: policy)
+    }
+
+    public func shutdown(
+        agentRuntime: AgentRuntimeSessionService,
+        conversationReplay: ConversationReplayService,
+        orchestratorRuntime: OrchestratorRuntimeService
+    ) async {
+        await shutdownOrchestratorAndToolRuntimes(
+            agentRuntime: agentRuntime,
+            conversationReplay: conversationReplay,
+            orchestratorRuntime: orchestratorRuntime
+        )
     }
 
     func shutdownOrchestratorAndToolRuntimes(
