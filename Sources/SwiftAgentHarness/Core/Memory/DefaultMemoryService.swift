@@ -2,7 +2,7 @@ import Foundation
 import Logging
 import CryptoKit
 
-actor DefaultMemoryService: MemoryServicing {
+public actor DefaultMemoryService: MemoryServicing {
     private let config: MemoryConfiguration
     private let logger: Logger?
     private let snapshotStore: MemorySessionSnapshotStore
@@ -19,6 +19,15 @@ actor DefaultMemoryService: MemoryServicing {
     private var storeByConversation: [UUID: AgentMemoryStore] = [:]
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
     private let userConfigDir: URL
+
+    /// Silenia / composition-root entry: caller supplies resolved memory configuration explicitly.
+    public init(
+        config: MemoryConfiguration,
+        logger: Logger? = nil,
+        userConfigDir: URL? = nil
+    ) {
+        self.init(config: config, logger: logger, userConfigDir: userConfigDir, llmRecallSelector: nil)
+    }
 
     init(
         config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),

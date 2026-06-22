@@ -42,7 +42,7 @@ public struct ModeProfilePickerRow: Sendable, Equatable {
     }
 }
 
-protocol ModeRegistryAccessing: Sendable {
+public protocol ModeRegistryAccessing: Sendable {
     func register(_ profile: ResolvedModeProfile, replacing: Bool) async throws
     func reloadProjectConfig() async -> Bool
     func resolve(modeId: String) async throws -> ResolvedModeProfile

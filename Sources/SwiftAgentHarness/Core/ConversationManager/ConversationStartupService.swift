@@ -20,7 +20,7 @@ protocol StartupServicing: Sendable {
 }
 
 /// Server startup, retention sweeps, and composition-root publisher wiring (Slice 6 migration).
-actor ConversationStartupService: StartupServicing {
+public actor ConversationStartupService: StartupServicing {
     private let deps: ConversationRuntimeDependencies
     private let orchestrationCore: AgentRuntimeOrchestrationCore
     private let sessionProjection: SessionProjectionAccessing

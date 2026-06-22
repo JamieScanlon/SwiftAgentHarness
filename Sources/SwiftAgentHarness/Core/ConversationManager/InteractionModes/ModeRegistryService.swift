@@ -3,7 +3,7 @@ import Foundation
 import Logging
 
 /// Harness-shaped registry: built-in ids match persisted ``InteractionMode/rawValue`` strings.
-actor ModeRegistryService {
+public actor ModeRegistryService {
     /// Canonical built-in cap for collaboration planning turns.
     static let builtInPlanMaxIterations = 8
 
@@ -12,7 +12,7 @@ actor ModeRegistryService {
     private let projectConfigDirectory: URL?
     private var onDidMutate: (@Sendable () -> Void)?
 
-    init(
+    public init(
         seedingBuiltIns: Bool = true,
         modeProfileConfiguration: ModeProfileConfiguration? = nil,
         projectConfigDirectory: URL? = nil,

@@ -4,9 +4,9 @@ import Logging
 import SwiftAgentKit
 
 struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
-    private let runtime: RuntimeStreamingOrchestrationService
+    private let runtime: any APILayerChatRuntimeManaging
 
-    init(runtime: RuntimeStreamingOrchestrationService) {
+    init(runtime: any APILayerChatRuntimeManaging) {
         self.runtime = runtime
     }
 
@@ -61,7 +61,7 @@ struct HarnessTriggerDedupeAdapter: TriggerDedupeChecking {
     }
 }
 
-struct TriggersRuntimeBundle: Sendable {
+public struct TriggersRuntimeBundle: Sendable {
     let dispatch: TriggerDispatchService
     let scheduler: TriggerSchedulerService
     let webhookAdapter: WebhookIngressAdapter
@@ -75,8 +75,8 @@ struct TriggersRuntimeBundle: Sendable {
     let runRegistry: TriggerDelegatedRunRegistry
 }
 
-enum TriggersRuntimeWiring {
-    struct DelegatedPorts: Sendable {
+public enum TriggersRuntimeWiring {
+    public struct DelegatedPorts: Sendable {
         var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
         var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
         var lastAssistantText: @Sendable (UUID) async -> String?
@@ -84,7 +84,7 @@ enum TriggersRuntimeWiring {
         var resolveParentConversation: @Sendable (UUID) async -> (parentID: UUID, metadata: JSON?)?
     }
 
-    struct Configuration: Sendable {
+    public struct Configuration: Sendable {
         var dataDirectory: URL
         var eventsDirectory: URL? = nil
         var fileEventQueueEnabled: Bool = true
@@ -94,9 +94,32 @@ enum TriggersRuntimeWiring {
         var schedulerIdentity: String = "sah-trigger-scheduler"
     }
 
+    public static func resolve(
+        configuration: Configuration,
+        runtime: any APILayerChatRuntimeManaging,
+        dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
+        dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
+        createConversation: @escaping @Sendable (String?) async throws -> UUID,
+        resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
+        delegatedPorts: DelegatedPorts,
+        logger: Logger
+    ) -> TriggersRuntimeBundle {
+        resolve(
+            configuration: configuration,
+            runtime: runtime,
+            dedupePeek: dedupePeek,
+            dedupeCheckAndSet: dedupeCheckAndSet,
+            createConversation: createConversation,
+            resolveConversationByTitle: resolveConversationByTitle,
+            taskRuns: .disabled,
+            delegatedPorts: delegatedPorts,
+            logger: logger
+        )
+    }
+
     static func resolve(
         configuration: Configuration,
-        runtime: RuntimeStreamingOrchestrationService,
+        runtime: any APILayerChatRuntimeManaging,
         dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,

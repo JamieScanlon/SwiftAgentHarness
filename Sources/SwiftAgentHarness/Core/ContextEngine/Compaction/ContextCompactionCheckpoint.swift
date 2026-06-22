@@ -13,7 +13,7 @@ import SwiftAgentKit
 /// - `.pruned` checkpoints store the original messages with tool-result content cleared
 ///   (placeholder substituted) and on the next compaction the deterministic prune step is
 ///   skipped — the effective middle goes straight to LLM summarization.
-enum ContextCompactionCheckpointKind: String, Codable, Sendable {
+public enum ContextCompactionCheckpointKind: String, Codable, Sendable {
     case summarized
     case pruned
 

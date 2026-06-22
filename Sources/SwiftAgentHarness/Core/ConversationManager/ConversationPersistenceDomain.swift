@@ -8,14 +8,14 @@ import Logging
 import SwiftAgentKit
 import SwiftData
 
-actor ConversationPersistenceDomain {
+public actor ConversationPersistenceDomain {
     let stack: ConversationPersistenceStack
 
     init(stack: ConversationPersistenceStack) {
         self.stack = stack
     }
 
-    static func makeProduction(
+    public static func makeProduction(
         logger: Logger?,
         dataStoreURL: URL?,
         allowsSwiftDataSave: Bool

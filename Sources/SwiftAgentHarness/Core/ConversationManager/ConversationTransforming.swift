@@ -2,7 +2,7 @@ import EasyJSON
 import Foundation
 import SwiftAgentKit
 
-enum ContextTransformInvocationPhase: Sendable {
+public enum ContextTransformInvocationPhase: Sendable {
     case initial
     case continuation(round: Int)
 }
@@ -37,13 +37,19 @@ public enum ContextCompactionStrategy: String, Sendable, Codable {
     case branchAware = "branch_aware"
 }
 
-struct ContextCompactionCachePolicy: Sendable {
-    let enabled: Bool
-    let stablePrefixMessageCount: Int
-    let ttlSeconds: Double?
+public struct ContextCompactionCachePolicy: Sendable {
+    public let enabled: Bool
+    public let stablePrefixMessageCount: Int
+    public let ttlSeconds: Double?
+
+    public init(enabled: Bool, stablePrefixMessageCount: Int, ttlSeconds: Double?) {
+        self.enabled = enabled
+        self.stablePrefixMessageCount = stablePrefixMessageCount
+        self.ttlSeconds = ttlSeconds
+    }
 }
 
-struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
+public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
     let enabled: Bool
     let maxImagesPerMessage: Int
     let documentCharacterThreshold: Int
@@ -51,23 +57,23 @@ struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
     let documentPlaceholder: String
 }
 
-struct ContextCompactionDeterministicHygienePolicy: Sendable {
+public struct ContextCompactionDeterministicHygienePolicy: Sendable {
     let toolResultPruningEnabled: Bool
     let attachmentDocumentHygiene: ContextCompactionAttachmentDocumentHygienePolicy
 }
 
-enum ContextCompactionIdentifierPreservationMode: String, Sendable {
+public enum ContextCompactionIdentifierPreservationMode: String, Sendable {
     case strict
     case custom
     case off
 }
 
-struct ContextCompactionIdentifierPreservationPolicy: Sendable {
+public struct ContextCompactionIdentifierPreservationPolicy: Sendable {
     let mode: ContextCompactionIdentifierPreservationMode
     let customInstructions: String?
 }
 
-struct ConversationTransformMetadata: Sendable {
+public struct ConversationTransformMetadata: Sendable {
     let conversationID: UUID
     let modelID: String
     let modelName: String
@@ -138,7 +144,7 @@ struct ConversationTransformMetadata: Sendable {
     }
 }
 
-struct ContextTransformInput: Sendable {
+public struct ContextTransformInput: Sendable {
     let messages: [Message]
     let conversation: ConversationTransformMetadata
     let phase: ContextTransformInvocationPhase
@@ -247,50 +253,52 @@ enum ContextTransformedMessageOrigin: String, Sendable {
     case reinjected
 }
 
-struct ContextTransformMessageProvenance: Sendable {
+public struct ContextTransformMessageProvenance: Sendable {
     let transformedMessageID: UUID
     let origin: ContextTransformedMessageOrigin
     /// Original conversation message IDs that this transformed message came from.
     let sourceMessageIDs: [UUID]
 }
 
-struct ContextTransformOutput: Sendable {
+public struct ContextTransformOutput: Sendable {
     let messages: [Message]
     let diagnostics: String?
     let messageProvenance: [ContextTransformMessageProvenance]?
 }
 
-struct ToolResultTransformInput: Sendable {
+public struct ToolResultTransformInput: Sendable {
     let toolCall: ToolCall
     let result: ToolResult
     let conversation: ConversationTransformMetadata
 }
 
-struct ToolResultTransformOutput: Sendable {
+public struct ToolResultTransformOutput: Sendable {
     let result: ToolResult
     let diagnostics: String?
 }
 
-struct TurnSummaryTransformInput: Sendable {
+public struct TurnSummaryTransformInput: Sendable {
     let conversation: ConversationTransformMetadata
     let turnMessageRangeStartIndex: Int
     let turnMessages: [Message]
 }
 
-struct TurnSummaryTransformOutput: Sendable {
+public struct TurnSummaryTransformOutput: Sendable {
     /// Full replacement payload for the turn segment `turnMessages`.
     let replacementTurnMessages: [Message]
     let diagnostics: String?
 }
 
-protocol ConversationTransforming: Sendable {
+public protocol ConversationTransforming: Sendable {
     func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput
     func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput
 }
 
-struct NoOpConversationTransformer: ConversationTransforming {
-    func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput {
+public struct NoOpConversationTransformer: ConversationTransforming {
+    public init() {}
+
+    public func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput {
         ContextTransformOutput(
             messages: input.messages,
             diagnostics: nil,
@@ -304,11 +312,11 @@ struct NoOpConversationTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
+    public func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
         ToolResultTransformOutput(result: input.result, diagnostics: nil)
     }
 
-    func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
+    public func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: nil)
     }
 }

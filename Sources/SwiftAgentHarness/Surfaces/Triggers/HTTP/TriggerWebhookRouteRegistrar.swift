@@ -2,14 +2,25 @@ import Foundation
 import Logging
 import Vapor
 
-struct TriggerWebhookRouteRegistrar: Sendable {
+public struct TriggerWebhookRouteRegistrar: Sendable {
     let routeStore: WebhookRouteStore
     let adapter: WebhookIngressAdapter
     let logger: Logger
 
+    init(routeStore: WebhookRouteStore, adapter: WebhookIngressAdapter, logger: Logger) {
+        self.routeStore = routeStore
+        self.adapter = adapter
+        self.logger = logger
+    }
+
+    /// Composition-root helper for Silenia-style wiring from ``TriggersRuntimeWiring/resolve(configuration:runtime:dedupeCheckAndSet:createConversation:delegatedPorts:logger:)``.
+    public init(bundle: TriggersRuntimeBundle, logger: Logger) {
+        self.init(routeStore: bundle.webhookRouteStore, adapter: bundle.webhookAdapter, logger: logger)
+    }
+
     private static let defaultMaxBodyBytes = 1_048_576
 
-    func register(on app: Application) {
+    public func register(on app: Application) {
         app.get("webhook", "health") { _ async -> Response in
             let body = #"{"status":"ok","platform":"webhook"}"#
             var headers = HTTPHeaders()

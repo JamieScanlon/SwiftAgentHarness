@@ -1,7 +1,7 @@
 import Foundation
 import Logging
 
-struct MemoryConfiguration: Sendable, Equatable {
+public struct MemoryConfiguration: Sendable, Equatable {
     var enabled: Bool
     var managedInstructionsPath: String?
     var extractionEnabled: Bool

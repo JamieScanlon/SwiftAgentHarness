@@ -1,19 +1,19 @@
 import Foundation
 
-struct RuntimeLaneConfiguration: Sendable, Equatable {
-    var sessionMaxConcurrentRuns: Int
-    var globalMainLaneLimit: Int
-    var globalSubagentLaneLimit: Int
-    var maxChildrenPerAgent: Int
+public struct RuntimeLaneConfiguration: Sendable, Equatable {
+    public var sessionMaxConcurrentRuns: Int
+    public var globalMainLaneLimit: Int
+    public var globalSubagentLaneLimit: Int
+    public var maxChildrenPerAgent: Int
 
-    static let `default` = RuntimeLaneConfiguration(
+    public static let `default` = RuntimeLaneConfiguration(
         sessionMaxConcurrentRuns: 1,
         globalMainLaneLimit: 4,
         globalSubagentLaneLimit: 8,
         maxChildrenPerAgent: 5
     )
 
-    init(
+    public init(
         sessionMaxConcurrentRuns: Int = 1,
         globalMainLaneLimit: Int = 4,
         globalSubagentLaneLimit: Int = 8,

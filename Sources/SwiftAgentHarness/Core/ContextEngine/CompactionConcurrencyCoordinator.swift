@@ -2,11 +2,12 @@ import Foundation
 
 /// Per-conversation compaction mutex (harness “compaction lock”): only one compaction LLM run may be in-flight
 /// per conversation. When unavailable, callers should continue with the current transcript / checkpoints without blocking.
-actor CompactionConcurrencyCoordinator {
+public actor CompactionConcurrencyCoordinator {
+    public init() {}
     private var activeConversationIDs: Set<UUID> = []
 
     /// Returns true if this conversation was not already locked (caller must ``release``).
-    func tryAcquire(for conversationID: UUID) -> Bool {
+    public func tryAcquire(for conversationID: UUID) -> Bool {
         if activeConversationIDs.contains(conversationID) {
             return false
         }
@@ -14,7 +15,7 @@ actor CompactionConcurrencyCoordinator {
         return true
     }
 
-    func release(for conversationID: UUID) {
+    public func release(for conversationID: UUID) {
         activeConversationIDs.remove(conversationID)
     }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// bundles protocol projections for REST/WebSocket dependency injection.
 ///
 /// Tests may still use ``init(unified:)`` so one fake implements both protocols.
-struct APILayerChatGatewayServices: Sendable {
+public struct APILayerChatGatewayServices: Sendable {
     let conversation: APILayerConversationManaging
     let runtime: APILayerChatRuntimeManaging
 

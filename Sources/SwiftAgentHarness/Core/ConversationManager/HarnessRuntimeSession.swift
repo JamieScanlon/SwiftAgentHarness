@@ -59,7 +59,7 @@ public actor HarnessRuntimeSession {
     var conversationStartupService: ConversationStartupService { services.conversationStartupService }
     var orchestratorRuntimeService: OrchestratorRuntimeService { services.orchestratorRuntimeService }
     internal var conversationMessagingRuntimeService: ConversationMessagingRuntimeService { services.conversationMessagingRuntimeService }
-    internal var orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService { services.orchestratorSessionRuntimeService }
+    public var orchestratorSessionRuntimeService: OrchestratorSessionRuntimeService { services.orchestratorSessionRuntimeService }
     var conversationTopicPublicationRuntimeService: ConversationTopicPublicationRuntimeService {
         services.conversationTopicPublicationRuntimeService
     }
@@ -79,7 +79,7 @@ public actor HarnessRuntimeSession {
     /// Projection-input construction + assemble-request shaping for **`ContextEngine`** (see **`CONTEXT_ASSEMBLY_BOUNDARY`**).
     private let contextAssemblyRuntime: ContextAssemblyRuntimeFacade
     let runtimeLaneCoordinator: RuntimeLaneCoordinator
-    let contextEngine: any ContextEngine
+    public let contextEngine: any ContextEngine
 
     var currentConversationID: UUID? {
         get async { await services.conversationSelectionRuntimeService.currentConversationID }
@@ -166,6 +166,49 @@ public actor HarnessRuntimeSession {
             modeRegistry: modeRegistry,
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: runtimeExecutorFactory
+        )
+    }
+
+    public static func makeProduction(
+        persistenceDomain: ConversationPersistenceDomain,
+        logger: Logger?,
+        toolPolicy: ToolPolicyConfiguration,
+        trustPolicyConfiguration: TrustPolicyConfiguration,
+        agentHarness: AgentHarnessConfiguration,
+        thinkingPolicyConfiguration: ThinkingPolicyConfiguration,
+        conversationTransformConfiguration: ConversationTransformConfiguration,
+        conversationTransformer: any ConversationTransforming,
+        llmFactory: any ModelLLMFactoring,
+        registryEntryProvider: (@Sendable (UUID) async -> ModelRegistryEntry?)?,
+        rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?,
+        delegateCostTracker: (any DelegateCostTracking)?,
+        callScheduler: any ModelCallScheduling,
+        invocationCoordinator: any ModelInvocationLifecycleTracking,
+        compactionCoordinator: CompactionConcurrencyCoordinator,
+        contextEngine: any ContextEngine,
+        modeRegistry: any ModeRegistryAccessing,
+        runtimeLaneConfiguration: RuntimeLaneConfiguration = .default
+    ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
+        makeProduction(
+            persistenceDomain: persistenceDomain,
+            logger: logger,
+            toolPolicy: toolPolicy,
+            trustPolicyConfiguration: trustPolicyConfiguration,
+            agentHarness: agentHarness,
+            thinkingPolicyConfiguration: thinkingPolicyConfiguration,
+            conversationTransformConfiguration: conversationTransformConfiguration,
+            conversationTransformer: conversationTransformer,
+            llmFactory: llmFactory,
+            registryEntryProvider: registryEntryProvider,
+            rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
+            delegateCostTracker: delegateCostTracker,
+            callScheduler: callScheduler,
+            invocationCoordinator: invocationCoordinator,
+            compactionCoordinator: compactionCoordinator,
+            contextEngine: contextEngine,
+            modeRegistry: modeRegistry,
+            runtimeLaneConfiguration: runtimeLaneConfiguration,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.default
         )
     }
 

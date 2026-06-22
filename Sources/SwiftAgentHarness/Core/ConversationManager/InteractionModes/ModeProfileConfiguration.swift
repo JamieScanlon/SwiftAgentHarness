@@ -2,7 +2,7 @@ import EasyJSON
 import Foundation
 
 /// Config-driven mode profiles loaded from PromptConfig (`modeProfiles`).
-struct ModeProfileConfiguration: Sendable {
+public struct ModeProfileConfiguration: Sendable {
     struct RawProfile: Sendable {
         let id: String
         let extends: String?

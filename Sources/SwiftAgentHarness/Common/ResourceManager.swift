@@ -239,7 +239,7 @@ struct DefaultImageProcessor: ImageProcessing {
 /// When images are added, there are additional options to scale the image to fit within a maximum file size
 /// (in bytes) or a maximum pixel dimension. These can be set globally via `Configuration` or per-image
 /// via `addImage(...)` overrides.
-actor ResourceManager {
+public actor ResourceManager {
     
     // MARK: - Error Types
     
@@ -255,7 +255,7 @@ actor ResourceManager {
     // MARK: - Supporting Types
     
     /// Where a resource should be persisted
-    enum StorageLocation: String, Sendable, Codable, Equatable {
+    public enum StorageLocation: String, Sendable, Codable, Equatable {
         case homeDirectory
         case applicationSupport
         case temporary
@@ -293,17 +293,17 @@ actor ResourceManager {
     }
     
     /// Configuration controlling default behaviors of the `ResourceManager`
-    struct Configuration: Sendable {
+    public struct Configuration: Sendable {
         /// Default storage location for new resources when none is specified
-        var defaultStorageLocation: StorageLocation
+        public var defaultStorageLocation: StorageLocation
         /// Pixel dimension of auto-generated thumbnails (square)
-        var thumbnailPixelSize: Int
+        public var thumbnailPixelSize: Int
         /// Global maximum file size (bytes) for image resources. `nil` means no limit.
-        var maxImageFileSize: Int?
+        public var maxImageFileSize: Int?
         /// Global maximum pixel dimension for image resources. `nil` means no limit.
-        var maxImagePixelDimension: Int?
+        public var maxImagePixelDimension: Int?
         
-        init(
+        public init(
             defaultStorageLocation: StorageLocation = .applicationSupport,
             thumbnailPixelSize: Int = 50,
             maxImageFileSize: Int? = nil,
@@ -330,11 +330,23 @@ actor ResourceManager {
     
     // MARK: - Initialization
     
+    public init(
+        configuration: Configuration = .init(),
+        logger: Logger? = nil
+    ) {
+        self.init(
+            configuration: configuration,
+            logger: logger,
+            fileSystem: DefaultFileSystemProvider(),
+            imageProcessor: DefaultImageProcessor()
+        )
+    }
+
     init(
         configuration: Configuration = .init(),
         logger: Logger? = nil,
-        fileSystem: FileSystemProviding = DefaultFileSystemProvider(),
-        imageProcessor: ImageProcessing = DefaultImageProcessor()
+        fileSystem: FileSystemProviding,
+        imageProcessor: ImageProcessing
     ) {
         self.configuration = configuration
         self.logger = logger

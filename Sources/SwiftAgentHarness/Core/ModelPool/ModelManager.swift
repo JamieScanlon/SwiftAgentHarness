@@ -42,7 +42,7 @@ public actor ModelManager {
     /// Optional provider for runtime-observed performance overlays.
     private var observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)?
 
-    init(
+    public init(
         logger: Logger? = nil,
         registryTopicHub: (any ModelPoolResourceTopicPublishing)? = nil,
         observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)? = nil
@@ -53,13 +53,13 @@ public actor ModelManager {
     }
 
     /// Discovers models from Ollama and LM Studio, merges into the registry, and returns DTOs.
-    func getAvailableModels() async -> [Model] {
+    public func getAvailableModels() async -> [Model] {
         await syncRegistryFromDiscovery()
         return sortedModelsFromRegistry()
     }
 
     /// Full registry rows (preserves family / providers / cost / useClasses for routing-aware callers).
-    func getRegistryEntries() async -> [ModelRegistryEntry] {
+    public func getRegistryEntries() async -> [ModelRegistryEntry] {
         await syncRegistryFromDiscovery()
         return registryByID.values
             .sorted { ($0.displayName ?? $0.id.uuidString) < ($1.displayName ?? $1.id.uuidString) }
@@ -67,7 +67,7 @@ public actor ModelManager {
 
     /// Canonical resolve: O(1) for `.id` and `.slug` via the registry indexes; ranked candidates for `.query`.
     /// Throws ``ModelPoolError/unavailable(reference:)`` when no entry matches.
-    func resolve(_ ref: ModelReference) async throws -> ModelRegistryEntry {
+    public func resolve(_ ref: ModelReference) async throws -> ModelRegistryEntry {
         await syncRegistryFromDiscovery()
         switch ref {
         case .id(let id):
@@ -83,7 +83,7 @@ public actor ModelManager {
 
     /// Canonical bulk resolve: `.id` / `.slug` return a single-element list (or throw `.unavailable`);
     /// `.query` returns the ranked candidate set (empty array when filters drop everything — does not throw).
-    func resolveAll(_ ref: ModelReference) async throws -> [ModelRegistryEntry] {
+    public func resolveAll(_ ref: ModelReference) async throws -> [ModelRegistryEntry] {
         switch ref {
         case .id, .slug:
             return [try await resolve(ref)]

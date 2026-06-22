@@ -1,11 +1,11 @@
 import Foundation
+import Synchronization
 
-final class ChannelRegistryHolder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _registry: (any ChannelListenerLooking)?
+final class ChannelRegistryHolder: Sendable {
+    private let state = Mutex<(any ChannelListenerLooking)?>(nil)
 
     var registry: (any ChannelListenerLooking)? {
-        get { lock.withLock { _registry } }
-        set { lock.withLock { _registry = newValue } }
+        get { state.withLock { $0 } }
+        set { state.withLock { $0 = newValue } }
     }
 }

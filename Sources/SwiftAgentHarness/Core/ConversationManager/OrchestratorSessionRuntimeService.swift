@@ -6,7 +6,7 @@ import SwiftAgentKitOrchestrator
 import SwiftAgentKitSkills
 
 /// Orchestrator-facing session seam: mode policy, context recovery, listener lifecycle, and port surface.
-actor OrchestratorSessionRuntimeService {
+public actor OrchestratorSessionRuntimeService {
     private enum ModeTransitionHookID {
         static let invalidateOrchestrator = "invalidate_orchestrator"
         static let restoreSkillLoader = "restore_skill_loader"

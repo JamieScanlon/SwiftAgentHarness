@@ -1,14 +1,14 @@
 import Foundation
 import SwiftAgentKit
 
-struct BudgetLedgerHydrationSeed: Sendable {
-    let conversationID: UUID
-    let parentConversationID: UUID?
-    let ownerAccountID: UUID?
-    let spentUSD: Double
-    let maxUSD: Double?
+public struct BudgetLedgerHydrationSeed: Sendable {
+    public let conversationID: UUID
+    public let parentConversationID: UUID?
+    public let ownerAccountID: UUID?
+    public let spentUSD: Double
+    public let maxUSD: Double?
 
-    init(
+    public init(
         conversationID: UUID,
         parentConversationID: UUID?,
         ownerAccountID: UUID?,
@@ -23,7 +23,7 @@ struct BudgetLedgerHydrationSeed: Sendable {
     }
 }
 
-protocol DelegateCostTracking: BudgetAccounting, BudgetReporting {
+public protocol DelegateCostTracking: BudgetAccounting, BudgetReporting {
     func linkConversation(childConversationID: UUID, parentConversationID: UUID) async
     func recordDelegateCompletion(
         conversationID: UUID,
@@ -35,7 +35,7 @@ protocol DelegateCostTracking: BudgetAccounting, BudgetReporting {
 }
 
 /// Process-wide model pool cost ledger: main-loop dispatches, compaction, memory recall, and sub-agent spend.
-actor ModelPoolCostLedger: DelegateCostTracking {
+public actor ModelPoolCostLedger: DelegateCostTracking {
     private var parentByConversationID: [UUID: UUID] = [:]
     private var ownerAccountIDByConversationID: [UUID: UUID] = [:]
     private var settledSpendByConversationID: [UUID: Double] = [:]
@@ -54,7 +54,7 @@ actor ModelPoolCostLedger: DelegateCostTracking {
 
     /// In-memory ledger for runtime accounting signals.
     /// Startup currently begins at zero spend (no hydration from persistence yet).
-    init(defaultDelegateCompletionUSD: Double = 0.001) {
+    public init(defaultDelegateCompletionUSD: Double = 0.001) {
         self.defaultDelegateCompletionUSD = max(0, defaultDelegateCompletionUSD)
     }
 
@@ -69,7 +69,7 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         }
     }
 
-    func hydrate(from seeds: [BudgetLedgerHydrationSeed]) async {
+    public func hydrate(from seeds: [BudgetLedgerHydrationSeed]) async {
         parentByConversationID = [:]
         ownerAccountIDByConversationID = [:]
         settledSpendByConversationID = [:]
@@ -117,11 +117,11 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         }
     }
 
-    func linkConversation(childConversationID: UUID, parentConversationID: UUID) async {
+    public func linkConversation(childConversationID: UUID, parentConversationID: UUID) async {
         parentByConversationID[childConversationID] = parentConversationID
     }
 
-    func recordDelegateCompletion(
+    public func recordDelegateCompletion(
         conversationID: UUID,
         success: Bool,
         settledCostUSD: Double? = nil
@@ -134,7 +134,7 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         settledGlobalUSD += resolvedCost
     }
 
-    func setConversationMaxUSD(conversationID: UUID, maxUSD: Double?) async {
+    public func setConversationMaxUSD(conversationID: UUID, maxUSD: Double?) async {
         if let maxUSD, maxUSD > 0 {
             conversationMaxUSDByConversationID[conversationID] = maxUSD
         } else {
@@ -142,7 +142,7 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         }
     }
 
-    func authorize(
+    public func authorize(
         policy: BudgetPolicy,
         modelID _: UUID,
         conversationID: UUID?,
@@ -227,7 +227,7 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         }
     }
 
-    func recordCompletion(
+    public func recordCompletion(
         policy: BudgetPolicy,
         modelID _: UUID,
         conversationID: UUID?,
@@ -268,12 +268,12 @@ actor ModelPoolCostLedger: DelegateCostTracking {
         }
     }
 
-    func poolBudgetRemainingUSD() async -> Double? {
+    public func poolBudgetRemainingUSD() async -> Double? {
         guard hasSeenEnabledPolicy, let activeGlobalCapUSD else { return nil }
         return max(0, activeGlobalCapUSD - (settledGlobalUSD + pendingGlobalUSD))
     }
 
-    func projectedCostUSD(conversationID: UUID) async -> Double? {
+    public func projectedCostUSD(conversationID: UUID) async -> Double? {
         if hasSeenEnabledPolicy {
             return spendForConversation(conversationID)
         }

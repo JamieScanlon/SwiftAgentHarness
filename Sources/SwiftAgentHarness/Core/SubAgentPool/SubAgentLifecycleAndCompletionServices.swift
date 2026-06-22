@@ -1,6 +1,6 @@
 import Foundation
 
-protocol SubAgentLifecycleOrchestrationHosting: Sendable {
+public protocol SubAgentLifecycleOrchestrationHosting: Sendable {
     func hostSpawnSubAgent(
         parentConversationID: UUID,
         request: SubAgentSpawnRequest,
@@ -11,7 +11,7 @@ protocol SubAgentLifecycleOrchestrationHosting: Sendable {
     func hostCancelInvocation(parentConversationID: UUID, lifecycleID: String) async throws
 }
 
-protocol SubAgentCompletionIngressHosting: Sendable {
+public protocol SubAgentCompletionIngressHosting: Sendable {
     func hostPushCompletionAnnouncement(
         _ announce: CompletionAnnouncePayload,
         toolMessageContent: String?
@@ -32,7 +32,7 @@ protocol SubAgentLifecycleOrchestrationServicing: Sendable {
     func cancelInvocation(parentConversationID: UUID, lifecycleID: String) async throws
 }
 
-protocol SubAgentCompletionIngressServicing: Sendable {
+public protocol SubAgentCompletionIngressServicing: Sendable {
     func pushCompletionAnnouncement(
         _ announce: CompletionAnnouncePayload,
         toolMessageContent: String?

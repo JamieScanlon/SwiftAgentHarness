@@ -1,7 +1,7 @@
 import Foundation
 
 /// Explicit runtime + domain services wired at the composition root (no monolithic gateway owner).
-struct HarnessRuntimeGraph {
+public struct HarnessRuntimeGraph {
     let conversationDomain: ConversationDomainServiceBundle
     let agentRuntime: AgentRuntimeSessionService
     let conversationReplay: ConversationReplayService
@@ -12,7 +12,7 @@ struct HarnessRuntimeGraph {
 }
 
 /// Explicit gateway service instances built without a monolithic host owner.
-struct HarnessServiceGraph {
+public struct HarnessServiceGraph {
     let catalog: any ConversationCatalogServicing
     let controlPlane: any ConversationControlPlaneServicing
     let lifecycle: any ConversationLifecycleServicing
@@ -46,14 +46,14 @@ struct HarnessServiceGraph {
     }
 }
 
-enum SplitGatewayServiceFactory {
-    static func makeServiceGraph(
+public enum SplitGatewayServiceFactory {
+    public static func makeServiceGraph(
         graph: HarnessServiceGraph
     ) -> APILayerChatGatewayServices {
         graph.gatewayServices
     }
 
-    static func makeServiceGraph(
+    public static func makeServiceGraph(
         runtimeGraph: HarnessRuntimeGraph,
         runtime: (any APILayerChatRuntimeManaging)? = nil
     ) -> HarnessServiceGraph {
@@ -92,14 +92,14 @@ enum SplitGatewayServiceFactory {
         )
     }
 
-    static func makeGatewayServices(
+    public static func makeGatewayServices(
         runtimeGraph: HarnessRuntimeGraph
     ) -> APILayerChatGatewayServices {
         makeServiceGraph(runtimeGraph: runtimeGraph).gatewayServices
     }
 
     /// Builds the runtime graph from a wired service bag (composition-root path).
-    static func makeRuntimeGraph(
+    public static func makeRuntimeGraph(
         services: HarnessRuntimeSessionFactory.Services,
         subAgentLifecycleHost: any SubAgentLifecycleOrchestrationHosting,
         subAgentCompletionHost: any SubAgentCompletionIngressHosting,
@@ -117,8 +117,8 @@ enum SplitGatewayServiceFactory {
     }
 
     /// Builds the runtime graph from a runtime session plus composition-root sub-agent services (session is not the gateway owner).
-    static func makeRuntimeGraph(
-        host: some HarnessRuntimeSessionWiring,
+    public static func makeRuntimeGraph(
+        host: HarnessRuntimeSession,
         subAgentLifecycleHost: any SubAgentLifecycleOrchestrationHosting,
         subAgentCompletionHost: any SubAgentCompletionIngressHosting,
         subAgentCompletion: any SubAgentCompletionIngressServicing
@@ -134,8 +134,8 @@ enum SplitGatewayServiceFactory {
         )
     }
 
-    static func makeGatewayServices(
-        host: some HarnessRuntimeSessionWiring,
+    public static func makeGatewayServices(
+        host: HarnessRuntimeSession,
         subAgentLifecycleHost: any SubAgentLifecycleOrchestrationHosting,
         subAgentCompletionHost: any SubAgentCompletionIngressHosting,
         subAgentCompletion: any SubAgentCompletionIngressServicing

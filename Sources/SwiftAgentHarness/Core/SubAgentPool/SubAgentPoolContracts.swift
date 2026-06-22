@@ -17,13 +17,13 @@ enum SubAgentTrustLevel: String, Codable, Sendable, Equatable {
 }
 
 public struct SubAgentHostingPolicy: Sendable, Codable, Equatable {
-    var hostPersonaID: String?
-    var delegationAllowlist: [String]
-    var authScopeTags: [String]
-    var routingDomain: String?
-    var tenantScope: String?
+    public var hostPersonaID: String?
+    public var delegationAllowlist: [String]
+    public var authScopeTags: [String]
+    public var routingDomain: String?
+    public var tenantScope: String?
 
-    init(
+    public init(
         hostPersonaID: String? = nil,
         delegationAllowlist: [String] = [],
         authScopeTags: [String] = [],

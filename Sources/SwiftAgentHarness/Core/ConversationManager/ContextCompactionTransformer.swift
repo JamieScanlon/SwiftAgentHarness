@@ -66,17 +66,22 @@ protocol TurnSummarizing: Sendable {
     ) async throws -> TurnSummaryDecision
 }
 
-struct ContextCompactionProviderBundle: Sendable {
+public struct ContextCompactionProviderBundle: Sendable {
     let summarizer: any ContextCompactionSummarizing
     let toolResultSummarizer: any ToolResultSummarizing
     let turnSummarizer: any TurnSummarizing
 }
 
-struct ContextCompactionLLMScheduling: Sendable {
-    let scheduler: any ModelCallScheduling
-    let modelID: UUID
+public struct ContextCompactionLLMScheduling: Sendable {
+    public let scheduler: any ModelCallScheduling
+    public let modelID: UUID
 
-    static func modelID(model: String, ollamaServerURL: URL) -> UUID {
+    public init(scheduler: any ModelCallScheduling, modelID: UUID) {
+        self.scheduler = scheduler
+        self.modelID = modelID
+    }
+
+    public static func modelID(model: String, ollamaServerURL: URL) -> UUID {
         let modelToken = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let endpointToken = ollamaServerURL.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let key = "context-compaction|\(endpointToken)|\(modelToken)"
@@ -114,7 +119,7 @@ func wrapCompactionLLMForScheduling(
     )
 }
 
-protocol ContextCompactionProviderFactoring: Sendable {
+public protocol ContextCompactionProviderFactoring: Sendable {
     func makeProvider(
         config: ContextCompactionConfiguration,
         logger: Logger?,
@@ -298,7 +303,7 @@ struct FallbackTurnSummarizer: TurnSummarizing {
     }
 }
 
-struct ContextCompactionTransformer: ConversationTransforming {
+public struct ContextCompactionTransformer: ConversationTransforming {
     private let config: ContextCompactionConfiguration
     private let toolResultFormattingConfiguration: ToolResultFormattingConfiguration
     private let logger: Logger?
@@ -315,7 +320,7 @@ struct ContextCompactionTransformer: ConversationTransforming {
     /// Emitted when a summarized checkpoint is being reused and the conversation has no new raw tail to process.
     static let noopSummarizedNoNewTailDiagnostic = "context_compaction_noop_summarized_no_new_tail"
 
-    static func makeProduction(
+    public static func makeProduction(
         config: ContextCompactionConfiguration,
         toolResultFormattingConfiguration: ToolResultFormattingConfiguration = .default,
         logger: Logger? = nil,
@@ -357,7 +362,7 @@ struct ContextCompactionTransformer: ConversationTransforming {
         self.turnSummarizer = turnSummarizer ?? OllamaTurnSummarizer(config: config, logger: logger, scheduling: scheduling)
     }
 
-    func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput {
+    public func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput {
         let agentContextLimit = input.effectiveContextLimitTokens ?? config.fallbackContextLimitTokens
         let effectiveLimit = ContextCompactionPolicy.effectiveContextLimitForCompactionTrigger(
             agentContextLimitTokens: agentContextLimit,
@@ -954,7 +959,7 @@ struct ContextCompactionTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
+    public func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
         logger?.debug(
             "[ContextCompactionTransformer] transformToolResult input tool=\(input.toolCall.name) toolCallId=\(input.toolCall.id ?? "nil") resultChars=\(input.result.content.count)\n\(Self.describeToolResult(input.result))"
         )
@@ -1015,7 +1020,7 @@ struct ContextCompactionTransformer: ConversationTransforming {
         }
     }
 
-    func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
+    public func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         logger?.debug(
             "[ContextCompactionTransformer] transformTurnSummary input rangeStart=\(input.turnMessageRangeStartIndex) interactionMode=\(input.conversation.interactionMode.rawValue)\n\(Self.describeMessages(input.turnMessages))"
         )

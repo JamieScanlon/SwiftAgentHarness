@@ -1,7 +1,7 @@
 import Foundation
 import SwiftAgentKit
 
-struct ContextMemoryInjectionSnapshotSpec: Sendable {
+public struct ContextMemoryInjectionSnapshotSpec: Sendable {
     let conversationID: UUID
     let phase: ContextTransformInvocationPhase
     let memoryStoreVersion: Int
@@ -10,7 +10,7 @@ struct ContextMemoryInjectionSnapshotSpec: Sendable {
 }
 
 /// Optional policy input for pre-compaction memory flush behavior.
-struct ContextEnginePreCompactionMemoryFlushPolicyInput: Sendable {
+public struct ContextEnginePreCompactionMemoryFlushPolicyInput: Sendable {
     let enabled: Bool
     let maxFlushedMemoryEntries: Int
 
@@ -21,7 +21,7 @@ struct ContextEnginePreCompactionMemoryFlushPolicyInput: Sendable {
 }
 
 /// Persistable pre-compaction memory flush snapshot spec.
-struct ContextPreCompactionMemoryFlushSpec: Sendable {
+public struct ContextPreCompactionMemoryFlushSpec: Sendable {
     let conversationID: UUID
     let phase: ContextTransformInvocationPhase
     let memoryStoreVersion: Int
@@ -30,7 +30,7 @@ struct ContextPreCompactionMemoryFlushSpec: Sendable {
 }
 
 /// Projection policy input for trust-aware context filtering and attachment shaping.
-struct ContextEngineProjectionPolicyInput: Sendable {
+public struct ContextEngineProjectionPolicyInput: Sendable {
     let requestInputTrustRaw: String?
     let safeDefaultTrustClass: TrustPolicyClass
     let downgradeLowTrustContext: Bool
@@ -68,7 +68,7 @@ struct ContextEngineProjectionPolicyInput: Sendable {
 }
 
 /// Inputs required to project system prompt metadata/fingerprint under CE ownership.
-struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
+public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
     let resolvedModeProfile: ResolvedModeProfile
     let strictAgentHarnessPrompts: Bool
     let includeAgentSkills: Bool
@@ -79,7 +79,7 @@ struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
 }
 
 /// Inputs for deterministic attachment inlining/summarization projection decisions.
-struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
+public struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
     let enabled: Bool
     let inlineByteLimit: Int64
     let summarizeByteLimit: Int64
@@ -96,67 +96,67 @@ struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
 }
 
 /// Artifact projected by CE for system prompt assembly + checkpoint parity.
-struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
+public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let metadata: [String: String]
     let fingerprint: String
 }
 
 /// Attachment projection artifact emitted by CE for provider/transformer consumption.
-struct ContextEngineAttachmentProjectionArtifact: Sendable {
+public struct ContextEngineAttachmentProjectionArtifact: Sendable {
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
 }
 
 /// Persistable checkpoint trigger emitted by CE projection lifecycle.
-struct ContextSystemPromptAssemblyCheckpointPersistenceSpec: Sendable {
+public struct ContextSystemPromptAssemblyCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let fingerprint: String
 }
 
 /// Persistable checkpoint trigger for CE attachment projection decisions.
-struct ContextAttachmentProjectionCheckpointPersistenceSpec: Sendable {
+public struct ContextAttachmentProjectionCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
 }
 
 /// Deterministic CE projection artifact consumed by manager/provider layers.
-struct ContextEngineProjectionArtifact: Sendable {
+public struct ContextEngineProjectionArtifact: Sendable {
     let resolvedRequestTrustClass: TrustPolicyClass?
     let systemPromptAssembly: ContextEngineSystemPromptAssemblyArtifact?
     let attachmentProjection: ContextEngineAttachmentProjectionArtifact?
 }
 
 /// Lifecycle bootstrap request for one conversation/session runtime.
-struct ContextEngineBootstrapRequest: Sendable {
+public struct ContextEngineBootstrapRequest: Sendable {
     let conversationID: UUID
     let runID: UUID?
 }
 
 /// Lifecycle bootstrap result.
-struct ContextEngineBootstrapResult: Sendable {
+public struct ContextEngineBootstrapResult: Sendable {
     let initialized: Bool
 }
 
 /// Lifecycle ingest request for a single message.
-struct ContextEngineIngestRequest: Sendable {
+public struct ContextEngineIngestRequest: Sendable {
     let conversationID: UUID
     let message: Message
 }
 
 /// Lifecycle ingest request for message batches.
-struct ContextEngineIngestBatchRequest: Sendable {
+public struct ContextEngineIngestBatchRequest: Sendable {
     let conversationID: UUID
     let messages: [Message]
 }
 
 /// Lifecycle ingest result.
-struct ContextEngineIngestResult: Sendable {
+public struct ContextEngineIngestResult: Sendable {
     let ingestedCount: Int
 }
 
 /// Assemble-stage request for model-facing context projection.
-struct ContextEngineAssembleRequest: Sendable {
+public struct ContextEngineAssembleRequest: Sendable {
     let messages: [Message]
     let conversation: ModelConversation
     let phase: ContextTransformInvocationPhase
@@ -227,7 +227,7 @@ struct ContextEngineAssembleRequest: Sendable {
 }
 
 /// Assemble-stage result for orchestrator inputs and optional checkpoint persistence spec.
-struct ContextEngineAssembleResult: Sendable {
+public struct ContextEngineAssembleResult: Sendable {
     let messages: [Message]
     let transformOutput: ContextTransformOutput?
     let checkpointPersistence: ContextCompactionCheckpointPersistenceSpec?
@@ -268,7 +268,7 @@ struct ContextEngineAssembleResult: Sendable {
 }
 
 /// Request for projection-policy-derived context budget used by conversation state publishing.
-struct ContextEngineProjectedContextBudgetRequest: Sendable {
+public struct ContextEngineProjectedContextBudgetRequest: Sendable {
     let messages: [Message]
     let conversation: ModelConversation
     let compactionConfig: ContextCompactionConfiguration
@@ -278,15 +278,15 @@ struct ContextEngineProjectedContextBudgetRequest: Sendable {
 }
 
 /// Compact-stage request (manual/recovery/forced flows).
-struct ContextEngineCompactRequest: Sendable {
+public struct ContextEngineCompactRequest: Sendable {
     let assemble: ContextEngineAssembleRequest
 }
 
 /// Compact-stage result mirrors assemble result.
-typealias ContextEngineCompactResult = ContextEngineAssembleResult
+public typealias ContextEngineCompactResult = ContextEngineAssembleResult
 
 /// Post-turn lifecycle request.
-struct ContextEngineAfterTurnRequest: Sendable {
+public struct ContextEngineAfterTurnRequest: Sendable {
     let conversationID: UUID
     let runID: UUID?
     let terminalReason: ConversationRunTerminalReason?
@@ -309,12 +309,12 @@ struct ContextEngineAfterTurnRequest: Sendable {
 }
 
 /// Post-turn lifecycle result.
-struct ContextEngineAfterTurnResult: Sendable {
+public struct ContextEngineAfterTurnResult: Sendable {
     let completed: Bool
 }
 
 /// Sub-agent pre-spawn lifecycle request.
-struct ContextEnginePrepareSubagentSpawnRequest: Sendable {
+public struct ContextEnginePrepareSubagentSpawnRequest: Sendable {
     let conversationID: UUID
     let runID: UUID?
     let candidateToolNames: [String]
@@ -324,7 +324,7 @@ struct ContextEnginePrepareSubagentSpawnRequest: Sendable {
 }
 
 /// Deterministic CE artifact produced during sub-agent spawn preparation.
-struct ContextEngineSubagentHandoffArtifact: Sendable, Equatable {
+public struct ContextEngineSubagentHandoffArtifact: Sendable, Equatable {
     let conversationID: UUID
     let runID: UUID?
     let policyFingerprint: String
@@ -333,13 +333,13 @@ struct ContextEngineSubagentHandoffArtifact: Sendable, Equatable {
 }
 
 /// Persistable CE directive for checkpoint invalidation from sub-agent hook lifecycles.
-struct ContextEngineSubagentCheckpointInvalidationSpec: Sendable, Equatable {
+public struct ContextEngineSubagentCheckpointInvalidationSpec: Sendable, Equatable {
     let conversationID: UUID
     let invalidatedKinds: [String]
 }
 
 /// Sub-agent pre-spawn lifecycle result.
-struct ContextEnginePrepareSubagentSpawnResult: Sendable {
+public struct ContextEnginePrepareSubagentSpawnResult: Sendable {
     let approvedToolNames: [String]
     let handoffArtifact: ContextEngineSubagentHandoffArtifact?
     let checkpointInvalidation: ContextEngineSubagentCheckpointInvalidationSpec?
@@ -356,7 +356,7 @@ struct ContextEnginePrepareSubagentSpawnResult: Sendable {
 }
 
 /// Sub-agent ended lifecycle request.
-struct ContextEngineSubagentEndedRequest: Sendable {
+public struct ContextEngineSubagentEndedRequest: Sendable {
     let conversationID: UUID
     let runID: UUID?
     let toolName: String
@@ -365,7 +365,7 @@ struct ContextEngineSubagentEndedRequest: Sendable {
 }
 
 /// Deterministic CE artifact produced after sub-agent tool completion.
-struct ContextEngineSubagentContinuationArtifact: Sendable, Equatable {
+public struct ContextEngineSubagentContinuationArtifact: Sendable, Equatable {
     let conversationID: UUID
     let runID: UUID?
     let toolName: String
@@ -373,7 +373,7 @@ struct ContextEngineSubagentContinuationArtifact: Sendable, Equatable {
 }
 
 /// Sub-agent ended lifecycle result.
-struct ContextEngineSubagentEndedResult: Sendable {
+public struct ContextEngineSubagentEndedResult: Sendable {
     let acknowledged: Bool
     let continuationArtifact: ContextEngineSubagentContinuationArtifact?
     let checkpointInvalidation: ContextEngineSubagentCheckpointInvalidationSpec?
@@ -394,7 +394,7 @@ typealias ContextTurnAssemblyRequest = ContextEngineAssembleRequest
 typealias ContextTurnAssemblyResult = ContextEngineAssembleResult
 
 /// Checkpoint persistence bundle produced after a successful compaction transform (initial phase).
-struct ContextCompactionCheckpointPersistenceSpec: Sendable {
+public struct ContextCompactionCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let rawMiddleMessageIDs: [UUID]
     let compactedMiddleMessages: [Message]
@@ -411,7 +411,7 @@ struct ContextCompactionCheckpointPersistenceSpec: Sendable {
 
 /// Harness-aligned façade for **model** context projection (compaction + checkpoint reuse). Wire implementations
 /// must stay free of Vapor.
-protocol ContextEngine: Sendable {
+public protocol ContextEngine: Sendable {
     func bootstrap(request: ContextEngineBootstrapRequest) async -> ContextEngineBootstrapResult
     func ingest(request: ContextEngineIngestRequest) async -> ContextEngineIngestResult
     func ingestBatch(request: ContextEngineIngestBatchRequest) async -> ContextEngineIngestResult

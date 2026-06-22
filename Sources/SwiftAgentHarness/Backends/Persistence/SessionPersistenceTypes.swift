@@ -23,7 +23,7 @@ public struct SessionEntryID: RawRepresentable, Codable, Hashable, Sendable, Los
         self.rawValue = normalized
     }
 
-    static func generate() -> SessionEntryID {
+    public static func generate() -> SessionEntryID {
         let value = UInt32.random(in: UInt32.min...UInt32.max)
         return SessionEntryID(rawValue: String(format: "%08x", value))
     }

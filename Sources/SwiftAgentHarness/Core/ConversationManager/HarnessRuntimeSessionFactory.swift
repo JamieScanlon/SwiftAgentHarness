@@ -3,8 +3,8 @@ import Logging
 import SwiftAgentKit
 import SwiftAgentKitOrchestrator
 
-enum HarnessRuntimeSessionFactory {
-    struct Services {
+public enum HarnessRuntimeSessionFactory {
+    public struct Services: Sendable {
         let orchestrator: OrchestratorSessionPortAdapter
         let selection: ConversationSelectionAccessAdapter
         let sessionProjection: SessionProjectionPortAdapter

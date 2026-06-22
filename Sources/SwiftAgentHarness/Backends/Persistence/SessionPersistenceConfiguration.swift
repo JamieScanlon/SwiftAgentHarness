@@ -4,9 +4,9 @@
 
 import Foundation
 
-enum SessionPersistenceConfiguration {
+public enum SessionPersistenceConfiguration {
     /// When set, enables on-disk harness layout at this directory (see ``SessionPersistenceInstall``).
-    static var sessionStoreRoot: URL? {
+    public static var sessionStoreRoot: URL? {
         guard let raw = ProcessInfo.processInfo.environment["SAH_SESSION_STORE_ROOT"], !raw.isEmpty else {
             return nil
         }
@@ -14,7 +14,7 @@ enum SessionPersistenceConfiguration {
     }
 
     /// Per-process harness agent id (transcript subdirectory + catalog scope). Default `default`.
-    static var sessionAgentId: String {
+    public static var sessionAgentId: String {
         let raw = ProcessInfo.processInfo.environment["SAH_SESSION_AGENT_ID"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return SessionPersistenceLayout.defaultAgentId }
@@ -38,7 +38,7 @@ enum SessionPersistenceConfiguration {
     }
 
     /// True when ``SAH_SESSION_STORE_ROOT`` is set (install wires ``LocalHarnessSessionPersistence``).
-    static var harnessOnDiskV2Configured: Bool {
+    public static var harnessOnDiskV2Configured: Bool {
         sessionStoreRoot != nil
     }
 

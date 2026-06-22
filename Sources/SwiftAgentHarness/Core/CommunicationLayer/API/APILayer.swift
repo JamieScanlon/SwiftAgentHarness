@@ -232,7 +232,7 @@ extension APILayerConversationManaging {
 
 /// Streaming turns, replay, optional background orchestration pushes, and cancellation — used by WebSocket and chunked REST streaming.
 /// **Peel target:** Agent runtime + Model Pool; outbound visibility remains Communication Layer topic hubs.
-protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
+public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
     func apiMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]>
     func apiSendMessageAndStreamResponse(
         conversationID: UUID,
@@ -615,7 +615,7 @@ public actor APILayer {
      *
      * - Parameter port: The port number that the server will listen on.
      */
-    init(
+    public init(
         port: Int,
         logger: Logger = SwiftAgentKitLogging.logger(for: .custom(subsystem: "APILayer")),
         serverTraceSubscribePolicy: ServerTraceSubscribePolicy = .open
@@ -631,7 +631,7 @@ public actor APILayer {
     }
 
     /// Test / advanced wiring: inject split conversation vs runtime instances explicitly.
-    func setChatGatewayServices(_ gateway: APILayerChatGatewayServices) {
+    public func setChatGatewayServices(_ gateway: APILayerChatGatewayServices) {
         self.chatGateway = gateway
     }
     
@@ -640,7 +640,7 @@ public actor APILayer {
      *
      * - Parameter modelManager: The model manager instance to use.
      */
-    func setModelManager(_ modelManager: ModelManager) {
+    public func setModelManager(_ modelManager: ModelManager) {
         self.modelManager = modelManager
     }
 
@@ -649,11 +649,11 @@ public actor APILayer {
         self.modelManager = provider
     }
     
-    func setOAuthCallbackDelivery(_ delivery: OAuthCallbackDelivery) {
+    public func setOAuthCallbackDelivery(_ delivery: OAuthCallbackDelivery) {
         self.oauthCallbackDelivery = delivery
     }
 
-    func setTriggerWebhookRegistrar(_ registrar: TriggerWebhookRouteRegistrar?) {
+    public func setTriggerWebhookRegistrar(_ registrar: TriggerWebhookRouteRegistrar?) {
         self.triggerWebhookRegistrar = registrar
     }
 
@@ -704,7 +704,7 @@ public actor APILayer {
     }
 
     /// Production wiring: one ``CommunicationLayer`` plus coordinator (same hubs as the aggregate).
-    func setCommunicationWireResources(layer: CommunicationLayer, coordinator: ModelInvocationCoordinator) {
+    public func setCommunicationWireResources(layer: CommunicationLayer, coordinator: ModelInvocationCoordinator) {
         self.modelStateTopicHub = layer.modelPoolTopics
         self.conversationEventsTopicHub = layer.conversationEvents
         self.conversationStateTopicHub = layer.conversationState
@@ -721,7 +721,7 @@ public actor APILayer {
     /// Injects the budget reporting seam used to enrich `conversation/{id}/state.projectedCostUSD`.
     /// Defaults to ``NilBudgetReporting`` for tests; production wiring injects
     /// the real ledger-backed reporter.
-    func setBudgetReporting(_ reporter: any BudgetReporting) {
+    public func setBudgetReporting(_ reporter: any BudgetReporting) {
         self.budgetReporting = reporter
     }
 
@@ -854,7 +854,7 @@ public actor APILayer {
      * - Throws: APIError if the server components aren't properly initialized
      *           or if the server fails to start.
      */
-    func start() async throws {
+    public func start() async throws {
         // Verify that required components are initialized
         guard let chatGateway = chatGateway, let modelManager = modelManager else {
             throw APIError.componentsNotInitialized
@@ -887,7 +887,7 @@ public actor APILayer {
     }
 
     /// Bound listen port after ``start()``; when initialized with `0`, returns the OS-assigned ephemeral port.
-    var listeningPort: Int {
+    public var listeningPort: Int {
         guard let app else { return port }
         if let bound = app.http.server.shared.localAddress?.port {
             return Int(bound)
@@ -900,7 +900,7 @@ public actor APILayer {
      *
      * This method stops the Vapor application and releases all resources.
      */
-    func stop() async {
+    public func stop() async {
         logger.info("Shutting down API server...")
         if let running = app?.running {
             running.stop()
@@ -1494,7 +1494,7 @@ extension Model {
     }
 }
 
-enum APIError: Error {
+public enum APIError: Error {
     /// Thrown when the API layer's required components aren't initialized
     case componentsNotInitialized
     
