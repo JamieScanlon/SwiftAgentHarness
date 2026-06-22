@@ -74,7 +74,7 @@ public enum SplitGatewayServiceFactory {
         )
     }
 
-    static func makeConversationAdapter(
+    public static func makeConversationAdapter(
         runtimeGraph: HarnessRuntimeGraph
     ) -> APILayerConversationAdapter {
         makeServiceGraph(runtimeGraph: runtimeGraph).conversationAdapter

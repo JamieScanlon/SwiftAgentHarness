@@ -54,8 +54,8 @@ public actor HarnessRuntimeSession {
     internal var toolApprovalRuntimeService: ToolApprovalRuntimeService { services.toolApprovalRuntimeService }
     internal var skillActivationService: SkillActivationService { services.skillActivationService }
     internal var slashCommandDispatchService: SlashCommandDispatchService { services.slashCommandDispatchService }
-    var subAgentSpawnService: SubAgentSpawnService { services.subAgentSpawnService }
-    var subAgentCompletionRuntimeService: SubAgentCompletionRuntimeService { services.subAgentCompletionRuntimeService }
+    public var subAgentSpawnService: SubAgentSpawnService { services.subAgentSpawnService }
+    public var subAgentCompletionRuntimeService: SubAgentCompletionRuntimeService { services.subAgentCompletionRuntimeService }
     internal var runtimeLifecyclePublicationService: RuntimeLifecyclePublicationService { services.runtimeLifecyclePublicationService }
     public var conversationStartupService: ConversationStartupService { services.conversationStartupService }
 
@@ -608,11 +608,11 @@ public actor HarnessRuntimeSession {
         try await persistenceDomain.readPlanMarkdown(for: conversationID)
     }
 
-    internal func serviceHarnessDedupeCheckAndSet(key: String, ttlSeconds: Int) async throws -> Bool {
+    public func serviceHarnessDedupeCheckAndSet(key: String, ttlSeconds: Int) async throws -> Bool {
         try await persistenceDomain.dedupeCheckAndSet(key: key, ttlSeconds: ttlSeconds)
     }
 
-    internal func serviceHarnessDedupePeek(key: String) async throws -> Bool {
+    public func serviceHarnessDedupePeek(key: String) async throws -> Bool {
         try await persistenceDomain.dedupePeek(key: key)
     }
 
@@ -628,7 +628,7 @@ public actor HarnessRuntimeSession {
         try await persistenceDomain.markTaskRunDelivered(runId: runId)
     }
 
-    internal func serviceResolveConversationByTitle(_ title: String) async throws -> UUID? {
+    public func serviceResolveConversationByTitle(_ title: String) async throws -> UUID? {
         try await persistenceDomain.resolveConversationByTitle(title)
     }
 
@@ -644,7 +644,7 @@ public actor HarnessRuntimeSession {
         await agentRuntimeSessionService.cancelMessageStream()
     }
 
-    internal func createConversation(
+    public func createConversation(
         with selectedModel: Model,
         userSystemPrompt: String,
         topic: String? = nil,
@@ -668,7 +668,7 @@ public actor HarnessRuntimeSession {
         )
     }
 
-    internal func stampTriggerHostConversation(
+    public func stampTriggerHostConversation(
         conversationID: UUID,
         trigger: HarnessTrigger,
         sessionKey: String
@@ -1184,7 +1184,7 @@ public actor HarnessRuntimeSession {
 }
 
 extension HarnessRuntimeSession {
-    internal func modelConversation(id: UUID) async -> ModelConversation? {
+    public func modelConversation(id: UUID) async -> ModelConversation? {
         await persistenceDomain.modelConversation(id: id)
     }
 
