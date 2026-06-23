@@ -3,92 +3,90 @@ import Foundation
 import SwiftAgentKit
 import Testing
 
-@Suite("Harness session persistence Gap 14 (retention on snapshot reads)", .serialized)
+@Suite("Harness session persistence Gap 14 (retention on snapshot reads)")
 struct SessionPersistenceGap14Tests {
     @Test func localReadWithFloorBeyondLagThrowsRetentionExceeded() throws {
-        setenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG", "2", 1)
-        defer { unsetenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG") }
-
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sah-gap14-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let local = try LocalHarnessSessionPersistence(root: root)
-        let cid = UUID()
-        var row = SessionCatalogRecord(
-            id: cid,
-            topic: "gap14-\(cid.uuidString)",
-            description: nil,
-            messageCount: 0,
-            updatedAt: Date(),
-            createdAt: Date(),
-            modelName: "m",
-            interactionModeRaw: InteractionMode.chat.rawValue,
-        )
-        row.agentId = SessionPersistenceLayout.defaultAgentId
-        try local.bootstrapEmptyConversation(row)
-
-        for _ in 0 ..< 5 {
-            let seq = try local.nextTranscriptSequence(conversationID: cid)
-            let entry = SessionTranscriptEntry(
-                sequence: seq,
-                entryId: .generate(),
-                parentEntryId: nil,
-                type: .message,
-                timestamp: Date(),
-                payloadJSON: "{}"
+        try HarnessEnvironmentOverride.$overrides.withValue(["SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG": "2"]) {
+            let local = try LocalHarnessSessionPersistence(root: root)
+            let cid = UUID()
+            var row = SessionCatalogRecord(
+                id: cid,
+                topic: "gap14-\(cid.uuidString)",
+                description: nil,
+                messageCount: 0,
+                updatedAt: Date(),
+                createdAt: Date(),
+                modelName: "m",
+                interactionModeRaw: InteractionMode.chat.rawValue,
             )
-            try local.appendTranscriptEntry(conversationID: cid, entry: entry)
+            row.agentId = SessionPersistenceLayout.defaultAgentId
+            try local.bootstrapEmptyConversation(row)
+
+            for _ in 0 ..< 5 {
+                let seq = try local.nextTranscriptSequence(conversationID: cid)
+                let entry = SessionTranscriptEntry(
+                    sequence: seq,
+                    entryId: .generate(),
+                    parentEntryId: nil,
+                    type: .message,
+                    timestamp: Date(),
+                    payloadJSON: "{}"
+                )
+                try local.appendTranscriptEntry(conversationID: cid, entry: entry)
+            }
+            #expect(try local.latestTranscriptSequence(conversationID: cid) == 5)
+
+            #expect(throws: SessionPersistenceError.self) {
+                try local.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 1))
+            }
+
+            let tail = try local.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 3))
+            #expect(tail.count == 3)
+
+            let all = try local.readTranscriptEntries(conversationID: cid, request: .full)
+            #expect(all.count == 5)
         }
-        #expect(try local.latestTranscriptSequence(conversationID: cid) == 5)
-
-        #expect(throws: SessionPersistenceError.self) {
-            try local.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 1))
-        }
-
-        let tail = try local.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 3))
-        #expect(tail.count == 3)
-
-        let all = try local.readTranscriptEntries(conversationID: cid, request: .full)
-        #expect(all.count == 5)
     }
 
     @Test func inMemoryReadWithFloorBeyondLagThrows() throws {
-        setenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG", "2", 1)
-        defer { unsetenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG") }
-
-        let mem = InMemoryHarnessSessionPersistence()
-        let cid = UUID()
-        var row = SessionCatalogRecord(
-            id: cid,
-            topic: "g14m-\(cid.uuidString)",
-            description: nil,
-            messageCount: 0,
-            updatedAt: Date(),
-            createdAt: Date(),
-            modelName: "m",
-            interactionModeRaw: InteractionMode.chat.rawValue,
-        )
-        row.agentId = SessionPersistenceLayout.defaultAgentId
-        try mem.bootstrapEmptyConversation(row)
-
-        for _ in 0 ..< 5 {
-            let seq = try mem.nextTranscriptSequence(conversationID: cid)
-            let entry = SessionTranscriptEntry(
-                sequence: seq,
-                entryId: .generate(),
-                parentEntryId: nil,
-                type: .message,
-                timestamp: Date(),
-                payloadJSON: "{}"
+        try HarnessEnvironmentOverride.$overrides.withValue(["SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG": "2"]) {
+            let mem = InMemoryHarnessSessionPersistence()
+            let cid = UUID()
+            var row = SessionCatalogRecord(
+                id: cid,
+                topic: "g14m-\(cid.uuidString)",
+                description: nil,
+                messageCount: 0,
+                updatedAt: Date(),
+                createdAt: Date(),
+                modelName: "m",
+                interactionModeRaw: InteractionMode.chat.rawValue,
             )
-            try mem.appendTranscriptEntry(conversationID: cid, entry: entry)
-        }
+            row.agentId = SessionPersistenceLayout.defaultAgentId
+            try mem.bootstrapEmptyConversation(row)
 
-        #expect(throws: SessionPersistenceError.self) {
-            try mem.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 0))
+            for _ in 0 ..< 5 {
+                let seq = try mem.nextTranscriptSequence(conversationID: cid)
+                let entry = SessionTranscriptEntry(
+                    sequence: seq,
+                    entryId: .generate(),
+                    parentEntryId: nil,
+                    type: .message,
+                    timestamp: Date(),
+                    payloadJSON: "{}"
+                )
+                try mem.appendTranscriptEntry(conversationID: cid, entry: entry)
+            }
+
+            #expect(throws: SessionPersistenceError.self) {
+                try mem.readTranscriptEntries(conversationID: cid, request: .init(fromSequence: 0))
+            }
+            let ok = try mem.readTranscriptEntries(conversationID: cid, request: .full)
+            #expect(ok.count == 5)
         }
-        let ok = try mem.readTranscriptEntries(conversationID: cid, request: .full)
-        #expect(ok.count == 5)
     }
 
     @Test func readRequestSupportsToSequenceAndLimit() throws {

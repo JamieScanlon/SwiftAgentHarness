@@ -718,8 +718,17 @@ public actor APILayer {
     }
 
     /// Wires the conversation events topic hub for WebSocket `conversation/{id}/events` subscriptions.
-    public func setConversationEventsWireResources(hub: ConversationEventsTopicHub) {
+    ///
+    /// - Parameter replayRetention: Optional transcript replay-window override. When `nil` (default)
+    ///   the subscribe path resolves the window from the environment
+    ///   (`SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG`); supply a value to make the policy deterministic
+    ///   without mutating process-global state.
+    public func setConversationEventsWireResources(
+        hub: ConversationEventsTopicHub,
+        replayRetention: TranscriptTailRetentionPolicy? = nil
+    ) {
         self.conversationEventsTopicHub = hub
+        self.conversationEventsReplayRetention = replayRetention
     }
 
     /// Production wiring: one ``CommunicationLayer`` plus coordinator (same hubs as the aggregate).
@@ -963,6 +972,10 @@ public actor APILayer {
     /// When set, enables `kind: subscribe` / `unsubscribe` for `conversation/{id}/events` on `/ws`.
     private var conversationEventsTopicHub: ConversationEventsTopicHub?
 
+    /// Optional deterministic transcript replay-window override for `conversation/{id}/events`
+    /// subscribes. `nil` falls back to the environment-derived policy at request time.
+    private var conversationEventsReplayRetention: TranscriptTailRetentionPolicy?
+
     /// When set, enables `kind: subscribe` / `unsubscribe` for `conversation/{id}/state` on `/ws`.
     private var conversationStateTopicHub: ConversationStateTopicHub?
 
@@ -1058,6 +1071,7 @@ public actor APILayer {
         let wireLogger = logger
         let wireModelStateHub = modelStateTopicHub
         let wireConversationEventsHub = conversationEventsTopicHub
+        let wireConversationEventsReplayRetention = conversationEventsReplayRetention
         let wireConversationStateHub = conversationStateTopicHub
         let wireTraceHub = traceTopicHub
         let wireCapabilityRegistryHub = capabilityRegistryTopicHub
@@ -1294,6 +1308,7 @@ public actor APILayer {
                                 await sendControlPayload(APILayer.harnessDedupeResultPayload(firstSighting: first))
                             },
                             serverTraceSubscribePolicy: wireServerTraceSubscribePolicy,
+                            conversationEventsReplayRetention: wireConversationEventsReplayRetention ?? .fromEnvironmentOrDefault(),
                             message: comm,
                             registration: topicRegistration
                         ) {

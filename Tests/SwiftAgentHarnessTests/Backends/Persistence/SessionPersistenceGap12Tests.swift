@@ -85,29 +85,28 @@ struct SessionPersistenceGap12Tests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sah-gap12-dmg-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        setenv("SAH_SESSION_LITE_RECOVERY_SCAN_BYTES", "2048", 1)
-        defer { unsetenv("SAH_SESSION_LITE_RECOVERY_SCAN_BYTES") }
+        try HarnessEnvironmentOverride.$overrides.withValue(["SAH_SESSION_LITE_RECOVERY_SCAN_BYTES": "2048"]) {
+            let ua = UUID()
+            let ub = UUID()
+            let prefix = "not-json {\n \"hint\": \"\(ua.uuidString)\"\n"
+            let middle = String(repeating: "Z", count: 80_000)
+            let suffix = "\n\"tail\": \"\(ub.uuidString)\"\n"
+            var blob = Data(prefix.utf8)
+            blob.append(contentsOf: middle.utf8)
+            blob.append(contentsOf: suffix.utf8)
 
-        let ua = UUID()
-        let ub = UUID()
-        let prefix = "not-json {\n \"hint\": \"\(ua.uuidString)\"\n"
-        let middle = String(repeating: "Z", count: 80_000)
-        let suffix = "\n\"tail\": \"\(ub.uuidString)\"\n"
-        var blob = Data(prefix.utf8)
-        blob.append(contentsOf: middle.utf8)
-        blob.append(contentsOf: suffix.utf8)
+            try SessionPersistenceLayout.ensureDirectory(root)
+            let url = SessionPersistenceLayout.sessionsRecoveryIndexURL(root: root)
+            try SessionPersistenceLayout.ensureDirectory(url.deletingLastPathComponent())
+            try blob.write(to: url)
 
-        try SessionPersistenceLayout.ensureDirectory(root)
-        let url = SessionPersistenceLayout.sessionsRecoveryIndexURL(root: root)
-        try SessionPersistenceLayout.ensureDirectory(url.deletingLastPathComponent())
-        try blob.write(to: url)
-
-        let found = SessionPersistenceLiteRecovery.discoverConversationIds(
-            root: root,
-            agentId: SessionPersistenceLayout.defaultAgentId
-        )
-        #expect(found.contains(ua))
-        #expect(found.contains(ub))
+            let found = SessionPersistenceLiteRecovery.discoverConversationIds(
+                root: root,
+                agentId: SessionPersistenceLayout.defaultAgentId
+            )
+            #expect(found.contains(ua))
+            #expect(found.contains(ub))
+        }
     }
 
     @Test func recoveryDiscoveryServiceReadsRecoveryIndex() throws {

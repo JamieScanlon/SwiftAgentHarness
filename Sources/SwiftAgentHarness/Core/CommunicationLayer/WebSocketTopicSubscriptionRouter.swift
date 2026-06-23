@@ -24,6 +24,7 @@ enum WebSocketTopicSubscriptionRouter {
         inboundDedupePerform: (@Sendable (String, Int) async throws -> Bool)? = nil,
         inboundDedupeRespond: (@Sendable (Bool) async throws -> Void)? = nil,
         serverTraceSubscribePolicy: ServerTraceSubscribePolicy = .open,
+        conversationEventsReplayRetention: TranscriptTailRetentionPolicy = .fromEnvironmentOrDefault(),
         message: CommClientControlMessage,
         registration: WebSocketTopicWireRegistration
     ) async -> String? {
@@ -124,7 +125,8 @@ enum WebSocketTopicSubscriptionRouter {
                         transcriptReplay = try await conversationEventsTranscriptReplay(
                             conversationID: conversationID,
                             replay: replayRequest,
-                            session: conversationSession
+                            session: conversationSession,
+                            retention: conversationEventsReplayRetention
                         )
                     } catch {
                         return "Subscribe failed: \(error)"
@@ -601,11 +603,12 @@ enum WebSocketTopicSubscriptionRouter {
     private static func conversationEventsTranscriptReplay(
         conversationID: UUID,
         replay: ConversationEventsReplayRequest,
-        session: APILayerConversationManaging
+        session: APILayerConversationManaging,
+        retention: TranscriptTailRetentionPolicy
     ) async throws -> ConversationTranscriptSubscribeReplay {
         let latest = await session.apiLatestTranscriptSequence(conversationID: conversationID) ?? 0
         if let floor = ConversationEventsTranscriptReplayHydrator.replayInclusiveFloor(replay) {
-            try TranscriptTailRetentionPolicy.fromEnvironmentOrDefault().requireReplayWindow(
+            try retention.requireReplayWindow(
                 conversationID: conversationID,
                 clientInclusiveFloor: floor,
                 latestSequence: latest

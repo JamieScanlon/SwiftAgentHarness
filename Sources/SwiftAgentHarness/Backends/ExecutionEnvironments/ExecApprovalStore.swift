@@ -14,20 +14,30 @@ public actor ExecApprovalStore {
 
     private var pending: [String: PendingRequest] = [:]
     private var waiters: [String: [CheckedContinuation<ExecApprovalResolution?, Never>]] = [:]
-    private var durableCommands: Set<String> = []
+    private var grantStore: any ExecApprovalGrantStore
 
-    public init() {}
+    public init(grantStore: any ExecApprovalGrantStore = InMemoryExecApprovalGrantStore()) {
+        self.grantStore = grantStore
+    }
+
+    /// Swaps the backing grant store. Intended to be called once at host startup
+    /// (e.g. on `ExecApprovalStore.shared`) before any approvals are processed.
+    public func configure(grantStore: any ExecApprovalGrantStore) {
+        self.grantStore = grantStore
+    }
 
     public func registerPending(id: String, command: String) {
         pending[id] = PendingRequest(command: command)
     }
 
-    public func isDurableApproved(command: String) -> Bool {
-        durableCommands.contains(Self.normalizeCommand(command))
+    public func isDurableApproved(command: String) async -> Bool {
+        guard let name = Self.commandName(from: command) else { return false }
+        return await grantStore.isGranted(commandName: name)
     }
 
-    public func addDurableApproval(command: String) {
-        durableCommands.insert(Self.normalizeCommand(command))
+    public func addDurableApproval(command: String) async {
+        guard let name = Self.commandName(from: command) else { return }
+        await grantStore.add(commandName: name)
     }
 
     @discardableResult
@@ -36,12 +46,12 @@ public actor ExecApprovalStore {
         approved: Bool,
         durable: Bool = false,
         reason: String? = nil
-    ) -> ExecApprovalResolution? {
+    ) async -> ExecApprovalResolution? {
         guard let request = pending.removeValue(forKey: id) else { return nil }
         let resolution: ExecApprovalResolution
         if approved {
             if durable {
-                addDurableApproval(command: request.command)
+                await addDurableApproval(command: request.command)
             }
             resolution = .approved(durable: durable)
         } else {
@@ -90,7 +100,9 @@ public actor ExecApprovalStore {
         }
     }
 
-    private static func normalizeCommand(_ command: String) -> String {
-        command.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Extracts the command NAME (first executable token) from a full command
+    /// string. Leading environment assignments are out of scope.
+    static func commandName(from command: String) -> String? {
+        command.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init)
     }
 }

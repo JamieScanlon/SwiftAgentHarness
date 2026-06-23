@@ -9,12 +9,16 @@
 import Foundation
 
 /// Window for rejecting tail subscribers whose last-known transcript sequence is too far behind the current head.
-struct TranscriptTailRetentionPolicy: Sendable, Equatable {
+public struct TranscriptTailRetentionPolicy: Sendable, Equatable {
     /// When `(latestSequence - clientFloorSequence) > maxSequenceLag`, subscribe fails with ``SessionPersistenceError/retentionExceeded``.
-    var maxSequenceLag: Int
+    public var maxSequenceLag: Int
+
+    public init(maxSequenceLag: Int) {
+        self.maxSequenceLag = maxSequenceLag
+    }
 
     static func fromEnvironmentOrDefault() -> TranscriptTailRetentionPolicy {
-        let raw = ProcessInfo.processInfo.environment["SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG"]
+        let raw = HarnessEnvironmentOverride.string("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG")
         // `0` is valid (reject any client floor below the current head); only negative values fall back.
         if let raw, let v = Int(raw), v >= 0 {
             return TranscriptTailRetentionPolicy(maxSequenceLag: v)

@@ -32,9 +32,17 @@ actor BackgroundMemoryExtractor {
         await run(request: request, runExtraction: runExtraction)
     }
 
-    func drain(timeoutMs: Int) async {
+    /// Marks the extractor as shutting down and discards any stashed turn so it
+    /// will not be replayed. Idempotent. Separated from `drain` so callers (and
+    /// the in-flight completion path) observe shutdown deterministically before
+    /// the in-flight extraction finishes.
+    func beginShutdown() {
         shuttingDown = true
         stashedTurn = nil
+    }
+
+    func drain(timeoutMs: Int) async {
+        beginShutdown()
         guard inFlight else { return }
         await withCheckedContinuation { continuation in
             drainWaiters.append(continuation)
@@ -74,6 +82,7 @@ actor BackgroundMemoryExtractor {
         _ request: MemoryTurnEndedRequest,
         runExtraction: @Sendable @escaping (MemoryTurnEndedRequest) async -> Void
     ) async {
+        if shuttingDown { return }
         guard config.extractionEnabled else { return }
         guard request.isMainREPLThread else { return }
         if request.mainAgentWroteMemory { return }

@@ -804,6 +804,7 @@ struct APILayerWebSocketCoverageTests {
     /// Starts `/ws` with ``APILayer/setConversationEventsWireResources`` for `conversation/{id}/events` tests.
     private func withRunningWebSocketServerConversationEvents(
         models: [Model],
+        replayRetention: TranscriptTailRetentionPolicy? = nil,
         _ body: (Int, any APILayerConversationManaging, ConversationEventsTopicHub) async throws -> Void
     ) async throws {
         let api = APILayer(port: 0)
@@ -815,7 +816,7 @@ struct APILayerWebSocketCoverageTests {
         let gateway = await splitGatewayServices(runtimeSession: runtimeSession)
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
-        await api.setConversationEventsWireResources(hub: conversationHub)
+        await api.setConversationEventsWireResources(hub: conversationHub, replayRetention: replayRetention)
         try await api.start()
         let port = await api.listeningPort
         do {
@@ -1494,11 +1495,11 @@ struct APILayerWebSocketCoverageTests {
 
     @Test("WS conversation events subscribe enforces replay retention window")
     func websocketConversationEventsSubscribeRejectsTooOldCursorByRetention() async throws {
-        setenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG", "0", 1)
-        defer { unsetenv("SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG") }
-
         let model = APILayerWebSocketTestSupport.makeTestModel()
-        try await withRunningWebSocketServerConversationEvents(models: [model]) { port, runtimeSession, _ in
+        try await withRunningWebSocketServerConversationEvents(
+            models: [model],
+            replayRetention: TranscriptTailRetentionPolicy(maxSequenceLag: 0)
+        ) { port, runtimeSession, _ in
             let cid = try await createConversationID(
                 conversationAPI: runtimeSession,
                 model: model,
