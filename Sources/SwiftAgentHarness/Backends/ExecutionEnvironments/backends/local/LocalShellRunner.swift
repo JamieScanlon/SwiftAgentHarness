@@ -27,6 +27,7 @@ public enum ShellProcessRunner {
         timeoutSeconds: TimeInterval? = nil,
         inheritHostEnvironment: Bool = true
     ) async throws -> RunResult {
+        #if os(macOS) || os(Linux)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: argv[0])
         process.arguments = Array(argv.dropFirst())
@@ -67,6 +68,9 @@ public enum ShellProcessRunner {
             throw error
         }
         return RunResult(stdout: await stdoutDrain, stderr: await stderrDrain, exitCode: process.terminationStatus)
+        #else
+        throw SandboxBackendError.sandboxUnavailable
+        #endif
     }
 
     /// Runs a long-lived, abortable exec spawned into its own process group so timeout, Task
@@ -189,11 +193,13 @@ public enum ShellProcessRunner {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    #if os(macOS) || os(Linux)
     /// Terminates the direct child only; does not signal a process group or remote/container work.
     private static func terminateImmediateChild(_ process: Process) {
         process.terminate()
         process.waitUntilExit()
     }
+    #endif
 
     static func resolvedEnvironment(provided: [String: String], inheritHostEnvironment: Bool) -> [String: String]? {
         if inheritHostEnvironment {

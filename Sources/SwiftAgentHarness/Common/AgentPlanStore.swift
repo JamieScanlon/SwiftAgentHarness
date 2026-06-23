@@ -14,7 +14,7 @@ public enum AgentPlanStore {
     }
 
     public static func planURL(for conversationID: UUID) -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager.default.sahHomeDirectory
             .appendingPathComponent(".swiftAgentHarness", isDirectory: true)
             .appendingPathComponent("conversations", isDirectory: true)
             .appendingPathComponent(conversationID.uuidString, isDirectory: true)
