@@ -65,6 +65,50 @@ struct ConversationManagerTests {
         #expect(reloaded.systemPrompt == "You are a test helper.")
     }
 
+    @Test("createConversation honors an explicit cwd")
+    func createConversationHonorsExplicitCwd() throws {
+        let container = try makeContainer()
+        let model = makeModel()
+        let cm = makeManager(container: container)
+        let created = try cm.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            cwd: "/some/trusted/root"
+        )
+        #expect(created.harnessPersistenceCwd == "/some/trusted/root")
+    }
+
+    @Test("createConversation falls back to default cwd when omitted or empty")
+    func createConversationFallsBackToDefaultCwd() throws {
+        let container = try makeContainer()
+        let model = makeModel()
+        let cm = makeManager(container: container)
+        let withNil = try cm.createConversation(with: model, userSystemPrompt: "sys")
+        let withEmpty = try cm.createConversation(with: model, userSystemPrompt: "sys", cwd: "   ")
+        #expect(withEmpty.harnessPersistenceCwd == withNil.harnessPersistenceCwd)
+        #expect(withEmpty.harnessPersistenceCwd != "/some/trusted/root")
+    }
+
+    @Test("sub-agent inherits parent cwd regardless of create-time override")
+    func subAgentInheritsParentCwd() throws {
+        let container = try makeContainer()
+        let model = makeModel()
+        let cm = makeManager(container: container)
+        let parent = try cm.createConversation(
+            with: model,
+            userSystemPrompt: "parent",
+            cwd: "/trusted/parent"
+        )
+        let child = try cm.createIsolatedSubAgent(
+            parentConversationID: parent.id,
+            selectedModel: model,
+            userSystemPrompt: "child",
+            interactionMode: .chat,
+            modeProfileID: nil
+        )
+        #expect(child.harnessPersistenceCwd == "/trusted/parent")
+    }
+
     @Test("deleteConversation removes registry row and cache row")
     func deleteRemoves() throws {
         let container = try makeContainer()

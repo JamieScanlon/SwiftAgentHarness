@@ -353,6 +353,67 @@ struct APILayerRESTCoverageTests {
         }
     }
 
+    @Test("POST /api/conversations persists an explicit cwd")
+    func conversationCreatePersistsCwd() async throws {
+        let container = try APILayerRESTTestSupport.makeContainer()
+        let runtimeSession = APILayerRESTTestSupport.makeChatManager(container: container)
+        let model = APILayerRESTTestSupport.makeTestModel()
+        let modelProvider = StubModelProvider(models: [model])
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: modelProvider)
+
+            let createJSON = #"{"modelRef":"\#(model.id.uuidString)","userSystemPrompt":"sys","cwd":"/trusted/rest/root"}"#
+            var createdConversationID: String = ""
+
+            try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.body = .init(string: createJSON)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(body?["type"] as? String == "create")
+                createdConversationID = (body?["conversationID"] as? String) ?? ""
+                #expect(createdConversationID.isEmpty == false)
+            })
+
+            let createdID = try #require(UUID(uuidString: createdConversationID))
+            let conversation = try #require(await runtimeSession.modelConversation(id: createdID))
+            #expect(conversation.harnessPersistenceCwd == "/trusted/rest/root")
+        }
+    }
+
+    @Test("POST /api/conversations without cwd still succeeds and uses the default")
+    func conversationCreateWithoutCwdSucceeds() async throws {
+        let container = try APILayerRESTTestSupport.makeContainer()
+        let runtimeSession = APILayerRESTTestSupport.makeChatManager(container: container)
+        let model = APILayerRESTTestSupport.makeTestModel()
+        let modelProvider = StubModelProvider(models: [model])
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: modelProvider)
+
+            let createJSON = #"{"modelRef":"\#(model.id.uuidString)","userSystemPrompt":"sys"}"#
+            var createdConversationID: String = ""
+
+            try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.body = .init(string: createJSON)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                createdConversationID = (body?["conversationID"] as? String) ?? ""
+                #expect(createdConversationID.isEmpty == false)
+            })
+
+            let createdID = try #require(UUID(uuidString: createdConversationID))
+            let conversation = try #require(await runtimeSession.modelConversation(id: createdID))
+            #expect(conversation.harnessPersistenceCwd != "/trusted/rest/root")
+        }
+    }
+
     @Test("PATCH /api/conversations/:id updates topic and description")
     func conversationUpdateMetadataRoute() async throws {
         let container = try APILayerRESTTestSupport.makeContainer()

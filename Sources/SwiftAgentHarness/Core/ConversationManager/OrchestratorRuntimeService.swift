@@ -537,9 +537,10 @@ public actor OrchestratorRuntimeService {
                 memoryDirectory: memoryDirectory?.path,
                 memoryWriteOnly: memoryWriteOnly
             )
-            let elevatedBashMode: ElevatedMode? = deps.toolPolicy.isElevatedTool(name: WorkspaceFilesystemToolProvider.bashToolName)
-                ? .ask
-                : nil
+            let perCallElevationModes: [String: ElevatedMode] = Dictionary(
+                uniqueKeysWithValues: [WorkspaceFilesystemToolProvider.bashToolName]
+                    .compactMap { name in deps.toolPolicy.perCallElevationMode(name: name).map { (name, $0) } }
+            )
             let elevatedAllowlist = deps.toolPolicy.elevatedAllowFrom
             let persistence = deps.persistenceDomain
             let runtime = agentRuntime
@@ -568,7 +569,7 @@ public actor OrchestratorRuntimeService {
                     workspaceRoot: workspaceRoot,
                     execRuntime: execRuntime,
                     runtimeContext: runtimeContext,
-                    elevatedBashMode: elevatedBashMode,
+                    perCallElevationModes: perCallElevationModes,
                     elevatedAllowlist: elevatedAllowlist,
                     resolveSenderIdentity: resolveSenderIdentity,
                     onMemoryWrite: { path in

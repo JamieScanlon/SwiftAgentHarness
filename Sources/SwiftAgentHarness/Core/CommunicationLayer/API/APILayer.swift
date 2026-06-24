@@ -78,7 +78,7 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     /// Projected transcript for ``conversationID``.
     func apiListMessagesThrowing(conversationID: UUID) async throws -> [Message]
     func apiGenerateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String
-    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?) async throws -> UUID
+    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?, cwd: String?) async throws -> UUID
     func apiUpdateConversationMetadata(conversationID: UUID, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode?, modeProfileID: String?) async throws
     func apiUpdateConversationModelAndUserPrompt(conversationID: UUID, model: Model?, userSystemPrompt: String?) async throws
     func apiListAvailableTools() async throws -> [AvailableToolInfo]
@@ -193,7 +193,8 @@ extension APILayerConversationManaging {
             description: description,
             metadata: metadata,
             interactionMode: interactionMode,
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
     }
 
@@ -449,9 +450,10 @@ extension APILayerConversationManaging {
         description: String?,
         metadata: JSON?,
         interactionMode: InteractionMode,
-        modeProfileID: String?
+        modeProfileID: String?,
+        cwd: String?
     ) async throws -> UUID {
-        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID)
+        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID, cwd)
         throw APILayerConversationAPIError.unsupported
     }
 

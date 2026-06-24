@@ -14,7 +14,8 @@ struct ConvoRequestAPITests {
             description: "Ideas for a one-week trip.",
             metadata: nil,
             interactionMode: "agent",
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(ConvoRequest.self, from: data)

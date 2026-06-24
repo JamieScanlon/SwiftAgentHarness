@@ -57,9 +57,9 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
         try await mapConversationNotFound { try await backend.apiGenerateFullSystemPrompt(conversationID: conversationID, withUserSystemPrompt: userSystemPrompt) }
     }
 
-    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?) async throws -> UUID {
+    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?, cwd: String?) async throws -> UUID {
         try await mapConversationNotFound {
-            try await backend.apiCreateConversation(with: selectedModel, userSystemPrompt: userSystemPrompt, topic: topic, description: description, metadata: metadata, interactionMode: interactionMode, modeProfileID: modeProfileID)
+            try await backend.apiCreateConversation(with: selectedModel, userSystemPrompt: userSystemPrompt, topic: topic, description: description, metadata: metadata, interactionMode: interactionMode, modeProfileID: modeProfileID, cwd: cwd)
         }
     }
 

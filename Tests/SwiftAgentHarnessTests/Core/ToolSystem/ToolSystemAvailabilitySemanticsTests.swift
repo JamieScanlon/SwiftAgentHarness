@@ -466,6 +466,69 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(allowed.approvalGranted == true)
     }
 
+    @Test("gateway does not statically gate per-call elevated tools")
+    func gatewayPerCallElevatedNotGated() {
+        let model = makeToolsModel()
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: model,
+            systemPrompt: "sys",
+            interactionMode: .chat
+        )
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let policy = ToolPolicyConfiguration(
+            elevatedToolNames: ["bash"],
+            perCallElevatedToolNames: ["bash"]
+        )
+        let decision = gateway.evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(for: conversation),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: policy,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.allowed == true)
+        #expect(decision.isElevated == false)
+        #expect(decision.blockReason == nil)
+    }
+
+    @Test("gateway still gates statically elevated tools not marked per-call")
+    func gatewayStaticElevatedStillGated() {
+        let model = makeToolsModel()
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: model,
+            systemPrompt: "sys",
+            interactionMode: .chat
+        )
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "privileged_tool", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let policy = ToolPolicyConfiguration(
+            elevatedToolNames: ["privileged_tool"]
+        )
+        let decision = gateway.evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(for: conversation),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: policy,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.allowed == false)
+        #expect(decision.isElevated == true)
+        #expect(decision.blockReason == .approvalRequired)
+    }
+
     @Test("gateway environment policy can deny execution by environment kind")
     func gatewayExecutionEnvironmentPolicyDenied() {
         let model = makeToolsModel()

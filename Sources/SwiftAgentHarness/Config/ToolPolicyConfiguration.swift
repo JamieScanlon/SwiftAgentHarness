@@ -94,6 +94,7 @@ public struct ToolPolicyConfiguration: Sendable {
     private let escalationRequiredToolNames: Set<String>
     private let approvalRequiredToolNames: Set<String>
     private let elevatedToolNames: Set<String>
+    private let perCallElevatedToolNames: Set<String>
     public let elevatedAllowFrom: ElevatedAllowlist
     private let subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration
     public let descriptorValidationMode: DescriptorValidationMode
@@ -112,6 +113,7 @@ public struct ToolPolicyConfiguration: Sendable {
         escalationRequiredToolNames: Set<String> = [],
         approvalRequiredToolNames: Set<String> = [],
         elevatedToolNames: Set<String> = [],
+        perCallElevatedToolNames: Set<String> = [],
         elevatedAllowFrom: ElevatedAllowlist = .cliDefault,
         subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration = .empty,
         descriptorValidationMode: DescriptorValidationMode = .warning,
@@ -129,6 +131,7 @@ public struct ToolPolicyConfiguration: Sendable {
         self.escalationRequiredToolNames = escalationRequiredToolNames
         self.approvalRequiredToolNames = approvalRequiredToolNames
         self.elevatedToolNames = elevatedToolNames
+        self.perCallElevatedToolNames = perCallElevatedToolNames
         self.elevatedAllowFrom = elevatedAllowFrom
         self.subAgentHostingPolicyConfiguration = subAgentHostingPolicyConfiguration
         self.descriptorValidationMode = descriptorValidationMode
@@ -153,6 +156,7 @@ public struct ToolPolicyConfiguration: Sendable {
         escalationRequiredToolNames: [],
         approvalRequiredToolNames: [],
         elevatedToolNames: [],
+        perCallElevatedToolNames: [],
         elevatedAllowFrom: .cliDefault,
         subAgentHostingPolicyConfiguration: .empty,
         descriptorValidationMode: .warning,
@@ -174,6 +178,7 @@ public struct ToolPolicyConfiguration: Sendable {
             escalationRequiredToolNames: escalationRequiredToolNames,
             approvalRequiredToolNames: approvalRequiredToolNames,
             elevatedToolNames: elevatedToolNames,
+            perCallElevatedToolNames: perCallElevatedToolNames,
             elevatedAllowFrom: elevatedAllowFrom,
             subAgentHostingPolicyConfiguration: subAgentHostingPolicyConfiguration,
             descriptorValidationMode: descriptorValidationMode,
@@ -194,6 +199,7 @@ public struct ToolPolicyConfiguration: Sendable {
         escalationRequiredToolNames: Set<String>,
         approvalRequiredToolNames: Set<String>,
         elevatedToolNames: Set<String>,
+        perCallElevatedToolNames: Set<String>,
         elevatedAllowFrom: ElevatedAllowlist,
         subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration,
         descriptorValidationMode: DescriptorValidationMode,
@@ -211,6 +217,7 @@ public struct ToolPolicyConfiguration: Sendable {
         let escalationSlice = "escalationRequired:\(escalationRequiredToolNames.sorted().joined(separator: ","))"
         let approvalSlice = "approvalRequired:\(approvalRequiredToolNames.sorted().joined(separator: ","))"
         let elevatedSlice = "elevated:\(elevatedToolNames.sorted().joined(separator: ","))"
+        let perCallElevatedSlice = "elevatedPerCall:\(perCallElevatedToolNames.sorted().joined(separator: ","))"
         let allowFromParts = elevatedAllowFrom.allowFrom.keys.sorted().map { surface -> String in
             let ids = elevatedAllowFrom.allowFrom[surface]?.sorted().joined(separator: ",") ?? ""
             return "\(surface)=\(ids)"
@@ -232,6 +239,7 @@ public struct ToolPolicyConfiguration: Sendable {
             escalationSlice,
             approvalSlice,
             elevatedSlice,
+            perCallElevatedSlice,
             elevatedAllowFromSlice,
             hostingSlice,
             descriptorValidation,
@@ -307,6 +315,16 @@ public struct ToolPolicyConfiguration: Sendable {
         elevatedToolNames.contains(name)
     }
 
+    public func isPerCallElevatedTool(name: String) -> Bool {
+        perCallElevatedToolNames.contains(name)
+    }
+
+    /// Per-call elevation mode for a tool: sandboxed by default, elevating only
+    /// when a call opts in, governed by the exec-approval path and `allowFrom`.
+    public func perCallElevationMode(name: String) -> ElevatedMode? {
+        isPerCallElevatedTool(name: name) ? .ask : nil
+    }
+
     public func isExecutionEnvironmentAllowed(kind: ExecutionEnvironmentKind) -> Bool {
         !executionEnvironmentPolicy.disallowed.contains(kind)
     }
@@ -375,7 +393,7 @@ public struct ToolPolicyConfiguration: Sendable {
                 ?? (toolPolicy["approvalRequired"] as? [String])
                 ?? []
         )
-        let (elevatedToolNames, elevatedAllowFrom) = Self.parseElevatedBlock(toolPolicy["elevated"])
+        let parsedElevated = Self.parseElevatedBlock(toolPolicy["elevated"])
         let subAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.fromPromptConfigRoot(json)
         let approvalBlock = toolPolicy["approval"] as? [String: Any]
         let descriptorValidationMode: DescriptorValidationMode = {
@@ -454,8 +472,9 @@ public struct ToolPolicyConfiguration: Sendable {
             sensitiveToolNames: sensitiveToolNames,
             escalationRequiredToolNames: escalationRequiredToolNames,
             approvalRequiredToolNames: approvalRequiredToolNames,
-            elevatedToolNames: elevatedToolNames,
-            elevatedAllowFrom: elevatedAllowFrom,
+            elevatedToolNames: parsedElevated.tools,
+            perCallElevatedToolNames: parsedElevated.perCall,
+            elevatedAllowFrom: parsedElevated.allowFrom,
             subAgentHostingPolicyConfiguration: subAgentHostingPolicyConfiguration,
             descriptorValidationMode: descriptorValidationMode,
             approvalTimeoutMilliseconds: approvalTimeoutMilliseconds,
@@ -470,14 +489,21 @@ public struct ToolPolicyConfiguration: Sendable {
         )
     }
 
-    static func parseElevatedBlock(_ value: Any?) -> (Set<String>, ElevatedAllowlist) {
+    struct ParsedElevatedPolicy {
+        let tools: Set<String>
+        let perCall: Set<String>
+        let allowFrom: ElevatedAllowlist
+    }
+
+    static func parseElevatedBlock(_ value: Any?) -> ParsedElevatedPolicy {
         if let names = value as? [String] {
-            return (Set(names), .cliDefault)
+            return ParsedElevatedPolicy(tools: Set(names), perCall: [], allowFrom: .cliDefault)
         }
         guard let block = value as? [String: Any] else {
-            return ([], .cliDefault)
+            return ParsedElevatedPolicy(tools: [], perCall: [], allowFrom: .cliDefault)
         }
         let tools = Set((block["tools"] as? [String]) ?? [])
+        let perCall = Set((block["perCall"] as? [String]) ?? [])
         var allowFrom: [String: Set<String>] = [:]
         if let raw = block["allowFrom"] as? [String: Any] {
             for (surface, idsValue) in raw {
@@ -486,7 +512,11 @@ public struct ToolPolicyConfiguration: Sendable {
                 }
             }
         }
-        return (tools, ElevatedAllowlist(allowFrom: allowFrom))
+        return ParsedElevatedPolicy(
+            tools: tools,
+            perCall: perCall,
+            allowFrom: ElevatedAllowlist(allowFrom: allowFrom)
+        )
     }
 
     static func parseDispatchPolicyBlock(

@@ -12,6 +12,8 @@ struct ConvoRequest: Codable {
     let interactionMode: String?
     /// Persisted mode profile id; when set without `interactionMode`, routing resolves policy from this id.
     let modeProfileID: String?
+    /// Optional initial working directory (trusted workspace root) for the conversation; defaults to the env-derived cwd when omitted.
+    let cwd: String?
 }
 
 struct UpdateConversationMetadataRequest: Codable {

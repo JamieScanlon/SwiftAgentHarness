@@ -380,7 +380,8 @@ struct APILayerWebSocketCoverageTests {
             description: nil,
             metadata: nil,
             interactionMode: .chat,
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
     }
 

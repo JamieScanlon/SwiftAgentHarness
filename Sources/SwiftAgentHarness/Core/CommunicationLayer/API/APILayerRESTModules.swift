@@ -1955,7 +1955,8 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 description: convoRequest.description,
                 metadata: convoRequest.metadata,
                 interactionMode: interactionMode,
-                modeProfileID: modeProfileID
+                modeProfileID: modeProfileID,
+                cwd: convoRequest.cwd
             )
             await dependencies.notifyConversationStateChanged(newConversationID)
             await dependencies.notifyConversationsRegistryChanged(.added, newConversationID)

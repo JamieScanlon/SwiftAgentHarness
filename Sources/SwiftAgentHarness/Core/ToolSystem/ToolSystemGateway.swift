@@ -316,8 +316,9 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entryRequiresApprovalTag: entry.policyTags.contains(.requiresApproval)
         ) || toolPolicy.requiresExecutionEnvironmentApproval(kind: executionEnvironmentKind)
             || toolPolicy.requiresExecutionEnvironmentAdapterApproval(adapterID: executionEnvironmentAdapterID)
-        let isElevated = toolPolicy.isElevatedTool(name: entry.name)
-            || entry.policyTags.contains(.elevated)
+        let isElevated = (toolPolicy.isElevatedTool(name: entry.name)
+            || entry.policyTags.contains(.elevated))
+            && !toolPolicy.isPerCallElevatedTool(name: entry.name)
         let approvalRequiredByPolicy = requiresApproval || isElevated
         let isDelegateTool = subAgentToolClassifier?.isDelegateTool(entry: entry) ?? (entry.source == .a2a)
         let delegatePermissionPolicy = isDelegateTool ? (subAgentToolClassifier?.permissionPolicy(for: entry) ?? .askUser) : nil
@@ -415,8 +416,9 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entryRequiresApprovalTag: entry.policyTags.contains(.requiresApproval)
         ) || toolPolicy.requiresExecutionEnvironmentApproval(kind: executionEnvironmentKind)
             || toolPolicy.requiresExecutionEnvironmentAdapterApproval(adapterID: executionEnvironmentAdapterID)
-        let isElevated = toolPolicy.isElevatedTool(name: entry.name)
-            || entry.policyTags.contains(.elevated)
+        let isElevated = (toolPolicy.isElevatedTool(name: entry.name)
+            || entry.policyTags.contains(.elevated))
+            && !toolPolicy.isPerCallElevatedTool(name: entry.name)
         return AvailabilityFacts(
             isSensitive: toolPolicy.isToolSensitive(name: entry.name),
             requiresEscalation: toolPolicy.requiresEscalation(name: entry.name)

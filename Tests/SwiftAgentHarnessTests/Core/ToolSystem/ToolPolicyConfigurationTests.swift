@@ -151,4 +151,57 @@ struct ToolPolicyConfigurationTests {
         #expect(readonly == false)
         #expect(mutating)
     }
+
+    @Test("parseElevatedBlock reads perCall list distinct from tools")
+    func parseElevatedBlockReadsPerCall() {
+        let parsed = ToolPolicyConfiguration.parseElevatedBlock([
+            "tools": ["dispatch_tool"],
+            "perCall": ["some_tool"],
+            "allowFrom": ["cli": ["*"]],
+        ])
+        #expect(parsed.tools == ["dispatch_tool"])
+        #expect(parsed.perCall == ["some_tool"])
+    }
+
+    @Test("perCall accessors report mode independent of elevated.tools")
+    func perCallAccessorsIndependentOfElevatedTools() {
+        let policy = ToolPolicyConfiguration(
+            elevatedToolNames: [],
+            perCallElevatedToolNames: ["some_tool"]
+        )
+        #expect(policy.isPerCallElevatedTool(name: "some_tool"))
+        #expect(policy.perCallElevationMode(name: "some_tool") == .ask)
+        #expect(policy.isElevatedTool(name: "some_tool") == false)
+        #expect(policy.isPerCallElevatedTool(name: "other_tool") == false)
+        #expect(policy.perCallElevationMode(name: "other_tool") == nil)
+    }
+
+    @Test("a tool in both tools and perCall is reported per-call elevated")
+    func toolInBothListsIsPerCallElevated() {
+        let policy = ToolPolicyConfiguration(
+            elevatedToolNames: ["some_tool"],
+            perCallElevatedToolNames: ["some_tool"]
+        )
+        #expect(policy.isElevatedTool(name: "some_tool"))
+        #expect(policy.isPerCallElevatedTool(name: "some_tool"))
+        #expect(policy.perCallElevationMode(name: "some_tool") == .ask)
+    }
+
+    @Test("stable allowlist signature tracks perCall elevated tools")
+    func stableSignatureTracksPerCall() {
+        let none = ToolPolicyConfiguration()
+        let withPerCall = ToolPolicyConfiguration(perCallElevatedToolNames: ["bash"])
+        #expect(none.stableAllowlistSignature() != withPerCall.stableAllowlistSignature())
+    }
+
+    @Test("embedded test PromptConfig declares bash per-call elevated, not statically elevated")
+    func embeddedConfigDeclaresBashPerCall() throws {
+        let url = try #require(Bundle.module.url(forResource: "PromptConfig", withExtension: "json"))
+        let data = try Data(contentsOf: url)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let toolPolicy = try #require(json["toolPolicy"] as? [String: Any])
+        let parsed = ToolPolicyConfiguration.parseElevatedBlock(toolPolicy["elevated"])
+        #expect(parsed.perCall.contains(WorkspaceFilesystemToolProvider.bashToolName))
+        #expect(parsed.tools.contains(WorkspaceFilesystemToolProvider.bashToolName) == false)
+    }
 }

@@ -45,8 +45,44 @@ struct WorkspaceFilesystemToolProviderTests {
         )
     }
 
+    private func elevatedProvider(
+        workspace: URL,
+        memory: URL,
+        perCallElevationModes: [String: ElevatedMode] = [WorkspaceFilesystemToolProvider.bashToolName: .ask],
+        elevatedAllowlist: ElevatedAllowlist = .cliDefault,
+        senderIdentity: ExecSenderIdentity = .cliDefault,
+        approvalDelivery: any ExecApprovalDelivering
+    ) -> WorkspaceFilesystemToolProvider {
+        let execRuntime = ExecRuntimeService(
+            workspaceRoot: workspace.path,
+            approvalDelivery: approvalDelivery
+        )
+        let runtimeContext = ExecRuntimeContext(
+            sessionKey: "test-session",
+            agentID: "test-agent",
+            isMainSession: false,
+            memoryDirectory: memory.path
+        )
+        return WorkspaceFilesystemToolProvider(
+            workspaceRoot: workspace.path,
+            execRuntime: execRuntime,
+            runtimeContext: runtimeContext,
+            perCallElevationModes: perCallElevationModes,
+            elevatedAllowlist: elevatedAllowlist,
+            resolveSenderIdentity: { senderIdentity }
+        )
+    }
+
     private func call(_ name: String, args: [String: String], id: String = "call-1") -> ToolCall {
         ToolCall(name: name, arguments: .object(args.mapValues { JSON.string($0) }), id: id)
+    }
+
+    private func bashCall(command: String, elevated: Bool?, id: String = "call-1") -> ToolCall {
+        var args: [String: JSON] = ["command": .string(command)]
+        if let elevated {
+            args["elevated"] = .boolean(elevated)
+        }
+        return ToolCall(name: WorkspaceFilesystemToolProvider.bashToolName, arguments: .object(args), id: id)
     }
 
     @Test("read_file rejects absolute path outside workspace")
@@ -365,4 +401,99 @@ struct WorkspaceFilesystemToolProviderTests {
         let edited = try String(contentsOf: fixture.memory.appendingPathComponent("existing.md"), encoding: .utf8)
         #expect(edited == "after")
     }
+
+    @Test("bash tool definition exposes optional elevated parameter")
+    func bashExposesElevatedParameter() async {
+        let fixture = try? makeFixture()
+        let workspace = fixture?.workspace ?? URL(fileURLWithPath: "/tmp/ws")
+        let memory = fixture?.memory ?? URL(fileURLWithPath: "/tmp/mem")
+        defer { if let fixture { cleanup(fixture.workspace) } }
+        let tools = await provider(workspace: workspace, memory: memory).availableTools()
+        let bash = tools.first { $0.name == WorkspaceFilesystemToolProvider.bashToolName }
+        let elevatedParam = bash?.parameters.first { $0.name == "elevated" }
+        #expect(elevatedParam != nil)
+        #expect(elevatedParam?.type == "boolean")
+        #expect(elevatedParam?.required == false)
+    }
+
+    @Test("bash defaults to sandboxed and does not request approval")
+    func bashDefaultsSandboxed() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "echo hi", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+    }
+
+    @Test("bash with elevated:false stays sandboxed")
+    func bashElevatedFalseStaysSandboxed() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "echo hi", elevated: false))
+        #expect(await recorder.requestCount == 0)
+    }
+
+    @Test("bash with elevated:true requests approval and escapes sandbox")
+    func bashElevatedTrueEscapes() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "echo elevated-hi", elevated: true))
+        #expect(await recorder.requestCount == 1)
+        #expect(result.success == true)
+        #expect(result.content.contains("elevated-hi"))
+    }
+
+    @Test("bash elevated:true is sandboxed when sender not allowlisted")
+    func bashElevatedSenderNotAllowed() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            elevatedAllowlist: ElevatedAllowlist(allowFrom: ["discord": ["user-123"]]),
+            senderIdentity: ExecSenderIdentity(surface: "discord", senderID: "intruder"),
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "echo hi", elevated: true))
+        #expect(await recorder.requestCount == 0)
+    }
+
+    @Test("bash elevated:true stays sandboxed when tool absent from per-call map")
+    func bashElevatedNotInPerCallMap() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            perCallElevationModes: [:],
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "echo hi", elevated: true))
+        #expect(await recorder.requestCount == 0)
+    }
+}
+
+private actor RecordingExecApprovalDelivery: ExecApprovalDelivering {
+    private(set) var requestCount = 0
+
+    func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
+        requestCount += 1
+        return .approved
+    }
+
+    func sendFollowup(approvalID: String, approved: Bool) async {}
 }

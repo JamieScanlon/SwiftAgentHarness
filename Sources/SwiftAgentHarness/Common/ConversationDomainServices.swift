@@ -34,6 +34,7 @@ protocol ConversationControlPlaneServicing: Sendable {
         metadata: JSON?,
         interactionMode: InteractionMode,
         modeProfileID: String?,
+        cwd: String?,
         lineageKind: ConversationLineageKind,
         origin: ConversationOrigin
     ) async throws -> UUID
@@ -71,7 +72,8 @@ extension ConversationControlPlaneServicing {
         description: String?,
         metadata: JSON?,
         interactionMode: InteractionMode,
-        modeProfileID: String?
+        modeProfileID: String?,
+        cwd: String? = nil
     ) async throws -> UUID {
         try await createConversation(
             with: selectedModel,
@@ -81,6 +83,7 @@ extension ConversationControlPlaneServicing {
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
+            cwd: cwd,
             lineageKind: .root,
             origin: .user
         )

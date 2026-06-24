@@ -9,7 +9,11 @@
   "agentHarness": {
     "strictAgentHarnessPrompts": true
   },
-  "toolPolicy": {},
+  "toolPolicy": {
+    "elevated": {
+      "perCall": ["bash"]
+    }
+  },
   "subAgentHostingPolicy": {
     "entries": {
       "Coding Agent": {

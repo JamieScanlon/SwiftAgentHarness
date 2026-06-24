@@ -144,6 +144,7 @@ actor ConversationControlPlaneServiceImpl: ConversationControlPlaneServicing {
         metadata: JSON?,
         interactionMode: InteractionMode,
         modeProfileID: String?,
+        cwd: String? = nil,
         lineageKind: ConversationLineageKind = .root,
         origin: ConversationOrigin = .user
     ) async throws -> UUID {
@@ -160,6 +161,7 @@ actor ConversationControlPlaneServiceImpl: ConversationControlPlaneServicing {
             interactionMode: effectiveInteractionMode,
             modeProfileID: modeProfileID,
             ownerAccountID: APISessionContext.authenticatedOwnerAccountID,
+            cwd: cwd,
             lineageKind: lineageKind,
             origin: origin
         )
