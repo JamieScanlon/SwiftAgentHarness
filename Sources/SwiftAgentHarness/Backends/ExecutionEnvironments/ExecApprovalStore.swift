@@ -40,6 +40,23 @@ public actor ExecApprovalStore {
         await grantStore.add(commandName: name)
     }
 
+    /// Lists all durable grants (command names) from the configured grant store,
+    /// sorted ascending.
+    public func listDurableGrants() async -> [String] {
+        await grantStore.list()
+    }
+
+    /// Revokes a durable grant by command name. Returns `true` when an existing
+    /// grant was removed, `false` when the name is blank or no grant exists.
+    @discardableResult
+    public func revokeDurableGrant(commandName: String) async -> Bool {
+        let trimmed = commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard await grantStore.isGranted(commandName: trimmed) else { return false }
+        await grantStore.remove(commandName: trimmed)
+        return true
+    }
+
     @discardableResult
     public func resolve(
         id: String,

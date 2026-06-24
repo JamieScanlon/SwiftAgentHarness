@@ -70,6 +70,40 @@ struct ExecApprovalTests {
         #expect(await store.isDurableApproved(command: "git log"))
     }
 
+    @Test("listDurableGrants returns sorted command names from grant store")
+    func listDurableGrants() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["npm", "git", "grep"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.listDurableGrants() == ["git", "grep", "npm"])
+    }
+
+    @Test("revokeDurableGrant removes an existing grant")
+    func revokeDurableGrantExisting() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git", "npm"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "git"))
+        #expect(await store.listDurableGrants() == ["npm"])
+        #expect(await store.isDurableApproved(command: "git push") == false)
+    }
+
+    @Test("revokeDurableGrant trims whitespace before matching")
+    func revokeDurableGrantTrimsWhitespace() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "  git  "))
+        #expect(await store.listDurableGrants() == [])
+    }
+
+    @Test("revokeDurableGrant returns false for unknown or blank names")
+    func revokeDurableGrantUnknown() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "npm") == false)
+        #expect(await store.revokeDurableGrant(commandName: "   ") == false)
+        #expect(await store.revokeDurableGrant(commandName: "") == false)
+        #expect(await store.listDurableGrants() == ["git"])
+    }
+
     @Test("configure swaps the backing grant store")
     func configureSwapsGrantStore() async {
         let store = ExecApprovalStore()

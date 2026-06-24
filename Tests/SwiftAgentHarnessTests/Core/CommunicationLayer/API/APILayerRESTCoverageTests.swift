@@ -3696,6 +3696,153 @@ struct APILayerRESTCoverageTests {
             })
         }
     }
+
+    @Test("GET /api/exec-approvals/grants returns sorted command names")
+    func execApprovalGrantsList() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+        await ExecApprovalStore.shared.configure(
+            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["grep", "git"])
+        )
+        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(.GET, "/api/exec-approvals/grants") { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(body?["commandNames"] as? [String] == ["git", "grep"])
+            }
+        }
+    }
+
+    @Test("DELETE /api/exec-approvals/grants/:commandName removes an existing grant")
+    func execApprovalGrantsRevoke() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+        await ExecApprovalStore.shared.configure(
+            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git", "npm"])
+        )
+        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git") { res async throws in
+                #expect(res.status == .ok)
+            }
+            #expect(await ExecApprovalStore.shared.listDurableGrants() == ["npm"])
+        }
+    }
+
+    @Test("DELETE /api/exec-approvals/grants/:commandName accepts percent-encoded names")
+    func execApprovalGrantsRevokePercentEncoded() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+        await ExecApprovalStore.shared.configure(
+            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git status"])
+        )
+        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git%20status") { res async throws in
+                #expect(res.status == .ok)
+            }
+            #expect(await ExecApprovalStore.shared.listDurableGrants() == [])
+        }
+    }
+
+    @Test("DELETE /api/exec-approvals/grants/:commandName returns 404 for unknown grant")
+    func execApprovalGrantsRevokeNotFound() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+        await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore())
+        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/missing") { res async throws in
+                #expect(res.status == .notFound)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(body?["type"] as? String == "error")
+                #expect(body?["message"] as? String == "Exec approval grant not found")
+            }
+        }
+    }
+
+    @Test("Static exec-approvals grants routes register before :id")
+    func execApprovalGrantsRoutesRegisteredBeforeID() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            func pathDescription(_ route: Route) -> String {
+                route.path.map { component in
+                    switch component {
+                    case .constant(let value): return value
+                    case .parameter(let name): return ":\(name)"
+                    case .anything: return "*"
+                    case .catchall: return "**"
+                    }
+                }.joined(separator: "/")
+            }
+            let execApprovalRoutes = app.routes.all.filter { route in
+                pathDescription(route).hasPrefix("api/exec-approvals")
+            }
+            let grantsGetIndex = execApprovalRoutes.firstIndex { route in
+                route.method == .GET && pathDescription(route) == "api/exec-approvals/grants"
+            }
+            let grantsDeleteIndex = execApprovalRoutes.firstIndex { route in
+                route.method == .DELETE && pathDescription(route) == "api/exec-approvals/grants/:commandName"
+            }
+            let postIDIndex = execApprovalRoutes.firstIndex { route in
+                route.method == .POST && pathDescription(route) == "api/exec-approvals/:id"
+            }
+            #expect(grantsGetIndex != nil)
+            #expect(grantsDeleteIndex != nil)
+            #expect(postIDIndex != nil)
+            if let grantsGetIndex, let grantsDeleteIndex, let postIDIndex {
+                #expect(grantsGetIndex < postIDIndex)
+                #expect(grantsDeleteIndex < postIDIndex)
+            }
+        }
+    }
 }
 
 private final class ModePatchConflictConversationStub: APILayerConversationManaging, Sendable {

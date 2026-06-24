@@ -2573,8 +2573,42 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var reason: String?
     }
 
+    private struct ExecApprovalGrantsResponse: Content {
+        var commandNames: [String]
+    }
+
     func registerRoutes(on api: RoutesBuilder, dependencies: APILayerRouteDependencies) {
         let execApprovalsPath = api.grouped("exec-approvals")
+
+        // Static `grants` routes must be registered before `:id` so that the
+        // path segment is not captured as an approval ID.
+        execApprovalsPath.get("grants") { _ async -> ExecApprovalGrantsResponse in
+            let commandNames = await ExecApprovalStore.shared.listDurableGrants()
+            return ExecApprovalGrantsResponse(commandNames: commandNames)
+        }
+
+        execApprovalsPath.delete("grants", ":commandName") { req async -> Response in
+            let raw = req.parameters.get("commandName")
+            let commandName = (raw?.removingPercentEncoding ?? raw)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !commandName.isEmpty else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Invalid command name",
+                ])
+                return Response(status: .badRequest, body: .init(data: data))
+            }
+            let revoked = await ExecApprovalStore.shared.revokeDurableGrant(commandName: commandName)
+            guard revoked else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Exec approval grant not found",
+                ])
+                return Response(status: .notFound, body: .init(data: data))
+            }
+            return Response(status: .ok)
+        }
+
         execApprovalsPath.post(":id") { req async -> Response in
             guard let id = req.parameters.get("id"), !id.isEmpty else {
                 let data = try! JSONSerialization.data(withJSONObject: [
