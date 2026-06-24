@@ -7,7 +7,7 @@ import Foundation
 public enum SessionPersistenceConfiguration {
     /// When set, enables on-disk harness layout at this directory (see ``SessionPersistenceInstall``).
     public static var sessionStoreRoot: URL? {
-        guard let raw = ProcessInfo.processInfo.environment["SAH_SESSION_STORE_ROOT"], !raw.isEmpty else {
+        guard let raw = HarnessEnvironmentOverride.string("SAH_SESSION_STORE_ROOT"), !raw.isEmpty else {
             return nil
         }
         return URL(fileURLWithPath: raw, isDirectory: true)
@@ -15,7 +15,7 @@ public enum SessionPersistenceConfiguration {
 
     /// Per-process harness agent id (transcript subdirectory + catalog scope). Default `default`.
     public static var sessionAgentId: String {
-        let raw = ProcessInfo.processInfo.environment["SAH_SESSION_AGENT_ID"] ?? ""
+        let raw = HarnessEnvironmentOverride.string("SAH_SESSION_AGENT_ID") ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return SessionPersistenceLayout.defaultAgentId }
         return trimmed
@@ -23,14 +23,14 @@ public enum SessionPersistenceConfiguration {
 
     /// Optional auth profile label persisted beside the store for recovery UX (not secret storage).
     static var sessionAuthProfileLabel: String? {
-        let raw = ProcessInfo.processInfo.environment["SAH_SESSION_AUTH_PROFILE"] ?? ""
+        let raw = HarnessEnvironmentOverride.string("SAH_SESSION_AUTH_PROFILE") ?? ""
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
     }
 
     /// SQLite `busy_timeout` in milliseconds for `catalog.sqlite` (and recommended for other session SQLite files). Default 5000; set `0` to rely on application retries only.
     static var sqliteBusyTimeoutMilliseconds: Int {
-        let raw = ProcessInfo.processInfo.environment["SAH_SESSION_SQLITE_BUSY_TIMEOUT_MS"] ?? ""
+        let raw = HarnessEnvironmentOverride.string("SAH_SESSION_SQLITE_BUSY_TIMEOUT_MS") ?? ""
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return 5000 }
         if let v = Int(t), v >= 0 { return v }
@@ -54,12 +54,12 @@ public enum SessionPersistenceConfiguration {
 
     /// When `1`, sweep expired inbound/outbound blobs at harness install. Env: `SAH_SESSION_BLOB_SWEEP_ON_STARTUP`.
     static var blobSweepOnStartup: Bool {
-        ProcessInfo.processInfo.environment["SAH_SESSION_BLOB_SWEEP_ON_STARTUP"] != "0"
+        HarnessEnvironmentOverride.string("SAH_SESSION_BLOB_SWEEP_ON_STARTUP") != "0"
     }
 
     /// When `1`, reclaim unreferenced durable blobs at harness install. Env: `SAH_SESSION_BLOB_RECLAIM_ON_STARTUP`.
     static var blobReclaimOnStartup: Bool {
-        ProcessInfo.processInfo.environment["SAH_SESSION_BLOB_RECLAIM_ON_STARTUP"] != "0"
+        HarnessEnvironmentOverride.string("SAH_SESSION_BLOB_RECLAIM_ON_STARTUP") != "0"
     }
 
     /// Trash retention before hard-deleting unreferenced durable blobs. Env: `SAH_SESSION_BLOB_RECLAIM_GRACE_SECONDS`.
@@ -70,12 +70,12 @@ public enum SessionPersistenceConfiguration {
 
     /// When not `0`, verify/repair/quarantine transcripts at conversation startup. Env: `SAH_SESSION_TRANSCRIPT_VERIFY_ON_STARTUP`.
     static var transcriptVerifyOnStartup: Bool {
-        ProcessInfo.processInfo.environment["SAH_SESSION_TRANSCRIPT_VERIFY_ON_STARTUP"] != "0"
+        HarnessEnvironmentOverride.string("SAH_SESSION_TRANSCRIPT_VERIFY_ON_STARTUP") != "0"
     }
 
     /// Periodic transcript integrity sweep for post-boot corruption. Env: `SAH_SESSION_TRANSCRIPT_VERIFY_PERIODIC`.
     public static var transcriptVerifyPeriodicEnabled: Bool {
-        ProcessInfo.processInfo.environment["SAH_SESSION_TRANSCRIPT_VERIFY_PERIODIC"] != "0"
+        HarnessEnvironmentOverride.string("SAH_SESSION_TRANSCRIPT_VERIFY_PERIODIC") != "0"
     }
 
     /// Interval between periodic transcript integrity sweeps. Env: `SAH_SESSION_TRANSCRIPT_VERIFY_INTERVAL_SECONDS`.
@@ -107,7 +107,7 @@ public enum SessionPersistenceConfiguration {
 
     /// When `1`, append paths require the process-aware transcript lock on the current thread (Gap 11 / README `LockNotHeld`).
     static var enforceTranscriptWriteLock: Bool {
-        ProcessInfo.processInfo.environment["SAH_SESSION_ENFORCE_TRANSCRIPT_LOCK"] == "1"
+        HarnessEnvironmentOverride.string("SAH_SESSION_ENFORCE_TRANSCRIPT_LOCK") == "1"
     }
 
     // MARK: - Transcript subscribe strategy (README `subscribe`)
@@ -117,7 +117,7 @@ public enum SessionPersistenceConfiguration {
     /// - `multi_host`: multi-host seam (currently falls back to polling if no broker/watch adapter is configured)
     /// - default/unknown: `polling`
     static var transcriptSubscribeTailStrategy: TranscriptSubscribeTailStrategyKind {
-        let raw = (ProcessInfo.processInfo.environment["SAH_TRANSCRIPT_SUBSCRIBE_STRATEGY"] ?? "")
+        let raw = (HarnessEnvironmentOverride.string("SAH_TRANSCRIPT_SUBSCRIBE_STRATEGY") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         switch raw {
@@ -132,7 +132,7 @@ public enum SessionPersistenceConfiguration {
 
     /// Max bytes read from **start** and **end** of `sessions.json` when full JSON decode fails (README-style bounded scan). Env: `SAH_SESSION_LITE_RECOVERY_SCAN_BYTES`. Clamped **1024 … 2_097_152**; default **65536**.
     static var liteRecoveryScanBytes: Int {
-        let raw = ProcessInfo.processInfo.environment["SAH_SESSION_LITE_RECOVERY_SCAN_BYTES"] ?? ""
+        let raw = HarnessEnvironmentOverride.string("SAH_SESSION_LITE_RECOVERY_SCAN_BYTES") ?? ""
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed: Int
         if t.isEmpty {
@@ -149,7 +149,7 @@ public enum SessionPersistenceConfiguration {
     static let liteRecoveryJsonlHeaderPeekBytes = 16_384
 
     private static func parsePositiveIntEnv(_ key: String, default def: Int) -> Int {
-        let raw = ProcessInfo.processInfo.environment[key] ?? ""
+        let raw = HarnessEnvironmentOverride.string(key) ?? ""
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return def }
         if let v = Int(t), v > 0 { return v }

@@ -21,8 +21,16 @@ struct PromptConfigBundleResourceTests {
 struct PromptConfigBundleResourceOverrideTests {
     private static let marker = "marker"
 
+    /// Builds a *valid* PromptConfig payload carrying the round-trip marker.
+    ///
+    /// These tests mutate the process-global `PromptConfigBundleResource`. The suite is
+    /// `.serialized`, but that only orders tests within this suite — other suites still run in
+    /// parallel and may read this override (e.g. orchestrator warm-up builds a `SystemPrompt`,
+    /// which reads `options.includeAgentSkills`). A payload missing `options` makes those concurrent
+    /// builds fall back to skills-enabled and throw `skillLoaderNotFound`, nulling their orchestrator
+    /// and flaking unrelated suites. Including a valid `options` block keeps concurrent readers happy.
     private func config(_ value: String) -> Data {
-        Data("{\"\(Self.marker)\":\"\(value)\"}".utf8)
+        Data("{\"\(Self.marker)\":\"\(value)\",\"options\":{\"includeAgentSkills\":false}}".utf8)
     }
 
     private func markerValue(of data: Data?) -> String? {

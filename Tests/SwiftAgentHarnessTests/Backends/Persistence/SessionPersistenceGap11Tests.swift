@@ -67,35 +67,35 @@ struct SessionPersistenceGap11Tests {
     @Test func strictLockWithoutHoldThrowsLockNotHeld() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sah-gap11-lock-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        setenv("SAH_SESSION_ENFORCE_TRANSCRIPT_LOCK", "1", 1)
-        defer { unsetenv("SAH_SESSION_ENFORCE_TRANSCRIPT_LOCK") }
 
-        let local = try LocalHarnessSessionPersistence(root: root)
-        let cid = UUID()
-        var row = SessionCatalogRecord(
-            id: cid,
-            topic: "t",
-            description: nil,
-            messageCount: 0,
-            updatedAt: Date(),
-            createdAt: Date(),
-            modelName: "m",
-            interactionModeRaw: InteractionMode.chat.rawValue,
-        )
-        row.agentId = SessionPersistenceLayout.defaultAgentId
-        try local.bootstrapEmptyConversation(row)
+        try HarnessEnvironmentOverride.$overrides.withValue(["SAH_SESSION_ENFORCE_TRANSCRIPT_LOCK": "1"]) {
+            let local = try LocalHarnessSessionPersistence(root: root)
+            let cid = UUID()
+            var row = SessionCatalogRecord(
+                id: cid,
+                topic: "t",
+                description: nil,
+                messageCount: 0,
+                updatedAt: Date(),
+                createdAt: Date(),
+                modelName: "m",
+                interactionModeRaw: InteractionMode.chat.rawValue,
+            )
+            row.agentId = SessionPersistenceLayout.defaultAgentId
+            try local.bootstrapEmptyConversation(row)
 
-        let entry = SessionTranscriptEntry(
-            sequence: 1,
-            entryId: .generate(),
-            parentEntryId: nil,
-            type: .message,
-            harnessTypeRaw: nil,
-            timestamp: Date(),
-            payloadJSON: #"{"role":"user","content":"hi","id":"\#(UUID().uuidString)"}"#
-        )
-        #expect(throws: SessionPersistenceError.self) {
-            try local.appendMirroredTranscriptEntry(conversationID: cid, entry: entry)
+            let entry = SessionTranscriptEntry(
+                sequence: 1,
+                entryId: .generate(),
+                parentEntryId: nil,
+                type: .message,
+                harnessTypeRaw: nil,
+                timestamp: Date(),
+                payloadJSON: #"{"role":"user","content":"hi","id":"\#(UUID().uuidString)"}"#
+            )
+            #expect(throws: SessionPersistenceError.self) {
+                try local.appendMirroredTranscriptEntry(conversationID: cid, entry: entry)
+            }
         }
     }
 

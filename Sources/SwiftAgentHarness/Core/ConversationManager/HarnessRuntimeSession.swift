@@ -652,6 +652,7 @@ public actor HarnessRuntimeSession {
         metadata: JSON? = nil,
         interactionMode: InteractionMode = .chat,
         modeProfileID: String? = nil,
+        cwd: String? = nil,
         lineageKind: ConversationLineageKind = .root,
         origin: ConversationOrigin = .user
     ) async throws -> UUID {
@@ -663,6 +664,7 @@ public actor HarnessRuntimeSession {
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
+            cwd: cwd,
             lineageKind: lineageKind,
             origin: origin
         )

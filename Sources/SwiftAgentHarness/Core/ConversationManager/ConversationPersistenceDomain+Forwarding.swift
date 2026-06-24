@@ -236,6 +236,7 @@ extension ConversationPersistenceDomain {
         interactionMode: InteractionMode,
         modeProfileID: String? = nil,
         ownerAccountID: UUID? = nil,
+        cwd: String? = nil,
         lineageKind: ConversationLineageKind = .root,
         origin: ConversationOrigin = .user
     ) throws -> ModelConversation {
@@ -248,6 +249,7 @@ extension ConversationPersistenceDomain {
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
             ownerAccountID: ownerAccountID,
+            cwd: cwd,
             lineageKind: lineageKind,
             origin: origin
         )

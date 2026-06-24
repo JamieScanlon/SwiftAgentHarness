@@ -35,9 +35,10 @@ private final class SplitConversationProtocolOnlyStub: APILayerConversationManag
         description: String?,
         metadata: JSON?,
         interactionMode: InteractionMode,
-        modeProfileID: String?
+        modeProfileID: String?,
+        cwd: String?
     ) async throws -> UUID {
-        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID)
+        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID, cwd)
         return UUID()
     }
     func apiUpdateConversationMetadata(conversationID: UUID, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode?, modeProfileID: String?) async throws {

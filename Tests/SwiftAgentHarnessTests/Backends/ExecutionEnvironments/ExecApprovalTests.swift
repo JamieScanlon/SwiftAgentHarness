@@ -22,14 +22,76 @@ struct ExecApprovalTests {
         #expect(await store.resolve(id: "missing", approved: true) == nil)
     }
 
-    @Test("durable approval pre-approves matching commands")
+    @Test("durable approval pre-approves commands by command name")
     func durableApproval() async {
         let store = ExecApprovalStore()
         await store.registerPending(id: "abc", command: "git push")
         _ = await store.resolve(id: "abc", approved: true, durable: true)
         #expect(await store.isDurableApproved(command: "git push"))
-        #expect(await store.isDurableApproved(command: "  git push  "))
-        #expect(await store.isDurableApproved(command: "git pull") == false)
+        // Same command name with different args is now approved.
+        #expect(await store.isDurableApproved(command: "git status --short"))
+        #expect(await store.isDurableApproved(command: "  git pull  "))
+        // A different command name is not approved.
+        #expect(await store.isDurableApproved(command: "npm test") == false)
+    }
+
+    @Test("commandName extracts the first executable token")
+    func commandNameExtraction() {
+        #expect(ExecApprovalStore.commandName(from: "git push origin main") == "git")
+        #expect(ExecApprovalStore.commandName(from: "  npm   test ") == "npm")
+        #expect(ExecApprovalStore.commandName(from: "ls\t-la") == "ls")
+        #expect(ExecApprovalStore.commandName(from: "echo\nhi") == "echo")
+        #expect(ExecApprovalStore.commandName(from: "   ") == nil)
+        #expect(ExecApprovalStore.commandName(from: "") == nil)
+    }
+
+    @Test("in-memory grant store add/remove/list/isGranted")
+    func inMemoryGrantStore() async {
+        let grants = InMemoryExecApprovalGrantStore()
+        #expect(await grants.isGranted(commandName: "git") == false)
+        await grants.add(commandName: "git")
+        await grants.add(commandName: "npm")
+        await grants.add(commandName: "git")
+        #expect(await grants.isGranted(commandName: "git"))
+        #expect(await grants.list() == ["git", "npm"])
+        await grants.remove(commandName: "git")
+        #expect(await grants.isGranted(commandName: "git") == false)
+        #expect(await grants.list() == ["npm"])
+    }
+
+    @Test("resolve durable persists through injected grant store")
+    func resolveDurablePersistsToInjectedStore() async {
+        let grants = InMemoryExecApprovalGrantStore()
+        let store = ExecApprovalStore(grantStore: grants)
+        await store.registerPending(id: "abc", command: "git push origin main")
+        _ = await store.resolve(id: "abc", approved: true, durable: true)
+        #expect(await grants.isGranted(commandName: "git"))
+        #expect(await grants.list() == ["git"])
+        #expect(await store.isDurableApproved(command: "git log"))
+    }
+
+    @Test("configure swaps the backing grant store")
+    func configureSwapsGrantStore() async {
+        let store = ExecApprovalStore()
+        let seeded = InMemoryExecApprovalGrantStore(commandNames: ["git"])
+        await store.configure(grantStore: seeded)
+        #expect(await store.isDurableApproved(command: "git push"))
+        #expect(await store.isDurableApproved(command: "npm test") == false)
+    }
+
+    @Test("pre-seeded grant store pre-approves through default delivery")
+    func preSeededGrantStorePreApproves() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["curl"])
+        let store = ExecApprovalStore(grantStore: grants)
+        let delivery = DefaultExecApprovalDelivery(store: store, waitTimeoutSeconds: 5)
+        let request = ExecApprovalRequest(
+            id: "req-seed",
+            command: "curl https://example.com",
+            title: "Exec approval",
+            description: "curl https://example.com"
+        )
+        let result = await delivery.requestApproval(request, headless: false)
+        #expect(result == .approved)
     }
 
     @Test("default delivery waits for resolution")

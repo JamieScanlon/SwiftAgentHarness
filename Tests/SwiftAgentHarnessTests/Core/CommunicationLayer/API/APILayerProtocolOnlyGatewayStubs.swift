@@ -54,8 +54,8 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     func apiGenerateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String {
         userSystemPrompt ?? defaultSystemPrompt
     }
-    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?) async throws -> UUID {
-        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID)
+    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?, cwd: String?) async throws -> UUID {
+        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID, cwd)
         return UUID()
     }
     func apiUpdateConversationMetadata(conversationID: UUID, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode?, modeProfileID: String?) async throws {

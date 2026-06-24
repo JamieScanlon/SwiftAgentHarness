@@ -32,8 +32,12 @@ public enum HarnessHostPaths {
 
     private static let layoutBox = LayoutBox()
 
+    /// Task-scoped layout override. Checked before the process-global layout so tests can supply a
+    /// layout without mutating shared state observed by concurrently running tests.
+    @TaskLocal static var layoutOverride: HarnessHostLayout?
+
     public static var layout: HarnessHostLayout {
-        layoutBox.layout
+        layoutOverride ?? layoutBox.layout
     }
 
     public static func configure(_ layout: HarnessHostLayout) {

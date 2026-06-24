@@ -98,6 +98,9 @@ struct BackgroundMemoryExtractorTests {
         }
         await gate.waitUntilRunning()
         await extractor.scheduleIfNeeded(request: reqStash) { _ in }
+        // Initiate shutdown deterministically (discards the stash) before the
+        // in-flight extraction is released, so its completion observes shutdown.
+        await extractor.beginShutdown()
         async let draining: Void = extractor.drain(timeoutMs: 5000)
         await gate.release()
         await inFlight

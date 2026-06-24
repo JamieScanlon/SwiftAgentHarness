@@ -78,7 +78,7 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     /// Projected transcript for ``conversationID``.
     func apiListMessagesThrowing(conversationID: UUID) async throws -> [Message]
     func apiGenerateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String
-    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?) async throws -> UUID
+    func apiCreateConversation(with selectedModel: Model, userSystemPrompt: String, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode, modeProfileID: String?, cwd: String?) async throws -> UUID
     func apiUpdateConversationMetadata(conversationID: UUID, topic: String?, description: String?, metadata: JSON?, interactionMode: InteractionMode?, modeProfileID: String?) async throws
     func apiUpdateConversationModelAndUserPrompt(conversationID: UUID, model: Model?, userSystemPrompt: String?) async throws
     func apiListAvailableTools() async throws -> [AvailableToolInfo]
@@ -193,7 +193,8 @@ extension APILayerConversationManaging {
             description: description,
             metadata: metadata,
             interactionMode: interactionMode,
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
     }
 
@@ -449,9 +450,10 @@ extension APILayerConversationManaging {
         description: String?,
         metadata: JSON?,
         interactionMode: InteractionMode,
-        modeProfileID: String?
+        modeProfileID: String?,
+        cwd: String?
     ) async throws -> UUID {
-        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID)
+        _ = (selectedModel, userSystemPrompt, topic, description, metadata, interactionMode, modeProfileID, cwd)
         throw APILayerConversationAPIError.unsupported
     }
 
@@ -718,8 +720,17 @@ public actor APILayer {
     }
 
     /// Wires the conversation events topic hub for WebSocket `conversation/{id}/events` subscriptions.
-    public func setConversationEventsWireResources(hub: ConversationEventsTopicHub) {
+    ///
+    /// - Parameter replayRetention: Optional transcript replay-window override. When `nil` (default)
+    ///   the subscribe path resolves the window from the environment
+    ///   (`SAH_TRANSCRIPT_TAIL_MAX_SEQUENCE_LAG`); supply a value to make the policy deterministic
+    ///   without mutating process-global state.
+    public func setConversationEventsWireResources(
+        hub: ConversationEventsTopicHub,
+        replayRetention: TranscriptTailRetentionPolicy? = nil
+    ) {
         self.conversationEventsTopicHub = hub
+        self.conversationEventsReplayRetention = replayRetention
     }
 
     /// Production wiring: one ``CommunicationLayer`` plus coordinator (same hubs as the aggregate).
@@ -963,6 +974,10 @@ public actor APILayer {
     /// When set, enables `kind: subscribe` / `unsubscribe` for `conversation/{id}/events` on `/ws`.
     private var conversationEventsTopicHub: ConversationEventsTopicHub?
 
+    /// Optional deterministic transcript replay-window override for `conversation/{id}/events`
+    /// subscribes. `nil` falls back to the environment-derived policy at request time.
+    private var conversationEventsReplayRetention: TranscriptTailRetentionPolicy?
+
     /// When set, enables `kind: subscribe` / `unsubscribe` for `conversation/{id}/state` on `/ws`.
     private var conversationStateTopicHub: ConversationStateTopicHub?
 
@@ -1058,6 +1073,7 @@ public actor APILayer {
         let wireLogger = logger
         let wireModelStateHub = modelStateTopicHub
         let wireConversationEventsHub = conversationEventsTopicHub
+        let wireConversationEventsReplayRetention = conversationEventsReplayRetention
         let wireConversationStateHub = conversationStateTopicHub
         let wireTraceHub = traceTopicHub
         let wireCapabilityRegistryHub = capabilityRegistryTopicHub
@@ -1294,6 +1310,7 @@ public actor APILayer {
                                 await sendControlPayload(APILayer.harnessDedupeResultPayload(firstSighting: first))
                             },
                             serverTraceSubscribePolicy: wireServerTraceSubscribePolicy,
+                            conversationEventsReplayRetention: wireConversationEventsReplayRetention ?? .fromEnvironmentOrDefault(),
                             message: comm,
                             registration: topicRegistration
                         ) {

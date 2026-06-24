@@ -17,7 +17,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let workspaceRoot: String
     private let execRuntime: ExecRuntimeService
     private let runtimeContext: ExecRuntimeContext
-    private let elevatedBashMode: ElevatedMode?
+    private let perCallElevationModes: [String: ElevatedMode]
     private let elevatedAllowlist: ElevatedAllowlist
     private let resolveSenderIdentity: @Sendable () async -> ExecSenderIdentity
     private let onMemoryWrite: (@Sendable (String) async -> Void)?
@@ -41,7 +41,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         workspaceRoot: String,
         execRuntime: ExecRuntimeService,
         runtimeContext: ExecRuntimeContext,
-        elevatedBashMode: ElevatedMode? = nil,
+        perCallElevationModes: [String: ElevatedMode] = [:],
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
@@ -50,7 +50,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)
         self.execRuntime = execRuntime
         self.runtimeContext = runtimeContext
-        self.elevatedBashMode = elevatedBashMode
+        self.perCallElevationModes = perCallElevationModes
         self.elevatedAllowlist = elevatedAllowlist
         self.resolveSenderIdentity = resolveSenderIdentity
         self.onMemoryWrite = onMemoryWrite
@@ -110,6 +110,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                     .init(name: "command", description: "Shell command", type: "string", required: true),
                     .init(name: "run_in_background", description: "Run in background", type: "boolean", required: false),
                     .init(name: "use_pty", description: "Allocate a pseudo-terminal (makes isatty/ANSI colour work)", type: "boolean", required: false),
+                    .init(name: "elevated", description: "Escape the sandbox for this call (requires approval). Defaults to sandboxed.", type: "boolean", required: false),
                 ],
                 type: .function
             ),
@@ -286,8 +287,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         LocalSandboxBashExecutor(execRuntime: execRuntime, runtimeContext: context)
     }
 
-    private func bashRuntimeContext() async -> ExecRuntimeContext {
-        guard let elevatedBashMode else { return runtimeContext }
+    private func elevatedRuntimeContext(toolName: String, elevated: Bool) async -> ExecRuntimeContext {
+        guard elevated, let mode = perCallElevationModes[toolName] else { return runtimeContext }
         let identity = await resolveSenderIdentity()
         let senderAllowed = ElevatedSenderResolver.isAllowed(identity: identity, allowlist: elevatedAllowlist)
         return ExecRuntimeContext(
@@ -297,7 +298,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             memoryDirectory: runtimeContext.memoryDirectory,
             memoryWriteOnly: runtimeContext.memoryWriteOnly,
             senderIdentity: identity,
-            elevated: ElevatedExecContext(mode: elevatedBashMode, senderAllowed: senderAllowed),
+            elevated: ElevatedExecContext(mode: mode, senderAllowed: senderAllowed),
             headless: runtimeContext.headless
         )
     }
@@ -306,8 +307,9 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         let command = extractString(from: toolCall.arguments, key: "command") ?? ""
         let runInBackground = extractBool(from: toolCall.arguments, key: "run_in_background") ?? false
         let usePty = extractBool(from: toolCall.arguments, key: "use_pty") ?? false
+        let elevated = extractBool(from: toolCall.arguments, key: "elevated") ?? false
         do {
-            let context = await bashRuntimeContext()
+            let context = await elevatedRuntimeContext(toolName: Self.bashToolName, elevated: elevated)
             let result = try await sandboxExecutor(for: context).runBash(command: command, runInBackground: runInBackground, usePty: usePty)
             if let taskID = result.backgroundTaskID {
                 return ok(toolCall, "background task: \(taskID)")

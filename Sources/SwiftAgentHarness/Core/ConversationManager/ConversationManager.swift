@@ -349,11 +349,18 @@ final class ConversationManager {
         return cur
     }
 
-    private func applyDefaultHarnessPersistenceMetadata(to conversation: inout ModelConversation) {
+    private static func normalizedCwd(_ cwd: String?) -> String? {
+        guard let trimmed = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func applyDefaultHarnessPersistenceMetadata(to conversation: inout ModelConversation, cwd: String? = nil) {
         conversation.harnessPersistenceSource = "cli"
         conversation.harnessPersistenceTrustClass = "user"
         conversation.harnessPersistenceAgentId = SessionPersistenceConfiguration.sessionAgentId
-        conversation.harnessPersistenceCwd = Self.harnessCatalogWorkingDirectoryIfKnown()
+        conversation.harnessPersistenceCwd = cwd ?? Self.harnessCatalogWorkingDirectoryIfKnown()
     }
 
     /// Second value is set when the catalog disambiguates ``SessionCatalogRecord/title``; callers should prefer it over the requested topic for UI and persistence.
@@ -366,6 +373,7 @@ final class ConversationManager {
         modeProfileID: String?,
         parentConversationID: UUID? = nil,
         forkAnchorEntryID: UUID? = nil,
+        cwd: String? = nil,
         lineageKind: ConversationLineageKind = .root,
         origin: ConversationOrigin = .user
     ) throws -> (id: UUID, catalogResolvedTopic: String?) {
@@ -375,7 +383,7 @@ final class ConversationManager {
             trustClass: "user",
             parentConversationID: parentConversationID,
             forkAnchorMessageID: forkAnchorEntryID,
-            cwd: Self.harnessCatalogWorkingDirectoryIfKnown(),
+            cwd: cwd ?? Self.harnessCatalogWorkingDirectoryIfKnown(),
             modelName: selectedModel.modelName,
             interactionModeRaw: interactionMode.rawValue,
             modeProfileID: modeProfileID,
@@ -566,9 +574,11 @@ final class ConversationManager {
         interactionMode: InteractionMode = .chat,
         modeProfileID: String? = nil,
         ownerAccountID: UUID? = nil,
+        cwd: String? = nil,
         lineageKind: ConversationLineageKind = .root,
         origin: ConversationOrigin = .user
     ) throws -> ModelConversation {
+        let requestedCwd = Self.normalizedCwd(cwd)
         let (conversationID, catalogTopic) = try allocateBackendConversationIDIfNeeded(
             selectedModel: selectedModel,
             topic: topic,
@@ -576,6 +586,7 @@ final class ConversationManager {
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
+            cwd: requestedCwd,
             lineageKind: lineageKind,
             origin: origin
         )
@@ -600,7 +611,7 @@ final class ConversationManager {
         )
         newConversation.messages.append(systemMessage)
         newConversation.turns = conversationTurns(interactionMode: mode, messages: newConversation.messages)
-        applyDefaultHarnessPersistenceMetadata(to: &newConversation)
+        applyDefaultHarnessPersistenceMetadata(to: &newConversation, cwd: requestedCwd)
 
         if catalogRowExists(conversationID: conversationID) {
             try appendMessagesToHarnessTranscript(conversationID: conversationID, messages: [systemMessage])

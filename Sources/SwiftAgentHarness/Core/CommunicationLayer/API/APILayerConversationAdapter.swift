@@ -167,7 +167,8 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         description: String?,
         metadata: JSON?,
         interactionMode: InteractionMode,
-        modeProfileID: String?
+        modeProfileID: String?,
+        cwd: String?
     ) async throws -> UUID {
         try await controlPlane.createConversation(
             with: selectedModel,
@@ -177,6 +178,7 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
+            cwd: cwd,
             lineageKind: .root,
             origin: .user
         )

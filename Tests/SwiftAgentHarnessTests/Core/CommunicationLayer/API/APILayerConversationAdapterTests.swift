@@ -43,7 +43,8 @@ struct APILayerConversationAdapterTests {
             description: "desc",
             metadata: nil,
             interactionMode: .chat,
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
 
         let created = await adapter.apiGetConversation(id: conversationID)
@@ -88,7 +89,8 @@ struct APILayerConversationAdapterTests {
             description: nil,
             metadata: nil,
             interactionMode: .chat,
-            modeProfileID: nil
+            modeProfileID: nil,
+            cwd: nil
         )
 
         _ = try await adapter.apiListAvailableTools(conversationID: conversationID)
