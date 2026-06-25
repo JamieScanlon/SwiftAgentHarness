@@ -158,6 +158,29 @@ struct LMStudioLLMStreamContractTests {
         }
     }
 
+    @Test("regression (CR-C): SSE error event with zero data chunks surfaces provider message, not generic stream-ended text")
+    func sseErrorZeroDataChunksSurfacesProviderMessage() async throws {
+        // Reproduces the LM Studio failure: a single SSE error event (no data chunks) carrying
+        // the jinja render error. The surfaced detail must include the provider message rather than
+        // the generic "stream ended without receiving any data chunks".
+        let jinjaError = "Error rendering prompt with jinja template: \"No user query found in messages.\""
+        let errorPayload: [String: any Sendable] = [
+            "_sse_event": "error",
+            "error": ["message": jinjaError] as [String: any Sendable]
+        ]
+        let source = StubLMStudioStreamSource(payloads: [errorPayload])
+        let adapter = try await makeAdapter(streamSource: source)
+        let stream = adapter.stream([Message(id: UUID(), role: .user, content: "hi")], config: LLMRequestConfig(maxTokens: 1024))
+
+        let (_, terminal) = await consume(stream)
+        guard let err = terminal as? LLMError, case .invalidResponse(let message) = err else {
+            Issue.record("expected .invalidResponse terminal, got \(String(describing: terminal))")
+            return
+        }
+        #expect(message.contains(jinjaError))
+        #expect(!message.contains("stream ended without receiving any data chunks"))
+    }
+
     @Test("payload-level error envelope (no _sse_event) also maps to LLMError.invalidResponse")
     func payloadErrorEnvelopeMapsToInvalidResponse() async throws {
         let errorPayload: [String: any Sendable] = [

@@ -26,7 +26,13 @@ enum SessionTranscriptContextProjector: Sendable {
                     firstKeptEntryID = wire.fromEntryID
                     keptFromFirstEntry = false
                 }
-            case .message, .system:
+            case .system:
+                // Always replay the conversation's system prompt, regardless of the compaction
+                // anchor, so the projected head is never left without system framing.
+                if let message = try? SessionTranscriptMapping.messageForReplay(from: entry) {
+                    projected.append(message)
+                }
+            case .message:
                 if let target = firstKeptEntryID, !keptFromFirstEntry {
                     if entry.entryId == target {
                         keptFromFirstEntry = true
@@ -38,7 +44,7 @@ enum SessionTranscriptContextProjector: Sendable {
                     projected.append(
                         Message(
                             id: stableSummaryMessageID(entryID: entry.entryId, summary: summary),
-                            role: .user,
+                            role: .system,
                             content: summary,
                             timestamp: entry.timestamp,
                             toolCalls: []
@@ -59,14 +65,16 @@ enum SessionTranscriptContextProjector: Sendable {
             projected.append(
                 Message(
                     id: stableSummaryMessageID(entryID: anchor, summary: summary),
-                    role: .user,
+                    role: .system,
                     content: summary,
                     timestamp: Date(),
                     toolCalls: []
                 )
             )
         }
-        return projected.isEmpty ? fallbackMessages : projected
+        let result = projected.isEmpty ? fallbackMessages : projected
+        // Never begin a kept region on an orphaned tool result (assistant tool-call trimmed).
+        return RenderableMessageInvariant.repairToolPairs(result)
     }
 
     private static func stableSummaryMessageID(entryID: SessionEntryID, summary: String) -> UUID {

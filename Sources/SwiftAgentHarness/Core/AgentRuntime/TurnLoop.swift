@@ -134,6 +134,9 @@ struct TurnLoop {
             var publishedStreamDeltaThisAttempt = false
             var modelCallStartedEmitted = false
             var sawStreamComplete = false
+            // Final provider-agnostic guard: never dispatch an unrenderable array (orphaned leading
+            // tool result / missing system prompt) regardless of how `messages` was assembled.
+            messages = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: ports.logger)
             do {
                 let stream = await ports.model.stream(
                     messages,
