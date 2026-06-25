@@ -81,8 +81,8 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     func apiListActiveSubAgentInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo] { _ = parentConversationID; return [] }
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws { _ = (parentConversationID, lifecycleID) }
     func apiPushCompletionAnnouncement(conversationID: UUID, announce: CompletionAnnouncePayload, toolMessageContent: String?) async throws { _ = (conversationID, announce, toolMessageContent) }
-    func apiResolveToolApproval(conversationID: UUID, runID: UUID?, toolName: String, route: ToolApprovalRoute, status: ToolApprovalResolutionStatus, source: String, reason: String?) async throws {
-        _ = (conversationID, runID, toolName, route, status, source, reason)
+    func apiResolveToolApproval(conversationID: UUID, runID: UUID?, toolName: String, route: ToolApprovalRoute, status: ToolApprovalResolutionStatus, source: String, reason: String?, durable: Bool) async throws {
+        _ = (conversationID, runID, toolName, route, status, source, reason, durable)
         if let resolveToolApprovalRouteError {
             throw resolveToolApprovalRouteError
         }

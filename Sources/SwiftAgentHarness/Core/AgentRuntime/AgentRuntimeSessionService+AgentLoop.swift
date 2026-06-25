@@ -364,6 +364,7 @@ extension AgentRuntimeSessionService {
                             timeoutMs: spec.timeoutMs,
                             timeoutBehavior: spec.timeoutBehavior.rawValue,
                             resolutionKind: ToolApprovalResolutionKind.runtimeAuto.rawValue,
+                            presentation: spec.presentation,
                             source: "runtime.toolDispatch"
                         )
                     ),
@@ -406,6 +407,7 @@ extension AgentRuntimeSessionService {
                                 timeoutMs: spec.timeoutMs,
                                 timeoutBehavior: spec.timeoutBehavior.rawValue,
                                 resolutionKind: resolution.kind.rawValue,
+                                presentation: spec.presentation,
                                 source: "runtime.approvalTimeout"
                             )
                         ),
@@ -488,6 +490,7 @@ extension AgentRuntimeSessionService {
                             timeoutMs: spec.timeoutMs,
                             timeoutBehavior: spec.timeoutBehavior.rawValue,
                             resolutionKind: ToolApprovalResolutionKind.runtimeAuto.rawValue,
+                            presentation: spec.presentation,
                             source: "runtime.toolDispatch"
                         )
                     ),

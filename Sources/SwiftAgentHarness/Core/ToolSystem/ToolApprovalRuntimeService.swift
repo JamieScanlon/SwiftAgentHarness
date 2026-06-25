@@ -6,13 +6,32 @@ actor ToolApprovalRuntimeService {
     private let topics: ConversationTopicPublicationPort
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService!
     private let stateStore = ToolApprovalStateStore()
+    private let permissionRules: any PermissionRuleStore
 
     init(
         deps: ConversationRuntimeDependencies,
-        topics: ConversationTopicPublicationPort
+        topics: ConversationTopicPublicationPort,
+        permissionRules: any PermissionRuleStore = InMemoryPermissionRuleStore()
     ) {
         self.deps = deps
         self.topics = topics
+        self.permissionRules = permissionRules
+    }
+
+    /// Persists an `allow-always` rule for a tool so future runs (and restarts when
+    /// the store is disk-backed) auto-approve it.
+    func grantDurableToolRule(toolName: String) async {
+        await permissionRules.add(.toolName(toolName))
+    }
+
+    /// Lists persisted durable tool-name grants, sorted ascending.
+    func listDurableToolGrants() async -> [String] {
+        await permissionRules.grantedToolNames().sorted()
+    }
+
+    /// Revokes a persisted durable tool-name grant.
+    func revokeDurableToolGrant(toolName: String) async {
+        await permissionRules.remove(.toolName(toolName))
     }
 
     nonisolated func installSubAgentSpawnService(_ subAgentSpawnService: SubAgentSpawnService) {
@@ -48,6 +67,9 @@ actor ToolApprovalRuntimeService {
             route: route
         )
         out.preApprovedToolNames.formUnion(storeApproved)
+        // Durable `allow-always` tool grants apply across runs (and restarts when the
+        // permission rule store is disk-backed).
+        out.preApprovedToolNames.formUnion(await permissionRules.grantedToolNames())
         return out
     }
 
@@ -59,12 +81,23 @@ actor ToolApprovalRuntimeService {
         let severity = isElevated
             ? deps.toolPolicy.approvalElevatedSeverityDefault
             : deps.toolPolicy.approvalSeverityDefault
+        let title = isElevated ? "Elevated Tool Approval Required" : "Tool Approval Required"
+        let description = "Approve \(toolName) for this run (route: \(route.rawValue))."
+        let presentation = ApprovalPresentation.standard(
+            title: title,
+            context: [
+                "Tool: \(toolName)",
+                "Route: \(route.rawValue)  Severity: \(severity)",
+                isElevated ? "This tool runs with elevated privileges." : "",
+            ]
+        )
         return ToolApprovalContractSpec(
-            title: isElevated ? "Elevated Tool Approval Required" : "Tool Approval Required",
-            description: "Approve \(toolName) for this run (route: \(route.rawValue)).",
+            title: title,
+            description: description,
             severity: severity,
             timeoutMs: deps.toolPolicy.approvalTimeoutMilliseconds,
-            timeoutBehavior: deps.toolPolicy.approvalTimeoutBehavior
+            timeoutBehavior: deps.toolPolicy.approvalTimeoutBehavior,
+            presentation: presentation
         )
     }
 
@@ -126,8 +159,12 @@ actor ToolApprovalRuntimeService {
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
-        reason: String?
+        reason: String?,
+        durable: Bool = false
     ) async {
+        if durable, status == .approved {
+            await grantDurableToolRule(toolName: toolName)
+        }
         await applyToolApprovalResolution(
             conversationID: conversationID,
             runID: runID,
@@ -227,6 +264,7 @@ actor ToolApprovalRuntimeService {
                         timeoutMs: approvalSpec?.timeoutMs,
                         timeoutBehavior: approvalSpec?.timeoutBehavior.rawValue,
                         resolutionKind: kind.rawValue,
+                        presentation: approvalSpec?.presentation,
                         source: publicationSource
                     )
                 ),
@@ -253,6 +291,7 @@ actor ToolApprovalRuntimeService {
             approvalTimeoutMs: approvalSpec?.timeoutMs,
             approvalTimeoutBehavior: approvalSpec?.timeoutBehavior.rawValue,
             approvalResolutionKind: kind.rawValue,
+            approvalPresentation: approvalSpec?.presentation,
             source: publicationSource
         )
         await topics.publishRuntimeLifecycleWithFanout(payload)

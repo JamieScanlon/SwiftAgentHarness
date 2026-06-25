@@ -98,7 +98,10 @@ public struct ToolPolicyConfiguration: Sendable {
     public let elevatedAllowFrom: ElevatedAllowlist
     private let subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration
     public let descriptorValidationMode: DescriptorValidationMode
-    public let approvalTimeoutMilliseconds: Int
+    /// Approval wait timeout in milliseconds. `nil` disables the timeout so the
+    /// harness waits indefinitely for a user response (`autoDeny`/`autoApprove`
+    /// only apply when a finite timeout is set).
+    public let approvalTimeoutMilliseconds: Int?
     public let approvalTimeoutBehavior: ApprovalTimeoutBehavior
     public let approvalSeverityDefault: String
     public let approvalElevatedSeverityDefault: String
@@ -117,7 +120,7 @@ public struct ToolPolicyConfiguration: Sendable {
         elevatedAllowFrom: ElevatedAllowlist = .cliDefault,
         subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration = .empty,
         descriptorValidationMode: DescriptorValidationMode = .warning,
-        approvalTimeoutMilliseconds: Int = 120_000,
+        approvalTimeoutMilliseconds: Int? = 120_000,
         approvalTimeoutBehavior: ApprovalTimeoutBehavior = .autoDeny,
         approvalSeverityDefault: String = "medium",
         approvalElevatedSeverityDefault: String = "high",
@@ -135,7 +138,7 @@ public struct ToolPolicyConfiguration: Sendable {
         self.elevatedAllowFrom = elevatedAllowFrom
         self.subAgentHostingPolicyConfiguration = subAgentHostingPolicyConfiguration
         self.descriptorValidationMode = descriptorValidationMode
-        self.approvalTimeoutMilliseconds = max(1_000, approvalTimeoutMilliseconds)
+        self.approvalTimeoutMilliseconds = approvalTimeoutMilliseconds.map { max(1_000, $0) }
         self.approvalTimeoutBehavior = approvalTimeoutBehavior
         self.approvalSeverityDefault = approvalSeverityDefault.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "medium"
@@ -203,7 +206,7 @@ public struct ToolPolicyConfiguration: Sendable {
         elevatedAllowFrom: ElevatedAllowlist,
         subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration,
         descriptorValidationMode: DescriptorValidationMode,
-        approvalTimeoutMilliseconds: Int,
+        approvalTimeoutMilliseconds: Int?,
         approvalTimeoutBehavior: ApprovalTimeoutBehavior,
         approvalSeverityDefault: String,
         approvalElevatedSeverityDefault: String,
@@ -225,7 +228,7 @@ public struct ToolPolicyConfiguration: Sendable {
         let elevatedAllowFromSlice = "elevatedAllowFrom:\(allowFromParts.joined(separator: ";"))"
         let hostingSlice = "subAgentHosting:\(subAgentHostingPolicyConfiguration.stableSignature())"
         let descriptorValidation = "descriptorValidation:\(descriptorValidationMode.rawValue)"
-        let approvalTimeoutSlice = "approvalTimeoutMs:\(approvalTimeoutMilliseconds)"
+        let approvalTimeoutSlice = "approvalTimeoutMs:\(approvalTimeoutMilliseconds.map(String.init) ?? "disabled")"
         let approvalTimeoutBehaviorSlice = "approvalTimeoutBehavior:\(approvalTimeoutBehavior.rawValue)"
         let approvalSeveritySlice = "approvalSeverity:\(approvalSeverityDefault)"
         let approvalElevatedSeveritySlice = "approvalElevatedSeverity:\(approvalElevatedSeverityDefault)"
@@ -406,12 +409,14 @@ public struct ToolPolicyConfiguration: Sendable {
             }
             return mode
         }()
-        let approvalTimeoutMilliseconds: Int = {
+        // `timeoutMs: 0` (or any non-positive value) disables the timeout so the
+        // approval waits indefinitely; absent/null keeps the default.
+        let approvalTimeoutMilliseconds: Int? = {
             if let raw = approvalBlock?["timeoutMs"] as? Int {
-                return max(1_000, raw)
+                return raw <= 0 ? nil : max(1_000, raw)
             }
             if let raw = approvalBlock?["timeoutMs"] as? Double {
-                return max(1_000, Int(raw))
+                return raw <= 0 ? nil : max(1_000, Int(raw))
             }
             return 120_000
         }()

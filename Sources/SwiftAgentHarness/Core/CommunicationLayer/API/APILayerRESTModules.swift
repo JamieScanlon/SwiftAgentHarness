@@ -127,6 +127,9 @@ private struct ToolApprovalResolutionRequest: Content {
     let status: ToolApprovalResolutionStatus
     let source: String?
     let reason: String?
+    /// When true on an `approved` resolution, persists an allow-always tool rule so
+    /// future runs auto-approve this tool.
+    let durable: Bool?
 }
 
 private struct ActiveSubAgentInvocationListResponse: Content {
@@ -1370,7 +1373,8 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                     route: body.route ?? .user,
                     status: body.status,
                     source: body.source ?? "api.rest",
-                    reason: body.reason
+                    reason: body.reason,
+                    durable: body.durable ?? false
                 )
                 await dependencies.notifyConversationStateChanged(conversationID)
                 return Response(status: .ok)
@@ -2573,6 +2577,16 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var reason: String?
     }
 
+    /// Unified resolve body on the spec's decision vocabulary. `decision` is
+    /// preferred (`allowOnce`/`allowAlways`/`deny`); `approved`/`durable` remain for
+    /// the deprecated exec-only alias.
+    private struct UnifiedApprovalResolutionRequest: Content {
+        var decision: String?
+        var approved: Bool?
+        var durable: Bool?
+        var reason: String?
+    }
+
     private struct ExecApprovalGrantsResponse: Content {
         var commandNames: [String]
     }
@@ -2639,6 +2653,57 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",
                     "message": "Exec approval not found",
+                ])
+                return Response(status: .notFound, body: .init(data: data))
+            }
+            return Response(status: .ok)
+        }
+
+        // Unified resolve endpoint (spec: one POST /approvals/:id on the shared
+        // decision vocabulary). The path-specific endpoints above and the tool
+        // endpoint remain as aliases during migration.
+        let approvalsPath = api.grouped("approvals")
+        approvalsPath.post(":id") { req async -> Response in
+            guard let id = req.parameters.get("id"), !id.isEmpty else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Invalid approval ID",
+                ])
+                return Response(status: .badRequest, body: .init(data: data))
+            }
+            guard let body = try? req.content.decode(UnifiedApprovalResolutionRequest.self) else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Expected UnifiedApprovalResolutionRequest JSON body",
+                ])
+                return Response(status: .badRequest, body: .init(data: data))
+            }
+            let decision: ApprovalDecision
+            if let token = body.decision, let parsed = ApprovalDecision.fromToken(token) {
+                decision = parsed
+            } else if let approved = body.approved {
+                decision = approved ? (body.durable == true ? .allowAlways : .allowOnce) : .deny
+            } else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Expected a decision (allowOnce|allowAlways|deny) or approved flag",
+                ])
+                return Response(status: .badRequest, body: .init(data: data))
+            }
+            let store = ExecApprovalStore.shared
+            let resolution: ExecApprovalResolution?
+            switch decision {
+            case .allowOnce:
+                resolution = await store.resolve(id: id, approved: true, durable: false)
+            case .allowAlways:
+                resolution = await store.resolve(id: id, approved: true, durable: true)
+            case .deny, .timeout, .cancelled:
+                resolution = await store.resolve(id: id, approved: false, reason: body.reason ?? "denied via api.rest")
+            }
+            guard resolution != nil else {
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": "Approval not found",
                 ])
                 return Response(status: .notFound, body: .init(data: data))
             }

@@ -4,6 +4,7 @@ public struct ClientSurfaceIntent: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case openFileForEdit
         case execApprovalRequired
+        case execApprovalCleared
     }
 
     public var v: Int
@@ -14,6 +15,9 @@ public struct ClientSurfaceIntent: Codable, Sendable, Equatable {
     public var label: String?
     public var approvalID: String?
     public var command: String?
+    /// Portable approval presentation a capable surface renders natively (and core
+    /// degrades to text). Present on `execApprovalRequired` intents.
+    public var presentation: ApprovalPresentation?
 
     public init(
         v: Int = 1,
@@ -22,7 +26,8 @@ public struct ClientSurfaceIntent: Codable, Sendable, Equatable {
         scope: String? = nil,
         label: String? = nil,
         approvalID: String? = nil,
-        command: String? = nil
+        command: String? = nil,
+        presentation: ApprovalPresentation? = nil
     ) {
         self.v = v
         self.kind = kind
@@ -31,5 +36,6 @@ public struct ClientSurfaceIntent: Codable, Sendable, Equatable {
         self.label = label
         self.approvalID = approvalID
         self.command = command
+        self.presentation = presentation
     }
 }

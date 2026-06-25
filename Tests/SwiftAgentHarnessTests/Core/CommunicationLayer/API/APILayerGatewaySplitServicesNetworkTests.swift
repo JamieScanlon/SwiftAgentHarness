@@ -87,9 +87,10 @@ private final class SplitConversationProtocolOnlyStub: APILayerConversationManag
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
-        reason: String?
+        reason: String?,
+        durable: Bool
     ) async throws {
-        _ = (conversationID, runID, toolName, route, status, source, reason)
+        _ = (conversationID, runID, toolName, route, status, source, reason, durable)
     }
     func apiListAvailableSkills(conversationID: UUID) async throws -> [AvailableSkillInfo] {
         _ = conversationID

@@ -273,7 +273,8 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
-        reason: String?
+        reason: String?,
+        durable: Bool
     ) async throws {
         guard await catalog.getConversation(id: conversationID) != nil else {
             throw APILayerConversationRouteError.conversationNotFound
@@ -285,7 +286,8 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
             route: route,
             status: status,
             source: source,
-            reason: reason
+            reason: reason,
+            durable: durable
         )
     }
 

@@ -1478,7 +1478,8 @@ paths:
     post:
       operationId: resolveExecApproval
       tags: [ExecApprovals]
-      summary: Resolve a pending exec-approval request
+      deprecated: true
+      summary: Resolve a pending exec-approval request (deprecated alias of POST /approvals/{id})
       parameters:
         - name: id
           in: path
@@ -1502,6 +1503,43 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "404":
           description: Exec approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /approvals/{id}:
+    post:
+      operationId: resolveApproval
+      tags: [Approvals]
+      summary: Resolve a pending approval on the unified decision vocabulary
+      description: |
+        Unified resolve endpoint for approvals. Prefer `decision`
+        (`allowOnce`|`allowAlways`|`deny`); the `approved`/`durable` fields remain
+        for compatibility with the deprecated `POST /exec-approvals/{id}` alias.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnifiedApprovalResolutionRequest"
+      responses:
+        "200":
+          description: Approval resolution accepted
+        "400":
+          description: Invalid approval id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Approval not found
           content:
             application/json:
               schema:
@@ -2234,6 +2272,9 @@ components:
           type: string
         reason:
           type: string
+        durable:
+          type: boolean
+          description: When true and status is `approved`, persists an allow-always tool rule so future runs auto-approve this tool.
 
     ConversationCheckpointInvalidateRequest:
       type: object
@@ -2952,6 +2993,29 @@ components:
         durable:
           type: boolean
           description: When true and approved, persists a durable grant by command name.
+        reason:
+          type: string
+          description: Optional denial reason.
+
+    ApprovalDecision:
+      type: string
+      description: The unified approval decision vocabulary. `timeout` and `cancelled` are produced by the core lifecycle, not by a client.
+      enum: [allowOnce, allowAlways, deny, timeout, cancelled]
+
+    UnifiedApprovalResolutionRequest:
+      type: object
+      description: |
+        Resolve body for `POST /approvals/{id}`. Provide `decision` (preferred) or
+        the legacy `approved`/`durable` pair.
+      properties:
+        decision:
+          $ref: "#/components/schemas/ApprovalDecision"
+        approved:
+          type: boolean
+          description: Legacy flag; `true` maps to `allowOnce` (or `allowAlways` when `durable` is true), `false` maps to `deny`.
+        durable:
+          type: boolean
+          description: When true with `approved`, resolves as `allowAlways`.
         reason:
           type: string
           description: Optional denial reason.

@@ -3697,6 +3697,63 @@ struct APILayerRESTCoverageTests {
         }
     }
 
+    @Test("POST /api/approvals/:id resolves on the unified decision vocabulary")
+    func unifiedApprovalResolveAllowAlways() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+        let grants = InMemoryExecApprovalGrantStore()
+        await ExecApprovalStore.shared.configure(grantStore: grants)
+        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+        await ExecApprovalStore.shared.registerPending(id: "unified-1", command: "git push origin main")
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(
+                .POST,
+                "/api/approvals/unified-1",
+                beforeRequest: { req in
+                    try req.content.encode(["decision": "allowAlways"])
+                }
+            ) { res async throws in
+                #expect(res.status == .ok)
+            }
+            #expect(await ExecApprovalStore.shared.isDurableApproved(command: "git status"))
+        }
+    }
+
+    @Test("POST /api/approvals/:id returns 404 for unknown approval")
+    func unifiedApprovalResolveUnknown() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [])
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(
+                .POST,
+                "/api/approvals/missing-id",
+                beforeRequest: { req in
+                    try req.content.encode(["decision": "deny"])
+                }
+            ) { res async throws in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
     @Test("GET /api/exec-approvals/grants returns sorted command names")
     func execApprovalGrantsList() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()

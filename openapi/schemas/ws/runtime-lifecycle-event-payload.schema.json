@@ -92,6 +92,9 @@
       "type": "string",
       "enum": ["manual", "timeoutDefault", "runtimeAuto"]
     },
+    "approvalPresentation": {
+      "$ref": "approval-presentation.schema.json"
+    },
     "originTrustLevel": {
       "type": "string"
     },

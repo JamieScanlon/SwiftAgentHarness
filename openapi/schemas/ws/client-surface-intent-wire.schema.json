@@ -7,10 +7,13 @@
   "required": ["kind", "filePath"],
   "properties": {
     "v": { "type": "integer", "minimum": 1 },
-    "kind": { "type": "string", "enum": ["openFileForEdit"] },
+    "kind": { "type": "string", "enum": ["openFileForEdit", "execApprovalRequired", "execApprovalCleared"] },
     "filePath": { "type": "string" },
     "scope": { "type": "string" },
-    "label": { "type": "string" }
+    "label": { "type": "string" },
+    "approvalID": { "type": "string" },
+    "command": { "type": "string" },
+    "presentation": { "$ref": "approval-presentation.schema.json" }
   },
   "additionalProperties": false
 }

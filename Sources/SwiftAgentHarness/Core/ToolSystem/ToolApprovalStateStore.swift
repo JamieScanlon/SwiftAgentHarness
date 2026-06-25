@@ -24,8 +24,26 @@ struct ToolApprovalContractSpec: Sendable, Codable, Equatable {
     let title: String
     let description: String
     let severity: String
-    let timeoutMs: Int
+    /// `nil` disables the approval timeout (wait indefinitely for a response).
+    let timeoutMs: Int?
     let timeoutBehavior: ToolPolicyConfiguration.ApprovalTimeoutBehavior
+    let presentation: ApprovalPresentation?
+
+    init(
+        title: String,
+        description: String,
+        severity: String,
+        timeoutMs: Int?,
+        timeoutBehavior: ToolPolicyConfiguration.ApprovalTimeoutBehavior,
+        presentation: ApprovalPresentation? = nil
+    ) {
+        self.title = title
+        self.description = description
+        self.severity = severity
+        self.timeoutMs = timeoutMs
+        self.timeoutBehavior = timeoutBehavior
+        self.presentation = presentation
+    }
 }
 
 struct ToolApprovalTimedOutResolution: Sendable, Equatable {
@@ -45,21 +63,30 @@ private struct ToolApprovalStateKey: Hashable, Sendable {
     let runID: UUID?
     let toolName: String
     let route: ToolApprovalRoute
+
+    /// A stable string id for the shared `ApprovalCoordinator` lifecycle engine.
+    var coordinatorID: String {
+        "tool|\(conversationID.uuidString)|\(runID?.uuidString ?? "-")|\(toolName)|\(route.rawValue)"
+    }
 }
 
 enum ToolApprovalWaitError: Error, Sendable {
     case pendingRequestNotFound
 }
 
+/// Tool-path façade over the core-owned `ApprovalCoordinator`. The coordinator owns
+/// pending registration, dedupe, expiry/timeout, waiter resume, and cancellation;
+/// this store keeps the tuple-indexed resolution map the runtime queries
+/// (conversation-wide fallback, approved-tool-name set) and the per-key contract
+/// specs needed to report timeouts.
 actor ToolApprovalStateStore {
+    private let coordinator: ApprovalCoordinator
     private var resolutions: [ToolApprovalStateKey: ToolApprovalResolution] = [:]
-    private var pendingRequests: [ToolApprovalStateKey: PendingApprovalRequest] = [:]
-    private var waiters: [ToolApprovalStateKey: [CheckedContinuation<ToolApprovalResolution, Error>]] = [:]
+    private var specs: [ToolApprovalStateKey: ToolApprovalContractSpec] = [:]
+    private var keyByID: [String: ToolApprovalStateKey] = [:]
 
-    private struct PendingApprovalRequest: Sendable {
-        let requestedAt: Date
-        let expiresAt: Date
-        let spec: ToolApprovalContractSpec
+    init(coordinator: ApprovalCoordinator = ApprovalCoordinator()) {
+        self.coordinator = coordinator
     }
 
     func setResolution(
@@ -72,14 +99,13 @@ actor ToolApprovalStateStore {
         reason: String? = nil,
         kind: ToolApprovalResolutionKind = .manual,
         decidedAt: Date = Date()
-    ) {
+    ) async {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
             toolName: toolName,
             route: route
         )
-        pendingRequests.removeValue(forKey: key)
         let resolution = ToolApprovalResolution(
             status: status,
             decidedAt: decidedAt,
@@ -88,16 +114,15 @@ actor ToolApprovalStateStore {
             kind: kind
         )
         resolutions[key] = resolution
-        if status != .pending {
-            resumeWaiters(for: key, returning: resolution)
-        }
-    }
-
-    private func resumeWaiters(for key: ToolApprovalStateKey, returning resolution: ToolApprovalResolution) {
-        let pending = waiters.removeValue(forKey: key) ?? []
-        for continuation in pending {
-            continuation.resume(returning: resolution)
-        }
+        guard status != .pending else { return }
+        _ = await coordinator.resolve(
+            id: key.coordinatorID,
+            decision: status == .approved ? .allowOnce : .deny,
+            source: source,
+            reason: reason,
+            kind: kind.rawValue,
+            decidedAt: decidedAt
+        )
     }
 
     func waitForResolution(
@@ -120,92 +145,26 @@ actor ToolApprovalStateStore {
         ), existing.status != .pending {
             return existing
         }
-        guard let pending = pendingRequests[key] else {
-            throw ToolApprovalWaitError.pendingRequestNotFound
-        }
-        return try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: ToolApprovalResolution.self) { group in
-                group.addTask {
-                    try await self.suspendForResolution(key: key)
-                }
-                group.addTask {
-                    let delay = pending.expiresAt.timeIntervalSince(Date())
-                    if delay > 0 {
-                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    }
-                    return await self.resolveTimedOutApproval(for: key, request: pending)
-                }
-                guard let first = try await group.next() else {
-                    throw CancellationError()
-                }
-                group.cancelAll()
-                return first
-            }
-        } onCancel: {
-            Task {
-                await self.cancelWaiters(
-                    for: key,
-                    conversationID: conversationID,
-                    runID: runID,
-                    toolName: toolName,
-                    route: route
-                )
-            }
-        }
-    }
-
-    private func suspendForResolution(key: ToolApprovalStateKey) async throws -> ToolApprovalResolution {
-        try await withCheckedThrowingContinuation { continuation in
-            if let existing = resolutions[key], existing.status != .pending {
-                continuation.resume(returning: existing)
-                return
-            }
-            waiters[key, default: []].append(continuation)
-        }
-    }
-
-    private func resolveTimedOutApproval(
-        for key: ToolApprovalStateKey,
-        request: PendingApprovalRequest
-    ) -> ToolApprovalResolution {
-        let status: ToolApprovalResolutionStatus = switch request.spec.timeoutBehavior {
-        case .autoDeny:
-            .denied
-        case .autoApprove:
-            .approved
-        }
-        let timeoutReason = "approval_timeout_\(request.spec.timeoutBehavior.rawValue)"
-        setResolution(
-            conversationID: key.conversationID,
-            runID: key.runID,
-            toolName: key.toolName,
-            route: key.route,
-            status: status,
-            source: "runtime.approvalTimeout",
-            reason: timeoutReason,
-            kind: .timeoutDefault,
-            decidedAt: Date()
-        )
-        return resolutions[key]!
-    }
-
-    private func cancelWaiters(
-        for key: ToolApprovalStateKey,
-        conversationID: UUID,
-        runID: UUID?,
-        toolName: String,
-        route: ToolApprovalRoute
-    ) {
-        setResolution(
-            conversationID: conversationID,
-            runID: runID,
-            toolName: toolName,
-            route: route,
-            status: .denied,
+        let cancellation = ApprovalCoordinator.CancellationOutcome(
             source: "runtime.cancelled",
             reason: "denied-cancelled",
-            kind: .runtimeAuto
+            kind: ToolApprovalResolutionKind.runtimeAuto.rawValue
         )
+        return try await withTaskCancellationHandler {
+            do {
+                let outcome = try await coordinator.waitForResolution(
+                    id: key.coordinatorID,
+                    cancellation: cancellation
+                )
+                return persist(outcome: outcome, for: key)
+            } catch is CancellationError {
+                return cancelResolution(for: key)
+            } catch ApprovalCoordinator.WaitError.pendingRequestNotFound {
+                throw ToolApprovalWaitError.pendingRequestNotFound
+            }
+        } onCancel: {
+            Task { await self.markCancelled(key: key) }
+        }
     }
 
     func resolution(
@@ -241,7 +200,7 @@ actor ToolApprovalStateStore {
         route: ToolApprovalRoute = .user,
         requestedAt: Date = Date(),
         spec: ToolApprovalContractSpec
-    ) -> Bool {
+    ) async -> Bool {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
@@ -251,14 +210,19 @@ actor ToolApprovalStateStore {
         if let existing = resolutions[key], existing.status != .pending {
             return false
         }
-        if pendingRequests[key] != nil {
-            return false
-        }
-        pendingRequests[key] = PendingApprovalRequest(
+        let registered = await coordinator.register(
+            id: key.coordinatorID,
+            presentation: spec.presentation,
             requestedAt: requestedAt,
-            expiresAt: requestedAt.addingTimeInterval(TimeInterval(spec.timeoutMs) / 1000.0),
-            spec: spec
+            timeoutMs: spec.timeoutMs,
+            timeoutResolution: spec.timeoutBehavior.timeoutResolution,
+            timeoutSource: "runtime.approvalTimeout",
+            timeoutReason: "approval_timeout_\(spec.timeoutBehavior.rawValue)",
+            timeoutKind: ToolApprovalResolutionKind.timeoutDefault.rawValue
         )
+        guard registered else { return false }
+        specs[key] = spec
+        keyByID[key.coordinatorID] = key
         resolutions[key] = ToolApprovalResolution(
             status: .pending,
             decidedAt: requestedAt,
@@ -269,16 +233,20 @@ actor ToolApprovalStateStore {
         return true
     }
 
-    func consumeTimedOutApprovals(now: Date = Date()) -> [ToolApprovalTimedOutResolution] {
+    func consumeTimedOutApprovals(now: Date = Date()) async -> [ToolApprovalTimedOutResolution] {
+        let expired = await coordinator.consumeExpired(now: now)
         var out: [ToolApprovalTimedOutResolution] = []
-        for (key, request) in pendingRequests where request.expiresAt <= now {
-            let status: ToolApprovalResolutionStatus = switch request.spec.timeoutBehavior {
-            case .autoDeny:
-                .denied
-            case .autoApprove:
-                .approved
-            }
-            let timeoutReason = "approval_timeout_\(request.spec.timeoutBehavior.rawValue)"
+        for entry in expired {
+            guard let key = keyByID[entry.id], let spec = specs[key] else { continue }
+            let status = ToolApprovalResolutionStatus(decision: entry.outcome.decision)
+            let reason = entry.outcome.reason ?? "approval_timeout_\(spec.timeoutBehavior.rawValue)"
+            resolutions[key] = ToolApprovalResolution(
+                status: status,
+                decidedAt: entry.outcome.decidedAt,
+                source: entry.outcome.source,
+                reason: reason,
+                kind: .timeoutDefault
+            )
             out.append(
                 ToolApprovalTimedOutResolution(
                     conversationID: key.conversationID,
@@ -286,24 +254,11 @@ actor ToolApprovalStateStore {
                     toolName: key.toolName,
                     route: key.route,
                     status: status,
-                    source: "runtime.approvalTimeout",
-                    reason: timeoutReason,
-                    spec: request.spec,
-                    resolvedAt: now
+                    source: entry.outcome.source,
+                    reason: reason,
+                    spec: spec,
+                    resolvedAt: entry.outcome.decidedAt
                 )
-            )
-        }
-        for resolved in out {
-            setResolution(
-                conversationID: resolved.conversationID,
-                runID: resolved.runID,
-                toolName: resolved.toolName,
-                route: resolved.route,
-                status: resolved.status,
-                source: resolved.source,
-                reason: resolved.reason,
-                kind: .timeoutDefault,
-                decidedAt: resolved.resolvedAt
             )
         }
         return out
@@ -331,5 +286,57 @@ actor ToolApprovalStateStore {
             return key.toolName
         }
         return Set(exact + fallback)
+    }
+
+    private func persist(outcome: ApprovalOutcome, for key: ToolApprovalStateKey) -> ToolApprovalResolution {
+        let resolution = ToolApprovalResolution(
+            status: ToolApprovalResolutionStatus(decision: outcome.decision),
+            decidedAt: outcome.decidedAt,
+            source: outcome.source,
+            reason: outcome.reason,
+            kind: ToolApprovalResolutionKind(rawValue: outcome.kind ?? "") ?? .manual
+        )
+        resolutions[key] = resolution
+        return resolution
+    }
+
+    private func cancelResolution(for key: ToolApprovalStateKey) -> ToolApprovalResolution {
+        markCancelled(key: key)
+        return resolutions[key] ?? ToolApprovalResolution(
+            status: .denied,
+            decidedAt: Date(),
+            source: "runtime.cancelled",
+            reason: "denied-cancelled",
+            kind: .runtimeAuto
+        )
+    }
+
+    private func markCancelled(key: ToolApprovalStateKey) {
+        let resolution = ToolApprovalResolution(
+            status: .denied,
+            decidedAt: Date(),
+            source: "runtime.cancelled",
+            reason: "denied-cancelled",
+            kind: .runtimeAuto
+        )
+        resolutions[key] = resolution
+        Task { [coordinator] in
+            await coordinator.resolve(
+                id: key.coordinatorID,
+                decision: .cancelled,
+                source: "runtime.cancelled",
+                reason: "denied-cancelled",
+                kind: ToolApprovalResolutionKind.runtimeAuto.rawValue
+            )
+        }
+    }
+}
+
+extension ToolPolicyConfiguration.ApprovalTimeoutBehavior {
+    var timeoutResolution: ApprovalTimeoutResolution {
+        switch self {
+        case .autoDeny: return .deny
+        case .autoApprove: return .allow
+        }
     }
 }
