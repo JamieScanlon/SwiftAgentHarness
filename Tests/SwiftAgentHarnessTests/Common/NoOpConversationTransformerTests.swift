@@ -35,18 +35,6 @@ struct NoOpConversationTransformerTests {
         #expect(output.messageProvenance?.allSatisfy { $0.origin == .original } == true)
     }
 
-    @Test("transformToolResult returns original result")
-    func toolResultNoOp() async throws {
-        let transformer = NoOpConversationTransformer()
-        let toolCall = ToolCall(name: "web-fetch", arguments: .object([:]), id: UUID().uuidString)
-        let result = ToolResult(success: true, content: "large content", metadata: .object([:]), toolCallId: toolCall.id)
-        let output = try await transformer.transformToolResult(
-            ToolResultTransformInput(toolCall: toolCall, result: result, conversation: makeConversationMeta())
-        )
-        #expect(output.result.content == result.content)
-        #expect(output.result.toolCallId == result.toolCallId)
-    }
-
     @Test("transformTurnSummary preserves full turn messages")
     func turnSummaryNoOp() async throws {
         let transformer = NoOpConversationTransformer()

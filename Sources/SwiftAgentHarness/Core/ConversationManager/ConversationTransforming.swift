@@ -293,17 +293,6 @@ public struct ContextTransformOutput: Sendable {
     let messageProvenance: [ContextTransformMessageProvenance]?
 }
 
-public struct ToolResultTransformInput: Sendable {
-    let toolCall: ToolCall
-    let result: ToolResult
-    let conversation: ConversationTransformMetadata
-}
-
-public struct ToolResultTransformOutput: Sendable {
-    let result: ToolResult
-    let diagnostics: String?
-}
-
 public struct TurnSummaryTransformInput: Sendable {
     let conversation: ConversationTransformMetadata
     let turnMessageRangeStartIndex: Int
@@ -318,7 +307,6 @@ public struct TurnSummaryTransformOutput: Sendable {
 
 public protocol ConversationTransforming: Sendable {
     func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput
 }
 
@@ -337,10 +325,6 @@ public struct NoOpConversationTransformer: ConversationTransforming {
                 )
             }
         )
-    }
-
-    public func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
     }
 
     public func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {

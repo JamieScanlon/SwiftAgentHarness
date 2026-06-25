@@ -462,10 +462,6 @@ private struct PreviewSummaryTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
-    }
-
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: nil)
     }
@@ -481,10 +477,6 @@ private actor LowSavingsTransformCounter: ConversationTransforming {
             diagnostics: ContextCompactionTransformer.prunedDiagnostic,
             messageProvenance: nil
         )
-    }
-
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
     }
 
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {

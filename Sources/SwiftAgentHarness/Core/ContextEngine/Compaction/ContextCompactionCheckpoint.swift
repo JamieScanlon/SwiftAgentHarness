@@ -189,6 +189,7 @@ enum ContextCompactionCheckpointSupport {
             config.compactionToolResultPruneNames.sorted().joined(separator: ","),
             config.maxRecentToolResults,
             config.maxRecentPerNameToolResults,
+            config.toolResultPruneReplacementMode.rawValue,
             config.compactionSummaryBudgetTokens,
             config.compactionCustomInstructionsBlock,
             config.compactionSummarizerContextLimitTokens,

@@ -11,7 +11,10 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var charactersPerToken: Double
     /// Cap on synthesized middle messages passed to the compaction LLM (system + final preserved separately).
     public var maxCompactedMiddleMessages: Int
-    /// Tool results with `content` longer than this many characters (`String.count`) are passed through the tool-result summarizer; shorter results are left unchanged.
+    /// Deprecated and no longer functional. Formerly the character threshold above which a tool
+    /// result was sent to the eager LLM tool-result summarizer (removed; the runtime tool-result
+    /// middleware seam is now deterministic). Retained only for backward-compatible config decoding
+    /// and checkpoint fingerprint stability; absent/legacy values are tolerated and have no effect.
     public var toolResultSummarizationCharacterThreshold: Int
     /// If greater than zero, skip compaction LLM when the middle segment has fewer total characters than this (soft “under budget” gate).
     public var middleMinCharactersForCompactionLLM: Int
@@ -23,6 +26,8 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var maxRecentToolResults: Int
     /// Recency cap for tool results whose tool name **is** in `compactionToolResultPruneNames`, applied **per name independently**: e.g. with `["web-fetch", "web-search"]` and a value of `5` the pruned middle keeps the last 5 `web-fetch` and the last 5 `web-search` results, clearing earlier ones. See `ContextCompactionToolResultPruning`.
     public var maxRecentPerNameToolResults: Int
+    /// Replacement-content strategy for tool results dropped during pre-compaction hygiene: `.blankMarker` substitutes the content-free placeholder (rung 1), `.oneLineSummary` substitutes a deterministic 1-line summary that preserves the key signal at zero cost (rung 2). Affects only the compaction LLM payload; stored conversation messages are unchanged. See `ContextCompactionToolResultPruning` and `DeterministicToolResultSummary`.
+    public var toolResultPruneReplacementMode: ToolResultPruneReplacementMode
     /// Target size hint (in tokens) for the `<summary>` body, substituted as `{{summary_budget}}` in the compaction user prompt template.
     public var compactionSummaryBudgetTokens: Int
     /// Optional site- or deployment-specific instructions appended to the compaction user prompt as `{{custom_instructions_block}}`.
@@ -135,6 +140,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         compactionToolResultPruneNames: [],
         maxRecentToolResults: 5,
         maxRecentPerNameToolResults: 5,
+        toolResultPruneReplacementMode: .oneLineSummary,
         compactionSummaryBudgetTokens: 2000,
         compactionCustomInstructionsBlock: "",
         compactionIdentifierPreservationMode: "strict",
@@ -191,6 +197,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         compactionToolResultPruneNames: [String] = [],
         maxRecentToolResults: Int = 5,
         maxRecentPerNameToolResults: Int = 5,
+        toolResultPruneReplacementMode: ToolResultPruneReplacementMode = .oneLineSummary,
         compactionSummaryBudgetTokens: Int = 2000,
         compactionCustomInstructionsBlock: String = "",
         compactionIdentifierPreservationMode: String = "strict",
@@ -245,6 +252,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.compactionToolResultPruneNames = compactionToolResultPruneNames
         self.maxRecentToolResults = maxRecentToolResults
         self.maxRecentPerNameToolResults = maxRecentPerNameToolResults
+        self.toolResultPruneReplacementMode = toolResultPruneReplacementMode
         self.compactionSummaryBudgetTokens = compactionSummaryBudgetTokens
         self.compactionCustomInstructionsBlock = compactionCustomInstructionsBlock
         self.compactionIdentifierPreservationMode = compactionIdentifierPreservationMode
@@ -628,6 +636,18 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 guard let v = raw else { return def.maxRecentPerNameToolResults }
                 return Swift.min(1_000_000, Swift.max(0, v))
             }()
+            let toolResultPruneReplacementMode: ToolResultPruneReplacementMode = {
+                let raw = (payload["toolResultPruneReplacementMode"] as? String)
+                    ?? (payload["tool_result_prune_replacement_mode"] as? String)
+                switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                case "blank", "blankmarker", "blank_marker":
+                    return .blankMarker
+                case "one_line_summary", "onelinesummary":
+                    return .oneLineSummary
+                default:
+                    return def.toolResultPruneReplacementMode
+                }
+            }()
             let compactionSummaryBudgetTokens: Int = {
                 if let value = payload["compactionSummaryBudgetTokens"] as? Int {
                     return Swift.min(1_000_000, Swift.max(1, value))
@@ -815,6 +835,7 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 compactionToolResultPruneNames: compactionToolResultPruneNames,
                 maxRecentToolResults: maxRecentToolResults,
                 maxRecentPerNameToolResults: maxRecentPerNameToolResults,
+                toolResultPruneReplacementMode: toolResultPruneReplacementMode,
                 compactionSummaryBudgetTokens: compactionSummaryBudgetTokens,
                 compactionCustomInstructionsBlock: compactionCustomInstructionsBlock,
                 compactionIdentifierPreservationMode: compactionIdentifierPreservationMode,

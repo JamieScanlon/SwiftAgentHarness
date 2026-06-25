@@ -23,4 +23,5 @@ protocol OrchestratorSessionRuntimeCollaborating: Sendable {
     func persistActivatedSkillsFromLoaderToCurrentConversation() async
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async
     func runtimeToolResultMiddlewarePipeline() async -> ToolResultMiddlewarePipeline
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async
 }

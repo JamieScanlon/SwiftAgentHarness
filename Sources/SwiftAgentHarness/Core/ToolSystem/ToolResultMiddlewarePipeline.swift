@@ -6,6 +6,31 @@ enum ToolResultMiddlewareStage: String, Sendable {
     case persistence
 }
 
+/// Public host-facing registration for runtime-delivery tool-result middleware. Mounted via
+/// ``OrchestratorRuntimeService/registerAgentToolResultMiddleware(_:)``, this is the spec's
+/// runtime-neutral interception point for reshaping a ``ToolResult`` after the tool has executed
+/// and before the orchestrator forwards it to the model. Implementations are expected to be cheap
+/// and deterministic; the harness does not run any LLM call on this seam.
+public struct AgentToolResultMiddleware: Sendable {
+    /// Stable identifier used for deterministic ordering ties and diagnostics.
+    public let id: String
+    /// Relative position within the runtime-delivery stage. Lower runs earlier; host middleware is
+    /// applied between the harness subdirectory-hint tracker (order 50) and the external-content
+    /// envelope (order 200).
+    public let order: Int
+    public let transform: @Sendable (ToolCall, ToolResult) async -> ToolResult
+
+    public init(
+        id: String,
+        order: Int = 100,
+        transform: @escaping @Sendable (ToolCall, ToolResult) async -> ToolResult
+    ) {
+        self.id = id
+        self.order = order
+        self.transform = transform
+    }
+}
+
 struct ToolResultMiddlewareRegistration: Sendable {
     let id: String
     let stage: ToolResultMiddlewareStage

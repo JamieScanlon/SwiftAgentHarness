@@ -143,6 +143,13 @@ public actor OrchestratorRuntimeService {
         await installedSessionCollaborator.installTurnToolRegistryEntries(entries)
     }
 
+    /// Mounts a host-supplied deterministic runtime-delivery tool-result middleware on the
+    /// runtime-neutral interception seam (applied between the harness subdirectory-hint tracker and
+    /// the external-content envelope, before the orchestrator forwards the result to the model).
+    public func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async {
+        await installedSessionCollaborator.registerAgentToolResultMiddleware(middleware)
+    }
+
     private func orchestratorBinding() async -> any AgentRuntimeOrchestratorBinding {
         if let agentRuntime { return agentRuntime }
         return orchestrationCore

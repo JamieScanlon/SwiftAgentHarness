@@ -7,7 +7,6 @@ import Testing
 
 private actor StubReplayTransformer: ConversationTransforming {
     private(set) var contextCalls: Int = 0
-    private(set) var toolCalls: Int = 0
     private(set) var turnCalls: Int = 0
 
     func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput {
@@ -15,25 +14,20 @@ private actor StubReplayTransformer: ConversationTransforming {
         return ContextTransformOutput(messages: input.messages, diagnostics: "stub_context", messageProvenance: nil)
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        toolCalls += 1
-        let transformed = ToolResult(
-            success: input.result.success,
-            content: "[tool-transformed] \(input.result.content)",
-            metadata: input.result.metadata,
-            toolCallId: input.result.toolCallId
-        )
-        return ToolResultTransformOutput(result: transformed, diagnostics: "stub_tool")
-    }
-
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         turnCalls += 1
         return TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: "stub_turn")
     }
 
-    func counts() async -> (Int, Int, Int) {
-        (contextCalls, toolCalls, turnCalls)
+    func counts() async -> (Int, Int) {
+        (contextCalls, turnCalls)
     }
+}
+
+private actor ReplayToolMiddlewareProbe {
+    private(set) var calls: Int = 0
+    func record() { calls += 1 }
+    func count() -> Int { calls }
 }
 
 private actor StreamCountCollector {
@@ -199,6 +193,18 @@ struct HarnessRuntimeSessionReplayProcessingTests {
 
         let transformer = StubReplayTransformer()
         let runtimeSession = makeReplayHost(fixture: fixture, transformer: transformer)
+        let toolProbe = ReplayToolMiddlewareProbe()
+        await runtimeSession.orchestratorRuntimeService.registerAgentToolResultMiddleware(
+            AgentToolResultMiddleware(id: "replay-tool-probe") { _, result in
+                await toolProbe.record()
+                return ToolResult(
+                    success: result.success,
+                    content: "[tool-transformed] \(result.content)",
+                    metadata: result.metadata,
+                    toolCallId: result.toolCallId
+                )
+            }
+        )
         try await runtimeSession.resetConversationsFromCatalog(availableModels: [model])
         try await runtimeSession.selectConversation(conversationID: conversationID)
         try await runtimeSession.conversationReplayService.startConversationReplay(sourceConversationID: conversationID)
@@ -217,8 +223,8 @@ struct HarnessRuntimeSessionReplayProcessingTests {
         #expect(replayed.contains(where: { $0.role == .tool && $0.content == "raw tool output" }))
         let counts = await transformer.counts()
         #expect(counts.0 > 0) // context
-        #expect(counts.1 > 0) // tool (applied during replay on the sandbox)
-        #expect(counts.2 > 0) // turn
+        #expect(counts.1 > 0) // turn
+        #expect(await toolProbe.count() > 0) // host tool-result middleware applied during replay
         await teardownReplayFixture(fixture, runtimeSession: runtimeSession)
     }
 

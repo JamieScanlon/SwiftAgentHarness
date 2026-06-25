@@ -21,18 +21,6 @@ private struct CheckpointSuiteTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(
-            result: ToolResult(
-                success: input.result.success,
-                content: "[trimmed] \(input.result.content)",
-                metadata: input.result.metadata,
-                toolCallId: input.result.toolCallId
-            ),
-            diagnostics: "checkpoint_suite_tool"
-        )
-    }
-
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: nil)
     }
@@ -120,6 +108,16 @@ struct CheckpointProductionSuiteTests {
             container: container,
             conversationTransformConfiguration: transformConfig(),
             conversationTransformer: CheckpointSuiteTransformer()
+        )
+        await runtimeSession.orchestratorRuntimeService.registerAgentToolResultMiddleware(
+            AgentToolResultMiddleware(id: "checkpoint-suite-trim") { _, result in
+                ToolResult(
+                    success: result.success,
+                    content: "[trimmed] \(result.content)",
+                    metadata: result.metadata,
+                    toolCallId: result.toolCallId
+                )
+            }
         )
         let conversationAPI = await makeSplitConversationAdapter(runtimeSession: runtimeSession)
         let model = makeModel(name: "checkpoint-suite-tools")

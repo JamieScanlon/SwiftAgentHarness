@@ -140,6 +140,10 @@ public actor OrchestratorSessionRuntimeService {
         await messaging.installTurnToolRegistryEntries(entries)
     }
 
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async {
+        await messaging.registerAgentToolResultMiddleware(middleware)
+    }
+
     func recordContextSnapshot(from response: LLMResponse, requestConfig: LLMRequestConfig) async {
         await agentRuntime.recordContextSnapshot(from: response, requestConfig: requestConfig)
     }

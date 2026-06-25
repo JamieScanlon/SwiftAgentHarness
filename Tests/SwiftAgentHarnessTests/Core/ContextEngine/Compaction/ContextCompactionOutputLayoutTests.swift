@@ -198,6 +198,7 @@ private func layoutTestConfig(reinjectionEnabled: Bool = false) -> ContextCompac
         compactionToolResultPruneNames: ["web-fetch"],
         maxRecentToolResults: 5,
         maxRecentPerNameToolResults: 0,
+        toolResultPruneReplacementMode: .blankMarker,
         compactionSummaryBudgetTokens: 2000,
         compactionCustomInstructionsBlock: "",
         compactionSummarizerContextLimitTokens: 2_500,
