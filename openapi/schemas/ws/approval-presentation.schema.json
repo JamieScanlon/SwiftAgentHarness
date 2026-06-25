@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swiftagentharness.dev/schemas/ws/approval-presentation.json",
+  "title": "ApprovalPresentation",
+  "description": "Portable, surface-agnostic approval request: a sequence of presentation blocks (the rich justification plus the decision buttons) that any surface renders natively or degrades to text.",
+  "type": "object",
+  "required": ["blocks"],
+  "properties": {
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["text", "context", "buttons"]
+          },
+          "text": { "type": "string" },
+          "buttons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "label", "style"],
+              "properties": {
+                "id": { "type": "string" },
+                "label": { "type": "string" },
+                "style": {
+                  "type": "string",
+                  "enum": ["default", "primary", "danger"]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
