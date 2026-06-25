@@ -166,13 +166,23 @@ public struct SlashCommandRegistry: Sendable {
             base: SlashCommandBase(
                 name: "approve",
                 description: "Approve a pending exec request by ID.",
-                argumentHint: "<approval-id> [durable]",
-                hiddenKeywords: "exec approval allow",
+                argumentHint: "<approval-id> [always]",
+                hiddenKeywords: "exec approval allow once durable",
                 bypassTier: .always
             ),
             kind: .local
         )
-        return SlashCommandRegistry(commands: [compact, memory, initCmd, approve])
+        let deny = SlashCommand(
+            base: SlashCommandBase(
+                name: "deny",
+                description: "Deny a pending exec request by ID.",
+                argumentHint: "<approval-id> [reason]",
+                hiddenKeywords: "exec approval reject refuse",
+                bypassTier: .always
+            ),
+            kind: .local
+        )
+        return SlashCommandRegistry(commands: [compact, memory, initCmd, approve, deny])
     }
 
     /// Built-in commands plus one registry row per eligible skill (`name` key `skill:<lowercased>`).

@@ -328,6 +328,7 @@ struct AgentRuntimeSeamTests {
                     timeoutMs: 30_000,
                     timeoutBehavior: "deny",
                     resolutionKind: ToolApprovalResolutionKind.runtimeAuto.rawValue,
+                    presentation: ApprovalPresentation.standard(title: "Approve", context: ["danger_tool"]),
                     source: "runtime.toolDispatch"
                 )
             ),

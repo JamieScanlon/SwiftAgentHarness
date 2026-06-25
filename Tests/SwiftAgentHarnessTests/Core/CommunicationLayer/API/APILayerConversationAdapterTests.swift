@@ -106,7 +106,8 @@ struct APILayerConversationAdapterTests {
             route: .user,
             status: .approved,
             source: "tests.adapter",
-            reason: nil
+            reason: nil,
+            durable: false
         )
     }
 }

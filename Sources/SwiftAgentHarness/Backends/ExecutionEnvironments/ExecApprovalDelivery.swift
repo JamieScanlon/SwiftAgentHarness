@@ -6,6 +6,25 @@ public struct ExecApprovalRequest: Sendable, Equatable {
     public let command: String
     public let title: String
     public let description: String
+    /// Portable presentation a surface renders natively (and core degrades to text).
+    public let presentation: ApprovalPresentation
+
+    public init(
+        id: String,
+        command: String,
+        title: String,
+        description: String,
+        presentation: ApprovalPresentation? = nil
+    ) {
+        self.id = id
+        self.command = command
+        self.title = title
+        self.description = description
+        self.presentation = presentation ?? ApprovalPresentation.standard(
+            title: title,
+            context: [command, description == command ? "" : description]
+        )
+    }
 }
 
 public enum ExecApprovalDeliveryResult: Sendable, Equatable {
@@ -34,17 +53,20 @@ struct ExecApprovalChannelRoute: Sendable {
 
 public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
     private let store: ExecApprovalStore
-    private let waitTimeoutSeconds: TimeInterval
+    private let waitTimeoutSeconds: TimeInterval?
     private let onPending: (@Sendable (ExecApprovalRequest) async -> Void)?
+    private let onCleared: (@Sendable (String) async -> Void)?
 
     public init(
         store: ExecApprovalStore = .shared,
-        waitTimeoutSeconds: TimeInterval = 300,
-        onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil
+        waitTimeoutSeconds: TimeInterval? = nil,
+        onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil,
+        onCleared: (@Sendable (String) async -> Void)? = nil
     ) {
         self.store = store
         self.waitTimeoutSeconds = waitTimeoutSeconds
         self.onPending = onPending
+        self.onCleared = onCleared
     }
 
     public func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
@@ -54,7 +76,7 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
         if await store.isDurableApproved(command: request.command) {
             return .approved
         }
-        await store.registerPending(id: request.id, command: request.command)
+        await store.registerPending(id: request.id, command: request.command, presentation: request.presentation)
         await onPending?(request)
         if let resolution = await store.waitForResolution(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
             switch resolution {
@@ -64,7 +86,11 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
                 return .denied(reason)
             }
         }
-        return .denied("exec approval timed out")
+        // With the indefinite default, a `nil` resolution only happens when the
+        // awaiting run is stopped/cancelled. Notify so the surface can dismiss the
+        // stale prompt.
+        await onCleared?(request.id)
+        return .denied("exec approval cancelled")
     }
 
     public func sendFollowup(approvalID: String, approved: Bool) async {}
@@ -92,21 +118,20 @@ struct ChannelExecApprovalDelivery: ExecApprovalDelivering {
         if await store.isDurableApproved(command: request.command) {
             return .approved
         }
-        await store.registerPending(id: request.id, command: request.command)
+        await store.registerPending(id: request.id, command: request.command, presentation: request.presentation)
         guard let route else {
-            return .deferred("Use /approve \(request.id)")
+            return .deferred(request.presentation.textFallback(approvalID: request.id))
         }
         let card = ChannelOutboundApprovalCard(
             approvalID: request.id,
             title: request.title,
             command: request.command,
             description: request.description,
-            actions: [
-                ChannelOutboundApprovalAction(id: "approve", label: "Approve"),
-                ChannelOutboundApprovalAction(id: "deny", label: "Deny"),
-            ]
+            actions: request.presentation.buttons.map {
+                ChannelOutboundApprovalAction(id: $0.id, label: $0.label)
+            }
         )
-        let fallbackText = "Exec approval required for:\n\(request.command)\nUse /approve \(request.id)"
+        let fallbackText = request.presentation.textFallback(approvalID: request.id)
         let sendResult = await route.listener.send(
             ChannelOutboundMessage(
                 chatId: route.chatId,
@@ -117,7 +142,7 @@ struct ChannelExecApprovalDelivery: ExecApprovalDelivering {
             )
         )
         guard case .sent = sendResult else {
-            return .deferred("Use /approve \(request.id)")
+            return .deferred(fallbackText)
         }
         if let resolution = await store.waitForResolution(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
             switch resolution {
@@ -127,7 +152,7 @@ struct ChannelExecApprovalDelivery: ExecApprovalDelivering {
                 return .denied(reason)
             }
         }
-        return .deferred("Use /approve \(request.id)")
+        return .deferred(fallbackText)
     }
 
     func sendFollowup(approvalID: String, approved: Bool) async {
@@ -151,7 +176,8 @@ enum ExecApprovalDeliveryFactory {
     static func make(
         channelRegistry: (any ChannelListenerLooking)?,
         metadata: JSON?,
-        onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil
+        onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil,
+        onCleared: (@Sendable (String) async -> Void)? = nil
     ) async -> any ExecApprovalDelivering {
         guard let trigger = TriggerHostConversationMetadata.triggerFromFingerprint(metadata),
               let channelRaw = trigger.sourceMetadata["channel"],
@@ -161,7 +187,7 @@ enum ExecApprovalDeliveryFactory {
               let channelRegistry,
               let listener = await channelRegistry.listener(for: channel)
         else {
-            return DefaultExecApprovalDelivery(onPending: onPending)
+            return DefaultExecApprovalDelivery(onPending: onPending, onCleared: onCleared)
         }
         let route = ExecApprovalChannelRoute(
             listener: listener,

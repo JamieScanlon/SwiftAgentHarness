@@ -150,6 +150,11 @@ actor SlashCommandDispatchService {
                         conversationID: conversationID,
                         args: innerParsed.args
                     )
+                case "deny":
+                    return try await runSlashDenyCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
+                    )
                 default:
                     return nil
                 }

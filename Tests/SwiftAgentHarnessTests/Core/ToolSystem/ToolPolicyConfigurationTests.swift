@@ -11,6 +11,21 @@ struct ToolPolicyConfigurationTests {
         #expect(policy.pendingToolTimeoutSeconds == nil)
     }
 
+    @Test("approval timeout floors positive values and preserves nil disable")
+    func approvalTimeoutFloorAndDisable() {
+        #expect(ToolPolicyConfiguration().approvalTimeoutMilliseconds == 120_000)
+        #expect(ToolPolicyConfiguration(approvalTimeoutMilliseconds: 200).approvalTimeoutMilliseconds == 1_000)
+        #expect(ToolPolicyConfiguration(approvalTimeoutMilliseconds: 90_000).approvalTimeoutMilliseconds == 90_000)
+        #expect(ToolPolicyConfiguration(approvalTimeoutMilliseconds: nil).approvalTimeoutMilliseconds == nil)
+    }
+
+    @Test("stable allowlist signature distinguishes disabled approval timeout")
+    func stableSignatureTracksDisabledTimeout() {
+        let finite = ToolPolicyConfiguration(approvalTimeoutMilliseconds: 120_000)
+        let disabled = ToolPolicyConfiguration(approvalTimeoutMilliseconds: nil)
+        #expect(finite.stableAllowlistSignature() != disabled.stableAllowlistSignature())
+    }
+
     @Test("stable allowlist signature includes dispatch contract")
     func stableSignatureIncludesDispatchContract() {
         let base = ToolPolicyConfiguration(

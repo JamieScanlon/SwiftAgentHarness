@@ -12,6 +12,7 @@ struct ToolApprovalRequiredInfo: Sendable {
     let timeoutMs: Int?
     let timeoutBehavior: String?
     let resolutionKind: String
+    let presentation: ApprovalPresentation?
     let source: String
 }
 
@@ -31,6 +32,7 @@ struct ToolApprovalResolvedInfo: Sendable {
     let timeoutMs: Int?
     let timeoutBehavior: String?
     let resolutionKind: String?
+    let presentation: ApprovalPresentation?
     let source: String
 }
 
@@ -160,6 +162,7 @@ struct AgentRuntimeLifecycleEmitter {
                     approvalTimeoutMs: info.timeoutMs,
                     approvalTimeoutBehavior: info.timeoutBehavior,
                     approvalResolutionKind: info.resolutionKind,
+                    approvalPresentation: info.presentation,
                     toolCallID: info.toolCallID,
                     source: info.source
                 )
@@ -184,6 +187,7 @@ struct AgentRuntimeLifecycleEmitter {
                     approvalTimeoutMs: info.timeoutMs,
                     approvalTimeoutBehavior: info.timeoutBehavior,
                     approvalResolutionKind: info.resolutionKind,
+                    approvalPresentation: info.presentation,
                     toolCallID: info.toolCallID,
                     source: info.source
                 )

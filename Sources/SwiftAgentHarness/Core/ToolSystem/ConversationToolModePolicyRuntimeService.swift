@@ -182,7 +182,8 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
-        reason: String?
+        reason: String?,
+        durable: Bool = false
     ) async {
         await toolApproval.resolveToolApprovalForAPI(
             conversationID: conversationID,
@@ -191,7 +192,8 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
             route: route,
             status: status,
             source: source,
-            reason: reason
+            reason: reason,
+            durable: durable
         )
     }
 }

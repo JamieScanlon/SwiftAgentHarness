@@ -5,19 +5,22 @@ public enum ExecApprovalResolution: Sendable, Equatable {
     case denied(String)
 }
 
+/// Thin exec-approval façade over the core-owned `ApprovalCoordinator`. Owns only
+/// the exec-specific concerns (command text + durable grant store); the pending
+/// registry, dedupe, waiter resume, and timeout live in the coordinator.
 public actor ExecApprovalStore {
     public static let shared = ExecApprovalStore()
 
-    private struct PendingRequest: Sendable {
-        let command: String
-    }
-
-    private var pending: [String: PendingRequest] = [:]
-    private var waiters: [String: [CheckedContinuation<ExecApprovalResolution?, Never>]] = [:]
+    private let coordinator: ApprovalCoordinator
+    private var commands: [String: String] = [:]
     private var grantStore: any ExecApprovalGrantStore
 
-    public init(grantStore: any ExecApprovalGrantStore = InMemoryExecApprovalGrantStore()) {
+    public init(
+        grantStore: any ExecApprovalGrantStore = InMemoryExecApprovalGrantStore(),
+        coordinator: ApprovalCoordinator = ApprovalCoordinator()
+    ) {
         self.grantStore = grantStore
+        self.coordinator = coordinator
     }
 
     /// Swaps the backing grant store. Intended to be called once at host startup
@@ -26,8 +29,17 @@ public actor ExecApprovalStore {
         self.grantStore = grantStore
     }
 
-    public func registerPending(id: String, command: String) {
-        pending[id] = PendingRequest(command: command)
+    public func registerPending(id: String, command: String, presentation: ApprovalPresentation? = nil) async {
+        commands[id] = command
+        // Exec uses a caller-supplied wait timeout, so the registration timeout is a
+        // large placeholder; the deny default only applies if a tool-style wait is used.
+        _ = await coordinator.register(
+            id: id,
+            presentation: presentation,
+            timeoutMs: Int.max / 2,
+            timeoutResolution: .deny,
+            timeoutSource: "exec.timeout"
+        )
     }
 
     public func isDurableApproved(command: String) async -> Bool {
@@ -40,6 +52,23 @@ public actor ExecApprovalStore {
         await grantStore.add(commandName: name)
     }
 
+    /// Lists all durable grants (command names) from the configured grant store,
+    /// sorted ascending.
+    public func listDurableGrants() async -> [String] {
+        await grantStore.list()
+    }
+
+    /// Revokes a durable grant by command name. Returns `true` when an existing
+    /// grant was removed, `false` when the name is blank or no grant exists.
+    @discardableResult
+    public func revokeDurableGrant(commandName: String) async -> Bool {
+        let trimmed = commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard await grantStore.isGranted(commandName: trimmed) else { return false }
+        await grantStore.remove(commandName: trimmed)
+        return true
+    }
+
     @discardableResult
     public func resolve(
         id: String,
@@ -47,56 +76,36 @@ public actor ExecApprovalStore {
         durable: Bool = false,
         reason: String? = nil
     ) async -> ExecApprovalResolution? {
-        guard let request = pending.removeValue(forKey: id) else { return nil }
-        let resolution: ExecApprovalResolution
-        if approved {
-            if durable {
-                await addDurableApproval(command: request.command)
-            }
-            resolution = .approved(durable: durable)
-        } else {
-            resolution = .denied(reason ?? "denied")
+        guard await coordinator.isPending(id: id) else { return nil }
+        let command = commands.removeValue(forKey: id)
+        if approved, durable, let command {
+            await addDurableApproval(command: command)
         }
-        resumeWaiters(for: id, resolution: resolution)
-        return resolution
+        let decision: ApprovalDecision = approved ? (durable ? .allowAlways : .allowOnce) : .deny
+        guard let outcome = await coordinator.resolve(
+            id: id,
+            decision: decision,
+            source: "exec.resolve",
+            reason: approved ? nil : (reason ?? "denied")
+        ) else { return nil }
+        return Self.execResolution(from: outcome)
     }
 
-    public func waitForResolution(id: String, timeoutSeconds: TimeInterval) async -> ExecApprovalResolution? {
-        await withTaskGroup(of: ExecApprovalResolution?.self) { group in
-            group.addTask {
-                await self.awaitResolution(id: id)
-            }
-            group.addTask {
-                let nanoseconds = UInt64(max(0, timeoutSeconds) * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanoseconds)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            if first == nil {
-                self.cancelWaiters(for: id)
-            }
-            return first
+    public func waitForResolution(id: String, timeoutSeconds: TimeInterval?) async -> ExecApprovalResolution? {
+        guard let outcome = await coordinator.waitForResolution(id: id, timeoutSeconds: timeoutSeconds) else {
+            return nil
         }
+        return Self.execResolution(from: outcome)
     }
 
-    private func awaitResolution(id: String) async -> ExecApprovalResolution? {
-        await withCheckedContinuation { continuation in
-            waiters[id, default: []].append(continuation)
-        }
-    }
-
-    private func cancelWaiters(for id: String) {
-        guard let continuations = waiters.removeValue(forKey: id) else { return }
-        for continuation in continuations {
-            continuation.resume(returning: nil)
-        }
-    }
-
-    private func resumeWaiters(for id: String, resolution: ExecApprovalResolution) {
-        guard let continuations = waiters.removeValue(forKey: id) else { return }
-        for continuation in continuations {
-            continuation.resume(returning: resolution)
+    private static func execResolution(from outcome: ApprovalOutcome) -> ExecApprovalResolution {
+        switch outcome.decision {
+        case .allowAlways:
+            return .approved(durable: true)
+        case .allowOnce:
+            return .approved(durable: false)
+        case .deny, .timeout, .cancelled:
+            return .denied(outcome.reason ?? "denied")
         }
     }
 

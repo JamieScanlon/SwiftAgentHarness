@@ -1543,6 +1543,7 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
     public var approvalTimeoutMs: Int?
     public var approvalTimeoutBehavior: String?
     public var approvalResolutionKind: String?
+    public var approvalPresentation: ApprovalPresentation?
     public var originTrustLevel: String?
     public var parentConversationID: UUID?
     public var childConversationID: UUID?
@@ -1586,6 +1587,7 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
         approvalTimeoutMs: Int? = nil,
         approvalTimeoutBehavior: String? = nil,
         approvalResolutionKind: String? = nil,
+        approvalPresentation: ApprovalPresentation? = nil,
         originTrustLevel: String? = nil,
         parentConversationID: UUID? = nil,
         childConversationID: UUID? = nil,
@@ -1628,6 +1630,7 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
         self.approvalTimeoutMs = approvalTimeoutMs
         self.approvalTimeoutBehavior = approvalTimeoutBehavior
         self.approvalResolutionKind = approvalResolutionKind
+        self.approvalPresentation = approvalPresentation
         self.originTrustLevel = originTrustLevel
         self.parentConversationID = parentConversationID
         self.childConversationID = childConversationID

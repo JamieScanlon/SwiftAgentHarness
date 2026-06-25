@@ -512,7 +512,20 @@ public actor OrchestratorRuntimeService {
                     kind: .execApprovalRequired,
                     label: request.title,
                     approvalID: request.id,
-                    command: request.command
+                    command: request.command,
+                    presentation: request.presentation
+                )
+                guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+                await topics.publishConversationTopicEventIfConfigured(
+                    conversationID: conversationID,
+                    payload: .surfaceIntentJSONUTF8(utf8)
+                )
+            }
+            let execApprovalCleared: @Sendable (String) async -> Void = { approvalID in
+                guard let conversationID, let topics else { return }
+                let intent = ClientSurfaceIntent(
+                    kind: .execApprovalCleared,
+                    approvalID: approvalID
                 )
                 guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
                 await topics.publishConversationTopicEventIfConfigured(
@@ -523,7 +536,8 @@ public actor OrchestratorRuntimeService {
             let approvalDelivery = await ExecApprovalDeliveryFactory.make(
                 channelRegistry: channelRegistry,
                 metadata: activeConversation?.metadata,
-                onPending: execApprovalPending
+                onPending: execApprovalPending,
+                onCleared: execApprovalCleared
             )
             let execRuntime = ExecRuntimeService(
                 workspaceRoot: workspaceRoot,

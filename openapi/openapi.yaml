@@ -110,6 +110,8 @@ tags:
     description: Messages and replay control plane.
   - name: Upload
     description: File upload for chat attachments
+  - name: ExecApprovals
+    description: Exec-approval resolution and durable command grants
 
 paths:
   /status:
@@ -1428,6 +1430,121 @@ paths:
               schema:
                 $ref: "#/components/schemas/FileUploadResponse"
 
+  /exec-approvals/grants:
+    get:
+      operationId: listExecApprovalGrants
+      tags: [ExecApprovals]
+      summary: List durable exec-approval grants (command names)
+      description: |
+        Returns the command names with durable ("Always Allow") grants from the
+        configured `ExecApprovalStore` grant store, sorted ascending.
+      responses:
+        "200":
+          description: Durable grant command names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecApprovalGrantsResponse"
+
+  /exec-approvals/grants/{commandName}:
+    delete:
+      operationId: revokeExecApprovalGrant
+      tags: [ExecApprovals]
+      summary: Revoke a durable exec-approval grant by command name
+      parameters:
+        - name: commandName
+          in: path
+          required: true
+          description: Command name to revoke. Accepts percent-encoded values (e.g. `git%20status`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Grant revoked
+        "400":
+          description: Invalid command name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Grant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /exec-approvals/{id}:
+    post:
+      operationId: resolveExecApproval
+      tags: [ExecApprovals]
+      deprecated: true
+      summary: Resolve a pending exec-approval request (deprecated alias of POST /approvals/{id})
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecApprovalResolutionRequest"
+      responses:
+        "200":
+          description: Approval resolution accepted
+        "400":
+          description: Invalid exec approval id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Exec approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /approvals/{id}:
+    post:
+      operationId: resolveApproval
+      tags: [Approvals]
+      summary: Resolve a pending approval on the unified decision vocabulary
+      description: |
+        Unified resolve endpoint for approvals. Prefer `decision`
+        (`allowOnce`|`allowAlways`|`deny`); the `approved`/`durable` fields remain
+        for compatibility with the deprecated `POST /exec-approvals/{id}` alias.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnifiedApprovalResolutionRequest"
+      responses:
+        "200":
+          description: Approval resolution accepted
+        "400":
+          description: Invalid approval id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   parameters:
     ConversationId:
@@ -2155,6 +2272,9 @@ components:
           type: string
         reason:
           type: string
+        durable:
+          type: boolean
+          description: When true and status is `approved`, persists an allow-always tool rule so future runs auto-approve this tool.
 
     ConversationCheckpointInvalidateRequest:
       type: object
@@ -2853,6 +2973,52 @@ components:
           enum: [error]
         message:
           type: string
+
+    ExecApprovalGrantsResponse:
+      type: object
+      required: [commandNames]
+      properties:
+        commandNames:
+          type: array
+          items:
+            type: string
+          description: Command names with durable grants, sorted ascending.
+
+    ExecApprovalResolutionRequest:
+      type: object
+      required: [approved]
+      properties:
+        approved:
+          type: boolean
+        durable:
+          type: boolean
+          description: When true and approved, persists a durable grant by command name.
+        reason:
+          type: string
+          description: Optional denial reason.
+
+    ApprovalDecision:
+      type: string
+      description: The unified approval decision vocabulary. `timeout` and `cancelled` are produced by the core lifecycle, not by a client.
+      enum: [allowOnce, allowAlways, deny, timeout, cancelled]
+
+    UnifiedApprovalResolutionRequest:
+      type: object
+      description: |
+        Resolve body for `POST /approvals/{id}`. Provide `decision` (preferred) or
+        the legacy `approved`/`durable` pair.
+      properties:
+        decision:
+          $ref: "#/components/schemas/ApprovalDecision"
+        approved:
+          type: boolean
+          description: Legacy flag; `true` maps to `allowOnce` (or `allowAlways` when `durable` is true), `false` maps to `deny`.
+        durable:
+          type: boolean
+          description: When true with `approved`, resolves as `allowAlways`.
+        reason:
+          type: string
+          description: Optional denial reason.
 
     SimpleTypeResponse:
       type: object

@@ -155,11 +155,22 @@ public struct ExecRuntimeService: Sendable {
     }
 
     private func requestExecApproval(command: String, context: ExecRuntimeContext) async throws {
+        let title = context.elevated.isActive
+            ? "Approve elevated shell command?"
+            : "Approve shell command?"
+        let presentation = ApprovalPresentation.standard(
+            title: title,
+            context: [
+                command,
+                context.elevated.isActive ? "Runs on the host outside the sandbox." : "",
+            ]
+        )
         let request = ExecApprovalRequest(
             id: UUID().uuidString,
             command: command,
-            title: "Exec approval",
-            description: command
+            title: title,
+            description: command,
+            presentation: presentation
         )
         switch await approvalDelivery.requestApproval(request, headless: context.headless) {
         case .approved: return

@@ -70,6 +70,40 @@ struct ExecApprovalTests {
         #expect(await store.isDurableApproved(command: "git log"))
     }
 
+    @Test("listDurableGrants returns sorted command names from grant store")
+    func listDurableGrants() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["npm", "git", "grep"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.listDurableGrants() == ["git", "grep", "npm"])
+    }
+
+    @Test("revokeDurableGrant removes an existing grant")
+    func revokeDurableGrantExisting() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git", "npm"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "git"))
+        #expect(await store.listDurableGrants() == ["npm"])
+        #expect(await store.isDurableApproved(command: "git push") == false)
+    }
+
+    @Test("revokeDurableGrant trims whitespace before matching")
+    func revokeDurableGrantTrimsWhitespace() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "  git  "))
+        #expect(await store.listDurableGrants() == [])
+    }
+
+    @Test("revokeDurableGrant returns false for unknown or blank names")
+    func revokeDurableGrantUnknown() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["git"])
+        let store = ExecApprovalStore(grantStore: grants)
+        #expect(await store.revokeDurableGrant(commandName: "npm") == false)
+        #expect(await store.revokeDurableGrant(commandName: "   ") == false)
+        #expect(await store.revokeDurableGrant(commandName: "") == false)
+        #expect(await store.listDurableGrants() == ["git"])
+    }
+
     @Test("configure swaps the backing grant store")
     func configureSwapsGrantStore() async {
         let store = ExecApprovalStore()
@@ -109,6 +143,93 @@ struct ExecApprovalTests {
         let resolved = await store.resolve(id: "req-1", approved: true)
         #expect(resolved == .approved(durable: false))
         #expect(await result == .approved)
+    }
+
+    @Test("default delivery waits indefinitely by default and resolves on approval")
+    func defaultDeliveryIndefiniteWaitsForResolution() async {
+        let store = ExecApprovalStore()
+        let delivery = DefaultExecApprovalDelivery(store: store)
+        let request = ExecApprovalRequest(
+            id: "req-indef",
+            command: "curl example.com",
+            title: "Exec approval",
+            description: "curl example.com"
+        )
+        async let result = delivery.requestApproval(request, headless: false)
+        // Wait well past any legacy finite timeout to prove it does not self-deny.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await store.resolve(id: "req-indef", approved: true) == .approved(durable: false))
+        #expect(await result == .approved)
+    }
+
+    @Test("cancelling an indefinite request denies as cancelled and fires onCleared")
+    func defaultDeliveryCancelClears() async {
+        let store = ExecApprovalStore()
+        let cleared = ClearedRecorder()
+        let delivery = DefaultExecApprovalDelivery(
+            store: store,
+            onCleared: { id in await cleared.record(id) }
+        )
+        let request = ExecApprovalRequest(
+            id: "req-cancel",
+            command: "rm -rf /",
+            title: "Exec approval",
+            description: "rm -rf /"
+        )
+        let task = Task { await delivery.requestApproval(request, headless: false) }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        task.cancel()
+        let result = await task.value
+        #expect(result == .denied("exec approval cancelled"))
+        #expect(await cleared.ids == ["req-cancel"])
+    }
+
+    @Test("headless request denies immediately without registering")
+    func headlessDeniesImmediately() async {
+        let store = ExecApprovalStore()
+        let delivery = DefaultExecApprovalDelivery(store: store)
+        let request = ExecApprovalRequest(
+            id: "req-headless",
+            command: "curl example.com",
+            title: "Exec approval",
+            description: "curl example.com"
+        )
+        let result = await delivery.requestApproval(request, headless: true)
+        guard case .headlessDenied = result else {
+            Issue.record("expected headlessDenied, got \(result)")
+            return
+        }
+    }
+
+    @Test("channel delivery still times out at its finite default")
+    func channelDeliveryTimesOut() async {
+        let listener = MockChannelListener(
+            id: .discord,
+            config: ChannelListenerConfig(
+                enabled: true,
+                transport: .mock,
+                platformIdentity: "test-bot",
+                dmScope: .perChannelPeer
+            ),
+            logger: Logger(label: "test")
+        )
+        let route = ExecApprovalChannelRoute(listener: listener, chatId: "chat-1", threadId: nil)
+        let delivery = ChannelExecApprovalDelivery(
+            store: ExecApprovalStore(),
+            route: route,
+            waitTimeoutSeconds: 0.02
+        )
+        let request = ExecApprovalRequest(
+            id: "timeout-1",
+            command: "npm test",
+            title: "Exec approval",
+            description: "npm test"
+        )
+        let result = await delivery.requestApproval(request, headless: false)
+        guard case .deferred = result else {
+            Issue.record("expected deferred on timeout, got \(result)")
+            return
+        }
     }
 
     @Test("channel delivery posts approval card to mock listener")
@@ -167,4 +288,9 @@ struct ExecApprovalTests {
         #expect(listener.sentMessages.count == 1)
         #expect(listener.sentMessages[0].text.contains("approved"))
     }
+}
+
+private actor ClearedRecorder {
+    private(set) var ids: [String] = []
+    func record(_ id: String) { ids.append(id) }
 }

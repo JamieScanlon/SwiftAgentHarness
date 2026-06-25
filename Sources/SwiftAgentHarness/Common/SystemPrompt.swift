@@ -441,6 +441,9 @@ In this environment you have access to a set of tools you can use to help you ga
 {"role": "assistant", "content": "", "tool_calls": ["create_file("myFinalFile.txt")"]}
 ```
 
+## Approvals
+Some tools and commands require human approval before they run. The harness presents these approvals through native UI (buttons / cards) on whatever surface the user is on, and resolves them itself. Do not narrate the approval flow or invent your own confirmation protocol: never write things like "type yes to continue", "reply APPROVE", or "let me know if I should proceed". Just make the tool call; if approval is required the harness will prompt the user and either resume or report the denial back to you.
+
 """,
             .skills: """
 ---
