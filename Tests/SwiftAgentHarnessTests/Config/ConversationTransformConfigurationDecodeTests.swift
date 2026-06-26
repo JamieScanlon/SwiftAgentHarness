@@ -155,4 +155,172 @@ struct ConversationTransformConfigurationDecodeTests {
                 != ContextCompactionCheckpointSupport.configFingerprint(b)
         )
     }
+
+    // MARK: - Hook toggles and timeout
+
+    @Test("Default configuration enables all transform hooks for every interaction mode")
+    func defaultsEnableHooks() {
+        let config = ConversationTransformConfiguration.default
+        for mode in [InteractionMode.chat, .plan, .agent] {
+            let toggles = config.toggles(for: mode)
+            #expect(toggles.enableContextTransform)
+            #expect(toggles.enableToolResultTransform)
+            #expect(toggles.enableTurnSummaryTransform)
+        }
+    }
+
+    @Test("transformTimeoutSeconds clamps to 1...3600")
+    func parserClampsTimeoutRange() {
+        let zeroBlock: [String: Any] = ["transformTimeoutSeconds": 0]
+        #expect(ConversationTransformConfiguration.configuration(fromJSON: zeroBlock).transformTimeoutSeconds == 1)
+
+        let okBlock: [String: Any] = ["transformTimeoutSeconds": 999]
+        #expect(ConversationTransformConfiguration.configuration(fromJSON: okBlock).transformTimeoutSeconds == 999)
+
+        let highBlock: [String: Any] = ["transformTimeoutSeconds": 99_999]
+        #expect(ConversationTransformConfiguration.configuration(fromJSON: highBlock).transformTimeoutSeconds == 3600)
+    }
+
+    @Test("Top-level hook toggles apply to chat, plan, and agent")
+    func parserPreservesHookToggles() {
+        let block: [String: Any] = [
+            "enableContextTransform": false,
+            "enableToolResultTransform": true,
+            "enableTurnSummaryTransform": false,
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block)
+        for mode in [InteractionMode.chat, .plan, .agent] {
+            let toggles = config.toggles(for: mode)
+            #expect(toggles.enableContextTransform == false)
+            #expect(toggles.enableToolResultTransform == true)
+            #expect(toggles.enableTurnSummaryTransform == false)
+        }
+    }
+
+    @Test("Per-mode overrides merge over the legacy baseline")
+    func parserPerModeOverridesMergeWithBaseline() {
+        let block: [String: Any] = [
+            "enableContextTransform": true,
+            "enableToolResultTransform": true,
+            "enableTurnSummaryTransform": true,
+            "chat": [
+                "enableContextTransform": false,
+                "enableToolResultTransform": false,
+                "enableTurnSummaryTransform": false,
+            ],
+            "plan": [
+                "enableContextTransform": false,
+            ],
+            "agent": [
+                "enableTurnSummaryTransform": false,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block)
+        #expect(config.chat.enableContextTransform == false)
+        #expect(config.chat.enableToolResultTransform == false)
+        #expect(config.chat.enableTurnSummaryTransform == false)
+        #expect(config.plan.enableContextTransform == false)
+        #expect(config.plan.enableToolResultTransform == true)
+        #expect(config.plan.enableTurnSummaryTransform == true)
+        #expect(config.agent.enableContextTransform == true)
+        #expect(config.agent.enableToolResultTransform == true)
+        #expect(config.agent.enableTurnSummaryTransform == false)
+    }
+
+    @Test("Partial per-mode objects inherit unspecified hooks from baseline")
+    func parserPartialPerModeInheritsBaseline() {
+        let block: [String: Any] = [
+            "enableContextTransform": false,
+            "enableToolResultTransform": true,
+            "enableTurnSummaryTransform": false,
+            "agent": [
+                "enableContextTransform": true,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block)
+        #expect(config.agent.enableContextTransform == true)
+        #expect(config.agent.enableToolResultTransform == true)
+        #expect(config.agent.enableTurnSummaryTransform == false)
+    }
+
+    // MARK: - Context compaction defaults and JSON preservation
+
+    @Test("ContextCompactionConfiguration.default matches spec values")
+    func contextCompactionDefaults() {
+        let config = ContextCompactionConfiguration.default
+        #expect(config.enabled == true)
+        #expect(config.model == "gemma4:e4b")
+        #expect(config.fallbackContextLimitTokens == 131_072)
+        #expect(config.charactersPerToken == 4)
+        #expect(config.maxCompactedMiddleMessages == 15)
+        #expect(config.maxRecentToolResults == 5)
+        #expect(config.maxRecentPerNameToolResults == 5)
+        #expect(config.toolResultPruneReplacementMode == .oneLineSummary)
+        #expect(config.compactionSummaryBudgetTokens == 2000)
+        #expect(config.compactionIdentifierPreservationMode == "strict")
+        #expect(config.compactionSummarizerContextLimitTokens == 131_072)
+        #expect(config.proactiveSafetyBufferTokens == 13_000)
+        #expect(config.proactiveOutputReserveTokens == 20_000)
+        #expect(config.reactiveTriggerEnabled == true)
+        #expect(config.oversizeRetryMaxAttempts == 3)
+        #expect(config.manualToolEnabled == true)
+        #expect(config.defaultSummarizationStrategy == "default")
+        #expect(config.cacheAwarePruningEnabled == false)
+        #expect(config.deterministicToolResultPruningEnabled == true)
+        #expect(config.deterministicAttachmentDocumentHygieneEnabled == false)
+        #expect(config.compactionSummarizerMaxOutputTokens == 20_000)
+        #expect(config.compactionSummaryBudgetProportionalEnabled == true)
+        #expect(config.compactionReinjectionEnabled == true)
+        #expect(config.compactionCircuitBreakerMaxFailures == 3)
+        #expect(config.useSessionTreeProjection == true)
+    }
+
+    @Test("Explicit contextCompaction JSON values are preserved")
+    func parserPreservesContextCompaction() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "enabled": false,
+                "model": "custom-model",
+                "ollamaServerURL": "http://127.0.0.1:11435",
+                "maxCompactedMiddleMessages": 20,
+                "compactionToolResultPruneNames": ["web-fetch"],
+                "cacheAwarePruningEnabled": true,
+                "cacheStablePrefixMessageCount": 6,
+                "deterministicAttachmentDocumentHygieneEnabled": true,
+                "deterministicDocumentCharacterThreshold": 9000,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        #expect(config.enabled == false)
+        #expect(config.model == "custom-model")
+        #expect(config.ollamaServerURL.absoluteString == "http://127.0.0.1:11435")
+        #expect(config.maxCompactedMiddleMessages == 20)
+        #expect(config.compactionToolResultPruneNames == ["web-fetch"])
+        #expect(config.cacheAwarePruningEnabled == true)
+        #expect(config.cacheStablePrefixMessageCount == 6)
+        #expect(config.deterministicAttachmentDocumentHygieneEnabled == true)
+        #expect(config.deterministicDocumentCharacterThreshold == 9000)
+    }
+
+    @Test("max_recent_tool_results snake_case decodes")
+    func parserAcceptsSnakeCaseMaxRecentToolResults() {
+        let block: [String: Any] = [
+            "contextCompaction": ["max_recent_tool_results": 11],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: block)
+                .contextCompaction.maxRecentToolResults == 11
+        )
+    }
+
+    @Test("max_recent_per_name_tool_results snake_case decodes")
+    func parserAcceptsSnakeCaseMaxRecentPerNameToolResults() {
+        let block: [String: Any] = [
+            "contextCompaction": ["max_recent_per_name_tool_results": 12],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: block)
+                .contextCompaction.maxRecentPerNameToolResults == 12
+        )
+    }
 }
