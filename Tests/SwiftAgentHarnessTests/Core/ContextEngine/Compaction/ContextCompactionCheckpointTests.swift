@@ -821,7 +821,7 @@ struct ContextCompactionCheckpointTests {
         b.ollamaServerURL = URL(string: "http://127.0.0.1:11434")!
         #expect(ContextCompactionCheckpointSupport.configFingerprint(a) != ContextCompactionCheckpointSupport.configFingerprint(b))
         b = makeConfig()
-        b.toolResultSummarizationCharacterThreshold = 2_000
+        b.toolResultPruneReplacementMode = b.toolResultPruneReplacementMode == .blankMarker ? .oneLineSummary : .blankMarker
         #expect(ContextCompactionCheckpointSupport.configFingerprint(a) != ContextCompactionCheckpointSupport.configFingerprint(b))
         b = makeConfig()
         b.compactionToolResultPruneNames = ["web-search"]

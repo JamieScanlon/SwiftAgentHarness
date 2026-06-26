@@ -9,6 +9,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     private let compactionCoordinator: CompactionConcurrencyCoordinator?
     public let memoryService: DefaultMemoryService?
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
+    private let reinjectionSkillProvider: any CompactionReinjectionSkillProviding
     private let logger: Logger?
 
     public init(
@@ -20,6 +21,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
             preCompactionMemoryFlushRunner: nil,
+            reinjectionSkillProvider: nil,
             logger: logger
         )
     }
@@ -28,6 +30,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
         memoryService: DefaultMemoryService? = nil,
         preCompactionMemoryFlushRunner: (any PreCompactionMemoryFlushRunning)? = nil,
+        reinjectionSkillProvider: (any CompactionReinjectionSkillProviding)? = nil,
         logger: Logger? = nil
     ) {
         self.compactionCoordinator = compactionCoordinator
@@ -39,6 +42,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         } else {
             self.preCompactionMemoryFlushRunner = DefaultPreCompactionMemoryFlushRunner()
         }
+        self.reinjectionSkillProvider = reinjectionSkillProvider
+            ?? DefaultCompactionReinjectionSkillProvider(logger: logger)
         self.logger = logger
     }
 
@@ -313,6 +318,12 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
 
         let input: ContextTransformInput
         if case .initial = request.phase {
+            let activatedSkillNames = ConversationMetadataActivatedSkills.activatedAgentSkillNames(
+                from: request.conversation.metadata
+            )
+            let reinjectableSkills = await reinjectionSkillProvider.reinjectableSkillContent(
+                activatedSkillNames: activatedSkillNames
+            )
             let initial = ContextCompactionInputBuilder.buildInitialPhaseInput(
                 messages: compactionTranscript,
                 conversation: request.conversation,
@@ -327,7 +338,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 gating: request.gatingOverride ?? .production,
                 allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
                 sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction,
-                compactionInjectedPrefix: compactionInjectedPrefix
+                compactionInjectedPrefix: compactionInjectedPrefix,
+                reinjectableSkills: reinjectableSkills
             )
             switch initial {
             case .passthrough(let reason):

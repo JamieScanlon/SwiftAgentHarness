@@ -192,7 +192,6 @@ private func layoutTestConfig(reinjectionEnabled: Bool = false) -> ContextCompac
         fallbackContextLimitTokens: 2_500,
         charactersPerToken: 4,
         maxCompactedMiddleMessages: 15,
-        toolResultSummarizationCharacterThreshold: 1_000_000,
         middleMinCharactersForCompactionLLM: 0,
         compactionLLMCooldownSeconds: 0,
         compactionToolResultPruneNames: ["web-fetch"],

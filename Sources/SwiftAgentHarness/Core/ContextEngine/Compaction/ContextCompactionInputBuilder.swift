@@ -106,7 +106,8 @@ enum ContextCompactionInputBuilder: Sendable {
         compactionSummarizerDebugOutputPath: String? = nil,
         allowProactiveCompactionTriggers: Bool = true,
         sessionMemoryNoteForCompaction: String? = nil,
-        compactionInjectedPrefix: [Message] = []
+        compactionInjectedPrefix: [Message] = [],
+        reinjectableSkills: [ReinjectableSkill] = []
     ) -> ContextCompactionInitialPhaseBuildResult {
         guard enableContextTransform else {
             return .passthrough(reason: "context_transform_disabled")
@@ -222,7 +223,8 @@ enum ContextCompactionInputBuilder: Sendable {
             compactionPreviousSummaryText: previousSummaryText,
             compactionSessionMemoryNote: sessionMemoryNoteForCompaction,
             compactionSplitBaseMessages: messages,
-            compactionInjectedPrefixMessages: compactionInjectedPrefix
+            compactionInjectedPrefixMessages: compactionInjectedPrefix,
+            compactionReinjectableSkills: reinjectableSkills
         )
         return .transform(input)
     }

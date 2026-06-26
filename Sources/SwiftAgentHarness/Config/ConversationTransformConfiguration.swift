@@ -11,11 +11,6 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var charactersPerToken: Double
     /// Cap on synthesized middle messages passed to the compaction LLM (system + final preserved separately).
     public var maxCompactedMiddleMessages: Int
-    /// Deprecated and no longer functional. Formerly the character threshold above which a tool
-    /// result was sent to the eager LLM tool-result summarizer (removed; the runtime tool-result
-    /// middleware seam is now deterministic). Retained only for backward-compatible config decoding
-    /// and checkpoint fingerprint stability; absent/legacy values are tolerated and have no effect.
-    public var toolResultSummarizationCharacterThreshold: Int
     /// If greater than zero, skip compaction LLM when the middle segment has fewer total characters than this (soft “under budget” gate).
     public var middleMinCharactersForCompactionLLM: Int
     /// If greater than zero, skip compaction LLM if another call happened within this many seconds for the same conversation (unless gates are disabled by setting to `0`).
@@ -97,6 +92,19 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var compactionSummaryBudgetProportionalEnabled: Bool
     public var sessionMemorySwapBeforeCompactionEnabled: Bool
     public var compactionReinjectionEnabled: Bool
+    /// Number of most-recently-accessed files considered for post-compaction re-injection.
+    public var reinjectionRecentFileCount: Int
+    /// Per-file token budget for re-injected file content (`compaction.md` target: 5k/file).
+    public var reinjectionPerFileTokenBudget: Int
+    /// Total token budget across all re-injected files (`compaction.md` target: 50k total).
+    public var reinjectionTotalFileTokenBudget: Int
+    /// Per-skill token budget for re-injected active-skill content (`compaction.md` target: 5k/skill).
+    public var reinjectionPerSkillTokenBudget: Int
+    /// Total token budget across all re-injected skills (`compaction.md` target: 25k total).
+    public var reinjectionTotalSkillTokenBudget: Int
+    /// When true (default), re-inject the recent files' truncated content (spec primary). When false,
+    /// fall back to the path-only list (re-read with tools), the spec's cheaper alternative.
+    public var reinjectFileContentEnabled: Bool
     public var compactionCircuitBreakerMaxFailures: Int
     /// Minimum fractional prompt-token reduction required to persist a compaction checkpoint (0 = disabled).
     public var compactionMinPromptTokenSavingsFraction: Double
@@ -117,14 +125,31 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     /// Slack multiplier shared with checkpoint persistence size guards.
     public static let checkpointPersistenceSizeSlack = 1.5
 
-    /// Token ceiling for persisted compaction summaries (`summaryBudget × slack`).
-    public var compactionPersistenceTokenCeiling: Int {
-        Int(Double(compactionSummaryBudgetTokens) * Self.checkpointPersistenceSizeSlack)
+    /// Spec's summarizer output reserve (`compaction.md`, "Target sizes"): a healthy post-compact
+    /// context reserves 20k tokens for the summary itself. Acts as the floor for the summarizer's
+    /// `max_tokens` and the persistence ceiling so summaries are never truncated below the reserve.
+    public static let summaryOutputReserveTokens = 20_000
+
+    /// Largest summary budget the resolver can choose: the proportional cap (`12k`) when proportional
+    /// budgeting is enabled, otherwise the fixed budget. Mirrors `ContextCompactionPolicy.resolvedSummaryBudgetTokens`.
+    public var proportionalSummaryBudgetCeiling: Int {
+        compactionSummaryBudgetProportionalEnabled ? 12_000 : compactionSummaryBudgetTokens
     }
 
-    /// Summarizer LLM `maxTokens` capped so emitted summaries can pass persistence guards.
+    /// Token ceiling for persisted compaction summaries. Tracks the resolved (proportional-aware)
+    /// budget and never falls below the 20k output reserve, so an enabled proportional budget — and
+    /// the spec's reserve — are actually emittable and persistable.
+    public var compactionPersistenceTokenCeiling: Int {
+        Int(
+            Double(max(compactionSummaryBudgetTokens, proportionalSummaryBudgetCeiling, Self.summaryOutputReserveTokens))
+                * Self.checkpointPersistenceSizeSlack
+        )
+    }
+
+    /// Summarizer LLM `maxTokens`: capped by the persistence ceiling but floored at the 20k reserve so
+    /// it never clamps below the spec target. Invariant: `>= resolvedSummaryBudgetTokens` and `>= 20k`.
     public var resolvedSummarizerMaxOutputTokens: Int {
-        min(compactionSummarizerMaxOutputTokens, compactionPersistenceTokenCeiling)
+        max(Self.summaryOutputReserveTokens, min(compactionSummarizerMaxOutputTokens, compactionPersistenceTokenCeiling))
     }
 
     public static let `default` = ContextCompactionConfiguration(
@@ -134,7 +159,6 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         fallbackContextLimitTokens: 131_072,
         charactersPerToken: 4,
         maxCompactedMiddleMessages: 15,
-        toolResultSummarizationCharacterThreshold: 1_000,
         middleMinCharactersForCompactionLLM: 0,
         compactionLLMCooldownSeconds: 0,
         compactionToolResultPruneNames: [],
@@ -175,10 +199,16 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         headMinMessageCount: 3,
         tailMinMessageCount: 6,
         tailTokenBudgetFraction: 0.2,
-        compactionSummarizerMaxOutputTokens: 3_000,
+        compactionSummarizerMaxOutputTokens: 20_000,
         compactionSummaryBudgetProportionalEnabled: true,
         sessionMemorySwapBeforeCompactionEnabled: true,
         compactionReinjectionEnabled: true,
+        reinjectionRecentFileCount: 5,
+        reinjectionPerFileTokenBudget: 5_000,
+        reinjectionTotalFileTokenBudget: 50_000,
+        reinjectionPerSkillTokenBudget: 5_000,
+        reinjectionTotalSkillTokenBudget: 25_000,
+        reinjectFileContentEnabled: true,
         compactionCircuitBreakerMaxFailures: 3,
         compactionMinPromptTokenSavingsFraction: 0.03,
         useSessionTreeProjection: true
@@ -191,7 +221,6 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         fallbackContextLimitTokens: Int = 131_072,
         charactersPerToken: Double = 4,
         maxCompactedMiddleMessages: Int = 15,
-        toolResultSummarizationCharacterThreshold: Int = 1_000,
         middleMinCharactersForCompactionLLM: Int = 0,
         compactionLLMCooldownSeconds: Double = 0,
         compactionToolResultPruneNames: [String] = [],
@@ -232,10 +261,16 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         headMinMessageCount: Int = 3,
         tailMinMessageCount: Int = 6,
         tailTokenBudgetFraction: Double = 0.2,
-        compactionSummarizerMaxOutputTokens: Int = 3_000,
+        compactionSummarizerMaxOutputTokens: Int = 20_000,
         compactionSummaryBudgetProportionalEnabled: Bool = true,
         sessionMemorySwapBeforeCompactionEnabled: Bool = true,
         compactionReinjectionEnabled: Bool = true,
+        reinjectionRecentFileCount: Int = 5,
+        reinjectionPerFileTokenBudget: Int = 5_000,
+        reinjectionTotalFileTokenBudget: Int = 50_000,
+        reinjectionPerSkillTokenBudget: Int = 5_000,
+        reinjectionTotalSkillTokenBudget: Int = 25_000,
+        reinjectFileContentEnabled: Bool = true,
         compactionCircuitBreakerMaxFailures: Int = 3,
         compactionMinPromptTokenSavingsFraction: Double = 0.03,
         useSessionTreeProjection: Bool = true
@@ -246,7 +281,6 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.fallbackContextLimitTokens = fallbackContextLimitTokens
         self.charactersPerToken = charactersPerToken
         self.maxCompactedMiddleMessages = maxCompactedMiddleMessages
-        self.toolResultSummarizationCharacterThreshold = toolResultSummarizationCharacterThreshold
         self.middleMinCharactersForCompactionLLM = middleMinCharactersForCompactionLLM
         self.compactionLLMCooldownSeconds = compactionLLMCooldownSeconds
         self.compactionToolResultPruneNames = compactionToolResultPruneNames
@@ -291,6 +325,12 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.compactionSummaryBudgetProportionalEnabled = compactionSummaryBudgetProportionalEnabled
         self.sessionMemorySwapBeforeCompactionEnabled = sessionMemorySwapBeforeCompactionEnabled
         self.compactionReinjectionEnabled = compactionReinjectionEnabled
+        self.reinjectionRecentFileCount = reinjectionRecentFileCount
+        self.reinjectionPerFileTokenBudget = reinjectionPerFileTokenBudget
+        self.reinjectionTotalFileTokenBudget = reinjectionTotalFileTokenBudget
+        self.reinjectionPerSkillTokenBudget = reinjectionPerSkillTokenBudget
+        self.reinjectionTotalSkillTokenBudget = reinjectionTotalSkillTokenBudget
+        self.reinjectFileContentEnabled = reinjectFileContentEnabled
         self.compactionCircuitBreakerMaxFailures = compactionCircuitBreakerMaxFailures
         self.compactionMinPromptTokenSavingsFraction = compactionMinPromptTokenSavingsFraction
         self.useSessionTreeProjection = useSessionTreeProjection
@@ -589,12 +629,6 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.maxCompactedMiddleMessages
             }()
-            let toolResultSummarizationCharacterThreshold = {
-                if let value = payload["toolResultSummarizationCharacterThreshold"] as? Int {
-                    return Swift.min(2_000_000, Swift.max(0, value))
-                }
-                return def.toolResultSummarizationCharacterThreshold
-            }()
             let middleMinCharactersForCompactionLLM = {
                 if let value = payload["middleMinCharactersForCompactionLLM"] as? Int {
                     return Swift.min(2_000_000, Swift.max(0, value))
@@ -817,10 +851,9 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
             let compactionSummarizerMaxOutputTokens: Int = {
                 let raw = (payload["compactionSummarizerMaxOutputTokens"] as? Int)
                     ?? def.compactionSummarizerMaxOutputTokens
-                let ceiling = Int(
-                    Double(compactionSummaryBudgetTokens) * ContextCompactionConfiguration.checkpointPersistenceSizeSlack
-                )
-                return min(Swift.max(1, raw), ceiling)
+                // No fixed-budget clamp here: `resolvedSummarizerMaxOutputTokens` owns the
+                // proportional-aware ceiling and the 20k reserve floor.
+                return Swift.max(1, raw)
             }()
             return ContextCompactionConfiguration(
                 enabled: enabled,
@@ -829,7 +862,6 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 fallbackContextLimitTokens: fallbackContextLimitTokens,
                 charactersPerToken: charactersPerToken,
                 maxCompactedMiddleMessages: maxCompactedMiddleMessages,
-                toolResultSummarizationCharacterThreshold: toolResultSummarizationCharacterThreshold,
                 middleMinCharactersForCompactionLLM: middleMinCharactersForCompactionLLM,
                 compactionLLMCooldownSeconds: compactionLLMCooldownSeconds,
                 compactionToolResultPruneNames: compactionToolResultPruneNames,
@@ -877,6 +909,24 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                     ?? def.sessionMemorySwapBeforeCompactionEnabled,
                 compactionReinjectionEnabled: (payload["compactionReinjectionEnabled"] as? Bool)
                     ?? def.compactionReinjectionEnabled,
+                reinjectionRecentFileCount: (payload["reinjectionRecentFileCount"] as? Int)
+                    ?? (payload["reinjection_recent_file_count"] as? Int)
+                    ?? def.reinjectionRecentFileCount,
+                reinjectionPerFileTokenBudget: (payload["reinjectionPerFileTokenBudget"] as? Int)
+                    ?? (payload["reinjection_per_file_token_budget"] as? Int)
+                    ?? def.reinjectionPerFileTokenBudget,
+                reinjectionTotalFileTokenBudget: (payload["reinjectionTotalFileTokenBudget"] as? Int)
+                    ?? (payload["reinjection_total_file_token_budget"] as? Int)
+                    ?? def.reinjectionTotalFileTokenBudget,
+                reinjectionPerSkillTokenBudget: (payload["reinjectionPerSkillTokenBudget"] as? Int)
+                    ?? (payload["reinjection_per_skill_token_budget"] as? Int)
+                    ?? def.reinjectionPerSkillTokenBudget,
+                reinjectionTotalSkillTokenBudget: (payload["reinjectionTotalSkillTokenBudget"] as? Int)
+                    ?? (payload["reinjection_total_skill_token_budget"] as? Int)
+                    ?? def.reinjectionTotalSkillTokenBudget,
+                reinjectFileContentEnabled: (payload["reinjectFileContentEnabled"] as? Bool)
+                    ?? (payload["reinject_file_content_enabled"] as? Bool)
+                    ?? def.reinjectFileContentEnabled,
                 compactionCircuitBreakerMaxFailures: (payload["compactionCircuitBreakerMaxFailures"] as? Int)
                     ?? def.compactionCircuitBreakerMaxFailures,
                 compactionMinPromptTokenSavingsFraction: (payload["compactionMinPromptTokenSavingsFraction"] as? Double)

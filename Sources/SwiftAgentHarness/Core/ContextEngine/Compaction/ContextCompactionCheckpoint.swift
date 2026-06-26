@@ -183,7 +183,6 @@ enum ContextCompactionCheckpointSupport {
             config.fallbackContextLimitTokens,
             config.charactersPerToken,
             config.maxCompactedMiddleMessages,
-            config.toolResultSummarizationCharacterThreshold,
             config.middleMinCharactersForCompactionLLM,
             Int(config.compactionLLMCooldownSeconds * 1000),
             config.compactionToolResultPruneNames.sorted().joined(separator: ","),
@@ -224,6 +223,12 @@ enum ContextCompactionCheckpointSupport {
             config.compactionSummaryBudgetProportionalEnabled,
             config.sessionMemorySwapBeforeCompactionEnabled,
             config.compactionReinjectionEnabled,
+            config.reinjectionRecentFileCount,
+            config.reinjectionPerFileTokenBudget,
+            config.reinjectionTotalFileTokenBudget,
+            config.reinjectionPerSkillTokenBudget,
+            config.reinjectionTotalSkillTokenBudget,
+            config.reinjectFileContentEnabled,
             config.compactionCircuitBreakerMaxFailures,
             config.compactionMinPromptTokenSavingsFraction,
             config.useSessionTreeProjection,
@@ -302,9 +307,7 @@ enum ContextCompactionCheckpointSupport {
             messages: compactedMiddle,
             charactersPerToken: cpt
         )
-        let maxTokens = Int(
-            Double(config.compactionSummaryBudgetTokens) * compactionCheckpointPersistenceSizeSlack
-        )
+        let maxTokens = config.compactionPersistenceTokenCeiling
         if middleTokens > maxTokens {
             return false
         }

@@ -171,6 +171,19 @@ public struct ConversationTransformMetadata: Sendable {
     }
 }
 
+/// An active skill resolved for post-compaction re-injection: its name and full instruction body.
+/// Resolved upstream (e.g. by ``DefaultContextEngine`` via the configured ``SkillLoader``) so the
+/// synchronous re-injection collector can budget and truncate it without filesystem or actor access.
+public struct ReinjectableSkill: Sendable, Equatable {
+    public let name: String
+    public let content: String
+
+    public init(name: String, content: String) {
+        self.name = name
+        self.content = content
+    }
+}
+
 public struct ContextTransformInput: Sendable {
     let messages: [Message]
     let conversation: ConversationTransformMetadata
@@ -224,6 +237,8 @@ public struct ContextTransformInput: Sendable {
     let compactionSplitBaseMessages: [Message]?
     /// Harness-injected system messages prepended to split head in transformer output.
     let compactionInjectedPrefixMessages: [Message]?
+    /// Active skills (name + content) resolved upstream for budgeted post-compaction re-injection.
+    let compactionReinjectableSkills: [ReinjectableSkill]
 
     init(
         messages: [Message],
@@ -247,7 +262,8 @@ public struct ContextTransformInput: Sendable {
         compactionPreviousSummaryText: String? = nil,
         compactionSessionMemoryNote: String? = nil,
         compactionSplitBaseMessages: [Message]? = nil,
-        compactionInjectedPrefixMessages: [Message]? = nil
+        compactionInjectedPrefixMessages: [Message]? = nil,
+        compactionReinjectableSkills: [ReinjectableSkill] = []
     ) {
         self.messages = messages
         self.conversation = conversation
@@ -271,6 +287,7 @@ public struct ContextTransformInput: Sendable {
         self.compactionSessionMemoryNote = compactionSessionMemoryNote
         self.compactionSplitBaseMessages = compactionSplitBaseMessages
         self.compactionInjectedPrefixMessages = compactionInjectedPrefixMessages
+        self.compactionReinjectableSkills = compactionReinjectableSkills
     }
 }
 

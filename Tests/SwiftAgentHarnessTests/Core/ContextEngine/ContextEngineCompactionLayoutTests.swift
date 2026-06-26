@@ -174,10 +174,12 @@ struct ContextEngineCompactionLayoutTests {
             config: compactionConfig,
             modelContextLimitTokens: 2_500
         )
+        // Exceed the repaired persistence ceiling (proportional-aware budget with the 20k reserve
+        // floor => 30k-token ceiling at default slack): ~50k tokens of summary.
         let oversizedSummary = Message(
             id: UUID(),
             role: .assistant,
-            content: String(repeating: "Z", count: 1_000),
+            content: String(repeating: "Z", count: 200_000),
             timestamp: Date(),
             toolCalls: []
         )

@@ -118,7 +118,6 @@ recalled
             fallbackContextLimitTokens: 200_000,
             charactersPerToken: 4,
             maxCompactedMiddleMessages: 8,
-            toolResultSummarizationCharacterThreshold: 1_000_000,
             middleMinCharactersForCompactionLLM: 0,
             compactionLLMCooldownSeconds: 0,
             compactionToolResultPruneNames: [],
