@@ -51,7 +51,7 @@ public actor BlockCoalescer {
         lastIngestInstant = clock.now()
 
         if mergedLength() >= maxChars {
-            return await flushNow()
+            return flushNow()
         }
         return []
     }
@@ -72,14 +72,24 @@ public actor BlockCoalescer {
         if mergedLength() < config.minChars {
             return []
         }
-        return await flushNow()
+        return flushNow()
+    }
+
+    /// Flushes merged blocks iff the idle gap has elapsed and minChars is met. Never sleeps.
+    public func flushDue() -> [String] {
+        guard config.enabled else { return [] }
+        guard !pendingBlocks.isEmpty else { return [] }
+        guard let lastIngest = lastIngestInstant else { return [] }
+        guard clock.now() >= lastIngest + .milliseconds(config.idleMs) else { return [] }
+        guard mergedLength() >= config.minChars else { return [] }
+        return flushNow()
     }
 
     /// Flushes whatever remains (end-of-turn always sends).
     public func flushFinal() async -> [String] {
         guard config.enabled else { return [] }
         if pendingBlocks.isEmpty { return [] }
-        return await flushNow()
+        return flushNow()
     }
 
     public func discardPending() {
@@ -96,7 +106,7 @@ public actor BlockCoalescer {
         pendingBlocks.joined(separator: joiner)
     }
 
-    private func flushNow() async -> [String] {
+    private func flushNow() -> [String] {
         let text = mergedText()
         pendingBlocks = []
         lastIngestInstant = nil

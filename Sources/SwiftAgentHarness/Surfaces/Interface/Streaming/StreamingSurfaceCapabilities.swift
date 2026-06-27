@@ -125,6 +125,11 @@ public struct StreamingSurfaceCapabilities: Sendable, Equatable, Hashable {
         !usesBlockStreaming && granularity == .previewEdit && effectivePreviewMode != .off
     }
 
+    /// Whether block streaming surfaces ephemeral tool-progress lines during tool-heavy turns.
+    public var surfacesToolProgressInBlockMode: Bool {
+        granularity == .block && blockStreaming.enabled && supportedPreviewModes.contains(.progress)
+    }
+
     // MARK: - Presets
 
     public static let terminal = StreamingSurfaceCapabilities(

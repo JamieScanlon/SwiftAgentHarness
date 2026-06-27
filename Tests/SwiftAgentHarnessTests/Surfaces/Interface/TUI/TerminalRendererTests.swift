@@ -81,6 +81,33 @@ struct DifferentialRendererTests {
         #expect(term.rawOutput.contains(TUIEscapes.showCursor))
         #expect(!term.rawOutput.contains(CursorMarker.sentinel))
     }
+
+    @Test("Differential update targets correct rows under existing scrollback")
+    func differentialUnderScrollback() {
+        let term = VirtualTerminal(columns: 40, rows: 10)
+        term.write("\n\n\n")
+        let renderer = DifferentialRenderer(terminal: term)
+        renderer.renderLines(["A", "B", "C"], width: 40)
+        renderer.renderLines(["A", "B", "C2"], width: 40)
+        let grid = term.frameLines()
+        #expect(grid[3].contains("A"))
+        #expect(grid[4].contains("B"))
+        #expect(grid[5].contains("C2"))
+        #expect(!grid[2].contains("C2"))
+    }
+
+    @Test("Hardware cursor honors frame start row under scrollback")
+    func hardwareCursorUnderScrollback() {
+        let term = VirtualTerminal(columns: 40, rows: 10)
+        let frameStartRow = 3
+        term.write(String(repeating: "\n", count: frameStartRow))
+        let renderer = DifferentialRenderer(terminal: term)
+        let composer = InputComposerComponent(lines: ["hi"])
+        composer.isFocused = true
+        composer.cursorLine = 0
+        renderer.render(component: composer, width: 40, context: "composer")
+        #expect(term.cursorRow == frameStartRow + composer.cursorLine)
+    }
 }
 
 private final class StaticLinesComponent: TUIComponent {

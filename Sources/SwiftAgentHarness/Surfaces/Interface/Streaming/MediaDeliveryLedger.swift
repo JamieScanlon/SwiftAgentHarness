@@ -28,12 +28,15 @@ public struct StreamingFinalPayload: Sendable, Equatable {
 public struct MediaDeliveryLedger: Sendable {
     private var delivered: Set<StreamingMediaRef> = []
     private var deliveredExactPayloads: Set<String> = []
+    private var deliveredCollapsed = ""
+    private var deliveredMessageIDs: Set<UUID> = []
 
     public init() {}
 
     public mutating func recordBlock(_ text: String, media: [StreamingMediaRef] = []) {
         if !text.isEmpty {
             deliveredExactPayloads.insert(normalized(text))
+            deliveredCollapsed += collapsed(text)
         }
         for ref in media {
             delivered.insert(ref)
@@ -46,13 +49,29 @@ public struct MediaDeliveryLedger: Sendable {
         }
     }
 
+    public mutating func recordDeliveredMessageID(_ id: UUID) {
+        deliveredMessageIDs.insert(id)
+    }
+
+    public mutating func recordDeliveredMessageIDs(_ ids: [UUID]) {
+        for id in ids {
+            deliveredMessageIDs.insert(id)
+        }
+    }
+
+    public func hasDeliveredMessageID(_ id: UUID) -> Bool {
+        deliveredMessageIDs.contains(id)
+    }
+
     /// Strips media already streamed and suppresses exact-duplicate final payloads.
     public mutating func prepareFinal(_ payload: StreamingFinalPayload) -> StreamingFinalPayload? {
         let normalizedText = normalized(payload.text)
         let newMedia = payload.media.filter { !delivered.contains($0) }
         let mediaChanged = newMedia.count != payload.media.count
 
-        if deliveredExactPayloads.contains(normalizedText) && !mediaChanged {
+        let matchesExactPayload = deliveredExactPayloads.contains(normalizedText)
+        let matchesCollapsedBlocks = !deliveredCollapsed.isEmpty && collapsed(payload.text) == deliveredCollapsed
+        if !mediaChanged && (matchesExactPayload || matchesCollapsedBlocks) {
             return nil
         }
 
@@ -66,12 +85,39 @@ public struct MediaDeliveryLedger: Sendable {
         return StreamingFinalPayload(text: payload.text, media: newMedia)
     }
 
+    /// Dedup committed assistant rows by message id (published-stream final path).
+    public mutating func prepareFinal(
+        committedMessageIDs: [UUID],
+        payload: StreamingFinalPayload
+    ) -> StreamingFinalPayload? {
+        let undeliveredIDs = committedMessageIDs.filter { !deliveredMessageIDs.contains($0) }
+        if undeliveredIDs.isEmpty {
+            let newMedia = payload.media.filter { !delivered.contains($0) }
+            if newMedia.isEmpty {
+                return nil
+            }
+            for ref in payload.media {
+                delivered.insert(ref)
+            }
+            return StreamingFinalPayload(text: payload.text, media: newMedia)
+        }
+
+        recordDeliveredMessageIDs(undeliveredIDs)
+        return prepareFinal(payload)
+    }
+
     public mutating func reset() {
         delivered = []
         deliveredExactPayloads = []
+        deliveredCollapsed = ""
+        deliveredMessageIDs = []
     }
 
     private func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func collapsed(_ text: String) -> String {
+        text.filter { !$0.isWhitespace }
     }
 }

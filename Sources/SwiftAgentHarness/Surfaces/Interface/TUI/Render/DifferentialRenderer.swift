@@ -13,7 +13,8 @@ public final class DifferentialRenderer: @unchecked Sendable {
     private var lastFrame: [String] = []
     private var lastWidth: Int = 0
     private var isFirstRender = true
-    private var scrollbackFrozenLineCount = 0
+    /// Frame-relative row where the terminal cursor currently sits after the last paint.
+    private var cursorFrameRow = 0
     private let lock = NSLock()
 
     public init(terminal: any Terminal) {
@@ -55,7 +56,7 @@ public final class DifferentialRenderer: @unchecked Sendable {
         lastFrame = []
         lastWidth = 0
         isFirstRender = true
-        scrollbackFrozenLineCount = 0
+        cursorFrameRow = 0
     }
 
     private func pickStrategy(newFrame: [String], width: Int, changeAboveViewport: Bool) -> RenderStrategy {
@@ -84,15 +85,17 @@ public final class DifferentialRenderer: @unchecked Sendable {
         switch strategy {
         case .firstRender:
             writeLines(displayFrame, startAtHome: false)
-            scrollbackFrozenLineCount = displayFrame.count
+            cursorFrameRow = max(0, displayFrame.count - 1)
         case .fullClear:
             terminal.clearScreen()
             writeLines(displayFrame, startAtHome: true)
+            cursorFrameRow = max(0, displayFrame.count - 1)
         case .differential(let fromLine):
             if fromLine < displayFrame.count {
-                moveToLine(fromLine)
+                moveToFrameLine(fromLine)
                 terminal.clearFromCursor()
                 writeLines(Array(displayFrame[fromLine...]), startAtHome: false)
+                cursorFrameRow = max(0, displayFrame.count - 1)
             }
         }
 
@@ -105,9 +108,6 @@ public final class DifferentialRenderer: @unchecked Sendable {
             terminal.write(TUIEscapes.home)
         }
         for (index, line) in lines.enumerated() {
-            if index > 0 || startAtHome {
-                // newline between lines handled by write
-            }
             terminal.write(line)
             if index + 1 < lines.count {
                 terminal.write("\n")
@@ -115,11 +115,10 @@ public final class DifferentialRenderer: @unchecked Sendable {
         }
     }
 
-    private func moveToLine(_ line: Int) {
-        terminal.write(TUIEscapes.home)
-        if line > 0 {
-            terminal.moveBy(lines: line)
-        }
+    private func moveToFrameLine(_ target: Int) {
+        terminal.moveBy(lines: target - cursorFrameRow)
+        terminal.write("\r")
+        cursorFrameRow = target
     }
 
     private func positionHardwareCursor(in frame: [String]) {
@@ -127,7 +126,12 @@ public final class DifferentialRenderer: @unchecked Sendable {
             terminal.hideCursor()
             return
         }
-        terminal.write(TUIEscapes.moveTo(row: location.row + 1, column: location.column + 1))
+        terminal.moveBy(lines: location.row - cursorFrameRow)
+        terminal.write("\r")
+        if location.column > 0 {
+            terminal.write(TUIEscapes.moveForward(location.column))
+        }
+        cursorFrameRow = location.row
         terminal.showCursor()
     }
 }

@@ -20,6 +20,23 @@ struct PreviewStreamerTests {
         #expect(updates == [.progress("Searching the web…")])
     }
 
+    @Test("Progress mode emits ephemeral status instead of assistant text")
+    func progressModeStatus() {
+        var streamer = PreviewStreamer(mode: .progress)
+        let first = streamer.ingestText("Hello")
+        #expect(first == [.progress("Responding…")])
+        let second = streamer.ingestText(" world")
+        #expect(second.isEmpty)
+        #expect(streamer.flush().isEmpty)
+    }
+
+    @Test("Progress mode retains accumulated text for cancellation")
+    func progressModeCancellation() {
+        var streamer = PreviewStreamer(mode: .progress)
+        _ = streamer.ingestText("partial")
+        #expect(streamer.resolveForCancellation() == .cancelled(partialText: "partial"))
+    }
+
     @Test("Block mode emits chunked preview steps")
     func blockMode() {
         var streamer = PreviewStreamer(
@@ -90,5 +107,17 @@ struct StreamingSurfaceCapabilitiesTests {
         let caps = StreamingSurfaceCapabilities.socialChannel
         #expect(caps.usesBlockStreaming)
         #expect(!caps.usesPreviewStreaming)
+    }
+
+    @Test("Social channel surfaces tool progress in block mode")
+    func blockToolProgressCapability() {
+        let caps = StreamingSurfaceCapabilities.socialChannel
+        #expect(caps.surfacesToolProgressInBlockMode)
+    }
+
+    @Test("Operator channel does not surface tool progress in block mode")
+    func operatorNoBlockToolProgress() {
+        let caps = StreamingSurfaceCapabilities.operatorChannel
+        #expect(!caps.surfacesToolProgressInBlockMode)
     }
 }

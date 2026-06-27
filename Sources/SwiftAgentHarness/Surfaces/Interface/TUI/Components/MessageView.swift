@@ -3,6 +3,7 @@ import Foundation
 public final class MessageViewComponent: TUIComponent {
     public var message: TUIMessage
     public var streamingTail: String
+    public private(set) var renderCount = 0
 
     public init(message: TUIMessage, streamingTail: String = "") {
         self.message = message
@@ -27,6 +28,7 @@ public final class MessageViewComponent: TUIComponent {
     public func invalidate() { dirty = true }
 
     public func render(width: Int) -> [String] {
+        renderCount += 1
         let prefix: String
         switch message.role {
         case .user:

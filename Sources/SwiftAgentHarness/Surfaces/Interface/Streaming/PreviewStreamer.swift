@@ -54,8 +54,10 @@ public struct PreviewStreamer: Sendable {
             return chunks.map { .text($0) }
         case .progress:
             accumulatedText += text
-            lastPreviewText = accumulatedText
-            return [.text(accumulatedText)]
+            let status = "Responding…"
+            guard lastPreviewText != status else { return [] }
+            lastPreviewText = status
+            return [.progress(status)]
         }
     }
 
@@ -75,6 +77,9 @@ public struct PreviewStreamer: Sendable {
     /// Flushes remaining preview text at end-of-turn before final reply supersedes it.
     public mutating func flush() -> [PreviewUpdate] {
         guard mode != .off else { return [] }
+        if mode == .progress {
+            return []
+        }
         if mode == .block, var chunker {
             let chunks = chunker.flush()
             self.chunker = chunker

@@ -7,12 +7,13 @@ public actor StreamingSurfaceEngine {
     private var chunker: BlockChunker
     private var coalescer: BlockCoalescer
     private let pacer: HumanPacer
+    private let pacedSender: PacedBlockSender
     private var previewStreamer: PreviewStreamer?
     private var mediaLedger = MediaDeliveryLedger()
+    private var coalesceFlushTask: Task<Void, Never>?
 
     private var accumulatedText = ""
     private var messageEndBuffer = ""
-    private var blockCount = 0
     private var cancelled = false
 
     public init(capabilities: StreamingSurfaceCapabilities, sink: any StreamingSurfaceSink) {
@@ -28,6 +29,7 @@ public actor StreamingSurfaceEngine {
             breakPreference: capabilities.breakPreference
         )
         self.pacer = HumanPacer(config: capabilities.pacing)
+        self.pacedSender = PacedBlockSender(pacer: pacer, sink: sink)
 
         if capabilities.usesPreviewStreaming {
             self.previewStreamer = PreviewStreamer(
@@ -35,6 +37,12 @@ public actor StreamingSurfaceEngine {
                 chunkerConfig: capabilities.chunker
             )
         }
+    }
+
+    /// Awaits the in-flight coalesce debounce timer (test hook).
+    func awaitCoalesceFlush() async {
+        await coalesceFlushTask?.value
+        await pacedSender.drain()
     }
 
     /// Consumes one streaming partial from the conversation event stream.
@@ -45,11 +53,34 @@ public actor StreamingSurfaceEngine {
         case .text(let text):
             accumulatedText += text
             await routeText(text)
-        case .reasoning:
-            break
+        case .reasoning(let text, _):
+            if capabilities.granularity == .tokenDelta {
+                await sink.sendReasoningDelta(text)
+            }
         case .toolCall(let toolName, _, _, _):
             await routeToolProgress(toolName: toolName)
         case .surfaceIntent:
+            break
+        }
+    }
+
+    /// Flushes intra-turn segment boundaries without finalizing the turn.
+    public func flushSegment() async {
+        guard !cancelled else { return }
+
+        switch capabilities.granularity {
+        case .tokenDelta:
+            return
+        case .block:
+            guard capabilities.usesBlockStreaming else { return }
+            await flushBlocksAtBoundary()
+        case .previewEdit:
+            guard capabilities.usesPreviewStreaming, var preview = previewStreamer else { return }
+            for update in preview.flush() {
+                await sink.upsertPreview(update)
+            }
+            previewStreamer = preview
+        case .finalOnly:
             break
         }
     }
@@ -58,20 +89,11 @@ public actor StreamingSurfaceEngine {
     public func finish(final: StreamingFinalPayload) async {
         guard !cancelled else { return }
 
+        cancelCoalesceTimer()
+
         if capabilities.usesBlockStreaming {
-            if capabilities.blockStreaming.breakBoundary == .messageEnd {
-                await emitBlocks(from: messageEndBuffer)
-                messageEndBuffer = ""
-            } else {
-                for chunk in chunker.flush() {
-                    await emitBlock(chunk)
-                }
-                if capabilities.coalescing.enabled {
-                    for block in await coalescer.flushFinal() {
-                        await sendBlockWithPacing(block)
-                    }
-                }
-            }
+            await flushBlocksAtBoundary()
+            await pacedSender.drain()
         }
 
         if var preview = previewStreamer {
@@ -86,7 +108,7 @@ public actor StreamingSurfaceEngine {
             await sink.sendFinal(prepared)
         }
 
-        resetTurnState()
+        await resetTurnState()
     }
 
     /// Cancels an in-flight turn per the configured granularity policy.
@@ -94,9 +116,11 @@ public actor StreamingSurfaceEngine {
         cancelled = true
         let partial = accumulatedText
 
+        cancelCoalesceTimer()
         chunker.discardPending()
         await coalescer.discardPending()
         messageEndBuffer = ""
+        await pacedSender.reset()
 
         let actions = StreamingCancellation.resolve(
             granularity: capabilities.granularity,
@@ -117,7 +141,7 @@ public actor StreamingSurfaceEngine {
             }
         }
 
-        resetTurnState()
+        await resetTurnState()
     }
 
     /// Convenience: consume an entire partial stream then finish.
@@ -171,12 +195,39 @@ public actor StreamingSurfaceEngine {
     }
 
     private func routeToolProgress(toolName: String?) async {
-        guard capabilities.usesPreviewStreaming, var preview = previewStreamer else { return }
         let line = toolProgressLine(toolName: toolName)
-        for update in preview.ingestToolProgress(line) {
-            await sink.upsertPreview(update)
+
+        if capabilities.usesPreviewStreaming, var preview = previewStreamer {
+            for update in preview.ingestToolProgress(line) {
+                await sink.upsertPreview(update)
+            }
+            previewStreamer = preview
+            return
         }
-        previewStreamer = preview
+
+        if capabilities.surfacesToolProgressInBlockMode {
+            await sink.upsertPreview(.toolProgress(line))
+        }
+    }
+
+    private func flushBlocksAtBoundary() async {
+        if capabilities.blockStreaming.breakBoundary == .messageEnd {
+            await emitBlocks(from: messageEndBuffer)
+            messageEndBuffer = ""
+        } else {
+            for chunk in chunker.flush() {
+                await emitBlock(chunk)
+            }
+        }
+        await drainCoalescerFinal()
+    }
+
+    private func drainCoalescerFinal() async {
+        cancelCoalesceTimer()
+        guard capabilities.coalescing.enabled else { return }
+        for block in await coalescer.flushFinal() {
+            await pacedSender.enqueue(block)
+        }
     }
 
     private func emitBlocks(from text: String) async {
@@ -195,24 +246,34 @@ public actor StreamingSurfaceEngine {
 
         let coalesced = await coalescer.ingest(chunk)
         for block in coalesced {
-            await sendBlockWithPacing(block)
-        }
-
-        if capabilities.coalescing.enabled {
-            let idleFlushed = await coalescer.flushIfIdle()
-            for block in idleFlushed {
-                await sendBlockWithPacing(block)
-            }
+            await pacedSender.enqueue(block)
         }
 
         mediaLedger.recordBlock(chunk)
+        armCoalesceTimer()
     }
 
-    private func sendBlockWithPacing(_ block: String) async {
-        let isFirst = blockCount == 0
-        await pacer.sleepIfNeeded(isFirstBlock: isFirst, isFinalReply: false, isToolSummary: false)
-        await sink.sendBlock(block)
-        blockCount += 1
+    private func armCoalesceTimer() {
+        guard capabilities.coalescing.enabled else { return }
+        coalesceFlushTask?.cancel()
+        let idleMs = capabilities.coalescing.idleMs
+        coalesceFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(idleMs))
+            if Task.isCancelled { return }
+            await self?.drainDueCoalesced()
+        }
+    }
+
+    private func drainDueCoalesced() async {
+        guard !cancelled else { return }
+        for block in await coalescer.flushDue() {
+            await pacedSender.enqueue(block)
+        }
+    }
+
+    private func cancelCoalesceTimer() {
+        coalesceFlushTask?.cancel()
+        coalesceFlushTask = nil
     }
 
     private func toolProgressLine(toolName: String?) -> String {
@@ -229,12 +290,13 @@ public actor StreamingSurfaceEngine {
         }
     }
 
-    private func resetTurnState() {
+    private func resetTurnState() async {
+        cancelCoalesceTimer()
         accumulatedText = ""
         messageEndBuffer = ""
-        blockCount = 0
         cancelled = false
         mediaLedger.reset()
+        await pacedSender.reset()
         chunker = BlockChunker(
             config: capabilities.chunker,
             breakPreference: capabilities.breakPreference

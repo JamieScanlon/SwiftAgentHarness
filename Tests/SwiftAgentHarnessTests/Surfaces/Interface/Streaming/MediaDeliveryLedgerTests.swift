@@ -12,6 +12,15 @@ struct MediaDeliveryLedgerTests {
         #expect(result == nil)
     }
 
+    @Test("Suppresses final matching concatenated multi-block text")
+    func suppressMultiBlockConcatenatedFinal() {
+        var ledger = MediaDeliveryLedger()
+        ledger.recordBlock("Hello ")
+        ledger.recordBlock("world")
+        let result = ledger.prepareFinal(StreamingFinalPayload(text: "Hello world"))
+        #expect(result == nil)
+    }
+
     @Test("Strips duplicate media from final send")
     func stripDuplicateMedia() {
         var ledger = MediaDeliveryLedger()
@@ -34,6 +43,24 @@ struct MediaDeliveryLedgerTests {
         )
         #expect(result?.text == "Updated caption")
         #expect(result?.media.isEmpty == true)
+    }
+
+    @Test("Dedups committed message ids for published-stream finals")
+    func committedMessageIDDedup() {
+        var ledger = MediaDeliveryLedger()
+        let id = UUID()
+        let first = ledger.prepareFinal(
+            committedMessageIDs: [id],
+            payload: StreamingFinalPayload(text: "first")
+        )
+        #expect(first?.text == "first")
+        #expect(ledger.hasDeliveredMessageID(id))
+
+        let duplicate = ledger.prepareFinal(
+            committedMessageIDs: [id],
+            payload: StreamingFinalPayload(text: "first")
+        )
+        #expect(duplicate == nil)
     }
 }
 

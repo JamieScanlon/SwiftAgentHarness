@@ -3,6 +3,7 @@ import Foundation
 /// Outbound seam a concrete surface implements to deliver paced streaming output.
 public protocol StreamingSurfaceSink: Sendable {
     func sendTokenDelta(_ text: String) async
+    func sendReasoningDelta(_ text: String) async
     func sendBlock(_ text: String) async
     func upsertPreview(_ update: PreviewUpdate) async
     func resolvePreview(_ resolution: PreviewResolution) async
@@ -12,6 +13,7 @@ public protocol StreamingSurfaceSink: Sendable {
 
 public extension StreamingSurfaceSink {
     func sendTokenDelta(_ text: String) async {}
+    func sendReasoningDelta(_ text: String) async {}
     func sendBlock(_ text: String) async {}
     func upsertPreview(_ update: PreviewUpdate) async {}
     func resolvePreview(_ resolution: PreviewResolution) async {}
@@ -22,6 +24,7 @@ public extension StreamingSurfaceSink {
 /// Recorded outbound action for test assertions.
 public enum RecordedStreamingAction: Sendable, Equatable {
     case tokenDelta(String)
+    case reasoningDelta(String)
     case block(String)
     case preview(PreviewUpdate)
     case previewResolved(PreviewResolution)
@@ -37,6 +40,10 @@ public actor RecordingStreamingSurfaceSink: StreamingSurfaceSink {
 
     public func sendTokenDelta(_ text: String) async {
         actions.append(.tokenDelta(text))
+    }
+
+    public func sendReasoningDelta(_ text: String) async {
+        actions.append(.reasoningDelta(text))
     }
 
     public func sendBlock(_ text: String) async {

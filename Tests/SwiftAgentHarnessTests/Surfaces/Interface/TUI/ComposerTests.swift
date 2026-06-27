@@ -70,3 +70,109 @@ struct BracketedPasteTests {
         #expect(BracketedPaste.marker(for: result!) == "[Pasted 15 lines]")
     }
 }
+
+@Suite("BracketedPasteAccumulator")
+struct BracketedPasteAccumulatorTests {
+    @Test("Single-chunk paste passes through whole")
+    func singleChunk() {
+        var acc = BracketedPasteAccumulator()
+        let inner = "hello paste"
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        let chunks = acc.feed(wrapped)
+        #expect(chunks == [wrapped])
+        #expect(BracketedPaste.unwrap(chunks[0])?.text == inner)
+    }
+
+    @Test("Paste content split across reads reassembles")
+    func splitContent() {
+        var acc = BracketedPasteAccumulator()
+        let inner = String(repeating: "x", count: 300)
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        let mid = wrapped.index(wrapped.startIndex, offsetBy: 128)
+        let first = String(wrapped[..<mid])
+        let second = String(wrapped[mid...])
+        #expect(acc.feed(first).isEmpty)
+        let chunks = acc.feed(second)
+        #expect(chunks.count == 1)
+        #expect(BracketedPaste.unwrap(chunks[0])?.text == inner)
+    }
+
+    @Test("Start marker split across reads reassembles")
+    func splitStartMarker() {
+        var acc = BracketedPasteAccumulator()
+        let inner = "pasted"
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        let splitAt = BracketedPaste.start.index(BracketedPaste.start.startIndex, offsetBy: 3)
+        let head = String(BracketedPaste.start[..<splitAt])
+        let tail = String(BracketedPaste.start[splitAt...]) + inner + BracketedPaste.end
+        #expect(acc.feed(head).isEmpty)
+        let chunks = acc.feed(tail)
+        #expect(chunks.count == 1)
+        #expect(BracketedPaste.unwrap(chunks[0])?.text == inner)
+    }
+
+    @Test("End marker split across reads reassembles")
+    func splitEndMarker() {
+        var acc = BracketedPasteAccumulator()
+        let inner = "pasted"
+        let endPrefix = String(BracketedPaste.end.prefix(4))
+        let endSuffix = String(BracketedPaste.end.dropFirst(4))
+        let head = BracketedPaste.start + inner + endPrefix
+        #expect(acc.feed(head).isEmpty)
+        let chunks = acc.feed(endSuffix)
+        #expect(chunks.count == 1)
+        #expect(BracketedPaste.unwrap(chunks[0])?.text == inner)
+    }
+
+    @Test("Normal typed input passes through unchanged")
+    func passthrough() {
+        var acc = BracketedPasteAccumulator()
+        #expect(acc.feed("h") == ["h"])
+        #expect(acc.feed("\r") == ["\r"])
+        #expect(acc.feed("\u{1B}[A") == ["\u{1B}[A"])
+    }
+
+    @Test("Text before and after paste emits separate chunks")
+    func surroundingText() {
+        var acc = BracketedPasteAccumulator()
+        let inner = "paste"
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        let chunks = acc.feed("before" + wrapped + "after")
+        #expect(chunks == ["before", wrapped, "after"])
+    }
+
+    @Test("Large paste chunked at 256 bytes reassembles with correct metadata")
+    func largePasteChunked() {
+        var acc = BracketedPasteAccumulator()
+        let inner = String(repeating: "line\n", count: 12)
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        var chunks: [String] = []
+        var index = wrapped.startIndex
+        while index < wrapped.endIndex {
+            let end = wrapped.index(index, offsetBy: 256, limitedBy: wrapped.endIndex) ?? wrapped.endIndex
+            chunks.append(contentsOf: acc.feed(String(wrapped[index..<end])))
+            index = end
+        }
+        #expect(chunks.count == 1)
+        let result = BracketedPaste.unwrap(chunks[0])
+        #expect(result?.text == inner)
+        #expect(result?.isLargePaste == true)
+        #expect(result?.lineCount == 13)
+    }
+
+    @Test("Fragmented paste routed through composer records provenance")
+    func composerIntegration() {
+        var acc = BracketedPasteAccumulator()
+        let inner = String(repeating: "paste-content-", count: 20)
+        let wrapped = BracketedPaste.start + inner + BracketedPaste.end
+        let splitAt = wrapped.index(wrapped.startIndex, offsetBy: wrapped.count / 2)
+        _ = acc.feed(String(wrapped[..<splitAt]))
+        let chunks = acc.feed(String(wrapped[splitAt...]))
+        let composer = InputComposerComponent()
+        for chunk in chunks {
+            composer.handleInput(chunk)
+        }
+        #expect(composer.text == inner)
+        #expect(composer.makeSubmission().provenance.wasPasted)
+    }
+}

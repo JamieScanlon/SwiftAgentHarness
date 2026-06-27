@@ -17,6 +17,7 @@ public actor TUIApp {
 
     private var running = false
     private var streamingConfigured = false
+    private nonisolated let pasteInput = BracketedPasteAccumulatorBox()
 
     public init(terminal: any Terminal, registry: SlashCommandRegistry = .builtins(compactEnabled: true)) {
         self.terminal = terminal
@@ -60,7 +61,10 @@ public actor TUIApp {
         guard !running else { return }
         running = true
         terminal.start(onInput: { [weak self] data in
-            Task { await self?.handleInput(data) }
+            guard let self else { return }
+            let chunks = self.pasteInput.feed(data)
+            guard !chunks.isEmpty else { return }
+            Task { for chunk in chunks { await self.handleInput(chunk) } }
         }, onResize: { [weak self] columns, rows in
             Task { await self?.handleResize(columns: columns, rows: rows) }
         })
@@ -101,6 +105,12 @@ public actor TUIApp {
         await streamingEngine.cancel()
         statusLine.showSpinner = false
         statusLine.phase = "cancelled"
+        renderFrame()
+    }
+
+    public func flushSegment() async {
+        configureStreamingIfNeeded()
+        await streamingEngine.flushSegment()
         renderFrame()
     }
 

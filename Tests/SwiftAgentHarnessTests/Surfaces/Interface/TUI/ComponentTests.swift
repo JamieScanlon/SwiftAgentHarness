@@ -22,6 +22,41 @@ struct TranscriptListTests {
         view?.appendToken("tok")
         #expect(view?.streamingTail == "tok")
     }
+
+    @Test("Unchanged messages are not re-wrapped each frame")
+    func cachingReuse() {
+        let list = TranscriptListComponent(viewportRows: 20, marginRows: 0)
+        let stable = TUIMessage(role: .user, content: "stable")
+        list.appendMessage(stable)
+        _ = list.render(width: 40)
+        _ = list.render(width: 40)
+        #expect(list.view(for: stable).renderCount == 1)
+        list.appendMessage(TUIMessage(role: .user, content: "another"))
+        _ = list.render(width: 40)
+        #expect(list.view(for: stable).renderCount == 1)
+    }
+
+    @Test("Scroll math uses actual wrapped line counts")
+    func wrappedScrollMath() {
+        let list = TranscriptListComponent(viewportRows: 2, marginRows: 0)
+        let content = String(repeating: "word ", count: 30)
+        list.appendMessage(TUIMessage(role: .user, content: content))
+        let width = 12
+        let expected = MessageViewComponent(message: TUIMessage(role: .user, content: content)).render(width: width)
+        let visible = list.render(width: width)
+        #expect(visible == Array(expected.suffix(2)))
+    }
+
+    @Test("Virtualizes wrapped content to viewport window")
+    func wrappedVirtualization() {
+        let list = TranscriptListComponent(viewportRows: 3, marginRows: 1)
+        let content = String(repeating: "wrap ", count: 40)
+        for index in 0..<10 {
+            list.appendMessage(TUIMessage(role: .user, content: "\(content) \(index)"))
+        }
+        let lines = list.render(width: 10)
+        #expect(lines.count <= 4)
+    }
 }
 
 @Suite("MessageViewComponent")

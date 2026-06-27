@@ -162,4 +162,182 @@ struct StreamingSurfaceEngineTests {
         let actions = await sink.actions
         #expect(actions.count >= 3)
     }
+
+    @Test("flushSegment emits pending block without finalizing")
+    func flushSegment() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .socialChannel, sink: sink)
+        await engine.ingest(.text("segment one"))
+        await engine.flushSegment()
+        await engine.ingest(.text(" segment two"))
+        await engine.finish(final: StreamingFinalPayload(text: "committed reply"))
+        let actions = await sink.actions
+        let blockCount = actions.filter {
+            if case .block = $0 { return true }
+            return false
+        }.count
+        #expect(blockCount >= 2)
+        #expect(actions.contains(.final(StreamingFinalPayload(text: "committed reply"))))
+    }
+
+    @Test("flushSegment is no-op at token-delta granularity")
+    func flushSegmentTokenDeltaNoOp() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .terminal, sink: sink)
+        await engine.ingest(.text("live"))
+        await engine.flushSegment()
+        await engine.finish(final: StreamingFinalPayload(text: "live"))
+        let actions = await sink.actions
+        #expect(!actions.contains(where: { if case .block = $0 { return true }; return false }))
+    }
+
+    @Test("Coalescing merges blocks through the live ingest path")
+    func coalescingLiveMerge() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: coalescingTestCaps(), sink: sink)
+        await engine.ingest(.text("aaa\n\n"))
+        await engine.ingest(.text("bbb\n\n"))
+        await engine.ingest(.text("ccc\n\n"))
+        await engine.awaitCoalesceFlush()
+        let blocks = await sink.actions.compactMap { action -> String? in
+            if case .block(let text) = action { return text }
+            return nil
+        }
+        #expect(blocks.count == 1)
+        #expect(blocks[0].contains("aaa"))
+        #expect(blocks[0].contains("bbb"))
+        #expect(blocks[0].contains("ccc"))
+    }
+
+    @Test("Finish cancels the debounce timer with no double-send")
+    func finishCancelsCoalesceTimer() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: coalescingTestCaps(), sink: sink)
+        await engine.ingest(.text("aaa\n\n"))
+        await engine.ingest(.text("bbb\n\n"))
+        await engine.finish(final: StreamingFinalPayload(text: "aaa bbb ccc"))
+        await engine.awaitCoalesceFlush()
+        let blocks = await sink.actions.compactMap { action -> String? in
+            if case .block(let text) = action { return text }
+            return nil
+        }
+        #expect(blocks.count == 1)
+        #expect(blocks[0].contains("aaa"))
+        #expect(blocks[0].contains("bbb"))
+        let actions = await sink.actions
+        #expect(actions.contains(.final(StreamingFinalPayload(text: "aaa bbb ccc"))))
+    }
+
+    @Test("Block channel surfaces tool progress during tool-heavy turns")
+    func blockToolProgress() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .socialChannel, sink: sink)
+        await engine.ingest(.toolCall(toolName: "web_search", toolCallId: "1", argumentsFragment: nil, blockIndex: nil))
+        await engine.finish(final: StreamingFinalPayload(text: "Done"))
+
+        let actions = await sink.actions
+        #expect(actions.contains(where: {
+            if case .preview(.toolProgress(let line)) = $0 { return line.contains("Searching") }
+            return false
+        }))
+    }
+
+    @Test("Operator block channel does not surface tool progress")
+    func operatorNoToolProgress() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .operatorChannel, sink: sink)
+        await engine.ingest(.toolCall(toolName: "web_search", toolCallId: "1", argumentsFragment: nil, blockIndex: nil))
+        await engine.finish(final: StreamingFinalPayload(text: "Done"))
+
+        let previews = await sink.actions.filter {
+            if case .preview = $0 { return true }
+            return false
+        }
+        #expect(previews.isEmpty)
+    }
+
+    @Test("Message end boundary flushes through coalescer")
+    func messageEndCoalescing() async {
+        var caps = StreamingSurfaceCapabilities.socialChannel
+        caps.blockStreaming = BlockStreamingConfig(enabled: true, breakBoundary: .messageEnd)
+        caps.coalescing = CoalescingConfig(enabled: true, idleMs: 30, minChars: 14)
+        caps.pacing = PacingConfig(mode: .off)
+        caps.chunker = ChunkerConfig(minChars: 3, maxChars: 2000, textChunkLimit: 4000)
+
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: caps, sink: sink)
+        await engine.ingest(.text("aaa\n\n"))
+        await engine.ingest(.text("bbb\n\n"))
+        await engine.finish(final: StreamingFinalPayload(text: "aaa bbb"))
+
+        let blocks = await sink.actions.compactMap { action -> String? in
+            if case .block(let text) = action { return text }
+            return nil
+        }
+        #expect(blocks.count == 1)
+        #expect(blocks[0].contains("aaa"))
+        #expect(blocks[0].contains("bbb"))
+    }
+
+    @Test("Reasoning deltas route to token-delta terminals")
+    func reasoningDeltaTokenDelta() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .terminal, sink: sink)
+        await engine.ingest(.reasoning("thinking", blockIndex: nil))
+        await engine.finish(final: StreamingFinalPayload(text: "Done"))
+
+        let actions = await sink.actions
+        #expect(actions.contains(.reasoningDelta("thinking")))
+    }
+
+    @Test("Reasoning deltas are dropped at block granularity")
+    func reasoningDeltaBlockDropped() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .operatorChannel, sink: sink)
+        await engine.ingest(.reasoning("thinking", blockIndex: nil))
+        await engine.finish(final: StreamingFinalPayload(text: "Done"))
+
+        let actions = await sink.actions
+        #expect(!actions.contains(where: {
+            if case .reasoningDelta = $0 { return true }
+            return false
+        }))
+    }
+
+    @Test("Final is ordered after paced blocks")
+    func finalAfterPacedBlocks() async {
+        var caps = StreamingSurfaceCapabilities.operatorChannel
+        caps.pacing = PacingConfig(mode: .custom(minMs: 50, maxMs: 50))
+        caps.chunker = ChunkerConfig(minChars: 5, maxChars: 15, textChunkLimit: 15)
+        caps.coalescing = CoalescingConfig(enabled: false)
+
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: caps, sink: sink)
+        let text = String(repeating: "a", count: 40)
+        await engine.ingest(.text(text))
+        await engine.finish(final: StreamingFinalPayload(text: "committed final"))
+
+        let actions = await sink.actions
+        let blockIndices = actions.indices.filter {
+            if case .block = actions[$0] { return true }
+            return false
+        }
+        let finalIndex = actions.firstIndex {
+            if case .final = $0 { return true }
+            return false
+        }
+        #expect(!blockIndices.isEmpty)
+        #expect(finalIndex != nil)
+        if let finalIndex {
+            #expect(blockIndices.allSatisfy { $0 < finalIndex })
+        }
+    }
+}
+
+private func coalescingTestCaps() -> StreamingSurfaceCapabilities {
+    var caps = StreamingSurfaceCapabilities.operatorChannel
+    caps.coalescing = CoalescingConfig(enabled: true, idleMs: 30, minChars: 14)
+    caps.pacing = PacingConfig(mode: .off)
+    caps.chunker = ChunkerConfig(minChars: 3, maxChars: 2000, textChunkLimit: 4000)
+    return caps
 }
