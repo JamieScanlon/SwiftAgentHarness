@@ -147,6 +147,18 @@ Admitted triggers are snapshotted to `{dataDirectory}/trigger_snapshots/<id>.jso
 
 Default fire path enqueues to `{eventsDirectory}/replay-<uuid>.json`; the host's file-event watcher consumes it when the server process is running.
 
+## Channels (Messaging-as-Interface)
+
+Channel plugins are **capability records** under `Surfaces/Triggers/Channel/`:
+
+- **`ChannelPlugin`** — optional slots: `outbound`, `sessionGrammar`, `security`, `threading`, `heartbeat`, `approvalCapability`, `describeMessageTool`, streaming capabilities.
+- **Core `message` tool** — registered in `OrchestratorRuntimeService.buildToolManager`; channel turns use `MessageOutputPolicy.messageToolOnly` (free-form assistant text is not user-visible). Interactive transcript surfaces default to the same policy; opt out via `agentHarness.legacyStreamedTextSurfaces` in PromptConfig.
+- **Outbound** — `DefaultChannelOutboundAdapter` renders `MessagePresentation` and delivers via `BlockChunker` + per-channel `textChunkLimit`.
+- **Session grammar** — `ChannelSessionGrammar.resolveSessionConversation` + `parentFallbackCandidates` wired through `TriggerSessionRouter`.
+- **Lifecycle helpers** — `ChannelRetryingSender`, `ChannelTypingKeepalive`, `ChannelTransportSupervisor`, `ChannelFatalErrorSurfacing`.
+
+See [`Documentation/channels-phase0-spike-report.md`](../../../Documentation/channels-phase0-spike-report.md) for the harness-only output-verb decision.
+
 ## Upcoming work (next steps)
 
 | Step | Work |

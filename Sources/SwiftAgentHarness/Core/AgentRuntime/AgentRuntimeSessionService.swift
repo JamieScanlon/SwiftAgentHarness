@@ -120,6 +120,13 @@ public actor AgentRuntimeSessionService {
         activeTurnConfigurationsByRunID.removeValue(forKey: runID)
     }
 
+    private func configurationApplyingInteractiveDefaults(_ configuration: Configuration) -> Configuration {
+        let runtimeConfiguration = MessageOutputTurnConfiguration.applyingInteractiveDefaultsWhenMissing(
+            to: AgentRuntimeTurnConfiguration(managerConfiguration: configuration)
+        )
+        return Configuration(runtimeConfiguration: runtimeConfiguration)
+    }
+
     // MARK: - Runtime streaming API surface
 
     func serviceRuntimeMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]> {
@@ -212,6 +219,8 @@ public actor AgentRuntimeSessionService {
         case .passthrough:
             break
         }
+
+        effectiveConfiguration = configurationApplyingInteractiveDefaults(effectiveConfiguration)
 
         let runID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: conversation.id)
@@ -335,6 +344,8 @@ public actor AgentRuntimeSessionService {
             throw await runtimeSessionError(for: admission, conversationID: sendingConversationID, fallbackRunID: revertRunID)
         }
 
+        let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
+
         do {
             let prefixMessages = try await routingRevert(
                 conversationID: sendingConversationID,
@@ -406,7 +417,7 @@ public actor AgentRuntimeSessionService {
             await startStreamingOrchestrationTask(
                 sendingConversationID: sendingConversationID,
                 turnLoopAnchorUserMessageID: messageID,
-                configuration: configuration,
+                configuration: resolvedConfiguration,
                 orchestrator: orchestrator
             )
             return ChatStreamResponse(
@@ -476,6 +487,8 @@ public actor AgentRuntimeSessionService {
             throw ConversationServiceError.failedToInitialize
         }
 
+        let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
+
         let (turnStateStream, turnContinuation) = AsyncStream.makeStream(
             of: ConversationOrchestrationState.self,
             bufferingPolicy: .bufferingNewest(64)
@@ -497,7 +510,7 @@ public actor AgentRuntimeSessionService {
         await startStreamingOrchestrationTask(
             sendingConversationID: sendingConversationID,
             turnLoopAnchorUserMessageID: anchorNewId,
-            configuration: configuration,
+            configuration: resolvedConfiguration,
             orchestrator: orchestrator
         )
         return ChatStreamResponse(

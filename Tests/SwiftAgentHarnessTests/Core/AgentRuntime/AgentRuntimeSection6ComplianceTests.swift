@@ -100,6 +100,7 @@ private actor Section6ConversationEventCapture: ConversationTopicPublishing {
 }
 
 private actor ScriptedStreamingLLM: LLMProtocol {
+    private var streamCallCount: Int = 0
     private let modelName: String
     private let chunks: [String]
     private let finalContent: String
@@ -127,7 +128,11 @@ private actor ScriptedStreamingLLM: LLMProtocol {
 
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         let _ = (messages, config)
-        return LLMResponse(content: finalContent, toolCalls: [])
+        defer { streamCallCount += 1 }
+        if streamCallCount == 0 {
+            return MessageOutputTestSupport.messageToolLLMResponse(text: finalContent)
+        }
+        return MessageOutputTestSupport.emptyTurnStopLLMResponse()
     }
 
     nonisolated func stream(
@@ -138,6 +143,12 @@ private actor ScriptedStreamingLLM: LLMProtocol {
         return AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
+                    let callIndex = await self.claimStreamCall()
+                    if callIndex > 0 {
+                        continuation.yield(.complete(MessageOutputTestSupport.emptyTurnStopLLMResponse()))
+                        continuation.finish()
+                        return
+                    }
                     for chunk in await self.chunks {
                         try Task.checkCancellation()
                         continuation.yield(.stream(LLMResponse(content: chunk, toolCalls: [])))
@@ -147,7 +158,7 @@ private actor ScriptedStreamingLLM: LLMProtocol {
                     try await Task.sleep(nanoseconds: await self.finalDelayNanos)
                     try Task.checkCancellation()
                     let finalContent = await self.finalContent
-                    continuation.yield(.complete(LLMResponse(content: finalContent, toolCalls: [])))
+                    continuation.yield(.complete(MessageOutputTestSupport.messageToolLLMResponse(text: finalContent)))
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: CancellationError())
@@ -159,6 +170,11 @@ private actor ScriptedStreamingLLM: LLMProtocol {
                 producer.cancel()
             }
         }
+    }
+
+    private func claimStreamCall() -> Int {
+        defer { streamCallCount += 1 }
+        return streamCallCount
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
@@ -186,13 +202,7 @@ private actor ScriptedToolThenAnswerLLM: LLMProtocol {
 
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         let _ = (messages, config)
-        if streamCallCount == 0 {
-            let toolCall = ToolCall(name: toolName, arguments: .object([:]), id: toolCallID)
-            streamCallCount += 1
-            return LLMResponse(content: "", toolCalls: [toolCall])
-        }
-        streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
+        return nextStreamResponse()
     }
 
     nonisolated func stream(
@@ -208,13 +218,19 @@ private actor ScriptedToolThenAnswerLLM: LLMProtocol {
     func observedStreamCallCount() -> Int { streamCallCount }
 
     private func nextStreamResponse() -> LLMResponse {
-        if streamCallCount == 0 {
+        defer { streamCallCount += 1 }
+        switch streamCallCount {
+        case 0:
             let toolCall = ToolCall(name: toolName, arguments: .object([:]), id: toolCallID)
-            streamCallCount += 1
             return LLMResponse(content: "", toolCalls: [toolCall])
+        case 1:
+            return MessageOutputTestSupport.messageToolLLMResponse(
+                text: finalAssistantText,
+                toolCallID: "call_message_2"
+            )
+        default:
+            return MessageOutputTestSupport.emptyTurnStopLLMResponse()
         }
-        streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
@@ -301,14 +317,20 @@ private actor ScriptedToolThenDelayedAnswerLLM: LLMProtocol {
     }
 
     private func nextResponse() async throws -> LLMResponse {
-        if streamCallCount == 0 {
-            streamCallCount += 1
+        defer { streamCallCount += 1 }
+        switch streamCallCount {
+        case 0:
             let toolCall = ToolCall(name: toolName, arguments: .object([:]), id: toolCallID)
             return LLMResponse(content: "", toolCalls: [toolCall])
+        case 1:
+            try await Task.sleep(nanoseconds: secondCallDelayNanos)
+            return MessageOutputTestSupport.messageToolLLMResponse(
+                text: finalAssistantText,
+                toolCallID: "call_message_2"
+            )
+        default:
+            return MessageOutputTestSupport.emptyTurnStopLLMResponse()
         }
-        streamCallCount += 1
-        try await Task.sleep(nanoseconds: secondCallDelayNanos)
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
@@ -366,8 +388,13 @@ private actor ScriptedTwoToolsThenAnswerLLM: LLMProtocol {
                 content: "",
                 toolCalls: [ToolCall(name: toolName, arguments: .object([:]), id: secondToolCallID)]
             )
+        case 2:
+            return MessageOutputTestSupport.messageToolLLMResponse(
+                text: finalAssistantText,
+                toolCallID: "call_message_3"
+            )
         default:
-            return LLMResponse(content: finalAssistantText, toolCalls: [])
+            return MessageOutputTestSupport.emptyTurnStopLLMResponse()
         }
     }
 
@@ -968,7 +995,7 @@ struct AgentRuntimeSection6ComplianceTests {
         let toolCallIDSnapshots = await publisher.messagesRefreshToolCallIDs(for: conversationID)
         let newToolCallIDSnapshots = Array(toolCallIDSnapshots.dropFirst(refreshBaseline))
         #expect(newToolCallIDSnapshots.contains(where: { $0.contains("call_chat_tool_roundtrip_1") }))
-        #expect(await scriptedLLM.observedStreamCallCount() == 2)
+        #expect(await scriptedLLM.observedStreamCallCount() == 3)
     }
 
     @Test("chat-mode tool call round-trip commits assistant via agent loop transcript append")
@@ -1066,7 +1093,7 @@ struct AgentRuntimeSection6ComplianceTests {
         let toolCallIDSnapshots = await publisher.messagesRefreshToolCallIDs(for: conversationID)
         let newToolCallIDSnapshots = Array(toolCallIDSnapshots.dropFirst(snapshotsBefore))
         #expect(newToolCallIDSnapshots.contains(where: { $0.contains("call_chat_revert_tool_roundtrip_1") }))
-        #expect(await scriptedLLM.observedStreamCallCount() == 2)
+        #expect(await scriptedLLM.observedStreamCallCount() == 3)
     }
 
     @Test("chat-mode tool timeout persists tool transcript and publishes terminal lifecycle")
@@ -1168,7 +1195,7 @@ struct AgentRuntimeSection6ComplianceTests {
             message.role == .assistant && message.content == "Two rounds complete."
         }
         #expect(hasFinalAssistant)
-        #expect(await scriptedLLM.observedStreamCallCount() == 3)
+        #expect(await scriptedLLM.observedStreamCallCount() == 4)
     }
 
     @Test("chat-mode zero transcript delta is classified in terminal detail")

@@ -57,6 +57,18 @@ struct TUIControlInputBridgeTests {
             Issue.record("Expected command classification")
         }
     }
+
+    @Test("Builds runtime turn configuration with TUI provenance")
+    func runtimeTurnConfiguration() {
+        let bridge = TUIControlInputBridge()
+        let submission = ComposerSubmission(
+            text: "hello",
+            provenance: ComposerProvenance(originSurface: InteractiveSurfaceID.tui)
+        )
+        let configuration = bridge.runtimeTurnConfiguration(from: submission)
+        #expect(configuration.originSurface == InteractiveSurfaceID.tui)
+        #expect(configuration.ephemeralSystemReminder?.contains("Output contract:") == true)
+    }
 }
 
 @Suite("BracketedPaste")

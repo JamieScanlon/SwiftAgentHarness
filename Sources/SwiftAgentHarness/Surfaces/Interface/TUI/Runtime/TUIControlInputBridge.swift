@@ -36,4 +36,18 @@ public struct TUIControlInputBridge {
             return nil
         }
     }
+
+    /// Builds a runtime turn configuration with TUI provenance and optional message-tool output guidance.
+    public func runtimeTurnConfiguration(
+        from submission: ComposerSubmission,
+        base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+    ) -> AgentRuntimeTurnConfiguration {
+        var configuration = submission.runtimeTurnConfiguration(base: base, harness: harness)
+        if let patch = turnConfigurationPatch(from: classify(submission)) {
+            configuration.turnThinkingOverride = patch.turnThinkingOverride
+            configuration.turnModelSlug = patch.turnModelSlug
+        }
+        return configuration
+    }
 }

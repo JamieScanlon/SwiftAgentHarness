@@ -174,7 +174,8 @@ enum TurnLoopTestPorts {
         compactionRecorder: TurnLoopCompactionRecorder? = nil,
         finishReasonRecorder: TurnLoopFinishReasonRecorder? = nil,
         effectiveToolEntries: [ToolRegistryEntry] = [],
-        temperatureRecorder: TurnLoopTemperatureRecorder? = nil
+        temperatureRecorder: TurnLoopTemperatureRecorder? = nil,
+        agentHarness: AgentHarnessConfiguration = .default
     ) -> AgentLoopPorts {
         let emptySnapshot = RuntimeToolTurnPolicySnapshot(
             availabilitySnapshots: [],
@@ -251,7 +252,7 @@ enum TurnLoopTestPorts {
             tools: toolPort,
             conversation: conversationPort,
             memory: nil,
-            agentHarness: .default,
+            agentHarness: agentHarness,
             contextCompaction: contextCompaction,
             modeRegistry: modeRegistry ?? ModeRegistryTestSupport.makePort(seedingBuiltIns: true),
             logger: nil

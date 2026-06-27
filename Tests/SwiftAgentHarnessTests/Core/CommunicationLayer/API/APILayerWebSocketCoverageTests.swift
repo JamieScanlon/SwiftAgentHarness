@@ -84,7 +84,10 @@ private actor WebSocketScriptedToolThenAnswerLLM: LLMProtocol {
             )
         }
         streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
+        return MessageOutputTestSupport.messageToolLLMResponse(
+            text: finalAssistantText,
+            toolCallID: "call_message_\(streamCallCount)"
+        )
     }
 
     nonisolated func stream(
@@ -110,7 +113,10 @@ private actor WebSocketScriptedToolThenAnswerLLM: LLMProtocol {
             )
         }
         streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
+        return MessageOutputTestSupport.messageToolLLMResponse(
+            text: finalAssistantText,
+            toolCallID: "call_message_\(streamCallCount)"
+        )
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {

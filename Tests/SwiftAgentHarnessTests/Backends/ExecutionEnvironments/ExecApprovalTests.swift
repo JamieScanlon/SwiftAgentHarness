@@ -213,8 +213,13 @@ struct ExecApprovalTests {
             ),
             logger: Logger(label: "test")
         )
-        let route = ExecApprovalChannelRoute(listener: listener, chatId: "chat-1", threadId: nil)
-        let delivery = ChannelExecApprovalDelivery(
+        let outbound = DefaultChannelOutboundAdapter(listener: listener, chunkLimit: 4000)
+        let route = ExecApprovalPluginRoute(
+            approval: ChannelApprovalCapabilityAdapter(outbound: outbound),
+            outbound: outbound,
+            target: ChannelDeliveryTarget(chatId: "chat-1", threadId: nil, replyToMessageId: nil)
+        )
+        let delivery = PluginChannelExecApprovalDelivery(
             store: ExecApprovalStore(),
             route: route,
             waitTimeoutSeconds: 0.02
@@ -245,12 +250,13 @@ struct ExecApprovalTests {
             ),
             logger: Logger(label: "test")
         )
-        let route = ExecApprovalChannelRoute(
-            listener: listener,
-            chatId: "chat-1",
-            threadId: "thread-1"
+        let outbound = DefaultChannelOutboundAdapter(listener: listener, chunkLimit: 4000)
+        let route = ExecApprovalPluginRoute(
+            approval: ChannelApprovalCapabilityAdapter(outbound: outbound),
+            outbound: outbound,
+            target: ChannelDeliveryTarget(chatId: "chat-1", threadId: "thread-1", replyToMessageId: nil)
         )
-        let delivery = ChannelExecApprovalDelivery(store: store, route: route, waitTimeoutSeconds: 0.05)
+        let delivery = PluginChannelExecApprovalDelivery(store: store, route: route, waitTimeoutSeconds: 0.05)
         let request = ExecApprovalRequest(
             id: "card-1",
             command: "npm test",
@@ -282,8 +288,13 @@ struct ExecApprovalTests {
             ),
             logger: Logger(label: "test")
         )
-        let route = ExecApprovalChannelRoute(listener: listener, chatId: "c1", threadId: nil)
-        let delivery = ChannelExecApprovalDelivery(store: ExecApprovalStore(), route: route)
+        let outbound = DefaultChannelOutboundAdapter(listener: listener, chunkLimit: 4000)
+        let route = ExecApprovalPluginRoute(
+            approval: ChannelApprovalCapabilityAdapter(outbound: outbound),
+            outbound: outbound,
+            target: ChannelDeliveryTarget(chatId: "c1", threadId: nil, replyToMessageId: nil)
+        )
+        let delivery = PluginChannelExecApprovalDelivery(store: ExecApprovalStore(), route: route)
         await delivery.sendFollowup(approvalID: "x", approved: true)
         #expect(listener.sentMessages.count == 1)
         #expect(listener.sentMessages[0].text.contains("approved"))

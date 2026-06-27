@@ -35,6 +35,10 @@ struct TurnLoop {
         var retriedCompactionThisIteration = false
         var continuationsUsed = 0
         var hasTranscriptDeltaAcrossRun = false
+        let messageOutputPolicy = MessageOutputPolicyResolver.policy(
+            originSurface: configuration.originSurface,
+            legacyStreamedTextSurfaces: agentHarness.legacyStreamedTextSurfaces
+        )
         for iteration in 1...maxIterations {
             try Task.checkCancellation()
             guard let conv = await ports.conversation.conversation(id: conversationID) else {
@@ -183,7 +187,8 @@ struct TurnLoop {
                     if await publishStreamDelta(
                         event,
                         conversationID: conversationID,
-                        runID: runID
+                        runID: runID,
+                        outputPolicy: messageOutputPolicy
                     ) {
                         publishedStreamDeltaThisAttempt = true
                     }
@@ -221,7 +226,10 @@ struct TurnLoop {
                 continue
             }
 
-            let assistantEnvelope = acc.finalize()
+            let assistantEnvelope = MessageOutputPostProcessor.apply(
+                envelope: acc.finalize(),
+                policy: messageOutputPolicy
+            )
             HarnessMessageEnvelopeStore.store(assistantEnvelope)
             let assistant = assistantEnvelope.message
             let rejectedBareRequiredTurn = toolChoice == .required
@@ -524,19 +532,20 @@ struct TurnLoop {
     private func publishStreamDelta(
         _ event: ModelStreamEvent,
         conversationID: UUID,
-        runID: UUID?
+        runID: UUID?,
+        outputPolicy: MessageOutputPolicy
     ) async -> Bool {
         var published = false
         switch event {
         case .stream(let chunk):
-            if !chunk.content.isEmpty {
+            if !chunk.content.isEmpty, outputPolicy != .messageToolOnly {
                 await publishDelta(.text(chunk.content), conversationID, runID)
                 published = true
             }
             if let fragment = chunk.streamingFragment {
                 switch fragment {
                 case .text(let text):
-                    if !text.isEmpty {
+                    if !text.isEmpty, outputPolicy != .messageToolOnly {
                         await publishDelta(.text(text), conversationID, runID)
                         published = true
                     }
@@ -544,6 +553,13 @@ struct TurnLoop {
                     await publishDelta(.reasoning(text, blockIndex: nil), conversationID, runID)
                     published = true
                 case .toolCall(let id, let name, let args):
+                    if outputPolicy == .messageToolOnly,
+                       name == MessageToolArgumentsParser.toolName,
+                       let visible = MessageToolArgumentsParser.visibleText(fromArgumentsFragment: args),
+                       !visible.isEmpty {
+                        await publishDelta(.text(visible), conversationID, runID)
+                        published = true
+                    }
                     await publishDelta(
                         .toolCall(toolName: name, toolCallId: id, argumentsFragment: args, blockIndex: nil),
                         conversationID,

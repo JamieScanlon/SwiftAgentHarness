@@ -26,7 +26,7 @@ actor ChannelTransportSupervisor {
         }
     }
 
-    func stop() {
+    func stop() async {
         runTask?.cancel()
         runTask = nil
         Task { await transport.disconnect() }

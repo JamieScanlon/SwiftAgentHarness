@@ -9,7 +9,7 @@ actor ChannelListenerService {
     private let ingress: ChannelIngressAdapter
     private let logger: Logger
     private var pipeline: ChannelIntakePipeline?
-    private var drainTask: Task<Void, Never>?
+    private var supervisor: ChannelTransportSupervisor?
     private var ownsLock = false
 
     init(
@@ -29,7 +29,7 @@ actor ChannelListenerService {
     }
 
     func start() async {
-        guard drainTask == nil else { return }
+        guard supervisor == nil else { return }
         do {
             ownsLock = try ChannelInstanceLock.tryAcquire(
                 dataDirectory: dataDirectory,
@@ -64,28 +64,36 @@ actor ChannelListenerService {
             _ = try? await ingress.ingest(trigger)
         }
         self.pipeline = pipeline
-        let result = try? await listener.connect()
-        if case .fatal(let error) = result {
-            listener.setFatal(error)
+        do {
+            try await listener.prepareSupervisedTransport()
+        } catch {
+            listener.setFatal(ChannelFatalError(code: "connect_failed", message: String(describing: error), retryable: true))
             await writeStatus(state: .fatal)
             return
         }
-        drainTask = Task {
-            for await raw in listener.transportEvents() {
-                guard let event = MockChannelEventParser.parseRawEvent(raw) else { continue }
-                await pipeline.process(event: event)
-                await self.writeStatus(state: listener.state)
-            }
+        let transportSupervisor = ChannelTransportSupervisor(
+            transport: listener.transportForSupervision(),
+            logger: logger
+        ) { [pipeline, listener, self] raw in
+            guard let event = MockChannelEventParser.parseRawEvent(raw) else { return }
+            await pipeline.process(event: event)
+            listener.markTransportConnected()
+            await self.writeStatus(state: listener.state)
         }
+        supervisor = transportSupervisor
+        await transportSupervisor.start()
+        listener.markTransportConnected()
         await writeStatus(state: .connected)
     }
 
     func stop() async {
-        drainTask?.cancel()
-        drainTask = nil
+        if let supervisor {
+            await supervisor.stop()
+        }
+        supervisor = nil
         await pipeline?.stop()
         pipeline = nil
-        await listener.disconnect()
+        listener.markTransportDisconnected()
         if ownsLock {
             try? ChannelInstanceLock.release(
                 dataDirectory: dataDirectory,

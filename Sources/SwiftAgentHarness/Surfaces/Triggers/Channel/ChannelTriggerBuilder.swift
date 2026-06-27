@@ -15,6 +15,7 @@ enum ChannelTriggerBuilder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payloadJSON = String(data: try encoder.encode(payload), encoding: .utf8) ?? event.text
+        let sessionResolution = ChannelSessionGrammar.resolve(event: event, config: config)
         var metadata: [String: String] = [
             "channel": event.channel.rawValue,
             "chatId": event.chatId,
@@ -23,8 +24,12 @@ enum ChannelTriggerBuilder {
             "isDirect": String(event.isDirect),
             "isGroup": String(event.isGroup),
             "wasMentioned": String(effectiveWasMentioned),
-            "sessionKeyOverride": ChannelSessionScopeResolver.resolveSessionKey(event: event, config: config),
+            "sessionKeyOverride": sessionResolution.baseConversationKey,
+            "baseConversationKey": sessionResolution.baseConversationKey,
         ]
+        if !sessionResolution.parentFallbackCandidates.isEmpty {
+            metadata["parentFallbackCandidates"] = sessionResolution.parentFallbackCandidates.joined(separator: "|")
+        }
         if let threadId = event.threadId { metadata["threadId"] = threadId }
         if let updateId = event.platformUpdateId { metadata["platformUpdateId"] = updateId }
         if let burst {

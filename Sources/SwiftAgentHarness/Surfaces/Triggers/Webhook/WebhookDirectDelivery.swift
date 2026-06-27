@@ -2,12 +2,12 @@ import Foundation
 import Logging
 
 struct WebhookDirectDelivery: Sendable {
-    let channelRegistry: any ChannelListenerLooking
+    let channelRegistry: any ChannelPluginLooking
     let webhookPost: @Sendable (String, Data) async throws -> Int
     let logger: Logger?
 
     init(
-        channelRegistry: any ChannelListenerLooking,
+        channelRegistry: any ChannelPluginLooking,
         webhookPost: @escaping @Sendable (String, Data) async throws -> Int = { url, body in
             try await WebhookOutboundDelivery.postRawJSON(urlString: url, body: body)
         },
@@ -25,17 +25,17 @@ struct WebhookDirectDelivery: Sendable {
         guard let channel = ChannelId(rawValue: route.delivery) else {
             return .targetMissing
         }
-        guard let listener = await channelRegistry.listener(for: channel) else {
-            logger?.warning("[WebhookDirectDelivery] missing listener channel=\(channel.rawValue) route=\(route.name)")
+        guard let plugin = await channelRegistry.plugin(for: channel) else {
+            logger?.warning("[WebhookDirectDelivery] missing plugin channel=\(channel.rawValue) route=\(route.name)")
             return .targetMissing
         }
-        let message = ChannelOutboundMessage(
+        let target = ChannelDeliveryTarget(
             chatId: extra["chatId"] ?? "",
             threadId: extra["threadId"],
-            text: rendered,
             replyToMessageId: extra["replyToMessageId"]
         )
-        let result = await listener.send(message)
+        let payload = ChannelRenderedPayload(text: rendered, approvalCard: nil)
+        let result = await plugin.outbound.sendPayload(payload, target: target)
         switch result {
         case .sent:
             return .success

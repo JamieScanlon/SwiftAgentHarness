@@ -52,9 +52,16 @@ struct TriggerSessionRouter: Sendable {
         )
         switch trigger.routingMode {
         case .isolated:
-            let conversationID = try await sessionIndex.resolveOrCreateTriggerHost(
-                sessionKey: sessionKey,
-                trigger: trigger
+            let fallbackRaw = trigger.sourceMetadata["parentFallbackCandidates"] ?? ""
+            let fallbacks = fallbackRaw.split(separator: "|").map(String.init).filter { !$0.isEmpty }
+            let conversationID = try await sessionIndex.resolveWithFallbacks(
+                primaryKey: sessionKey,
+                fallbackCandidates: fallbacks
+            )
+            try await sessionIndex.stampTriggerHost(
+                conversationID: conversationID,
+                trigger: trigger,
+                sessionKey: sessionKey
             )
             return TriggerSessionRoute(sessionKey: sessionKey, conversationID: conversationID, routingMode: .isolated)
         case .threaded:
@@ -100,8 +107,12 @@ actor TriggerSessionIndex {
 
     func resolveOrCreateTriggerHost(sessionKey: String, trigger: HarnessTrigger) async throws -> UUID {
         let id = try await resolveOrCreate(sessionKey: sessionKey)
-        try await stampDelegatedHost(id, trigger, sessionKey)
+        try await stampTriggerHost(conversationID: id, trigger: trigger, sessionKey: sessionKey)
         return id
+    }
+
+    func stampTriggerHost(conversationID: UUID, trigger: HarnessTrigger, sessionKey: String) async throws {
+        try await stampDelegatedHost(conversationID, trigger, sessionKey)
     }
 
     func resolveOrCreateDelegatedHost(sessionKey: String, trigger: HarnessTrigger) async throws -> UUID {
@@ -120,6 +131,24 @@ actor TriggerSessionIndex {
         }
         await isolatedSessions.insert(key: sessionKey, value: id)
         return id
+    }
+
+    func resolveWithFallbacks(primaryKey: String, fallbackCandidates: [String]) async throws -> UUID {
+        if let existing = await isolatedSessions.value(for: primaryKey) {
+            return existing
+        }
+        for candidate in fallbackCandidates {
+            if let existing = await isolatedSessions.value(for: candidate) {
+                await isolatedSessions.insert(key: primaryKey, value: existing)
+                return existing
+            }
+            if let durable = try await resolveConversationByTitle(candidate) {
+                await isolatedSessions.insert(key: primaryKey, value: durable)
+                await isolatedSessions.insert(key: candidate, value: durable)
+                return durable
+            }
+        }
+        return try await resolveOrCreate(sessionKey: primaryKey)
     }
 
     func reset() async {

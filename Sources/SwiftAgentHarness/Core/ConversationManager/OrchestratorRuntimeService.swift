@@ -32,7 +32,7 @@ public actor OrchestratorRuntimeService {
     internal let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
 
     nonisolated(unsafe) private var additionalToolProviderFactory: HarnessToolProviderFactory?
-    nonisolated(unsafe) private var channelRegistry: (any ChannelListenerLooking)?
+    nonisolated(unsafe) private var channelRegistry: (any ChannelPluginLooking)?
     nonisolated(unsafe) private var topicPublication: ConversationTopicPublicationPort?
 
     init(
@@ -91,14 +91,14 @@ public actor OrchestratorRuntimeService {
         self.additionalToolProviderFactory = factory
     }
 
-    nonisolated func installChannelRegistry(_ registry: any ChannelListenerLooking, holder: ChannelRegistryHolder? = nil) {
-        precondition(self.channelRegistry == nil, "ChannelListenerLooking already installed")
+    nonisolated func installChannelRegistry(_ registry: any ChannelPluginLooking, holder: ChannelRegistryHolder? = nil) {
+        precondition(self.channelRegistry == nil, "ChannelPluginLooking already installed")
         self.channelRegistry = registry
         holder?.assign(registry)
     }
 
     nonisolated public func installChannelRegistry(_ registry: ChannelListenerRegistry, holder: ChannelRegistryHolder? = nil) {
-        installChannelRegistry(registry as any ChannelListenerLooking, holder: holder)
+        installChannelRegistry(registry as any ChannelPluginLooking, holder: holder)
     }
 
     public func resolvedChannelRegistry() -> ChannelListenerRegistry? {
@@ -502,6 +502,21 @@ public actor OrchestratorRuntimeService {
         providers.append(
             AgentPlanToolProvider(
                 dataProvider: toolData,
+                logger: logger
+            )
+        )
+        let messageConv = activeConversation
+        providers.append(
+            MessageToolProvider(
+                resolveConversationID: {
+                    if let scope = ConversationScope.current {
+                        return scope.selfID
+                    }
+                    return messageConv?.id
+                },
+                resolveDeliveryMetadata: {
+                    Self.messageDeliveryMetadata(from: messageConv)
+                },
                 logger: logger
             )
         )
@@ -1082,6 +1097,19 @@ public actor OrchestratorRuntimeService {
             orchestrator: orchestrator,
             queuedLLM: llm,
             conversationID: activeConversationID
+        )
+    }
+
+    static func messageDeliveryMetadata(from conversation: ModelConversation?) -> MessageOutputDeliveryMetadata {
+        guard let conversation,
+              let trigger = TriggerHostConversationMetadata.triggerFromFingerprint(conversation.metadata) else {
+            return MessageOutputDeliveryMetadata()
+        }
+        return MessageOutputDeliveryMetadata(
+            originSurface: trigger.sourceMetadata["channel"] ?? trigger.source.rawValue,
+            originSenderID: trigger.sourceMetadata["senderId"] ?? trigger.initiator.id,
+            chatId: trigger.sourceMetadata["chatId"],
+            threadId: trigger.sourceMetadata["threadId"]
         )
     }
 }

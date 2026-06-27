@@ -60,4 +60,12 @@ struct AgentHarnessConfigurationDecodeTests {
         )
         #expect(config.repeatToolCallStreakThreshold == 7)
     }
+
+    @Test("legacyStreamedTextSurfaces decodes string array")
+    func harnessJSONDecodesLegacyStreamedTextSurfaces() {
+        let config = AgentHarnessConfiguration.configuration(
+            fromAgentHarnessJSON: ["legacyStreamedTextSurfaces": ["cli"]]
+        )
+        #expect(config.legacyStreamedTextSurfaces == Set(["cli"]))
+    }
 }

@@ -21,6 +21,7 @@ struct TriggerDispatchService: Sendable {
     let runtime: any TriggerRuntimeDispatching
     let delegatedDispatch: TriggerDelegatedDispatchService?
     let snapshotStore: TriggerSnapshotStore?
+    let channelRunStreaming: ChannelRunStreamingServiceHolder?
 
     init(
         activationPolicy: TriggerActivationPolicy,
@@ -28,7 +29,8 @@ struct TriggerDispatchService: Sendable {
         promptBuilder: TriggerPromptBuilder,
         runtime: any TriggerRuntimeDispatching,
         delegatedDispatch: TriggerDelegatedDispatchService? = nil,
-        snapshotStore: TriggerSnapshotStore? = nil
+        snapshotStore: TriggerSnapshotStore? = nil,
+        channelRunStreaming: ChannelRunStreamingServiceHolder? = nil
     ) {
         self.activationPolicy = activationPolicy
         self.sessionRouter = sessionRouter
@@ -36,6 +38,7 @@ struct TriggerDispatchService: Sendable {
         self.runtime = runtime
         self.delegatedDispatch = delegatedDispatch
         self.snapshotStore = snapshotStore
+        self.channelRunStreaming = channelRunStreaming
     }
 
     func ingest(_ trigger: HarnessTrigger) async throws -> TriggerActivationResult {
@@ -62,10 +65,24 @@ struct TriggerDispatchService: Sendable {
             )
             return TriggerActivationResult(decision: .admitted, sessionID: childID)
         case .isolated, .threaded:
+            if trigger.source == .channel, let holder = channelRunStreaming, let service = holder.service() {
+                await attachChannelRunStreaming(
+                    service: service,
+                    trigger: trigger,
+                    conversationID: conversationID
+                )
+            }
+            let outputReminder = trigger.source == .channel
+                ? MessageOutputSystemPromptGuidance.channelOutputVerb
+                : nil
+            let mergedReminder = [built.systemReminder, outputReminder]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
             try await runtime.dispatchTriggerMessage(
                 conversationID: conversationID,
                 text: built.userMessageBody,
-                systemReminder: built.systemReminder,
+                systemReminder: mergedReminder.isEmpty ? nil : mergedReminder,
                 inputTrustRaw: TriggerTrustCodec.inputTrustRaw(for: trigger.trust),
                 enableTools: trigger.enableTools,
                 enableAgents: trigger.enableAgents,
@@ -74,5 +91,25 @@ struct TriggerDispatchService: Sendable {
             )
             return TriggerActivationResult(decision: .admitted, sessionID: conversationID)
         }
+    }
+
+    private func attachChannelRunStreaming(
+        service: ChannelRunStreamingService,
+        trigger: HarnessTrigger,
+        conversationID: UUID
+    ) async {
+        guard let channelRaw = trigger.sourceMetadata["channel"],
+              let channel = ChannelId(rawValue: channelRaw) else {
+            return
+        }
+        await service.attach(
+            conversationID: conversationID,
+            target: ChannelRunStreamingTarget(
+                channel: channel,
+                chatId: trigger.sourceMetadata["chatId"] ?? "",
+                threadId: trigger.sourceMetadata["threadId"],
+                replyToMessageId: trigger.sourceMetadata["platformMessageId"]
+            )
+        )
     }
 }

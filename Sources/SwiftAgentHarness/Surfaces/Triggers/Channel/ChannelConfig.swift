@@ -48,6 +48,22 @@ struct ChannelAckConfig: Codable, Sendable, Equatable {
     var reactionScope: String = "group-mentions"
 }
 
+enum ChannelStreamingPreset: String, Codable, Sendable, Equatable {
+    case social
+    case `operator`
+    case finalOnly = "final_only"
+}
+
+struct ChannelStreamingConfig: Codable, Sendable, Equatable {
+    var preset: ChannelStreamingPreset = .social
+    var textChunkLimit: Int = 4000
+
+    enum CodingKeys: String, CodingKey {
+        case preset
+        case textChunkLimit = "text_chunk_limit"
+    }
+}
+
 enum ChannelDMScope: String, Codable, Sendable, Equatable {
     case main
     case perPeer = "per-peer"
@@ -65,6 +81,7 @@ struct ChannelListenerConfig: Codable, Sendable, Equatable {
     var debounce: ChannelDebounceConfig = ChannelDebounceConfig()
     var media: ChannelMediaConfig = ChannelMediaConfig()
     var ack: ChannelAckConfig = ChannelAckConfig()
+    var streaming: ChannelStreamingConfig = ChannelStreamingConfig()
     var routingMode: TriggerRoutingMode = .isolated
     var delegate: TriggerDelegateProfile?
     var dmScope: ChannelDMScope = .perChannelPeer
@@ -81,6 +98,7 @@ struct ChannelListenerConfig: Codable, Sendable, Equatable {
         case debounce
         case media
         case ack
+        case streaming
         case routingMode = "routing_mode"
         case delegate
         case dmScope = "dm_scope"

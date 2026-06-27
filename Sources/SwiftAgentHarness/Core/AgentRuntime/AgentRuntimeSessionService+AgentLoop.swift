@@ -128,29 +128,11 @@ extension AgentRuntimeSessionService {
     }
 
     private func agentLoopManagerConfiguration(from runtime: AgentRuntimeTurnConfiguration) -> Configuration {
-        Configuration(
-            enableTools: runtime.enableTools,
-            enableAgents: runtime.enableAgents,
-            allowEscalatedTools: runtime.allowEscalatedTools,
-            preApprovedToolNames: runtime.preApprovedToolNames,
-            expectedPreviousTailHarnessMessageID: runtime.expectedPreviousTailHarnessMessageID,
-            inputTrustRaw: runtime.inputTrustRaw,
-            resolvedInputTrustClass: runtime.resolvedInputTrustClass,
-            ephemeralSystemReminder: runtime.ephemeralSystemReminder
-        )
+        Configuration(runtimeConfiguration: runtime)
     }
 
     private func agentLoopRuntimeConfiguration(from manager: Configuration) -> AgentRuntimeTurnConfiguration {
-        AgentRuntimeTurnConfiguration(
-            enableTools: manager.enableTools,
-            enableAgents: manager.enableAgents,
-            allowEscalatedTools: manager.allowEscalatedTools,
-            preApprovedToolNames: manager.preApprovedToolNames,
-            expectedPreviousTailHarnessMessageID: manager.expectedPreviousTailHarnessMessageID,
-            inputTrustRaw: manager.inputTrustRaw,
-            resolvedInputTrustClass: manager.resolvedInputTrustClass,
-            ephemeralSystemReminder: manager.ephemeralSystemReminder
-        )
+        AgentRuntimeTurnConfiguration(managerConfiguration: manager)
     }
 
     func beginAgentLoopPartialStream() -> AsyncStream<ChatStreamingPartial> {

@@ -2281,7 +2281,7 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
         let expectedTail = ifMatch != nil
             ? APILayer.parseMessageTailIfMatch(ifMatch)
             : chatRequest.expectedPreviousTailHarnessMessageID
-        let configuration = AgentRuntimeTurnConfiguration(
+        let configuration = MessageOutputTurnConfiguration.forRESTSend(
             enableTools: chatRequest.includeTools != false,
             enableAgents: chatRequest.includeAgents != false,
             expectedPreviousTailHarnessMessageID: expectedTail,

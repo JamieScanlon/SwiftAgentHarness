@@ -33,6 +33,22 @@ final class MockChannelListener: ChannelListener, @unchecked Sendable {
         _ = logger
     }
 
+    func transportForSupervision() -> any ChannelTransport {
+        transport
+    }
+
+    func markTransportConnected() {
+        stateLock.withLock { _state = .connected }
+    }
+
+    func markTransportDisconnected() {
+        stateLock.withLock { _state = .disconnected }
+    }
+
+    func prepareSupervisedTransport() async throws {
+        try await transport.connect()
+    }
+
     func connect() async throws -> ChannelConnectResult {
         stateLock.withLock { _state = .connecting }
         do {

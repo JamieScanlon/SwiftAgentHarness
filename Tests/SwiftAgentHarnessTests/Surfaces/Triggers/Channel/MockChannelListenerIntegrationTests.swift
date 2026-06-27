@@ -67,12 +67,16 @@ struct MockChannelListenerIntegrationTests {
         #expect(runtime.texts[0].contains("from mock"))
     }
 
-    @Test("output router sends via listener")
+    @Test("output router sends via plugin outbound")
     func outputRouter() async {
-        let listener = MockChannelListener(
-            id: .slack,
-            config: ChannelListenerConfig(platformIdentity: "mock"),
-            logger: Logger(label: "test")
+        let config = ChannelListenerConfig(platformIdentity: "mock")
+        let logger = Logger(label: "test")
+        let listener = MockChannelListener(id: .slack, config: config, logger: logger)
+        let plugin = ChannelPluginFactory.makeMockPlugin(
+            channel: .slack,
+            config: config,
+            listener: listener,
+            logger: logger
         )
         let router = TriggerOutputRouter()
         let trigger = HarnessTrigger(
@@ -83,7 +87,7 @@ struct MockChannelListenerIntegrationTests {
             initiator: TriggerInitiator(kind: .external, id: "U1"),
             trust: .knownParty
         )
-        let result = await router.routeResponse(trigger: trigger, responseText: "pong", listener: listener)
+        let result = await router.routeResponse(trigger: trigger, responseText: "pong", plugin: plugin)
         if case .sent = result {
             #expect(Bool(true))
         } else {

@@ -104,6 +104,7 @@ public enum TriggersRuntimeWiring {
         public var fileEventQueueEnabled: Bool = true
         public var channelsConfigURL: URL? = nil
         public var channelListenersEnabled: Bool = false
+        public var conversationEventsHub: ConversationEventsTopicHub? = nil
         public var staticWebhookRoutes: [WebhookRoute] = []
         public var schedulerIdentity: String = "sah-trigger-scheduler"
 
@@ -113,6 +114,7 @@ public enum TriggersRuntimeWiring {
             fileEventQueueEnabled: Bool = true,
             channelsConfigURL: URL? = nil,
             channelListenersEnabled: Bool = false,
+            conversationEventsHub: ConversationEventsTopicHub? = nil,
             staticWebhookRoutes: [WebhookRoute] = [],
             schedulerIdentity: String = "sah-trigger-scheduler"
         ) {
@@ -121,6 +123,7 @@ public enum TriggersRuntimeWiring {
             self.fileEventQueueEnabled = fileEventQueueEnabled
             self.channelsConfigURL = channelsConfigURL
             self.channelListenersEnabled = channelListenersEnabled
+            self.conversationEventsHub = conversationEventsHub
             self.staticWebhookRoutes = staticWebhookRoutes
             self.schedulerIdentity = schedulerIdentity
         }
@@ -191,13 +194,17 @@ public enum TriggersRuntimeWiring {
             runRegistry: runRegistry,
             logger: logger
         )
+        let channelRunStreamingHolder = configuration.conversationEventsHub == nil
+            ? nil
+            : ChannelRunStreamingServiceHolder()
         let dispatch = TriggerDispatchService(
             activationPolicy: activationPolicy,
             sessionRouter: sessionRouter,
             promptBuilder: promptBuilder,
             runtime: runtimeAdapter,
             delegatedDispatch: delegatedDispatch,
-            snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory)
+            snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory),
+            channelRunStreaming: channelRunStreamingHolder
         )
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
@@ -225,6 +232,13 @@ public enum TriggersRuntimeWiring {
             enabled: configuration.channelListenersEnabled,
             configURL: configuration.channelsConfigURL
         )
+        if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
+            channelRunStreamingHolder.install(
+                ChannelRunStreamingService(hub: hub) { channel in
+                    await channelRegistry.plugin(for: channel)
+                }
+            )
+        }
         let webhookValidation = WebhookValidationGate(
             routeStore: routeStore,
             idempotency: idempotency,

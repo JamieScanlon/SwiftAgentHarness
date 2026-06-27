@@ -23,4 +23,17 @@ enum ChannelRuntimeStatus {
         let data = try JSONEncoder().encode(snapshot)
         try data.write(to: url, options: .atomic)
     }
+
+    static func recordFatal(channel: ChannelId, error: ChannelFatalError, dataDirectory: URL) {
+        let snapshot = ChannelRuntimeStatusSnapshot(
+            channel: channel.rawValue,
+            platformIdentity: "unknown",
+            state: .fatal,
+            fatalError: error,
+            counters: ChannelIntakeCounters(),
+            inflightDebounce: 0,
+            updatedAt: Date()
+        )
+        try? write(snapshot, dataDirectory: dataDirectory)
+    }
 }

@@ -35,6 +35,16 @@ struct TUIAppIntegrationTests {
         #expect(await app.messageCount() == 1)
     }
 
+    @Test("Ingests message-tool sourced text partials")
+    func messageToolTextPartial() async {
+        let term = VirtualTerminal(columns: 80, rows: 24)
+        let app = TUIApp(terminal: term)
+        await app.ingest(.text("from message tool"))
+        await app.finishTurn(final: StreamingFinalPayload(text: "from message tool"))
+        #expect(await app.messageCount() == 1)
+        #expect(!term.rawOutput.isEmpty)
+    }
+
     @Test("Shows approval overlay from surface intent")
     func approvalOverlay() async {
         let term = VirtualTerminal(columns: 80, rows: 24)

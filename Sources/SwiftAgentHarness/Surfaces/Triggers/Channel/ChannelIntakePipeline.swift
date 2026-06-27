@@ -32,7 +32,13 @@ actor ChannelIntakePipeline {
 
     func process(event: ChannelMessageEvent) async {
         counters.parsed += 1
-        if await dedup.isDuplicate(channel: channel, platformMessageId: event.platformMessageId) {
+        if await dedup.isDuplicate(
+            channel: channel,
+            platformMessageId: event.platformMessageId,
+            accountId: config.platformIdentity,
+            peerId: event.senderId,
+            sessionKey: ChannelSessionScopeResolver.resolveSessionKey(event: event, config: config)
+        ) {
             counters.dedupDropped += 1
             logger.debug("channel_intake_dedup channel=\(channel.rawValue) id=\(event.platformMessageId)")
             return

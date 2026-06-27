@@ -73,7 +73,7 @@ struct AgentRuntimeToolContinuationStressTests {
             )
         }
 
-        #expect(streamCalls == 2)
+        #expect(streamCalls == 3)
         #expect(hasFinal)
     }
 }
@@ -168,13 +168,19 @@ private actor Section6StressScriptedToolThenAnswerLLM: LLMProtocol {
     }
 
     private func nextStreamResponse() -> LLMResponse {
-        if streamCallCount == 0 {
+        defer { streamCallCount += 1 }
+        switch streamCallCount {
+        case 0:
             let toolCall = ToolCall(name: toolName, arguments: .object([:]), id: toolCallID)
-            streamCallCount += 1
             return LLMResponse(content: "", toolCalls: [toolCall])
+        case 1:
+            return MessageOutputTestSupport.messageToolLLMResponse(
+                text: finalAssistantText,
+                toolCallID: "call_message_2"
+            )
+        default:
+            return MessageOutputTestSupport.emptyTurnStopLLMResponse()
         }
-        streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
