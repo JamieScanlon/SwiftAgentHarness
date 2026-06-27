@@ -34,6 +34,7 @@ let package = Package(
             ],
             resources: [
                 .process("Backends/ExecutionEnvironments/manifests"),
+                .process("Backends/Providers/manifests"),
             ]
         ),
         .testTarget(

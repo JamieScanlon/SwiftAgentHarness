@@ -144,23 +144,15 @@ struct StandardModelLLMFactoryAdapterTests {
     }
 
     @Test("profile-specific Anthropic key is preferred")
-    func profileSpecificAnthropicKeyPreferred() {
-        let binding = ProviderBinding(
-            providerId: "anthropic",
-            modelProtocol: .anthropic,
-            endpointModelId: "claude-test",
-            serverURL: URL(string: "https://api.anthropic.com/v1/messages")!,
-            priority: 0,
-            authProfile: "prod-west"
-        )
-        let key = StandardModelLLMFactory.resolveAnthropicAPIKey(
-            binding: binding,
-            defaultAuthProfile: nil,
+    func profileSpecificAnthropicKeyPreferred() throws {
+        let store = AuthProfileStore(
             environment: [
                 "SAH_ANTHROPIC_API_KEY_PROD_WEST": "profile-key",
                 "ANTHROPIC_API_KEY": "global-key",
-            ]
+            ],
+            defaultAuthProfileLabel: "prod-west"
         )
-        #expect(key == "profile-key")
+        let resolved = try store.resolveAPIKey(providerID: "anthropic", authProfileLabel: "prod-west")
+        #expect(resolved.apiKey == "profile-key")
     }
 }

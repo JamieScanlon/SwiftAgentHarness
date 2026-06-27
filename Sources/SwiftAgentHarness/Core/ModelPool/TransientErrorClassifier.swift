@@ -119,8 +119,13 @@ public enum TransientErrorClassifier {
 /// binding-scoped terminal classes (for example `modelNotFound` on one backend) as
 /// eligible to try the next binding for the same logical model.
 public enum BindingFailoverClassifier {
-    public static func classify(_ error: Error) -> BindingFailoverDecision {
+    public static func classify(_ error: Error, providerID: ProviderID? = nil) -> BindingFailoverDecision {
         if error is CancellationError { return .terminal }
+        if let providerID,
+           let provider = ProviderRegistry.textInferenceProvider(for: providerID) {
+            let classification = provider.failoverError(error)
+            return ProviderFailoverBridge.bindingDecision(for: classification)
+        }
         if TransientErrorClassifier.classify(error) == .transient {
             return .tryNextBinding
         }
@@ -131,7 +136,7 @@ public enum BindingFailoverClassifier {
         case .modelNotFound, .unsupportedCapability, .invalidResponse, .imageGenerationError:
             return .tryNextBinding
         case .networkError(let inner):
-            return classify(inner)
+            return classify(inner, providerID: providerID)
         case .invalidRequest, .quotaExceeded, .authenticationFailed, .unknown,
              .rateLimitExceeded, .timeout, .queueFull, .queueTimeout:
             return .terminal

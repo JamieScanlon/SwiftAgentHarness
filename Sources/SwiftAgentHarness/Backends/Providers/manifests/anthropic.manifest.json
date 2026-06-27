@@ -1,0 +1,27 @@
+{
+  "id": "anthropic",
+  "label": "Anthropic",
+  "providerEndpoints": [
+    { "id": "anthropic-default", "baseUrl": "https://api.anthropic.com" }
+  ],
+  "providerAuthAliases": ["anthropic", "claude"],
+  "providerAuthChoices": [
+    {
+      "id": "api-key",
+      "label": "API Key",
+      "envVars": ["SAH_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+      "cliFlag": "--anthropic-key",
+      "cliOption": "anthropicKey",
+      "onboardingScopes": []
+    }
+  ],
+  "modelSupport": {
+    "modelPrefixes": ["claude-"]
+  },
+  "cliBackends": [],
+  "uiHints": {
+    "iconRef": "anthropic-mark",
+    "category": "frontier"
+  },
+  "capabilitySlots": ["text-inference", "media-understanding"]
+}

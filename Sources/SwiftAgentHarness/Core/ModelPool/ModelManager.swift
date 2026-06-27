@@ -95,12 +95,12 @@ public actor ModelManager {
     }
 
     private func syncRegistryFromDiscovery() async {
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
         var merged: [UUID: ModelRegistryEntry] = [:]
-        for entry in await discoverOllamaEntries() {
-            merged[entry.id] = entry
-        }
-        for entry in await discoverLMStudioEntries() {
-            merged[entry.id] = entry
+        for provider in ProviderRegistry.allTextInferenceProviders() {
+            for entry in await provider.discoverEntries(logger: logger) {
+                merged[entry.id] = entry
+            }
         }
         if let observedPerformanceProvider {
             for id in merged.keys {
@@ -400,7 +400,7 @@ public actor ModelManager {
         }
     }
 
-    private static func mergedRequestFeaturesFromConfig(_ config: ModelConfig) -> ModelRequestFeatures {
+    static func mergedRequestFeaturesFromConfig(_ config: ModelConfig) -> ModelRequestFeatures {
         mergeRequestFeatures(
             baseline: requestFeaturesBaseline(for: config.modelProtocol),
             overlay: config.hardcodedRequestFeatures
@@ -438,14 +438,14 @@ public actor ModelManager {
     }
 
     /// If both `.thinking` and `.reasoningRequired` appear, keep required-only semantics.
-    private static func normalizeReasoningCapabilities(_ caps: inout Set<LLMCapability>) {
+    static func normalizeReasoningCapabilities(_ caps: inout Set<LLMCapability>) {
         if caps.contains(.reasoningRequired) {
             caps.remove(.thinking)
         }
     }
 
     /// Static registry metadata hints for per-model routing windows.
-    private static func defaultRoutingMetadata(for modelProtocol: ModelProtocol) -> ModelRoutingMetadata {
+    static func defaultRoutingMetadata(for modelProtocol: ModelProtocol) -> ModelRoutingMetadata {
         switch modelProtocol {
         case .ollama:
             return ModelRoutingMetadata(

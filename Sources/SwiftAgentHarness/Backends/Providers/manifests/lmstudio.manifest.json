@@ -1,0 +1,18 @@
+{
+  "id": "lmstudio",
+  "label": "LM Studio",
+  "providerEndpoints": [
+    { "id": "lmstudio-default", "baseUrl": "http://localhost:1234" }
+  ],
+  "providerAuthAliases": ["lmstudio", "lm-studio"],
+  "providerAuthChoices": [],
+  "modelSupport": {
+    "modelPrefixes": []
+  },
+  "cliBackends": [],
+  "uiHints": {
+    "iconRef": "lmstudio-mark",
+    "category": "local"
+  },
+  "capabilitySlots": ["text-inference"]
+}

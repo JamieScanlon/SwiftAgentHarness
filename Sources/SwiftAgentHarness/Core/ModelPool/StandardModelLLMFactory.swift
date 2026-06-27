@@ -107,9 +107,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
                 model: model,
                 systemPrompt: systemPrompt,
                 logger: logger,
-                override: testBindingAdapterOverride,
-                resolveOpenAIAPIKey: { resolveOpenAIAPIKey(for: $0) },
-                resolveAnthropicAPIKey: { resolveAnthropicAPIKey(for: $0) }
+                override: testBindingAdapterOverride
             )
             let promptPlanned: any LLMProtocol
             if case .enabled = advanced.promptCache {
@@ -192,52 +190,24 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         systemPrompt: SystemPrompt,
         logger: Logger?,
         override: (@Sendable (ProviderBinding) -> any LLMProtocol)? = nil,
-        resolveOpenAIAPIKey: (ProviderBinding) -> String = { _ in "dummy_key" },
-        resolveAnthropicAPIKey: (ProviderBinding) -> String = { _ in "dummy_key" }
+        authProfileStore: AuthProfileStore = .production()
     ) -> any LLMProtocol {
         if let override {
             return override(binding)
         }
-        switch binding.modelProtocol {
-        case .ollama:
-            return OllamaLLM(
-                model: binding.endpointModelId,
-                serverURL: binding.serverURL,
-                capabilities: model.capabilities,
-                requestFeatures: model.requestFeatures,
-                systemPrompt: systemPrompt,
-                logger: logger
-            )
-        case .openAIAPI:
-            return OpenAILLM(
-                baseURL: binding.serverURL.absoluteString,
-                apiKey: resolveOpenAIAPIKey(binding),
-                model: binding.endpointModelId,
-                capabilities: model.capabilities,
-                requestFeatures: model.requestFeatures,
-                systemPrompt: systemPrompt,
-                logger: logger
-            )
-        case .lmStudio:
-            return LMStudioLLM(
-                model: binding.endpointModelId,
-                serverURL: binding.serverURL,
-                capabilities: model.capabilities,
-                requestFeatures: model.requestFeatures,
-                systemPrompt: systemPrompt,
-                logger: logger
-            )
-        case .anthropic:
-            return AnthropicLLM(
-                apiURL: binding.serverURL,
-                apiKey: resolveAnthropicAPIKey(binding),
-                model: binding.endpointModelId,
-                capabilities: model.capabilities,
-                requestFeatures: model.requestFeatures,
-                systemPrompt: systemPrompt,
-                logger: logger
-            )
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
+            fatalError("No text-inference provider registered for binding \(binding.providerId)/\(binding.modelProtocol.rawValue)")
         }
+        return provider.makeAdapter(
+            context: ProviderAdapterContext(
+                binding: binding,
+                model: model,
+                systemPrompt: systemPrompt,
+                authProfileStore: authProfileStore,
+                logger: logger
+            )
+        )
     }
 
     private func providerScopeKey(for binding: ProviderBinding) -> String {

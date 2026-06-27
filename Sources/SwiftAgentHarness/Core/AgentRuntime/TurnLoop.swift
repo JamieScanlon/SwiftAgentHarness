@@ -137,12 +137,22 @@ struct TurnLoop {
             // Final provider-agnostic guard: never dispatch an unrenderable array (orphaned leading
             // tool result / missing system prompt) regardless of how `messages` was assembled.
             messages = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: ports.logger)
+            let providerBinding = ProviderBinding(
+                providerId: conv.model.modelProtocol.rawValue,
+                modelProtocol: conv.model.modelProtocol,
+                endpointModelId: conv.model.modelName,
+                serverURL: conv.model.serverURL
+            )
+            let normalizedTools = ProviderRuntimeHooks.normalizeTools(
+                snapshot.effectiveTools,
+                binding: providerBinding
+            )
             do {
                 let stream = await ports.model.stream(
                     messages,
                     orchestrator: orchestrator,
                     handle: handle,
-                    tools: snapshot.effectiveTools,
+                    tools: normalizedTools,
                     toolChoice: toolChoice,
                     temperatureOverride: temperatureOverride
                 )

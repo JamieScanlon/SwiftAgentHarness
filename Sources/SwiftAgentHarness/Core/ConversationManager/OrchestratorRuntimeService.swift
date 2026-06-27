@@ -317,14 +317,24 @@ public actor OrchestratorRuntimeService {
         } else {
             thinkingConfig = nil
         }
-        if metadata.isEmpty, thinkingConfig == nil {
+        var enrichedMetadata = metadata
+        if let conversation,
+           let entry = await deps.registryEntryProvider?(conversation.model.id),
+           let binding = entry.primaryBinding,
+           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+            ProviderPromptContribution.applySectionOverrides(
+                metadata: &enrichedMetadata,
+                contribution: contribution
+            )
+        }
+        if enrichedMetadata.isEmpty, thinkingConfig == nil {
             return nil
         }
 
         var payload: [String: JSON] = [:]
-        if !metadata.isEmpty {
-            payload["systemPromptMetadata"] = .object(metadata.mapValues { .string($0) })
-            payload["contextEngineSystemPromptMetadata"] = .object(metadata.mapValues { .string($0) })
+        if !enrichedMetadata.isEmpty {
+            payload["systemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
+            payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
         }
         if let conversationID = conversation?.id,
            let attachmentProjection = await contextProjection.cachedAttachmentProjection(conversationID: conversationID) {
