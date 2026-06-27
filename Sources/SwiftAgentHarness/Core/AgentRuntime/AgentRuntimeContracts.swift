@@ -58,6 +58,8 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
     public var ephemeralSystemReminder: String?
     public var originSurface: String?
     public var originSenderID: String?
+    public var turnThinkingOverride: ThinkingConfig?
+    public var turnModelSlug: String?
 
     public init(
         enableTools: Bool = true,
@@ -69,7 +71,9 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         ephemeralSystemReminder: String? = nil,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        turnThinkingOverride: ThinkingConfig? = nil,
+        turnModelSlug: String? = nil
     ) {
         self.enableTools = enableTools
         self.enableAgents = enableAgents
@@ -81,6 +85,8 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         self.ephemeralSystemReminder = ephemeralSystemReminder
         self.originSurface = originSurface
         self.originSenderID = originSenderID
+        self.turnThinkingOverride = turnThinkingOverride
+        self.turnModelSlug = turnModelSlug
     }
 }
 

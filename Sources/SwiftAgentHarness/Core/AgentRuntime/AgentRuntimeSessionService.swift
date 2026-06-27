@@ -192,8 +192,25 @@ public actor AgentRuntimeSessionService {
             throw ConversationServiceError.conversationRunInProgress(conversationID: conversation.id, activeRunID: busyRun)
         }
 
-        if let slashCommandResponse = try await runSlashCommandIfNeeded(text, conversationID: conversation.id) {
-            return slashCommandResponse
+        var effectiveText = text
+        var effectiveConfiguration = configuration
+
+        switch try await processControlInputBoundary(
+            text: text,
+            conversationID: conversation.id,
+            configuration: configuration
+        ) {
+        case .shortCircuit(let response):
+            return response
+        case let .continueTurn(modelText, patch, preTurnAckContent):
+            effectiveText = modelText
+            effectiveConfiguration.turnThinkingOverride = patch.turnThinkingOverride
+            effectiveConfiguration.turnModelSlug = patch.turnModelSlug
+            if let preTurnAckContent, !preTurnAckContent.isEmpty {
+                try await savePreTurnAcknowledgement(preTurnAckContent, conversationID: conversation.id)
+            }
+        case .passthrough:
+            break
         }
 
         let runID = UUID()
@@ -202,7 +219,7 @@ public actor AgentRuntimeSessionService {
             throw await runtimeSessionError(for: admission, conversationID: conversation.id, fallbackRunID: runID)
         }
 
-        let resolvedConfiguration = await configurationApplyingTrustPolicy(configuration)
+        let resolvedConfiguration = await configurationApplyingTrustPolicy(effectiveConfiguration)
         let sendingConversationID = conversation.id
 
         do {
@@ -220,7 +237,7 @@ public actor AgentRuntimeSessionService {
             await invokeTestingPreRunStateSendHook(for: conversation)
 
             let trustRaw = MessageInputTrustCodec.sanitizedInputTrustRaw(resolvedConfiguration.inputTrustRaw)
-            let newMessage = Message(id: UUID(), role: .user, content: text, images: images, inputTrustRaw: trustRaw)
+            let newMessage = Message(id: UUID(), role: .user, content: effectiveText, images: images, inputTrustRaw: trustRaw)
             _ = try await saveMessageToCache(
                 newMessage,
                 for: conversation.id,

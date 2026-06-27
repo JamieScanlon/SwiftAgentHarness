@@ -383,6 +383,12 @@ public struct SlashCommandConfiguration: Sendable, Equatable {
     public var compactEnabled: Bool
     /// When false, `/skill:…` user invocations are ignored for slash handling (passthrough as plain text).
     public var skillSlashEnabled: Bool
+    /// When false, turn-tuning directives (`/think`, `/model`, …) are treated as plain text.
+    public var directivesEnabled: Bool
+    /// When false, inline shortcuts (`/help`, `/status` + prose) are treated as plain text.
+    public var inlineShortcutsEnabled: Bool
+    /// Directive names requiring owner authorization (lowercased, without leading `/`).
+    public var ownerOnlyDirectiveNames: [String]
     /// Optional static slash rows that dispatch directly to named tools.
     public var toolDispatchCommands: [ToolDispatchCommand]
     /// Skill directory names (lowercased) that already have a dedicated top-level slash entry; excluded from merged `/skill:` autocomplete rows only.
@@ -393,6 +399,9 @@ public struct SlashCommandConfiguration: Sendable, Equatable {
         allowUnknownPassthrough: true,
         compactEnabled: true,
         skillSlashEnabled: true,
+        directivesEnabled: true,
+        inlineShortcutsEnabled: true,
+        ownerOnlyDirectiveNames: ["model"],
         toolDispatchCommands: [],
         staticSkillNamesExcludedFromSkillColon: []
     )
@@ -402,6 +411,9 @@ public struct SlashCommandConfiguration: Sendable, Equatable {
         allowUnknownPassthrough: Bool = true,
         compactEnabled: Bool = true,
         skillSlashEnabled: Bool = true,
+        directivesEnabled: Bool = true,
+        inlineShortcutsEnabled: Bool = true,
+        ownerOnlyDirectiveNames: [String] = ["model"],
         toolDispatchCommands: [ToolDispatchCommand] = [],
         staticSkillNamesExcludedFromSkillColon: [String] = []
     ) {
@@ -409,6 +421,9 @@ public struct SlashCommandConfiguration: Sendable, Equatable {
         self.allowUnknownPassthrough = allowUnknownPassthrough
         self.compactEnabled = compactEnabled
         self.skillSlashEnabled = skillSlashEnabled
+        self.directivesEnabled = directivesEnabled
+        self.inlineShortcutsEnabled = inlineShortcutsEnabled
+        self.ownerOnlyDirectiveNames = ownerOnlyDirectiveNames
         self.toolDispatchCommands = toolDispatchCommands
         self.staticSkillNamesExcludedFromSkillColon = staticSkillNamesExcludedFromSkillColon
     }
@@ -942,6 +957,14 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
             let allowUnknownPassthrough = (payload["allowUnknownPassthrough"] as? Bool) ?? def.allowUnknownPassthrough
             let compactEnabled = (payload["compactEnabled"] as? Bool) ?? def.compactEnabled
             let skillSlashEnabled = (payload["skillSlashEnabled"] as? Bool) ?? def.skillSlashEnabled
+            let directivesEnabled = (payload["directivesEnabled"] as? Bool) ?? def.directivesEnabled
+            let inlineShortcutsEnabled = (payload["inlineShortcutsEnabled"] as? Bool) ?? def.inlineShortcutsEnabled
+            let ownerOnlyDirectiveNames: [String] = {
+                if let rows = payload["ownerOnlyDirectiveNames"] as? [String] {
+                    return rows.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty }
+                }
+                return def.ownerOnlyDirectiveNames
+            }()
             let toolDispatchCommands: [SlashCommandConfiguration.ToolDispatchCommand] = {
                 guard let rows = payload["toolDispatchCommands"] as? [[String: Any]] else {
                     return def.toolDispatchCommands
@@ -1002,6 +1025,9 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 allowUnknownPassthrough: allowUnknownPassthrough,
                 compactEnabled: compactEnabled,
                 skillSlashEnabled: skillSlashEnabled,
+                directivesEnabled: directivesEnabled,
+                inlineShortcutsEnabled: inlineShortcutsEnabled,
+                ownerOnlyDirectiveNames: ownerOnlyDirectiveNames,
                 toolDispatchCommands: toolDispatchCommands,
                 staticSkillNamesExcludedFromSkillColon: staticSkillNamesExcludedFromSkillColon
             )

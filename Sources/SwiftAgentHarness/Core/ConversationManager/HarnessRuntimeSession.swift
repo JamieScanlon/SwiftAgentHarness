@@ -41,6 +41,10 @@ public actor HarnessRuntimeSession {
         var originSurface: String? = nil
         /// Originating sender id on the surface.
         var originSenderID: String? = nil
+        /// One-turn thinking override from inline directives (not persisted).
+        var turnThinkingOverride: ThinkingConfig? = nil
+        /// One-turn model slug hint from inline directives (not persisted).
+        var turnModelSlug: String? = nil
     }
 
     typealias ToolAvailabilitySnapshot = RuntimeToolAvailabilitySnapshot

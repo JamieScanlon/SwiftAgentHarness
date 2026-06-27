@@ -92,7 +92,8 @@ actor SlashCommandDispatchService {
     func runSlashCommandIfNeeded(
         _ text: String,
         conversationID: UUID,
-        skipQueue: Bool = false
+        skipQueue: Bool = false,
+        isOwner: Bool = true
     ) async throws -> ChatStreamResponse? {
         guard slashCommandRuntimeConfiguration.enabled else { return nil }
         let parser = SlashCommandParser()
@@ -177,13 +178,16 @@ actor SlashCommandDispatchService {
         }
     }
 
-    private var slashCommandRuntimeConfiguration: SlashCommandRuntimeConfiguration {
+    var slashCommandRuntimeConfiguration: SlashCommandRuntimeConfiguration {
         let config = deps.conversationTransformConfiguration
         return SlashCommandRuntimeConfiguration(
             enabled: config.slashCommands.enabled,
             allowUnknownPassthrough: config.slashCommands.allowUnknownPassthrough,
             compactEnabled: config.slashCommands.compactEnabled && config.contextCompaction.manualSlashEnabled,
-            skillSlashEnabled: config.slashCommands.skillSlashEnabled
+            skillSlashEnabled: config.slashCommands.skillSlashEnabled,
+            directivesEnabled: config.slashCommands.directivesEnabled,
+            inlineShortcutsEnabled: config.slashCommands.inlineShortcutsEnabled,
+            ownerOnlyDirectiveNames: Set(config.slashCommands.ownerOnlyDirectiveNames)
         )
     }
 
@@ -194,7 +198,7 @@ actor SlashCommandDispatchService {
         return conv.state == .generating || conv.agenticPhase != .idle
     }
 
-    private func buildSlashCommandRegistry(conversationID: UUID) async -> SlashCommandRegistry {
+    func buildSlashCommandRegistry(conversationID: UUID) async -> SlashCommandRegistry {
         let slashConfig = deps.conversationTransformConfiguration.slashCommands
         let excluded = Set(deps.conversationTransformConfiguration.slashCommands.staticSkillNamesExcludedFromSkillColon)
         let baseRegistry: SlashCommandRegistry

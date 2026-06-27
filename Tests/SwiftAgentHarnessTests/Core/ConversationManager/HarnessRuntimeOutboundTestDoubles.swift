@@ -110,6 +110,15 @@ enum HarnessRuntimeOutboundTestDoubles {
         func runSlashCommandIfNeeded(_ text: String, conversationID: UUID) async throws -> ChatStreamResponse? {
             unimplemented()
         }
+
+        func processControlInputBoundary(
+            text: String,
+            conversationID: UUID,
+            trustClass: TrustPolicyClass?,
+            senderLabel: String?
+        ) async throws -> ControlInputBoundaryOutcome {
+            unimplemented()
+        }
     }
 
     private static func unimplementedVoid() -> Never {

@@ -313,7 +313,16 @@ public actor OrchestratorRuntimeService {
         let thinkingConfig: ThinkingConfig?
         if let conversation {
             let callContext: ThinkingCallContext = conversation.parentConversationID == nil ? .foreground : .subAgent
-            thinkingConfig = await installedModePolicy.resolvedThinkingConfig(for: conversation, callContext: callContext)
+            var resolved = await installedModePolicy.resolvedThinkingConfig(for: conversation, callContext: callContext)
+            if let runID = conversation.currentRunID,
+               let turnConfig = await agentRuntime?.activeTurnConfiguration(
+                   conversationID: conversation.id,
+                   runID: runID
+               ),
+               let override = turnConfig.turnThinkingOverride {
+                resolved = override
+            }
+            thinkingConfig = resolved
         } else {
             thinkingConfig = nil
         }

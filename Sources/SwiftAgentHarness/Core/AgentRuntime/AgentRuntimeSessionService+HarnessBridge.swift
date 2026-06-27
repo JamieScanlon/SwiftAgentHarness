@@ -7,6 +7,45 @@ extension AgentRuntimeSessionService {
         try await outbound.slashCommand.runSlashCommandIfNeeded(text, conversationID: conversationID)
     }
 
+    func processControlInputBoundary(
+        text: String,
+        conversationID: UUID,
+        configuration: Configuration
+    ) async throws -> ControlInputBoundaryOutcome {
+        let resolvedConfiguration = await configurationApplyingTrustPolicy(configuration)
+        return try await outbound.slashCommand.processControlInputBoundary(
+            text: text,
+            conversationID: conversationID,
+            trustClass: resolvedConfiguration.resolvedInputTrustClass,
+            senderLabel: resolvedConfiguration.originSenderID
+        )
+    }
+
+    func savePreTurnAcknowledgement(_ content: String, conversationID: UUID) async throws {
+        let synthetic = Message(
+            id: UUID(),
+            role: .assistant,
+            content: content,
+            timestamp: Date(),
+            toolCalls: []
+        )
+        _ = try await messaging.saveMessageToCache(
+            synthetic,
+            for: conversationID,
+            expectedPreviousTailHarnessMessageID: nil,
+            transcriptRunID: nil
+        )
+        if var convo = await modelConversation(id: conversationID) {
+            convo.messages.append(synthetic)
+            convo.turns = await transformedTurns(
+                messages: convo.messages,
+                interactionMode: convo.interactionMode,
+                previousTurns: convo.turns
+            )
+            await updateConversation(convo)
+        }
+    }
+
     func configurationApplyingTrustPolicy(_ configuration: Configuration) async -> Configuration {
         await selection.configurationApplyingTrustPolicy(configuration)
     }

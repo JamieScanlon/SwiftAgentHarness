@@ -81,6 +81,12 @@ protocol ContextProjectionTransformServicing: Sendable {
 
 protocol SlashCommandRuntimeDispatching: Sendable {
     func runSlashCommandIfNeeded(_ text: String, conversationID: UUID) async throws -> ChatStreamResponse?
+    func processControlInputBoundary(
+        text: String,
+        conversationID: UUID,
+        trustClass: TrustPolicyClass?,
+        senderLabel: String?
+    ) async throws -> ControlInputBoundaryOutcome
 }
 
 struct AgentRuntimeOutboundCollaborators: Sendable {
