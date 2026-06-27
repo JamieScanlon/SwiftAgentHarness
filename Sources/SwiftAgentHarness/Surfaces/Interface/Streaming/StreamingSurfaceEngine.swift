@@ -59,6 +59,8 @@ public actor StreamingSurfaceEngine {
             }
         case .toolCall(let toolName, _, _, _):
             await routeToolProgress(toolName: toolName)
+        case .toolCallStarted(let toolName, _, _), .toolCallCompleted(let toolName, _, _, _):
+            await routeToolProgress(toolName: toolName)
         case .surfaceIntent:
             break
         }

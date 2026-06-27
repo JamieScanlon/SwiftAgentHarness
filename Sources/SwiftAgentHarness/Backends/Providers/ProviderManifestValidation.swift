@@ -9,7 +9,13 @@ public enum ProviderManifestValidationError: Error, Equatable, Sendable {
     case duplicateModelPrefix(String, existingProvider: ProviderID, newProvider: ProviderID)
     case emptyAuthChoiceID(providerID: ProviderID)
     case emptyAuthChoiceEnvVars(choiceID: String, providerID: ProviderID)
+    case emptyOAuthScope(choiceID: String, providerID: ProviderID)
     case duplicateManifestID(ProviderID)
+    case emptyCLIBackendID(providerID: ProviderID)
+    case duplicateCLIBackendID(String, providerID: ProviderID)
+    case cliInferenceBackendSlotWithoutBackends(providerID: ProviderID)
+    case undeclaredSlotRegistration(ProviderCapabilitySlot, providerID: ProviderID)
+    case missingCLIBackendRegistration(String, providerID: ProviderID)
 }
 
 /// Static manifest validation for pluginsInspect-style offline checks.
@@ -37,10 +43,55 @@ public enum ProviderManifestValidation {
             guard !choice.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ProviderManifestValidationError.emptyAuthChoiceID(providerID: manifest.id)
             }
-            if choice.envVars.isEmpty {
+            let authType = choice.resolvedAuthType
+            if authType == .apiKey, choice.envVars.isEmpty {
                 throw ProviderManifestValidationError.emptyAuthChoiceEnvVars(
                     choiceID: choice.id,
                     providerID: manifest.id
+                )
+            }
+            if authType == .oauth {
+                for scope in choice.onboardingScopes {
+                    guard !scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ProviderManifestValidationError.emptyOAuthScope(
+                            choiceID: choice.id,
+                            providerID: manifest.id
+                        )
+                    }
+                }
+            }
+        }
+        var cliBackendIDs = Set<String>()
+        for backend in manifest.cliBackends {
+            let trimmed = backend.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw ProviderManifestValidationError.emptyCLIBackendID(providerID: manifest.id)
+            }
+            if cliBackendIDs.contains(trimmed) {
+                throw ProviderManifestValidationError.duplicateCLIBackendID(trimmed, providerID: manifest.id)
+            }
+            cliBackendIDs.insert(trimmed)
+        }
+        if manifest.capabilitySlots.contains(.cliInferenceBackend), manifest.cliBackends.isEmpty {
+            throw ProviderManifestValidationError.cliInferenceBackendSlotWithoutBackends(providerID: manifest.id)
+        }
+    }
+
+    public static func validateRegistrationConsistency(_ registration: ProviderRegistration) throws {
+        try validate(registration.manifest)
+        let declared = Set(registration.manifest.capabilitySlots)
+        for slot in registration.registeredSlots() {
+            guard declared.contains(slot) else {
+                throw ProviderManifestValidationError.undeclaredSlotRegistration(slot, providerID: registration.manifest.id)
+            }
+        }
+        guard registration.manifest.capabilitySlots.contains(.cliInferenceBackend) else { return }
+        let registeredCLIIDs = Set(registration.registeredCLIBackendIDs)
+        for backend in registration.manifest.cliBackends {
+            guard registeredCLIIDs.contains(backend.id) else {
+                throw ProviderManifestValidationError.missingCLIBackendRegistration(
+                    backend.id,
+                    providerID: registration.manifest.id
                 )
             }
         }

@@ -9,13 +9,12 @@ public struct OpenAITextInferenceProvider: TextInferenceProviding {
 
     public init() {}
 
-    public func staticCatalogEntries() -> [ProviderCatalogEntry] { [] }
+    public func staticCatalogEntries() -> [ProviderCatalogEntry] {
+        bundledStaticCatalogEntries(providerID: manifest.id)
+    }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.authProfileStore.resolveAPIKeyOrDummy(
-            providerID: manifest.id,
-            authProfileLabel: context.binding.authProfile
-        )
+        let apiKey = context.resolvedBearerToken()
         return OpenAILLM(
             baseURL: context.binding.serverURL.absoluteString,
             apiKey: apiKey,
@@ -23,12 +22,20 @@ public struct OpenAITextInferenceProvider: TextInferenceProviding {
             capabilities: context.model.capabilities,
             requestFeatures: context.model.requestFeatures,
             systemPrompt: context.systemPrompt,
-            logger: context.logger
+            logger: context.logger,
+            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
         )
     }
 
     public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
         context.endpointModelId.hasPrefix("gpt-") ? .long : .short
+    }
+
+    public func failoverError(_ error: Error) -> ProviderFailoverClassification {
+        if DefaultProviderFailoverClassifier.isCredentialExhausted(error) {
+            return .credentialExhausted
+        }
+        return DefaultProviderFailoverClassifier.classify(error)
     }
 }
 
@@ -38,7 +45,9 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
 
     public init() {}
 
-    public func staticCatalogEntries() -> [ProviderCatalogEntry] { [] }
+    public func staticCatalogEntries() -> [ProviderCatalogEntry] {
+        bundledStaticCatalogEntries(providerID: manifest.id)
+    }
 
     public func normalizeProviderModelId(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,10 +60,7 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.authProfileStore.resolveAPIKeyOrDummy(
-            providerID: manifest.id,
-            authProfileLabel: context.binding.authProfile
-        )
+        let apiKey = context.resolvedBearerToken()
         return AnthropicLLM(
             apiURL: context.binding.serverURL,
             apiKey: apiKey,
@@ -62,12 +68,24 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
             capabilities: context.model.capabilities,
             requestFeatures: context.model.requestFeatures,
             systemPrompt: context.systemPrompt,
-            logger: context.logger
+            logger: context.logger,
+            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
         )
     }
 
     public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
         .long
+    }
+
+    public func failoverError(_ error: Error) -> ProviderFailoverClassification {
+        if DefaultProviderFailoverClassifier.isCredentialExhausted(error) {
+            return .credentialExhausted
+        }
+        return DefaultProviderFailoverClassifier.classify(error)
+    }
+
+    public func replayPolicy(_ context: ProviderMessageTransformContext) -> ProviderReplayPolicy {
+        .anthropicTarget
     }
 }
 
@@ -135,6 +153,21 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
         )
     }
 
+    public func prepareDynamicModel(_ context: ProviderDynamicPrepareContext) async -> ProviderCatalogEntry? {
+        var entry = context.catalogEntry
+        do {
+            let detail = try await fetchOllamaModelDetail(
+                modelName: context.binding.endpointModelId,
+                config: entry.modelConfig
+            )
+            entry.capabilities = detail.capabilities
+            entry.maxContextLength = detail.maxContextLength
+        } catch {
+            return entry
+        }
+        return entry
+    }
+
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
         OllamaLLM(
             model: context.binding.endpointModelId,
@@ -142,7 +175,8 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
             capabilities: context.model.capabilities,
             requestFeatures: context.model.requestFeatures,
             systemPrompt: context.systemPrompt,
-            logger: context.logger
+            logger: context.logger,
+            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
         )
     }
 
@@ -252,7 +286,8 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
             capabilities: context.model.capabilities,
             requestFeatures: context.model.requestFeatures,
             systemPrompt: context.systemPrompt,
-            logger: context.logger
+            logger: context.logger,
+            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
         )
     }
 
@@ -295,26 +330,32 @@ public struct OpenRouterTextInferenceProvider: TextInferenceProviding {
 
     public init() {}
 
-    public func staticCatalogEntries() -> [ProviderCatalogEntry] { [] }
+    public func staticCatalogEntries() -> [ProviderCatalogEntry] {
+        bundledStaticCatalogEntries(providerID: manifest.id)
+    }
 
-    public func resolveDynamicModel(_ context: ProviderDynamicModelContext) async -> ProviderCatalogEntry? {
-        ProviderCatalogEntry(
-            registryID: UUID(),
-            endpointModelId: context.endpointModelId,
-            displayName: context.endpointModelId,
-            modelConfig: ModelConfig(
-                uuid: UUID(),
-                modelProtocol: .openAIAPI,
-                hardcodedCost: Constants.defaultCatalogCostForOpenRouter
-            )
+    public func discoverEntries(logger: Logger?) async -> [ModelRegistryEntry] {
+        await OpenRouterCatalogDiscovery.discoverEntries(
+            manifest: manifest,
+            staticEntries: staticCatalogEntries(),
+            logger: logger
         )
     }
 
-    public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.authProfileStore.resolveAPIKeyOrDummy(
+    public func resolveDynamicModel(_ context: ProviderDynamicModelContext) async -> ProviderCatalogEntry? {
+        OpenRouterCatalogDiscovery.resolveDynamicModel(
+            context: context,
             providerID: manifest.id,
-            authProfileLabel: context.binding.authProfile
+            staticEntries: staticCatalogEntries()
         )
+    }
+
+    public func preferRuntimeResolvedModel(_ context: ProviderDynamicModelPreferenceContext) -> Bool {
+        true
+    }
+
+    public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
+        let apiKey = context.resolvedBearerToken()
         return OpenAILLM(
             baseURL: context.binding.serverURL.absoluteString,
             apiKey: apiKey,
@@ -322,13 +363,30 @@ public struct OpenRouterTextInferenceProvider: TextInferenceProviding {
             capabilities: context.model.capabilities,
             requestFeatures: context.model.requestFeatures,
             systemPrompt: context.systemPrompt,
-            logger: context.logger
+            logger: context.logger,
+            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
         )
+    }
+
+    public func failoverError(_ error: Error) -> ProviderFailoverClassification {
+        if DefaultProviderFailoverClassifier.isCredentialExhausted(error) {
+            return .credentialExhausted
+        }
+        return DefaultProviderFailoverClassifier.classify(error)
     }
 }
 
-private extension Constants {
-    static var defaultCatalogCostForOpenRouter: ModelCostBudget {
-        ModelCostBudget(inputPer1MUSD: 0.50, outputPer1MUSD: 1.00)
+private extension ProviderAdapterContext {
+    func resolvedBearerToken() -> String {
+        if let profile = resolvedCredential, profile.isDispatchReady, let token = profile.apiKey {
+            return token
+        }
+        if let credential = try? authProfileStore.resolveCredential(
+            providerID: binding.providerId,
+            authProfileLabel: binding.authProfile
+        ) {
+            return credential.bearerToken
+        }
+        fatalError("makeAdapter invoked without dispatch-ready credential for \(binding.providerId)")
     }
 }

@@ -236,6 +236,24 @@ extension AgentRuntimeSessionService {
                 runId: runID,
                 callId: nil
             )
+        case .toolCallStarted(let toolName, let toolCallId, let contentIndex):
+            return ConversationTopicWireEncoding.contentDeltaToolCallFragmentPayload(
+                toolName: toolName,
+                toolCallId: toolCallId,
+                argumentsFragment: nil,
+                blockIndex: contentIndex,
+                runId: runID,
+                callId: nil
+            )
+        case .toolCallCompleted(let toolName, let toolCallId, let arguments, let blockIndex):
+            return ConversationTopicWireEncoding.contentDeltaToolCallFragmentPayload(
+                toolName: toolName,
+                toolCallId: toolCallId,
+                argumentsFragment: arguments,
+                blockIndex: blockIndex,
+                runId: runID,
+                callId: nil
+            )
         case .surfaceIntent(let intent):
             return ConversationTopicWireEncoding.surfaceIntentPayload(intent: intent)
         }

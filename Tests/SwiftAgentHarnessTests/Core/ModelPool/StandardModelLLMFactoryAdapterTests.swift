@@ -56,12 +56,13 @@ struct StandardModelLLMFactoryAdapterTests {
     }
 
     private static func binding(
+        _ providerId: String,
         _ modelProtocol: ModelProtocol,
         endpoint: String,
         priority: Int
     ) -> ProviderBinding {
         ProviderBinding(
-            providerId: "\(modelProtocol.rawValue)-\(endpoint)",
+            providerId: providerId,
             modelProtocol: modelProtocol,
             endpointModelId: endpoint,
             serverURL: URL(string: "http://localhost:1/")!,
@@ -73,18 +74,25 @@ struct StandardModelLLMFactoryAdapterTests {
     func adapterDispatchPerProtocol() async throws {
         let prompt = try await Self.systemPrompt()
         let model = Self.model()
-        let cases: [(ModelProtocol, any LLMProtocol.Type)] = [
-            (.ollama, OllamaLLM.self),
-            (.openAIAPI, OpenAILLM.self),
-            (.lmStudio, LMStudioLLM.self),
-            (.anthropic, AnthropicLLM.self),
+        let store = AuthProfileStore(
+            environment: [
+                "OPENAI_API_KEY": "test-openai",
+                "ANTHROPIC_API_KEY": "test-anthropic",
+            ]
+        )
+        let cases: [(String, ModelProtocol, any LLMProtocol.Type)] = [
+            ("ollama", .ollama, OllamaLLM.self),
+            ("openai", .openAIAPI, OpenAILLM.self),
+            ("lmstudio", .lmStudio, LMStudioLLM.self),
+            ("anthropic", .anthropic, AnthropicLLM.self),
         ]
-        for (modelProtocol, expectedAdapterType) in cases {
+        for (providerId, modelProtocol, expectedAdapterType) in cases {
             let adapter = StandardModelLLMFactory.makeBindingAdapter(
-                binding: Self.binding(modelProtocol, endpoint: "model", priority: 0),
+                binding: Self.binding(providerId, modelProtocol, endpoint: "model", priority: 0),
                 model: model,
                 systemPrompt: prompt,
-                logger: nil
+                logger: nil,
+                authProfileStore: store
             )
             #expect(type(of: adapter) == expectedAdapterType, "Expected \(expectedAdapterType) for \(modelProtocol)")
         }
@@ -98,8 +106,8 @@ struct StandardModelLLMFactoryAdapterTests {
         let llm = factory.makeBaseLLM(
             model: Self.model(),
             providerBindings: [
-                Self.binding(.anthropic, endpoint: "claude", priority: 0),
-                Self.binding(.openAIAPI, endpoint: "gpt", priority: 1),
+                Self.binding("anthropic", .anthropic, endpoint: "claude", priority: 0),
+                Self.binding("openai", .openAIAPI, endpoint: "gpt", priority: 1),
             ],
             conversationID: UUID(),
             ownerAccountID: nil,
@@ -131,8 +139,8 @@ struct StandardModelLLMFactoryAdapterTests {
         let llm = factory.makeBaseLLM(
             model: Self.model(),
             providerBindings: [
-                Self.binding(.anthropic, endpoint: "claude", priority: 0),
-                Self.binding(.openAIAPI, endpoint: "gpt", priority: 1),
+                Self.binding("anthropic", .anthropic, endpoint: "claude", priority: 0),
+                Self.binding("openai", .openAIAPI, endpoint: "gpt", priority: 1),
             ],
             conversationID: UUID(),
             ownerAccountID: nil,

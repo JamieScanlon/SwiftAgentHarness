@@ -43,7 +43,7 @@
       "required": ["attemptIndex", "kind", "outcome", "observedAt"],
       "properties": {
         "attemptIndex": { "type": "integer", "minimum": 1 },
-        "kind": { "type": "string", "enum": ["retry", "bindingFailover", "modelSubstitution", "authProbeSkip", "promptCache"] },
+        "kind": { "type": "string", "enum": ["retry", "bindingFailover", "modelSubstitution", "authProbeSkip", "promptCache", "credentialRotation"] },
         "outcome": { "type": "string", "enum": ["continued", "succeeded", "terminalFailure", "skipped", "observed"] },
         "observedAt": { "type": "string", "format": "date-time" },
         "providerID": { "type": "string" },

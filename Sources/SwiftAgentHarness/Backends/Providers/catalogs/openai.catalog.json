@@ -1,0 +1,88 @@
+{
+  "providerId": "openai",
+  "generatedAt": "2026-06-27T00:00:00Z",
+  "models": [
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000001",
+      "endpointModelId": "gpt-4o",
+      "displayName": "GPT-4o",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision"],
+      "maxContextLength": 128000,
+      "maxOutputTokens": 16384,
+      "cost": {
+        "inputPer1MUSD": 2.5,
+        "outputPer1MUSD": 10.0,
+        "cachedInputPer1MUSD": 1.25
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": false
+      }
+    },
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000002",
+      "endpointModelId": "gpt-4.1",
+      "displayName": "GPT-4.1",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision"],
+      "maxContextLength": 1047576,
+      "maxOutputTokens": 32768,
+      "cost": {
+        "inputPer1MUSD": 2.0,
+        "outputPer1MUSD": 8.0,
+        "cachedInputPer1MUSD": 0.5
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": false
+      }
+    },
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000003",
+      "endpointModelId": "gpt-4.1-mini",
+      "displayName": "GPT-4.1 Mini",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision"],
+      "maxContextLength": 1047576,
+      "maxOutputTokens": 32768,
+      "cost": {
+        "inputPer1MUSD": 0.4,
+        "outputPer1MUSD": 1.6,
+        "cachedInputPer1MUSD": 0.1
+      }
+    },
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000004",
+      "endpointModelId": "o3",
+      "displayName": "o3",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 100000,
+      "cost": {
+        "inputPer1MUSD": 10.0,
+        "outputPer1MUSD": 40.0,
+        "cachedInputPer1MUSD": 2.5
+      },
+      "requestFeatures": {
+        "reasoningEfforts": ["low", "medium", "high"]
+      }
+    },
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000005",
+      "endpointModelId": "o4-mini",
+      "displayName": "o4-mini",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 100000,
+      "cost": {
+        "inputPer1MUSD": 1.1,
+        "outputPer1MUSD": 4.4,
+        "cachedInputPer1MUSD": 0.275
+      },
+      "requestFeatures": {
+        "reasoningEfforts": ["low", "medium", "high"]
+      }
+    }
+  ]
+}

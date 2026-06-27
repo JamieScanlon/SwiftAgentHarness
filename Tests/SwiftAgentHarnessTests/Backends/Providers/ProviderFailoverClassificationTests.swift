@@ -5,6 +5,25 @@ import Testing
 
 @Suite("ProviderFailoverClassification")
 struct ProviderFailoverClassificationTests {
+    @Test("Credential exhausted maps to rotate hint")
+    func credentialExhaustedHints() {
+        let hints = ProviderFailoverRecoveryHints.hints(for: .credentialExhausted)
+        #expect(hints.shouldRotateCredential)
+    }
+
+    @Test("LLMError quota exceeded classifies as credential-exhausted")
+    func llmQuotaExceeded() {
+        #expect(DefaultProviderFailoverClassifier.classify(LLMError.quotaExceeded) == .credentialExhausted)
+    }
+
+    @Test("Insufficient credits message classifies as credential-exhausted")
+    func insufficientCreditsMessage() {
+        struct BillingError: Error, CustomStringConvertible {
+            var description: String { "HTTP 402 insufficient credits" }
+        }
+        #expect(DefaultProviderFailoverClassifier.classify(BillingError()) == .credentialExhausted)
+    }
+
     @Test("Rate limit maps to rotate + fallback hints")
     func rateLimitHints() {
         let hints = ProviderFailoverRecoveryHints.hints(for: .rateLimited)

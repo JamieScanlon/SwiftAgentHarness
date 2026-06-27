@@ -1,0 +1,52 @@
+{
+  "providerId": "openrouter",
+  "generatedAt": "2026-06-27T00:00:00Z",
+  "models": [
+    {
+      "registryId": "c3000003-0003-4000-8000-000000000001",
+      "endpointModelId": "anthropic/claude-sonnet-4-6",
+      "displayName": "Claude Sonnet 4.6 (via OpenRouter)",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 64000,
+      "cost": {
+        "inputPer1MUSD": 3.0,
+        "outputPer1MUSD": 15.0
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": true,
+        "thinkingFormat": "anthropic-extended-thinking"
+      }
+    },
+    {
+      "registryId": "c3000003-0003-4000-8000-000000000002",
+      "endpointModelId": "openai/gpt-4o",
+      "displayName": "GPT-4o (via OpenRouter)",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision"],
+      "maxContextLength": 128000,
+      "maxOutputTokens": 16384,
+      "cost": {
+        "inputPer1MUSD": 2.5,
+        "outputPer1MUSD": 10.0
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": true
+      }
+    },
+    {
+      "registryId": "c3000003-0003-4000-8000-000000000003",
+      "endpointModelId": "google/gemini-2.5-pro-preview",
+      "displayName": "Gemini 2.5 Pro Preview (via OpenRouter)",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 1048576,
+      "maxOutputTokens": 65536,
+      "cost": {
+        "inputPer1MUSD": 1.25,
+        "outputPer1MUSD": 10.0
+      }
+    }
+  ]
+}

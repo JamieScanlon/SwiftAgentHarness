@@ -9,6 +9,7 @@
     {
       "id": "api-key",
       "label": "API Key",
+      "authType": "api-key",
       "envVars": ["SAH_OPENAI_API_KEY", "OPENAI_API_KEY"],
       "cliFlag": "--openai-key",
       "cliOption": "openaiKey",

@@ -1,0 +1,59 @@
+{
+  "providerId": "anthropic",
+  "generatedAt": "2026-06-27T00:00:00Z",
+  "models": [
+    {
+      "registryId": "b2000002-0002-4000-8000-000000000001",
+      "endpointModelId": "claude-opus-4-6",
+      "displayName": "Claude Opus 4.6",
+      "modelProtocol": "anthropic",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 64000,
+      "cost": {
+        "inputPer1MUSD": 15.0,
+        "outputPer1MUSD": 75.0,
+        "cachedInputPer1MUSD": 1.5
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": true,
+        "thinkingFormat": "anthropic-extended-thinking"
+      }
+    },
+    {
+      "registryId": "b2000002-0002-4000-8000-000000000002",
+      "endpointModelId": "claude-sonnet-4-6",
+      "displayName": "Claude Sonnet 4.6",
+      "modelProtocol": "anthropic",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 64000,
+      "cost": {
+        "inputPer1MUSD": 3.0,
+        "outputPer1MUSD": 15.0,
+        "cachedInputPer1MUSD": 0.3
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": true,
+        "thinkingFormat": "anthropic-extended-thinking"
+      }
+    },
+    {
+      "registryId": "b2000002-0002-4000-8000-000000000003",
+      "endpointModelId": "claude-haiku-4-5",
+      "displayName": "Claude Haiku 4.5",
+      "modelProtocol": "anthropic",
+      "capabilities": ["completion", "tools", "vision"],
+      "maxContextLength": 200000,
+      "maxOutputTokens": 8192,
+      "cost": {
+        "inputPer1MUSD": 0.8,
+        "outputPer1MUSD": 4.0,
+        "cachedInputPer1MUSD": 0.08
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": true
+      }
+    }
+  ]
+}

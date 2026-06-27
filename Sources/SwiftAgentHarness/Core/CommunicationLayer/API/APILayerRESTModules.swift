@@ -2323,6 +2323,14 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
                         dependencies.logger.debug(
                             "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCall toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") argumentChars=\(argumentsFragment?.count ?? 0) blockIndex=\(blockIndex.map(String.init) ?? "nil")"
                         )
+                    case .toolCallStarted(let toolName, let toolCallId, let contentIndex):
+                        dependencies.logger.debug(
+                            "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCallStarted toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") contentIndex=\(contentIndex.map(String.init) ?? "nil")"
+                        )
+                    case .toolCallCompleted(let toolName, let toolCallId, let arguments, let blockIndex):
+                        dependencies.logger.debug(
+                            "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCallCompleted toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") argumentChars=\(arguments.count) blockIndex=\(blockIndex.map(String.init) ?? "nil")"
+                        )
                     case .surfaceIntent(let intent):
                         dependencies.logger.debug(
                             "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=surfaceIntent filePath=\(intent.filePath)"

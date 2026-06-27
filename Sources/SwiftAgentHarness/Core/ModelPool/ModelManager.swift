@@ -65,6 +65,9 @@ public actor ModelManager {
             .sorted { ($0.displayName ?? $0.id.uuidString) < ($1.displayName ?? $1.id.uuidString) }
     }
 
+    /// Tracks one-time dynamic model preparation per provider endpoint slug.
+    private var preparedDynamicModelKeys: Set<String> = []
+
     /// Canonical resolve: O(1) for `.id` and `.slug` via the registry indexes; ranked candidates for `.query`.
     /// Throws ``ModelPoolError/unavailable(reference:)`` when no entry matches.
     public func resolve(_ ref: ModelReference) async throws -> ModelRegistryEntry {
@@ -74,11 +77,75 @@ public actor ModelManager {
             if let entry = registryByID[id] { return entry }
         case .slug(let slug):
             if let id = slugIndex[slug], let entry = registryByID[id] { return entry }
+            if let entry = try await lazyResolveSlug(slug) { return entry }
         case .query(let query):
             let entries = Array(registryByID.values)
             if let hit = ModelQuery.rank(entries: entries, query: query).first { return hit }
         }
         throw ModelPoolError.unavailable(reference: ref)
+    }
+
+    private func lazyResolveSlug(_ slug: String) async throws -> ModelRegistryEntry? {
+        guard slug.contains("/") else { return nil }
+        let modelRef: ModelRef
+        do {
+            modelRef = try ModelRefParser.parse(slug)
+        } catch {
+            return nil
+        }
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        guard let provider = ProviderRegistry.textInferenceProvider(for: modelRef.providerID),
+              let endpoint = ProviderManifests.manifest(for: modelRef.providerID)?.defaultEndpoint
+        else {
+            return nil
+        }
+        let binding = ProviderBinding(
+            providerId: modelRef.providerID,
+            modelProtocol: provider.modelProtocol,
+            endpointModelId: modelRef.modelID,
+            serverURL: endpoint.baseURL
+        )
+        guard var catalogEntry = await provider.resolveDynamicModel(
+            ProviderDynamicModelContext(
+                endpointModelId: modelRef.modelID,
+                serverURL: endpoint.baseURL
+            )
+        ) else {
+            return nil
+        }
+        let prepareKey = "\(modelRef.providerID)#\(modelRef.modelID)#\(endpoint.baseURL.absoluteString)"
+        if !preparedDynamicModelKeys.contains(prepareKey) {
+            catalogEntry = await ProviderRuntimeHooks.prepareDynamicModel(
+                binding: binding,
+                catalogEntry: catalogEntry
+            )
+            preparedDynamicModelKeys.insert(prepareKey)
+        }
+        var entry = catalogEntry.toRegistryEntry(
+            providerID: modelRef.providerID,
+            serverURL: endpoint.baseURL
+        )
+        if !ProviderRuntimeHooks.preferRuntimeResolvedModel(binding: binding),
+           let staticEntry = provider.staticCatalogEntries().first(where: { $0.endpointModelId == modelRef.modelID }) {
+            let staticRegistry = staticEntry.toRegistryEntry(
+                providerID: modelRef.providerID,
+                serverURL: endpoint.baseURL
+            )
+            if entry.maxContextLength == nil {
+                entry.maxContextLength = staticRegistry.maxContextLength
+            }
+            if entry.compat == nil {
+                entry.compat = staticRegistry.compat
+            }
+            if entry.cost == nil {
+                entry.cost = staticRegistry.cost
+            }
+        }
+        registryByID[entry.id] = entry
+        rebuildSlugIndex()
+        activeModels = sortedModelsFromRegistry()
+        await publishRegistryWireIfChanged()
+        return entry
     }
 
     /// Canonical bulk resolve: `.id` / `.slug` return a single-element list (or throw `.unavailable`);
@@ -419,6 +486,40 @@ public actor ModelManager {
             reasoningEfforts: baseline.reasoningEfforts.union(overlay.reasoningEfforts),
             toolChoiceModes: baseline.toolChoiceModes.union(overlay.toolChoiceModes)
         )
+    }
+
+    /// Applies a per-binding downward override to the model entry's tool-choice ladder.
+    static func effectiveToolChoiceModes(
+        baseline: Set<ToolChoiceMode>,
+        override: Set<ToolChoiceMode>?
+    ) -> Set<ToolChoiceMode> {
+        guard let override else { return baseline }
+        return baseline.intersection(override).union([.auto])
+    }
+
+    static func requestFeatures(
+        for model: Model,
+        binding: ProviderBinding
+    ) -> ModelRequestFeatures {
+        guard binding.toolChoiceModesOverride != nil else {
+            return model.requestFeatures
+        }
+        var features = model.requestFeatures
+        features.toolChoiceModes = effectiveToolChoiceModes(
+            baseline: model.requestFeatures.toolChoiceModes,
+            override: binding.toolChoiceModesOverride
+        )
+        return features
+    }
+
+    static func model(
+        _ model: Model,
+        applyingBinding binding: ProviderBinding
+    ) -> Model {
+        guard binding.toolChoiceModesOverride != nil else { return model }
+        var adjusted = model
+        adjusted.requestFeatures = requestFeatures(for: model, binding: binding)
+        return adjusted
     }
 
     private static func mergeParallelToolSupport(

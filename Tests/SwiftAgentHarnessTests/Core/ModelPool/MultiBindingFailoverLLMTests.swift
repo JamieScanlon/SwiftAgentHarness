@@ -387,6 +387,49 @@ struct MultiBindingFailoverLLMTests {
         #expect(await primary.sendCalls == 1)
         #expect(await secondary.sendCalls == 1)
     }
+
+    @Test("heterogeneous failover replays anthropic thinking without signature on openAI target")
+    func heterogeneousFailoverTransformsForeignThinking() async throws {
+        HarnessMessageEnvelopeStore.resetForTesting()
+        let assistantID = UUID()
+        let assistant = Message(
+            id: assistantID,
+            role: .assistant,
+            content: "prior answer",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        HarnessMessageEnvelopeStore.store(
+            HarnessMessageEnvelope(
+                message: assistant,
+                contentBlocks: [.thinking(text: "chain", signature: "sig-foreign"), .text("prior answer")]
+            )
+        )
+        let openAIBinding = Self.binding("gpt-proxy", priority: 10)
+        let history: [Message] = [
+            Message(id: UUID(), role: .user, content: "question", timestamp: Date(), toolCalls: []),
+            assistant,
+        ]
+        let replaySafe = ProviderRuntimeHooks.transformMessages(
+            history,
+            binding: openAIBinding,
+            compat: ProviderModelCompat(supportsEagerToolInputStreaming: false)
+        )
+        #expect(replaySafe.count == 2)
+        #expect(replaySafe[1].content.contains("chain"))
+        #expect(!replaySafe[1].content.contains("sig-foreign"))
+
+        let primary = BindingScriptedLLM(sendQueue: [.failure(LLMError.modelNotFound("claude"))])
+        let secondary = BindingScriptedLLM(sendQueue: [.success(LLMResponse(content: "fallback", toolCalls: []))])
+        let llm = MultiBindingFailoverLLM(
+            bindings: [Self.anthropicBinding("claude", priority: 0), openAIBinding],
+            makeBindingLLM: { binding in
+                binding.modelProtocol == .anthropic ? primary : secondary
+            }
+        )
+        let response = try await llm.send(replaySafe, config: LLMRequestConfig())
+        #expect(response.content == "fallback")
+    }
 }
 
 @Suite("BindingFailoverClassifier")

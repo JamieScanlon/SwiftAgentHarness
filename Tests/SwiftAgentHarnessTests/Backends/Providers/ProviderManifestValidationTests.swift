@@ -20,6 +20,22 @@ struct ProviderManifestDecodeTests {
         }
     }
 
+    @Test("Bundled JSON manifests match static ProviderManifests exactly")
+    func bundledManifestParityWithStaticCatalog() throws {
+        for manifest in ProviderManifests.all {
+            let bundled = try #require(
+                try ProviderManifestLoader.decodeBundledManifest(for: manifest.id),
+                "Missing bundled manifest for \(manifest.id)"
+            )
+            let normalizedStatic = ProviderManifestParity.normalize(manifest)
+            let normalizedBundled = ProviderManifestParity.normalize(bundled)
+            #expect(
+                normalizedBundled == normalizedStatic,
+                "Bundled manifest drift for \(manifest.id): update manifests/\(manifest.id).manifest.json or ProviderManifests.\(manifest.id)"
+            )
+        }
+    }
+
     @Test("Built-in catalog passes validation")
     func builtInCatalogValidates() throws {
         try ProviderManifestValidation.validateAll(ProviderManifests.all)

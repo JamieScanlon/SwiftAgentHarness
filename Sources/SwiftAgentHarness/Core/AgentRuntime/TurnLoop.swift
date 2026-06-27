@@ -143,6 +143,21 @@ struct TurnLoop {
                 endpointModelId: conv.model.modelName,
                 serverURL: conv.model.serverURL
             )
+            let compat = ProviderRuntimeHooks.compatForBinding(providerBinding)
+            let targetCapabilities = Set(conv.model.capabilities)
+            _ = ProviderRuntimeHooks.validateReplayTurns(
+                messages,
+                binding: providerBinding,
+                compat: compat,
+                targetCapabilities: targetCapabilities,
+                logger: ports.logger
+            )
+            messages = ProviderRuntimeHooks.transformMessages(
+                messages,
+                binding: providerBinding,
+                compat: compat,
+                targetCapabilities: targetCapabilities
+            )
             let normalizedTools = ProviderRuntimeHooks.normalizeTools(
                 snapshot.effectiveTools,
                 binding: providerBinding
@@ -206,7 +221,9 @@ struct TurnLoop {
                 continue
             }
 
-            let assistant = acc.finalize()
+            let assistantEnvelope = acc.finalize()
+            HarnessMessageEnvelopeStore.store(assistantEnvelope)
+            let assistant = assistantEnvelope.message
             let rejectedBareRequiredTurn = toolChoice == .required
                 && runtimePolicy.termination?.policy == .terminalTool
                 && !snapshot.effectiveTools.isEmpty
@@ -533,8 +550,25 @@ struct TurnLoop {
                         runID
                     )
                     published = true
-                @unknown default:
-                    break
+                case .toolCallStarted(let id, let name, let contentIndex):
+                    await publishDelta(
+                        .toolCallStarted(toolName: name, toolCallId: id, contentIndex: contentIndex),
+                        conversationID,
+                        runID
+                    )
+                    published = true
+                case .toolCallCompleted(let id, let name, let arguments):
+                    await publishDelta(
+                        .toolCallCompleted(
+                            toolName: name,
+                            toolCallId: id,
+                            arguments: arguments,
+                            blockIndex: nil
+                        ),
+                        conversationID,
+                        runID
+                    )
+                    published = true
                 }
             }
         case .complete:

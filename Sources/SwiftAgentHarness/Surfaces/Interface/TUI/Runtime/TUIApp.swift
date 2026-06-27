@@ -84,6 +84,8 @@ public actor TUIApp {
             reasoningView.append(text)
         case .toolCall(let toolName, _, let fragment, _):
             toolPane.updateToolCall(name: toolName, fragment: fragment)
+        case .toolCallStarted(let toolName, _, _), .toolCallCompleted(let toolName, _, _, _):
+            toolPane.updateToolCall(name: toolName, fragment: nil)
         case .surfaceIntent(let intent):
             await handleSurfaceIntent(intent)
         default:

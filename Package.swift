@@ -15,7 +15,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.18.0"),
+        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.19.0"),
         // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "59f20badfafea33a71150445e6e1e55f273eca93"),
         .package(url: "https://github.com/JamieScanlon/OllamaKit.git", from: "1.0.8"),
     //    .package(url: "https://github.com/JamieScanlon/OllamaKit.git", revision: "56f78f94c1684bffd2bf61d62f4eb539cd04645f"),
@@ -35,6 +35,7 @@ let package = Package(
             resources: [
                 .process("Backends/ExecutionEnvironments/manifests"),
                 .process("Backends/Providers/manifests"),
+                .process("Backends/Providers/catalogs"),
             ]
         ),
         .testTarget(

@@ -187,44 +187,30 @@ struct StandardModelLLMFactoryBudgetTests {
     }
 
     @Test("profile-specific OpenAI key is preferred")
-    func profileSpecificOpenAIKeyPreferred() {
-        let binding = ProviderBinding(
-            providerId: "openai",
-            modelProtocol: .openAIAPI,
-            endpointModelId: "gpt-test",
-            serverURL: URL(string: "https://api.openai.com/v1")!,
-            priority: 0,
-            authProfile: "prod-west"
-        )
-        let key = StandardModelLLMFactory.resolveOpenAIAPIKey(
-            binding: binding,
-            defaultAuthProfile: nil,
+    func profileSpecificOpenAIKeyPreferred() throws {
+        let store = AuthProfileStore(
             environment: [
                 "SAH_OPENAI_API_KEY_PROD_WEST": "profile-key",
                 "OPENAI_API_KEY": "global-key",
             ]
         )
-        #expect(key == "profile-key")
+        let resolved = try store.resolveAPIKey(
+            providerID: "openai",
+            authProfileLabel: "prod-west"
+        )
+        #expect(resolved.apiKey == "profile-key")
     }
 
     @Test("default auth profile fallback can source OpenAI key")
-    func defaultProfileFallbackOpenAIKey() {
-        let binding = ProviderBinding(
-            providerId: "openai",
-            modelProtocol: .openAIAPI,
-            endpointModelId: "gpt-test",
-            serverURL: URL(string: "https://api.openai.com/v1")!,
-            priority: 0,
-            authProfile: nil
-        )
-        let key = StandardModelLLMFactory.resolveOpenAIAPIKey(
-            binding: binding,
-            defaultAuthProfile: "team-a",
+    func defaultProfileFallbackOpenAIKey() throws {
+        let store = AuthProfileStore(
             environment: [
                 "OPENAI_API_KEY_TEAM_A": "team-key",
                 "OPENAI_API_KEY": "global-key",
-            ]
+            ],
+            defaultAuthProfileLabel: "team-a"
         )
-        #expect(key == "team-key")
+        let resolved = try store.resolveAPIKey(providerID: "openai")
+        #expect(resolved.apiKey == "team-key")
     }
 }

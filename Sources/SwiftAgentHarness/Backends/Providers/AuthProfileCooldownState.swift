@@ -54,10 +54,17 @@ public actor AuthProfileCooldownRegistry {
     public func mark(
         key: String,
         classification: ProviderFailoverClassification,
-        now: Date = Date()
+        now: Date = Date(),
+        billingCooldown: TimeInterval = 3600,
+        rateLimitCooldown: TimeInterval = 900
     ) {
         var current = states[key] ?? AuthProfileCooldownState()
-        current.mark(classification: classification, now: now)
+        current.mark(
+            classification: classification,
+            now: now,
+            billingCooldown: billingCooldown,
+            rateLimitCooldown: rateLimitCooldown
+        )
         states[key] = current
     }
 

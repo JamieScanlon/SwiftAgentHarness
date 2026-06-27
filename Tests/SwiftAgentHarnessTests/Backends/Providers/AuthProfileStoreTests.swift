@@ -25,7 +25,7 @@ struct AuthProfileStoreTests {
         #expect(resolved.apiKey == "sk-work")
     }
 
-    @Test("auth-profiles.json overrides env")
+    @Test("Config file entry ranks before env in credential pool")
     func fileOverridesEnv() throws {
         let fileData = """
         {
@@ -42,6 +42,141 @@ struct AuthProfileStoreTests {
         let resolved = try store.resolveAPIKey(providerID: "openai")
         #expect(resolved.apiKey == "sk-from-file")
         #expect(resolved.profile.source == .config)
+        let pool = try store.resolveCredentialPool(providerID: "openai")
+        #expect(pool.count == 2)
+    }
+
+    @Test("Numbered env vars populate ordered pool")
+    func numberedEnvPool() throws {
+        let store = AuthProfileStore(
+            environment: [
+                "OPENAI_API_KEY": "sk-0",
+                "OPENAI_API_KEY_1": "sk-1",
+                "OPENAI_API_KEY_2": "sk-2",
+            ]
+        )
+        let pool = try store.resolveCredentialPool(providerID: "openai")
+        #expect(pool.map(\.apiKey) == ["sk-0", "sk-1", "sk-2"])
+        #expect(pool.map(\.priority) == [0, 1, 2])
+    }
+
+    @Test("Delimited env var expands into pool entries")
+    func delimitedEnvPool() throws {
+        let store = AuthProfileStore(
+            environment: ["OPENAI_API_KEYS": "sk-a,sk-b\nsk-c"]
+        )
+        let pool = try store.resolveCredentialPool(providerID: "openai")
+        #expect(pool.map(\.apiKey) == ["sk-a", "sk-b", "sk-c"])
+    }
+
+    @Test("Config keys array preserves explicit priority and id")
+    func configKeysArray() throws {
+        let fileData = """
+        {
+          "default": {
+            "openai": {
+              "keys": [
+                { "id": "primary", "apiKey": "sk-primary", "priority": 0 },
+                { "id": "secondary", "apiKey": "sk-secondary", "priority": 5 }
+              ]
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let store = AuthProfileStore(authProfilesFileData: fileData)
+        let pool = try store.resolveCredentialPool(providerID: "openai")
+        #expect(pool.map(\.id) == ["primary", "secondary"])
+        #expect(pool.map(\.priority) == [0, 5])
+    }
+
+    @Test("Duplicate secrets dedupe preferring config metadata")
+    func dedupePrefersConfig() throws {
+        let fileData = """
+        {
+          "default": {
+            "openai": {
+              "keys": [
+                { "id": "from-config", "apiKey": "sk-shared", "priority": 0 }
+              ]
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let store = AuthProfileStore(
+            environment: ["OPENAI_API_KEY": "sk-shared"],
+            authProfilesFileData: fileData
+        )
+        let pool = try store.resolveCredentialPool(providerID: "openai")
+        #expect(pool.count == 1)
+        #expect(pool[0].id == "from-config")
+        #expect(pool[0].source == .config)
+    }
+
+    @Test("Empty pool throws credentialNotFound")
+    func emptyPoolThrows() {
+        let store = AuthProfileStore(environment: [:])
+        #expect(throws: AuthProfileStoreError.self) {
+            _ = try store.resolveCredentialPool(providerID: "openai")
+        }
+    }
+}
+
+@Suite("AuthProfileSelector")
+struct AuthProfileSelectorTests {
+    @Test("Fill first skips cooled-down credentials")
+    func fillFirstSkipsCooldown() {
+        let pool = [
+            AuthProfile(id: "a", providerID: "openai", authType: .apiKey, apiKey: "1", priority: 0),
+            AuthProfile(id: "b", providerID: "openai", authType: .apiKey, apiKey: "2", priority: 1),
+        ]
+        let now = Date(timeIntervalSince1970: 1_000)
+        var cooled = AuthProfileCooldownState()
+        cooled.mark(classification: .credentialExhausted, now: now, billingCooldown: 3600)
+        let result = AuthProfileSelector.selectNext(
+            AuthProfileSelector.SelectionInput(
+                pool: pool,
+                cooldownStates: ["a": cooled],
+                strategy: .fillFirst,
+                now: now
+            )
+        )
+        #expect(result?.credential.id == "b")
+    }
+
+    @Test("Round robin advances cursor")
+    func roundRobinCursor() {
+        let pool = [
+            AuthProfile(id: "a", providerID: "openai", authType: .apiKey, apiKey: "1", priority: 0),
+            AuthProfile(id: "b", providerID: "openai", authType: .apiKey, apiKey: "2", priority: 1),
+        ]
+        let first = AuthProfileSelector.selectNext(
+            AuthProfileSelector.SelectionInput(pool: pool, strategy: .roundRobin, roundRobinCursor: 0)
+        )
+        let second = AuthProfileSelector.selectNext(
+            AuthProfileSelector.SelectionInput(
+                pool: pool,
+                strategy: .roundRobin,
+                roundRobinCursor: first?.nextRoundRobinCursor ?? 0
+            )
+        )
+        #expect(first?.credential.id == "a")
+        #expect(second?.credential.id == "b")
+    }
+
+    @Test("Least used prefers lowest usage count")
+    func leastUsed() {
+        let pool = [
+            AuthProfile(id: "a", providerID: "openai", authType: .apiKey, apiKey: "1", priority: 0),
+            AuthProfile(id: "b", providerID: "openai", authType: .apiKey, apiKey: "2", priority: 0),
+        ]
+        let result = AuthProfileSelector.selectNext(
+            AuthProfileSelector.SelectionInput(
+                pool: pool,
+                strategy: .leastUsed,
+                usageCounts: ["a": 3, "b": 1]
+            )
+        )
+        #expect(result?.credential.id == "b")
     }
 }
 

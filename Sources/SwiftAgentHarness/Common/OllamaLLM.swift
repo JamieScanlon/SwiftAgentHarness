@@ -26,6 +26,7 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
     private let systemPrompt: SystemPrompt
     private let logger: Logger?
     private let streamSource: any OllamaChatStreamSourcing
+    private let supportsEagerToolInputStreaming: Bool
     
     init(
         model: String,
@@ -35,7 +36,8 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
         systemPrompt: SystemPrompt,
         requestTimeoutInterval: TimeInterval? = nil,
         logger: Logger? = nil,
-        streamSource: any OllamaChatStreamSourcing = DefaultOllamaChatStreamSource()
+        streamSource: any OllamaChatStreamSourcing = DefaultOllamaChatStreamSource(),
+        supportsEagerToolInputStreaming: Bool = false
     ) {
         self.model = model
         self.serverURL = serverURL
@@ -45,6 +47,7 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
         self.requestTimeoutInterval = requestTimeoutInterval
         self.logger = logger
         self.streamSource = streamSource
+        self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
     }
     
     /// Returns the model name for this LLM instance
@@ -156,9 +159,12 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
         let model = getModelName()
         logPromptCacheNoOpIfNeeded(config: config)
         return AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> { continuation in
-            let emitter = StreamCompletionEmitter(continuation: continuation)
-            
             Task {
+                var emitter = NormalizedStreamEmitter(
+                    continuation: continuation,
+                    supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
+                )
+                
                 let requestData = await createOllamaChatRequest(model: model, messages: messages, config: config)
                 self.logRequestPayloadIfDebug(requestData)
                 var fullContent: String = ""
@@ -189,11 +195,9 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
                         
                         if !thinkingDelta.isEmpty {
                             fullThinking += thinkingDelta
-                            emitter.yieldStream(
-                                NormalizedEventMapper.streamChunk(
-                                    for: .reasoningDelta(thinkingDelta),
-                                    availableTools: config.availableTools
-                                )
+                            emitter.yield(
+                                .thinkingDelta(thinkingDelta),
+                                availableTools: config.availableTools
                             )
                         }
                         
@@ -203,41 +207,50 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
                             let toolCalls = accumulator.finalize()
                             let terminalDelta = messageContent ?? ""
                             if !hasEmittedAnyDelta, !terminalDelta.isEmpty {
-                                let chunkResponse = NormalizedEventMapper.streamChunk(
-                                    for: .contentDelta(terminalDelta),
+                                emitter.yield(
+                                    .textDelta(terminalDelta),
                                     availableTools: config.availableTools
                                 )
-                                emitter.yieldStream(chunkResponse)
                             }
                             logger?.info("[OllamaLLM] Done (stream)\(LLMRequestPurposeReader.logSuffix(from: config)) - doneReason: \(chunk.doneReason ?? "nil"), toolCalls: \(toolCalls.count), contentLength: \(fullContent.count), thinkingLength: \(fullThinking.count)")
                             logger?.debug("[OllamaLLM] usage: prompt_eval_count=\(chunk.promptEvalCount.map(String.init) ?? "nil") eval_count=\(chunk.evalCount.map(String.init) ?? "nil") messagesInRequest=\(messages.count) approxCharsInMessages=\(approxChars)")
                             let numCtx = requestData.options?.numCtx ?? config.maxTokens ?? DEFAUT_MAX_TOKENS
                             let metadata = ollamaMetadata(from: chunk, numCtx: numCtx)
+                            emitter.yield(
+                                .usage(NormalizedUsage(
+                                    inputTokens: chunk.promptEvalCount,
+                                    outputTokens: chunk.evalCount
+                                )),
+                                availableTools: config.availableTools
+                            )
+                            let stopReason: NormalizedStopReason = toolCalls.isEmpty ? .end : .toolUse
+                            emitter.yield(.stop(stopReason), availableTools: config.availableTools)
                             let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
                                 .appending(toolCalls: toolCalls)
                                 .updatingMetadata(with: metadata)
                             self.logLLMResponsePayloadIfDebug(finalResponse)
-                            emitter.finishSuccess(with: finalResponse)
+                            emitter.finishSuccess(
+                                content: fullContent,
+                                toolCalls: toolCalls,
+                                availableTools: config.availableTools,
+                                metadata: metadata
+                            )
                             return
                         } else {
                             let delta = messageContent ?? ""
                             // `/api/chat` often sends chunks with empty content (keepalives / framing); skip streaming those.
                             guard !delta.isEmpty else { continue }
                             hasEmittedAnyDelta = true
-                            let chunkResponse = NormalizedEventMapper.streamChunk(
-                                for: .contentDelta(delta),
+                            emitter.yield(
+                                .textDelta(delta),
                                 availableTools: config.availableTools
                             )
-                            emitter.yieldStream(chunkResponse)
                         }
                     }
                 } catch is CancellationError {
                     emitter.finishCancelled()
                     return
                 } catch {
-                    // ``StreamCompletionEmitter/finishFailed(with:)`` rethrows `LLMError` raw and
-                    // wraps everything else as `LLMError.networkError(_:)` so
-                    // `TransientErrorClassifier` can recurse.
                     logger?.error("\(error)")
                     emitter.finishFailed(with: error)
                     return

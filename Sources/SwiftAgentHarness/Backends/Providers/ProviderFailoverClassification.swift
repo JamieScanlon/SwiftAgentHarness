@@ -59,6 +59,8 @@ public enum DefaultProviderFailoverClassifier {
                 return .transient
             case .rateLimitExceeded:
                 return .rateLimited
+            case .quotaExceeded:
+                return .credentialExhausted
             case .authenticationFailed:
                 return .authError
             case .modelNotFound:
@@ -76,12 +78,26 @@ public enum DefaultProviderFailoverClassifier {
         if TransientErrorClassifier.classify(error) == .transient {
             return .transient
         }
+        if isCredentialExhausted(error) {
+            return .credentialExhausted
+        }
         return .permanent
     }
 
     private static func isContextOverflow(_ error: Error) -> Bool {
         let message = String(describing: error).lowercased()
         return message.contains("context") && (message.contains("length") || message.contains("token"))
+    }
+
+    public static func isCredentialExhausted(_ error: Error) -> Bool {
+        if case LLMError.quotaExceeded = error { return true }
+        let message = String(describing: error).lowercased()
+        if message.contains("402") { return true }
+        if message.contains("insufficient credits") || message.contains("insufficient_credit") {
+            return true
+        }
+        if message.contains("payment required") { return true }
+        return false
     }
 }
 

@@ -29,6 +29,8 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     private let authProbeModelsURL: URL
     private let authProbeAPIKey: String
     private let authProbeTransport: AuthProbeTransport?
+    private let supportsEagerToolInputStreaming: Bool
+    private let authProbePermissiveForEmptyToken: Bool
     /// "Never timeout" represented as a very large finite interval.
     private static let effectivelyNoTimeoutInterval: TimeInterval = 60 * 60 * 24 * 365 * 10
     
@@ -40,7 +42,9 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         requestFeatures: ModelRequestFeatures = .unknown,
         systemPrompt: SystemPrompt? = nil,
         logger: Logger? = nil,
-        authProbeTransport: AuthProbeTransport? = nil
+        authProbeTransport: AuthProbeTransport? = nil,
+        supportsEagerToolInputStreaming: Bool = false,
+        authProbePermissiveForEmptyToken: Bool = false
     ) {
         let parsedURL = URL(string: baseURL)!
         self.model = model
@@ -51,6 +55,8 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         self.authProbeModelsURL = parsedURL.appendingPathComponent("models")
         self.authProbeAPIKey = apiKey
         self.authProbeTransport = authProbeTransport
+        self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
+        self.authProbePermissiveForEmptyToken = authProbePermissiveForEmptyToken
         
         // Parse the base URL to extract host, port, and scheme
         let host = parsedURL.host ?? "api.openai.com"
@@ -86,10 +92,13 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     }
 
     func validateAuth() async -> Bool {
-        // Conservative contract: only return false for definitive auth failures.
         let token = authProbeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if token.isEmpty || token == "dummy_key" || token == "dummy-key" {
+        if authProbePermissiveForEmptyToken,
+           token.isEmpty || token == "dummy_key" || token == "dummy-key" {
             return true
+        }
+        if token.isEmpty {
+            return false
         }
         var request = URLRequest(url: authProbeModelsURL)
         request.httpMethod = "GET"
@@ -149,8 +158,11 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         }
         
         return AsyncThrowingStream { continuation in
-            let emitter = StreamCompletionEmitter(continuation: continuation)
             Task {
+                var emitter = NormalizedStreamEmitter(
+                    continuation: continuation,
+                    supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
+                )
                 do {
                     let openAIMessages = await self.openAIChatCompletionMessageParams(from: messages, config: config)
                     self.logPromptCacheNoOpIfNeeded(config: config)
@@ -172,20 +184,16 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                         }
                         let delta = result.choices.first?.delta
                         if let reasoning = delta?.reasoning, !reasoning.isEmpty {
-                            emitter.yieldStream(
-                                NormalizedEventMapper.streamChunk(
-                                    for: .reasoningDelta(reasoning),
-                                    availableTools: config.availableTools
-                                )
+                            emitter.yield(
+                                .thinkingDelta(reasoning),
+                                availableTools: config.availableTools
                             )
                         }
                         if let content = delta?.content, !content.isEmpty {
                             fullContent += content
-                            emitter.yieldStream(
-                                NormalizedEventMapper.streamChunk(
-                                    for: .contentDelta(content),
-                                    availableTools: config.availableTools
-                                )
+                            emitter.yield(
+                                .textDelta(content),
+                                availableTools: config.availableTools
                             )
                         }
                         
@@ -201,15 +209,13 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                                 let name = fn?.name
                                 let id = toolCall.id
                                 if name != nil || !argsFragment.isEmpty {
-                                    emitter.yieldStream(
-                                        NormalizedEventMapper.streamChunk(
-                                            for: .toolCallDelta(
-                                                id: id,
-                                                name: name,
-                                                argumentsFragment: argsFragment
-                                            ),
-                                            availableTools: config.availableTools
-                                        )
+                                    emitter.yield(
+                                        .toolCallDelta(
+                                            id: id,
+                                            name: name,
+                                            argumentsFragment: argsFragment
+                                        ),
+                                        availableTools: config.availableTools
                                     )
                                 }
                                 accumulator.ingestNameAndArgs(
@@ -221,22 +227,42 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                         }
                     }
                     
+                    if let usage {
+                        emitter.yield(
+                            .usage(NormalizedUsage(
+                                inputTokens: usage.promptTokens,
+                                outputTokens: usage.completionTokens
+                            )),
+                            availableTools: config.availableTools
+                        )
+                    }
                     let canonicalFinishReason = FinishReason.fromOpenAI(finishReason)
+                    emitter.yield(
+                        .stop(NormalizedStopReason(finishReason: canonicalFinishReason)),
+                        availableTools: config.availableTools
+                    )
                     let storedFinishReason: String? = {
                         guard let raw = finishReason else { return nil }
                         return canonicalFinishReason == .unknown ? raw : canonicalFinishReason.rawValue
                     }()
                     let metadata = openAIMetadata(usage: usage, config: config, finishReason: storedFinishReason)
-                    let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
-                        .appending(toolCalls: accumulator.finalize())
-                        .updatingMetadata(with: metadata)
-                    self.logLLMResponsePayloadIfDebug(finalResponse)
-                    emitter.finishSuccess(with: finalResponse)
+                    let toolCalls = accumulator.finalize()
+                    self.logLLMResponsePayloadIfDebug(
+                        LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
+                            .appending(toolCalls: toolCalls)
+                            .updatingMetadata(with: metadata)
+                    )
+                    emitter.finishSuccess(
+                        content: fullContent,
+                        toolCalls: toolCalls,
+                        availableTools: config.availableTools,
+                        metadata: metadata
+                    )
                     
                 } catch is CancellationError {
                     emitter.finishCancelled()
                 } catch {
-                    // ``StreamCompletionEmitter/finishFailed(with:)`` rethrows `LLMError`
+                    // ``NormalizedStreamEmitter/finishFailed(with:)`` rethrows `LLMError`
                     // raw and wraps everything else as `LLMError.networkError(_:)` so
                     // ``TransientErrorClassifier`` can recurse.
                     emitter.finishFailed(with: error)

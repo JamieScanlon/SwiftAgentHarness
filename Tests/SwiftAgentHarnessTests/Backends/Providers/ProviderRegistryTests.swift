@@ -39,6 +39,22 @@ struct ProviderRegistryTests {
         let inspected = ProviderRegistry.inspect()
         #expect(!inspected.isEmpty)
     }
+
+    @Test("Anthropic bootstrap registers media understanding stub")
+    func anthropicMediaUnderstandingStub() throws {
+        ProviderRegistry.resetForTesting()
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        let slots = try ProviderRegistry.registeredSlots(for: "anthropic")
+        #expect(slots.contains(.mediaUnderstanding))
+    }
+
+    @Test("allCLIInferenceBackends includes openai codex stub")
+    func allCLIBackends() {
+        ProviderRegistry.resetForTesting()
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        let ids = ProviderRegistry.allCLIInferenceBackends().map(\.cliBackendID)
+        #expect(ids.contains("openai-codex"))
+    }
 }
 
 @Suite("Provider capability slot scaffolds")

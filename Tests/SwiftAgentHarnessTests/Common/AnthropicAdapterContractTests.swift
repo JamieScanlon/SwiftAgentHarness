@@ -16,7 +16,7 @@ struct AnthropicAdapterContractTests {
         let textEvents = AnthropicSSEParser.events(fromJSONLine: textJSON, eventName: nil)
         #expect(thinkingEvents.count == 1)
         #expect(textEvents.count == 1)
-        if case .thinkingDelta(let t)? = thinkingEvents.first {
+        if case .thinkingDelta(let t, _)? = thinkingEvents.first {
             #expect(t == "step")
         } else {
             Issue.record("expected thinking delta")
@@ -31,7 +31,7 @@ struct AnthropicAdapterContractTests {
     @Test("NormalizedEvent mapper projects reasoning fragments")
     func normalizedReasoningFragment() {
         let chunk = NormalizedEventMapper.streamChunk(
-            for: .reasoningDelta("hidden"),
+            for: .thinkingDelta("hidden"),
             availableTools: []
         )
         guard case .reasoning(let text)? = chunk.streamingFragment else {
@@ -40,5 +40,21 @@ struct AnthropicAdapterContractTests {
         }
         #expect(text == "hidden")
         #expect(chunk.content.isEmpty)
+    }
+
+    @Test("SSE parser maps tool_use content_block_start")
+    func sseParserToolCallStarted() {
+        let json = """
+        {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"search"}}
+        """
+        let events = AnthropicSSEParser.events(fromJSONLine: json, eventName: nil)
+        #expect(events.count == 1)
+        if case .toolCallStarted(let id, let name, let index)? = events.first {
+            #expect(id == "toolu_1")
+            #expect(name == "search")
+            #expect(index == 1)
+        } else {
+            Issue.record("expected toolCallStarted")
+        }
     }
 }

@@ -25,7 +25,7 @@ enum AdapterContractValidator {
             }
             if let fragment = chunk.streamingFragment {
                 switch fragment {
-                case .text, .reasoning, .toolCall:
+                case .text, .reasoning, .toolCall, .toolCallStarted, .toolCallCompleted:
                     continue
                 }
             }

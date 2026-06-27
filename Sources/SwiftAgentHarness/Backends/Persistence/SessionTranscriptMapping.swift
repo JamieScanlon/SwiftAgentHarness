@@ -14,10 +14,12 @@ enum SessionTranscriptMapping {
         finishReason: String? = nil
     ) throws -> SessionTranscriptEntry {
         let roleType: SessionTranscriptEntryType = message.role == .system ? .system : .message
+        let contentBlocks = HarnessMessageEnvelopeStore.envelope(for: message.id)?.contentBlocks
         let json = try MessageTranscriptPayloadCodec.encodePayloadJSON(
             from: message,
             transcriptRunID: transcriptRunID,
-            finishReason: finishReason
+            finishReason: finishReason,
+            contentBlocks: contentBlocks
         )
         return SessionTranscriptEntry(
             sequence: sequence,
@@ -42,7 +44,7 @@ enum SessionTranscriptMapping {
         guard entry.type == .message || entry.type == .system else { return nil }
         let obj = try MessageTranscriptPayloadCodec.decode(entry.payloadJSON)
         guard let role = MessageRole(rawValue: obj.role) else { return nil }
-        return Message(
+        let message = Message(
             id: obj.id,
             role: role,
             content: obj.content,
@@ -53,6 +55,11 @@ enum SessionTranscriptMapping {
             responseFormat: obj.responseFormat,
             inputTrustRaw: obj.inputTrustRaw
         )
+        let envelope = HarnessMessageEnvelope.fromTranscriptPayload(obj)
+        if !envelope.contentBlocks.isEmpty {
+            HarnessMessageEnvelopeStore.store(envelope)
+        }
+        return message
     }
 }
 

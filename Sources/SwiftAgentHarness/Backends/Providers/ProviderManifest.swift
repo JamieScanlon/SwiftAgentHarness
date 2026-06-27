@@ -24,6 +24,7 @@ public struct ProviderAuthChoice: Sendable, Equatable, Codable, Hashable {
     public var cliFlag: String?
     public var cliOption: String?
     public var onboardingScopes: [String]
+    public var authType: AuthProfileType?
 
     public init(
         id: String,
@@ -31,7 +32,8 @@ public struct ProviderAuthChoice: Sendable, Equatable, Codable, Hashable {
         envVars: [String],
         cliFlag: String? = nil,
         cliOption: String? = nil,
-        onboardingScopes: [String] = []
+        onboardingScopes: [String] = [],
+        authType: AuthProfileType? = nil
     ) {
         self.id = id
         self.label = label
@@ -39,6 +41,7 @@ public struct ProviderAuthChoice: Sendable, Equatable, Codable, Hashable {
         self.cliFlag = cliFlag
         self.cliOption = cliOption
         self.onboardingScopes = onboardingScopes
+        self.authType = authType
     }
 }
 
@@ -124,7 +127,8 @@ public enum ProviderManifests {
                 label: "API Key",
                 envVars: ["SAH_OPENAI_API_KEY", "OPENAI_API_KEY"],
                 cliFlag: "--openai-key",
-                cliOption: "openaiKey"
+                cliOption: "openaiKey",
+                authType: .apiKey
             ),
         ],
         modelSupport: ProviderModelSupport(modelPrefixes: ["gpt-", "o1-", "o3-", "o4-"]),
@@ -148,7 +152,8 @@ public enum ProviderManifests {
                 label: "API Key",
                 envVars: ["SAH_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
                 cliFlag: "--anthropic-key",
-                cliOption: "anthropicKey"
+                cliOption: "anthropicKey",
+                authType: .apiKey
             ),
         ],
         modelSupport: ProviderModelSupport(modelPrefixes: ["claude-"]),
@@ -193,7 +198,8 @@ public enum ProviderManifests {
             ProviderAuthChoice(
                 id: "api-key",
                 label: "API Key",
-                envVars: ["SAH_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"]
+                envVars: ["SAH_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+                authType: .apiKey
             ),
         ],
         modelSupport: ProviderModelSupport(modelPrefixes: []),

@@ -10,6 +10,8 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
     /// Lower sorts first when failing over.
     public var priority: Int
     public var authProfile: String?
+    /// Downward-only override of the model entry's ``ModelRequestFeatures/toolChoiceModes``.
+    public var toolChoiceModesOverride: Set<ToolChoiceMode>?
 
     public init(
         providerId: String,
@@ -17,7 +19,8 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         endpointModelId: String,
         serverURL: URL,
         priority: Int = 0,
-        authProfile: String? = nil
+        authProfile: String? = nil,
+        toolChoiceModesOverride: Set<ToolChoiceMode>? = nil
     ) {
         self.providerId = providerId
         self.modelProtocol = modelProtocol
@@ -25,6 +28,7 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         self.serverURL = serverURL
         self.priority = priority
         self.authProfile = authProfile
+        self.toolChoiceModesOverride = toolChoiceModesOverride
     }
 }
 
@@ -46,6 +50,8 @@ public struct ModelRegistryEntry: Sendable, Hashable {
     public var performance: ModelObservedPerformance?
     /// Optional routing metadata (`ModelEntry.routing`).
     public var routing: ModelRoutingMetadata?
+    /// Provider-specific declarative quirks (spec: catalog `compat` block).
+    public var compat: ProviderModelCompat?
 
     public init(
         id: UUID,
@@ -59,7 +65,8 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         useClasses: [String] = [],
         cost: ModelCostBudget? = nil,
         performance: ModelObservedPerformance? = nil,
-        routing: ModelRoutingMetadata? = nil
+        routing: ModelRoutingMetadata? = nil,
+        compat: ProviderModelCompat? = nil
     ) {
         self.id = id
         self.family = family
@@ -73,6 +80,7 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         self.cost = cost
         self.performance = performance
         self.routing = routing
+        self.compat = compat
     }
 
     /// Primary wire target for the shared ``Model`` DTO (lowest `priority` wins).

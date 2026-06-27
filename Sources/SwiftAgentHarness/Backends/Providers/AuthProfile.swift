@@ -65,6 +65,26 @@ public struct AuthProfile: Sendable, Equatable, Hashable, Codable {
         guard let resetAt = lastErrorResetAt else { return true }
         return now >= resetAt
     }
+
+    public func isAccessTokenExpired(at now: Date = Date()) -> Bool {
+        guard let expiresAt else { return false }
+        return now >= expiresAt
+    }
+
+    public var isDispatchReady: Bool {
+        switch authType {
+        case .apiKey, .iam, .adc:
+            guard let apiKey, !apiKey.isEmpty else { return false }
+            return !isAccessTokenExpired()
+        case .oauth:
+            guard let apiKey, !apiKey.isEmpty else { return false }
+            return !isAccessTokenExpired()
+        }
+    }
+
+    public var requiresOnboarding: Bool {
+        authType == .oauth && refreshToken != nil && !isDispatchReady
+    }
 }
 
 public enum AuthProfileRotationStrategy: String, Sendable, Codable, Hashable {
@@ -88,10 +108,13 @@ public struct AuthProfileSelectionContext: Sendable {
 
 public struct ResolvedAuthCredential: Sendable, Equatable {
     public var profile: AuthProfile
-    public var apiKey: String
+    public var bearerToken: String
 
-    public init(profile: AuthProfile, apiKey: String) {
+    public init(profile: AuthProfile, bearerToken: String) {
         self.profile = profile
-        self.apiKey = apiKey
+        self.bearerToken = bearerToken
     }
+
+    /// Backward-compatible alias for wire codecs expecting `apiKey`.
+    public var apiKey: String { bearerToken }
 }

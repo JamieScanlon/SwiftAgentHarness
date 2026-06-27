@@ -12,26 +12,32 @@ struct AssistantMessageAccumulatorTests {
         acc.consume(.stream(LLMResponse.llmResponse(from: "hel", availableTools: []).markingIncomplete()))
         acc.consume(.stream(LLMResponse.llmResponse(from: "lo", availableTools: []).markingIncomplete()))
         acc.consume(.complete(LLMResponse.llmResponse(from: "hello", availableTools: [])))
-        let message = acc.finalize()
-        #expect(message.role == .assistant)
-        #expect(message.content == "hello")
-        #expect(message.toolCalls.isEmpty)
+        let envelope = acc.finalize()
+        #expect(envelope.message.role == .assistant)
+        #expect(envelope.message.content == "hello")
+        #expect(envelope.message.toolCalls.isEmpty)
     }
 
-    @Test("finalize omits streamed reasoning from assistant message")
-    func omitsReasoningFromFinalize() {
+    @Test("captures streamed reasoning in content blocks")
+    func capturesReasoningBlocks() {
         var acc = AssistantMessageAccumulator()
         acc.consume(
             .stream(
                 LLMResponse.streamChunk(
-                    "x",
+                    "",
                     streamingFragment: .reasoning("hidden reasoning")
                 )
             )
         )
         acc.consume(.complete(LLMResponse.llmResponse(from: "x", availableTools: [])))
-        let message = acc.finalize()
-        #expect(message.content == "x")
+        let envelope = acc.finalize()
+        #expect(envelope.message.content == "x")
+        #expect(envelope.contentBlocks.count == 1)
+        if case .thinking(let text, nil)? = envelope.contentBlocks.first {
+            #expect(text == "hidden reasoning")
+        } else {
+            Issue.record("expected thinking block")
+        }
     }
 
     @Test("accumulates tool call fragments")
@@ -54,9 +60,27 @@ struct AssistantMessageAccumulatorTests {
             )
         )
         acc.consume(.complete(LLMResponse.llmResponse(from: "", availableTools: [])))
-        let message = acc.finalize()
-        #expect(message.toolCalls.count == 1)
-        #expect(message.toolCalls.first?.name == "read")
+        let envelope = acc.finalize()
+        #expect(envelope.message.toolCalls.count == 1)
+        #expect(envelope.message.toolCalls.first?.name == "read")
+    }
+
+    @Test("accumulates tool call completed lifecycle fragment")
+    func accumulatesToolCallCompleted() {
+        var acc = AssistantMessageAccumulator()
+        acc.consume(
+            .stream(
+                LLMResponse.streamToolCallCompleted(
+                    id: "call-1",
+                    name: "read",
+                    arguments: "{\"path\":\"/tmp/x\"}"
+                )
+            )
+        )
+        acc.consume(.complete(LLMResponse.llmResponse(from: "", availableTools: [])))
+        let envelope = acc.finalize()
+        #expect(envelope.message.toolCalls.count == 1)
+        #expect(envelope.message.toolCalls.first?.name == "read")
     }
 
     @Test("LM Studio split tool-call delta shape preserves arguments on finalize")
@@ -92,10 +116,10 @@ struct AssistantMessageAccumulatorTests {
                     ])
             )
         )
-        let message = acc.finalize()
-        #expect(message.toolCalls.count == 1)
-        #expect(message.toolCalls.first?.name == "get_plan")
-        if case .object(let dict) = message.toolCalls.first?.arguments,
+        let envelope = acc.finalize()
+        #expect(envelope.message.toolCalls.count == 1)
+        #expect(envelope.message.toolCalls.first?.name == "get_plan")
+        if case .object(let dict) = envelope.message.toolCalls.first?.arguments,
            case .string(let cid)? = dict["conversation_id"] {
             #expect(cid == conversationID)
         } else {

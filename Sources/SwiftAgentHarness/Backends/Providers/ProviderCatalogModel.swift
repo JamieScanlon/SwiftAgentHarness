@@ -56,7 +56,8 @@ public struct ProviderCatalogEntry: Sendable {
         providerID: ProviderID,
         serverURL: URL,
         authProfile: String? = nil,
-        priority: Int = 0
+        priority: Int = 0,
+        toolChoiceModesOverride: Set<ToolChoiceMode>? = nil
     ) -> ModelRegistryEntry {
         let binding = ProviderBinding(
             providerId: providerID,
@@ -64,7 +65,8 @@ public struct ProviderCatalogEntry: Sendable {
             endpointModelId: endpointModelId,
             serverURL: serverURL,
             priority: priority,
-            authProfile: authProfile
+            authProfile: authProfile,
+            toolChoiceModesOverride: toolChoiceModesOverride
         )
         return ModelRegistryEntry(
             id: registryID,
@@ -78,7 +80,8 @@ public struct ProviderCatalogEntry: Sendable {
             useClasses: [],
             cost: modelConfig.hardcodedCost,
             routing: modelConfig.hardcodedRouting
-                ?? ModelManager.defaultRoutingMetadata(for: modelConfig.modelProtocol)
+                ?? ModelManager.defaultRoutingMetadata(for: modelConfig.modelProtocol),
+            compat: compat
         )
     }
 }
@@ -139,19 +142,32 @@ public struct ProviderAdapterContext: Sendable {
     public var model: Model
     public var systemPrompt: SystemPrompt
     public var authProfileStore: AuthProfileStore
+    public var resolvedCredential: AuthProfile?
+    public var compat: ProviderModelCompat?
     public var logger: Logger?
+
+    public var supportsEagerToolInputStreaming: Bool {
+        ProviderRuntimeHooks.effectiveSupportsEagerToolInputStreaming(
+            binding: binding,
+            compat: compat
+        )
+    }
 
     public init(
         binding: ProviderBinding,
         model: Model,
         systemPrompt: SystemPrompt,
         authProfileStore: AuthProfileStore = .production(),
+        resolvedCredential: AuthProfile? = nil,
+        compat: ProviderModelCompat? = nil,
         logger: Logger? = nil
     ) {
         self.binding = binding
         self.model = model
         self.systemPrompt = systemPrompt
         self.authProfileStore = authProfileStore
+        self.resolvedCredential = resolvedCredential
+        self.compat = compat
         self.logger = logger
     }
 }

@@ -70,8 +70,59 @@ struct MessageTranscriptToolCallWire: Codable, Sendable, Equatable {
     }
 }
 
+struct MessageTranscriptContentBlockWire: Codable, Sendable, Equatable {
+    enum Kind: String, Codable, Sendable {
+        case text
+        case thinking
+        case toolUse
+    }
+
+    var kind: Kind
+    var text: String?
+    var signature: String?
+    var toolCallId: String?
+    var toolName: String?
+
+    init(
+        kind: Kind,
+        text: String? = nil,
+        signature: String? = nil,
+        toolCallId: String? = nil,
+        toolName: String? = nil
+    ) {
+        self.kind = kind
+        self.text = text
+        self.signature = signature
+        self.toolCallId = toolCallId
+        self.toolName = toolName
+    }
+
+    init(from block: HarnessContentBlock) {
+        switch block {
+        case .text(let text):
+            kind = .text
+            self.text = text
+            signature = nil
+            toolCallId = nil
+            toolName = nil
+        case .thinking(let text, let signature):
+            kind = .thinking
+            self.text = text
+            self.signature = signature
+            toolCallId = nil
+            toolName = nil
+        case .toolUse(let id, let name):
+            kind = .toolUse
+            text = nil
+            signature = nil
+            toolCallId = id
+            toolName = name
+        }
+    }
+}
+
 struct MessageTranscriptPayload: Codable, Sendable, Equatable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var v: Int?
     var id: UUID
@@ -89,8 +140,15 @@ struct MessageTranscriptPayload: Codable, Sendable, Equatable {
     var inputTrustRaw: String?
     var finishReason: String?
     var responseFormat: String?
+    /// v4: structured assistant content blocks (thinking signatures, etc.).
+    var contentBlocks: [MessageTranscriptContentBlockWire]?
 
-    init(from message: Message, transcriptRunID: UUID? = nil, finishReason: String? = nil) {
+    init(
+        from message: Message,
+        transcriptRunID: UUID? = nil,
+        finishReason: String? = nil,
+        contentBlocks: [HarnessContentBlock]? = nil
+    ) {
         v = Self.currentVersion
         id = message.id
         role = message.role.rawValue
@@ -109,6 +167,17 @@ struct MessageTranscriptPayload: Codable, Sendable, Equatable {
         inputTrustRaw = trust
         self.finishReason = finishReason
         responseFormat = message.responseFormat
+        if let contentBlocks, !contentBlocks.isEmpty {
+            self.contentBlocks = contentBlocks.map(MessageTranscriptContentBlockWire.init(from:))
+        } else if !message.content.isEmpty {
+            self.contentBlocks = [MessageTranscriptContentBlockWire(kind: .text, text: message.content)]
+        } else {
+            self.contentBlocks = nil
+        }
+    }
+
+    init(from message: Message, transcriptRunID: UUID? = nil, finishReason: String? = nil) {
+        self.init(from: message, transcriptRunID: transcriptRunID, finishReason: finishReason, contentBlocks: nil)
     }
 
     func resolvedToolCallNames() -> [String] {
@@ -128,6 +197,30 @@ struct MessageTranscriptPayload: Codable, Sendable, Equatable {
     func decodedAttachmentImages() -> [Message.Image] {
         guard let attachmentRefs, !attachmentRefs.isEmpty else { return [] }
         return attachmentRefs.compactMap { $0.asMessageImage() }
+    }
+
+    func decodedContentBlocks() -> [MessageTranscriptContentBlockWire] {
+        if let contentBlocks, !contentBlocks.isEmpty {
+            return contentBlocks
+        }
+        if !content.isEmpty {
+            return [MessageTranscriptContentBlockWire(kind: .text, text: content)]
+        }
+        return []
+    }
+
+    func asMessage() -> Message {
+        Message(
+            id: id,
+            role: MessageRole(rawValue: role) ?? .user,
+            content: content,
+            timestamp: timestamp,
+            images: decodedAttachmentImages(),
+            toolCalls: decodedToolCalls(),
+            toolCallId: toolCallId,
+            responseFormat: responseFormat,
+            inputTrustRaw: inputTrustRaw
+        )
     }
 
     var hasAttachmentRefs: Bool {
@@ -166,16 +259,30 @@ enum MessageTranscriptPayloadCodec {
         )
     }
 
-    static func encodePayloadJSON(from message: Message, transcriptRunID: UUID? = nil, finishReason: String? = nil) throws -> String {
+    static func encodePayloadJSON(
+        from message: Message,
+        transcriptRunID: UUID? = nil,
+        finishReason: String? = nil,
+        contentBlocks: [HarnessContentBlock]? = nil
+    ) throws -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
-        let payload = MessageTranscriptPayload(from: message, transcriptRunID: transcriptRunID, finishReason: finishReason)
+        let payload = MessageTranscriptPayload(
+            from: message,
+            transcriptRunID: transcriptRunID,
+            finishReason: finishReason,
+            contentBlocks: contentBlocks
+        )
         let data = try enc.encode(payload)
         guard let json = String(data: data, encoding: .utf8) else {
             throw SessionPersistenceError.transcriptPayloadInvalid(reason: "message payload encode failed")
         }
         try SessionTranscriptPayloadAllowlist.assertMessagePayloadKeysAllowed(json)
         return json
+    }
+
+    static func encodePayloadJSON(from message: Message, transcriptRunID: UUID? = nil, finishReason: String? = nil) throws -> String {
+        try encodePayloadJSON(from: message, transcriptRunID: transcriptRunID, finishReason: finishReason, contentBlocks: nil)
     }
 
     static func decode(_ payloadJSON: String) throws -> MessageTranscriptPayload {
