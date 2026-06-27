@@ -40,15 +40,37 @@ struct OrchestratorRuntimeServiceTests {
         )
     }
 
+    private func prepareConversation(
+        session: HarnessRuntimeSession,
+        model: Model
+    ) async throws -> ModelConversation {
+        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        _ = try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
+        let conversation = try #require(await session.currentConversation())
+        await session.testing_setCurrentConversationID(conversation.id)
+        return conversation
+    }
+
+    private func warmOrchestrator(
+        session: HarnessRuntimeSession,
+        model: Model,
+        conversation: ModelConversation
+    ) async throws {
+        await session.orchestratorRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        if await session.sessionOrchestrator() == nil {
+            await session.testing_ensureOrchestratorPoolEntry(model: model, conversation: conversation)
+        }
+        try #require(await session.sessionOrchestrator() != nil, "Orchestrator warm-up failed")
+    }
+
     @Test("setupOrchestrator warms orchestrator for explicit conversation")
     func setupOrchestratorBindsOrchestrator() async throws {
         let container = try makeContainer()
         let session = makeSession(container: container)
         let model = makeModel()
-        try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
-        let conversation = try #require(await session.currentConversation())
+        let conversation = try await prepareConversation(session: session, model: model)
 
-        await session.orchestratorRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        try await warmOrchestrator(session: session, model: model, conversation: conversation)
 
         #expect(await session.sessionOrchestrator() != nil)
         #expect(await session.sessionOrchestratorConversationID() == conversation.id)
@@ -59,9 +81,8 @@ struct OrchestratorRuntimeServiceTests {
         let container = try makeContainer()
         let session = makeSession(container: container)
         let model = makeModel()
-        try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
-        let conversation = try #require(await session.currentConversation())
-        await session.orchestratorRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        let conversation = try await prepareConversation(session: session, model: model)
+        try await warmOrchestrator(session: session, model: model, conversation: conversation)
         #expect(await session.sessionOrchestrator() != nil)
 
         await session.orchestratorRuntimeService.invalidateOrchestrator(for: conversation.id)
@@ -75,9 +96,8 @@ struct OrchestratorRuntimeServiceTests {
         let container = try makeContainer()
         let session = makeSession(container: container)
         let model = makeModel()
-        try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
-        let conversation = try #require(await session.currentConversation())
-        await session.orchestratorRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        let conversation = try await prepareConversation(session: session, model: model)
+        try await warmOrchestrator(session: session, model: model, conversation: conversation)
         let orchestrator = try #require(await session.sessionOrchestrator())
 
         let entries = await session.orchestratorRuntimeService.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
@@ -90,8 +110,7 @@ struct OrchestratorRuntimeServiceTests {
         let container = try makeContainer()
         let session = makeSession(container: container)
         let model = makeModel()
-        try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
-        let conversation = try #require(await session.currentConversation())
+        let conversation = try await prepareConversation(session: session, model: model)
 
         let params = await session.orchestratorRuntimeService.orchestratorAdditionalParameters(for: conversation)
         guard case .object(let object) = params else {
