@@ -70,6 +70,7 @@ public struct TriggersRuntimeBundle: Sendable {
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
+    public let channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator
     let outputRouter: TriggerSymmetricOutputRouter
     public let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
     let runRegistry: TriggerDelegatedRunRegistry
@@ -194,6 +195,7 @@ public enum TriggersRuntimeWiring {
             runRegistry: runRegistry,
             logger: logger
         )
+        let channelSessionLifecycleCoordinator = ChannelSessionLifecycleCoordinator()
         let channelRunStreamingHolder = configuration.conversationEventsHub == nil
             ? nil
             : ChannelRunStreamingServiceHolder()
@@ -204,7 +206,8 @@ public enum TriggersRuntimeWiring {
             runtime: runtimeAdapter,
             delegatedDispatch: delegatedDispatch,
             snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory),
-            channelRunStreaming: channelRunStreamingHolder
+            channelRunStreaming: channelRunStreamingHolder,
+            lifecycleCoordinator: channelSessionLifecycleCoordinator
         )
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
@@ -228,15 +231,22 @@ public enum TriggersRuntimeWiring {
         let channelRegistry = ChannelListenerRegistry.load(
             dataDirectory: configuration.dataDirectory,
             ingress: channelIngress,
+            dedupe: dedupe,
+            lifecycleCoordinator: channelSessionLifecycleCoordinator,
+            channelRunStreaming: channelRunStreamingHolder,
             logger: logger,
             enabled: configuration.channelListenersEnabled,
             configURL: configuration.channelsConfigURL
         )
         if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
             channelRunStreamingHolder.install(
-                ChannelRunStreamingService(hub: hub) { channel in
-                    await channelRegistry.plugin(for: channel)
-                }
+                ChannelRunStreamingService(
+                    hub: hub,
+                    pluginLookup: { channel in
+                        await channelRegistry.plugin(for: channel)
+                    },
+                    lifecycleCoordinator: channelSessionLifecycleCoordinator
+                )
             )
         }
         let webhookValidation = WebhookValidationGate(
@@ -285,6 +295,7 @@ public enum TriggersRuntimeWiring {
             fileEventQueue: fileEventQueue,
             replay: replay,
             channelRegistry: channelRegistry,
+            channelSessionLifecycleCoordinator: channelSessionLifecycleCoordinator,
             outputRouter: outputRouter,
             delegatedCompletionHandoff: delegatedCompletionHandoff,
             runRegistry: runRegistry

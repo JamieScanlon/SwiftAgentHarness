@@ -1,6 +1,6 @@
 import Foundation
 
-struct MockChannelRawEvent: Sendable, Equatable {
+struct ChannelTransportRawEvent: Sendable, Equatable {
     var channel: ChannelId
     var platformMessageId: String
     var senderId: String
@@ -15,8 +15,14 @@ struct MockChannelRawEvent: Sendable, Equatable {
     var internalEvent: Bool
 }
 
+typealias MockChannelRawEvent = ChannelTransportRawEvent
+
 protocol ChannelTransport: Sendable {
     func connect() async throws
     func disconnect() async
-    func events() -> AsyncStream<MockChannelRawEvent>
+    func events() -> AsyncStream<ChannelTransportRawEvent>
+}
+
+enum ChannelTransportBuildError: Error, Equatable {
+    case notImplemented(ChannelTransportKind)
 }

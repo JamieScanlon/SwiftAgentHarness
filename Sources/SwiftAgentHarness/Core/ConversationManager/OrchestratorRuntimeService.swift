@@ -97,8 +97,18 @@ public actor OrchestratorRuntimeService {
         holder?.assign(registry)
     }
 
-    nonisolated public func installChannelRegistry(_ registry: ChannelListenerRegistry, holder: ChannelRegistryHolder? = nil) {
+    nonisolated public func installChannelRegistry(
+        _ registry: ChannelListenerRegistry,
+        holder: ChannelRegistryHolder? = nil,
+        sessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil
+    ) {
         installChannelRegistry(registry as any ChannelPluginLooking, holder: holder)
+        if let sessionLifecycleCoordinator {
+            agentRuntime?.installChannelSessionLifecycle(
+                coordinator: sessionLifecycleCoordinator,
+                registry: registry
+            )
+        }
     }
 
     public func resolvedChannelRegistry() -> ChannelListenerRegistry? {

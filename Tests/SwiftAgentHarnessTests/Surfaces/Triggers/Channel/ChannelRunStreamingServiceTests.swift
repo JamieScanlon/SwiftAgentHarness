@@ -13,14 +13,15 @@ struct ChannelRunStreamingServiceTests {
         let runID = UUID()
         let config = ChannelListenerConfig(enabled: true)
         let logger = Logger(label: "test")
-        let listener = MockChannelListener(id: .slack, config: config, logger: logger)
-        let plugin = ChannelPluginFactory.makeMockPlugin(
-            channel: .slack,
-            config: config,
-            listener: listener,
-            logger: logger
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: logger)
+        let plugin = bundle.plugin
+        let listener = bundle.listener as! MockChannelListener
+        let coordinator = ChannelSessionLifecycleCoordinator()
+        let service = ChannelRunStreamingService(
+            hub: hub,
+            pluginLookup: { _ in plugin },
+            lifecycleCoordinator: coordinator
         )
-        let service = ChannelRunStreamingService(hub: hub) { _ in plugin }
         await service.attach(
             conversationID: conversationID,
             target: ChannelRunStreamingTarget(
@@ -32,6 +33,9 @@ struct ChannelRunStreamingServiceTests {
         )
 
         try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(listener.typingCallCount >= 1)
+        #expect(listener.typingChatIds.allSatisfy { $0 == "C1" })
 
         await hub.broadcastTransient(
             conversationID: conversationID,
@@ -77,7 +81,10 @@ struct ChannelRunStreamingServiceTests {
 
         try? await Task.sleep(for: .milliseconds(150))
         #expect(listener.sentMessages.contains(where: { $0.text.contains("hello channel") }))
+        let typingCountAfterTurn = listener.typingCallCount
         await service.detach(conversationID: conversationID)
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(listener.typingCallCount == typingCountAfterTurn)
     }
 }
 

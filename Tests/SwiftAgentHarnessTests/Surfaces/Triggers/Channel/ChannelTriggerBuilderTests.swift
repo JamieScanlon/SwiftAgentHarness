@@ -28,6 +28,7 @@ struct ChannelTriggerBuilderTests {
         let trigger = try ChannelTriggerBuilder.build(
             event: event,
             config: config,
+            sessionGrammar: ChannelSessionGrammar(),
             trust: .knownParty,
             effectiveWasMentioned: true,
             burst: nil

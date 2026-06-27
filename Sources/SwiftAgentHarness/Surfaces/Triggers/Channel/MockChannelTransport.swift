@@ -3,8 +3,8 @@ import os
 
 final class MockChannelTransport: ChannelTransport, @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
-    private var continuation: AsyncStream<MockChannelRawEvent>.Continuation?
-    private var stream: AsyncStream<MockChannelRawEvent>?
+    private var continuation: AsyncStream<ChannelTransportRawEvent>.Continuation?
+    private var stream: AsyncStream<ChannelTransportRawEvent>?
     private var connected = false
 
     func connect() async throws {
@@ -24,11 +24,11 @@ final class MockChannelTransport: ChannelTransport, @unchecked Sendable {
         }
     }
 
-    func events() -> AsyncStream<MockChannelRawEvent> {
+    func events() -> AsyncStream<ChannelTransportRawEvent> {
         lock.withLock { stream ?? AsyncStream { _ in } }
     }
 
-    func inject(_ event: MockChannelRawEvent) {
+    func inject(_ event: ChannelTransportRawEvent) {
         _ = lock.withLock { continuation?.yield(event) }
     }
 }

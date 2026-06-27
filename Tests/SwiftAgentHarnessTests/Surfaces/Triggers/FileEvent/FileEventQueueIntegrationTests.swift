@@ -52,6 +52,7 @@ struct FileEventQueueIntegrationTests {
         let channelRegistry = ChannelListenerRegistry.load(
             dataDirectory: dir,
             ingress: ChannelIngressAdapter(dispatch: bundle.dispatch),
+            dedupe: ReplayHarnessDedupe(),
             logger: Logger(label: "test"),
             enabled: false,
             configURL: nil
@@ -93,6 +94,7 @@ struct FileEventQueueIntegrationTests {
         let channelRegistry = ChannelListenerRegistry.load(
             dataDirectory: dataDir,
             ingress: ChannelIngressAdapter(dispatch: dispatch),
+            dedupe: ReplayHarnessDedupe(),
             logger: Logger(label: "test"),
             enabled: false,
             configURL: nil
@@ -124,6 +126,7 @@ struct FileEventQueueIntegrationTests {
             logger: Logger(label: "test")
         )
         let runRegistry = TriggerDelegatedRunRegistry()
+        let channelSessionLifecycleCoordinator = ChannelSessionLifecycleCoordinator()
         let handoff = TriggerDelegatedCompletionHandoff(
             runRegistry: runRegistry,
             outputRouter: outputRouter,
@@ -142,6 +145,7 @@ struct FileEventQueueIntegrationTests {
             fileEventQueue: fileEventQueue,
             replay: TriggerReplayService(dispatch: dispatch, eventsDirectory: eventsDir),
             channelRegistry: channelRegistry,
+            channelSessionLifecycleCoordinator: channelSessionLifecycleCoordinator,
             outputRouter: outputRouter,
             delegatedCompletionHandoff: handoff,
             runRegistry: runRegistry

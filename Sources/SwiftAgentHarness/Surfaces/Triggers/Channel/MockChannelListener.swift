@@ -2,7 +2,7 @@ import Foundation
 import Logging
 import os
 
-final class MockChannelListener: ChannelListener, @unchecked Sendable {
+final class MockChannelListener: ChannelListener, ChannelSupervisedListening, @unchecked Sendable {
     let id: ChannelId
     let platformIdentity: String
     let config: ChannelListenerConfig
@@ -12,6 +12,7 @@ final class MockChannelListener: ChannelListener, @unchecked Sendable {
     private var _state: ChannelListenerState = .disconnected
     private var _fatalError: ChannelFatalError?
     private var _sentMessages: [ChannelOutboundMessage] = []
+    private var _typingChatIds: [String] = []
 
     var state: ChannelListenerState {
         stateLock.withLock { _state }
@@ -23,6 +24,14 @@ final class MockChannelListener: ChannelListener, @unchecked Sendable {
 
     var sentMessages: [ChannelOutboundMessage] {
         stateLock.withLock { _sentMessages }
+    }
+
+    var typingChatIds: [String] {
+        stateLock.withLock { _typingChatIds }
+    }
+
+    var typingCallCount: Int {
+        stateLock.withLock { _typingChatIds.count }
     }
 
     init(id: ChannelId, config: ChannelListenerConfig, logger: Logging.Logger) {
@@ -80,15 +89,17 @@ final class MockChannelListener: ChannelListener, @unchecked Sendable {
         return .sent(messageId: UUID().uuidString)
     }
 
-    func sendTyping(chatId: String) async {}
+    func sendTyping(chatId: String) async {
+        stateLock.withLock { _typingChatIds.append(chatId) }
+    }
 
     func react(messageId: String, emoji: String) async {}
 
-    func transportEvents() -> AsyncStream<MockChannelRawEvent> {
+    func transportEvents() -> AsyncStream<ChannelTransportRawEvent> {
         transport.events()
     }
 
-    func injectRawEvent(_ raw: MockChannelRawEvent) {
+    func injectRawEvent(_ raw: ChannelTransportRawEvent) {
         transport.inject(raw)
     }
 

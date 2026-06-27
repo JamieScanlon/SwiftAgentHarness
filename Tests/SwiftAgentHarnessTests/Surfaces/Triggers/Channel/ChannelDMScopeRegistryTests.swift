@@ -28,6 +28,7 @@ struct ChannelDMScopeRegistryTests {
         return ChannelListenerRegistry(
             dataDirectory: FileManager.default.temporaryDirectory,
             ingress: makeIngress(),
+            dedupe: ChannelTestDedupe(),
             logger: logger,
             enabled: false,
             channelsFile: channelsFile

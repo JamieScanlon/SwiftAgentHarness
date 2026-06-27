@@ -124,6 +124,7 @@ struct WebhookIngressAdapterTests {
                 channelRegistry: ChannelListenerRegistry.load(
                     dataDirectory: FileManager.default.temporaryDirectory,
                     ingress: ChannelIngressAdapter(dispatch: dispatch),
+                    dedupe: ReplayHarnessDedupe(),
                     logger: Logger(label: "test"),
                     enabled: false,
                     configURL: nil

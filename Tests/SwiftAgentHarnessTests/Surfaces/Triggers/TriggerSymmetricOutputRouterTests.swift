@@ -25,6 +25,7 @@ struct TriggerSymmetricOutputRouterTests {
         let registry = ChannelListenerRegistry.load(
             dataDirectory: dataDir,
             ingress: ChannelIngressAdapter(dispatch: dispatch),
+            dedupe: ReplayHarnessDedupe(),
             logger: Logger(label: "test"),
             enabled: false,
             configURL: nil
@@ -63,6 +64,7 @@ struct TriggerSymmetricOutputRouterTests {
             channelRegistry: ChannelListenerRegistry.load(
                 dataDirectory: FileManager.default.temporaryDirectory,
                 ingress: ChannelIngressAdapter(dispatch: makeNoopDispatch()),
+                dedupe: ReplayHarnessDedupe(),
                 logger: Logger(label: "test"),
                 enabled: false,
                 configURL: nil
@@ -100,6 +102,7 @@ struct TriggerSymmetricOutputRouterTests {
             channelRegistry: ChannelListenerRegistry.load(
                 dataDirectory: FileManager.default.temporaryDirectory,
                 ingress: ChannelIngressAdapter(dispatch: makeNoopDispatch()),
+                dedupe: ReplayHarnessDedupe(),
                 logger: Logger(label: "test"),
                 enabled: false,
                 configURL: nil

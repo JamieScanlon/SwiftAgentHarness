@@ -4,11 +4,23 @@ import Logging
 struct DefaultChannelSecurityAdapter: ChannelSecurityAdapting {
     let config: ChannelListenerConfig
 
-    func classifyTrust(event: ChannelMessageEvent, config: ChannelListenerConfig) -> CommEnvelopeOriginTrust {
+    func isAllowed(event: ChannelMessageEvent, config: ChannelListenerConfig) -> Bool {
+        ChannelAllowlistPolicy.isAllowed(event: event, config: config)
+    }
+
+    func makeMentionGate(config: ChannelMentionConfig) -> ChannelMentionGate {
+        ChannelMentionGate(config: config)
+    }
+
+    func classifyTrust(
+        event: ChannelMessageEvent,
+        config: ChannelListenerConfig,
+        effectiveWasMentioned: Bool
+    ) -> CommEnvelopeOriginTrust {
         ChannelTrustClassifier.classify(
             event: event,
             config: config,
-            effectiveWasMentioned: event.mentionsBot || event.hasMention
+            effectiveWasMentioned: effectiveWasMentioned
         )
     }
 
@@ -32,10 +44,3 @@ enum ChannelIdentifierRedaction {
     }
 }
 
-enum ChannelSecurityInboundGate {
-    static func shouldAccept(event: ChannelMessageEvent, config: ChannelListenerConfig) -> Bool {
-        guard ChannelAllowlistPolicy.isAllowed(event: event, config: config) else { return false }
-        if event.internalEvent { return true }
-        return true
-    }
-}

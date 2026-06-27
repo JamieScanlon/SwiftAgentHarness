@@ -15,6 +15,7 @@ struct TriggerDelegatedCompletionHandoffTests {
             channelRegistry: ChannelListenerRegistry.load(
                 dataDirectory: FileManager.default.temporaryDirectory,
                 ingress: ChannelIngressAdapter(dispatch: makeDispatch()),
+                dedupe: ReplayHarnessDedupe(),
                 logger: Logger(label: "test"),
                 enabled: false,
                 configURL: nil
@@ -63,6 +64,7 @@ struct TriggerDelegatedCompletionHandoffTests {
             channelRegistry: ChannelListenerRegistry.load(
                 dataDirectory: FileManager.default.temporaryDirectory,
                 ingress: ChannelIngressAdapter(dispatch: makeDispatch()),
+                dedupe: ReplayHarnessDedupe(),
                 logger: Logger(label: "test"),
                 enabled: false,
                 configURL: nil

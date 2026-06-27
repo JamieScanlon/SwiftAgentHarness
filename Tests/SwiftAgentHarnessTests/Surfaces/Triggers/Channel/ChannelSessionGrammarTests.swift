@@ -51,20 +51,16 @@ struct ChannelSessionGrammarTests {
 @Suite("Channel plugin factory")
 struct ChannelPluginFactoryTests {
     @Test("mock plugin declares message tool media params")
-    func describeMessageTool() {
+    func describeMessageTool() throws {
         let config = ChannelListenerConfig(enabled: true, platformIdentity: "mock-bot")
         let logger = Logger(label: "test")
-        let listener = MockChannelListener(id: .slack, config: config, logger: logger)
-        let plugin = ChannelPluginFactory.makeMockPlugin(
-            channel: .slack,
-            config: config,
-            listener: listener,
-            logger: logger
-        )
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: logger)
+        let plugin = bundle.plugin
         #expect(plugin.outbound.textChunkLimit > 0)
         #expect(plugin.messageToolDescriptor?.describeMessageTool().isEmpty == false)
         let rendered = plugin.outbound.renderPresentation(MessagePresentation(blocks: [.text("hi")]))
         #expect(rendered.text == "hi")
+        #expect(rendered.richPresentation?.blocks == [.text("hi")])
     }
 }
 

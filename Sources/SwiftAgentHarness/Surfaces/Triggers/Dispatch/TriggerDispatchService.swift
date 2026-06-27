@@ -22,6 +22,7 @@ struct TriggerDispatchService: Sendable {
     let delegatedDispatch: TriggerDelegatedDispatchService?
     let snapshotStore: TriggerSnapshotStore?
     let channelRunStreaming: ChannelRunStreamingServiceHolder?
+    let lifecycleCoordinator: ChannelSessionLifecycleCoordinator?
 
     init(
         activationPolicy: TriggerActivationPolicy,
@@ -30,7 +31,8 @@ struct TriggerDispatchService: Sendable {
         runtime: any TriggerRuntimeDispatching,
         delegatedDispatch: TriggerDelegatedDispatchService? = nil,
         snapshotStore: TriggerSnapshotStore? = nil,
-        channelRunStreaming: ChannelRunStreamingServiceHolder? = nil
+        channelRunStreaming: ChannelRunStreamingServiceHolder? = nil,
+        lifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil
     ) {
         self.activationPolicy = activationPolicy
         self.sessionRouter = sessionRouter
@@ -39,6 +41,7 @@ struct TriggerDispatchService: Sendable {
         self.delegatedDispatch = delegatedDispatch
         self.snapshotStore = snapshotStore
         self.channelRunStreaming = channelRunStreaming
+        self.lifecycleCoordinator = lifecycleCoordinator
     }
 
     func ingest(_ trigger: HarnessTrigger) async throws -> TriggerActivationResult {
@@ -111,5 +114,15 @@ struct TriggerDispatchService: Sendable {
                 replyToMessageId: trigger.sourceMetadata["platformMessageId"]
             )
         )
+        if let lifecycleCoordinator {
+            let burstKeys = ChannelDebounceBurstKey.fromTriggerMetadata(trigger.sourceMetadata)
+            if !burstKeys.isEmpty {
+                await lifecycleCoordinator.bindBurstKeys(
+                    conversationID: conversationID,
+                    channel: channel,
+                    burstKeys: burstKeys
+                )
+            }
+        }
     }
 }

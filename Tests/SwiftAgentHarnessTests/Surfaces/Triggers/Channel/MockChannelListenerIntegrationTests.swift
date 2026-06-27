@@ -36,16 +36,18 @@ struct MockChannelListenerIntegrationTests {
             debounce: ChannelDebounceConfig(textMs: 0)
         )
         config.enabled = true
-        let listener = MockChannelListener(id: .slack, config: config, logger: Logger(label: "test"))
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: Logger(label: "test"))
         let service = ChannelListenerService(
             channel: .slack,
-            listener: listener,
+            bundle: bundle,
             dataDirectory: dir,
             mediaRoot: dir.appendingPathComponent("media", isDirectory: true),
             ingress: ingress,
+            dedupe: InMemoryTriggerDedupe(),
             logger: Logger(label: "test")
         )
         await service.start()
+        let listener = await service.listenerInstance() as! MockChannelListener
         listener.injectRawEvent(
             MockChannelRawEvent(
                 channel: .slack,
@@ -68,16 +70,12 @@ struct MockChannelListenerIntegrationTests {
     }
 
     @Test("output router sends via plugin outbound")
-    func outputRouter() async {
+    func outputRouter() async throws {
         let config = ChannelListenerConfig(platformIdentity: "mock")
         let logger = Logger(label: "test")
-        let listener = MockChannelListener(id: .slack, config: config, logger: logger)
-        let plugin = ChannelPluginFactory.makeMockPlugin(
-            channel: .slack,
-            config: config,
-            listener: listener,
-            logger: logger
-        )
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: logger)
+        let listener = bundle.listener as! MockChannelListener
+        let plugin = bundle.plugin
         let router = TriggerOutputRouter()
         let trigger = HarnessTrigger(
             id: "slack:m1",

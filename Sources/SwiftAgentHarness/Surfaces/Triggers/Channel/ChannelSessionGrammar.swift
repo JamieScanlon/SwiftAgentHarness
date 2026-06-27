@@ -1,8 +1,18 @@
 import Foundation
 
 struct ChannelSessionGrammar: ChannelSessionGrammarAdapting {
+    let config: ChannelListenerConfig?
+
+    init(config: ChannelListenerConfig? = nil) {
+        self.config = config
+    }
+
+    func resolveDedupSessionKey(event: ChannelMessageEvent, config: ChannelListenerConfig) -> String {
+        ChannelSessionScopeResolver.resolveSessionKey(event: event, config: config)
+    }
+
     func resolveSessionConversation(raw: ChannelSessionRawIdentity) -> ChannelSessionConversationResolution {
-        Self.resolve(raw: raw, config: nil)
+        Self.resolve(raw: raw, config: config)
     }
 
     static func resolve(

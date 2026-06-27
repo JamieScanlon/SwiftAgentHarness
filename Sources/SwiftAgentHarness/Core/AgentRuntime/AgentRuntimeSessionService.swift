@@ -28,6 +28,8 @@ public actor AgentRuntimeSessionService {
 
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService?
     nonisolated(unsafe) private var controlPlane: (any ConversationControlPlaneServicing)?
+    nonisolated(unsafe) private var channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator?
+    nonisolated(unsafe) private var channelRegistryForLifecycle: ChannelListenerRegistry?
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -53,6 +55,14 @@ public actor AgentRuntimeSessionService {
 
     nonisolated func installControlPlane(_ controlPlane: any ConversationControlPlaneServicing) {
         self.controlPlane = controlPlane
+    }
+
+    nonisolated func installChannelSessionLifecycle(
+        coordinator: ChannelSessionLifecycleCoordinator,
+        registry: ChannelListenerRegistry
+    ) {
+        channelSessionLifecycleCoordinator = coordinator
+        channelRegistryForLifecycle = registry
     }
 
     func flushPendingModeTransitionAfterRunTerminal(
@@ -530,6 +540,11 @@ public actor AgentRuntimeSessionService {
     }
 
     func cancelGeneration(for conversationID: UUID?) async {
+        if let conversationID,
+           let conversation = await modelConversation(id: conversationID),
+           TriggerHostConversationMetadata.isChannelTriggerHost(conversation.metadata) {
+            await drainChannelSessionLifecycle(conversationID: conversationID)
+        }
         let runtimeLifecycle = if let conversationID {
             await currentLifecycleSnapshot(for: conversationID)
         } else {
@@ -581,6 +596,10 @@ public actor AgentRuntimeSessionService {
                 }
             }
         }
+    }
+
+    private func drainChannelSessionLifecycle(conversationID: UUID) async {
+        await channelRegistryForLifecycle?.drainSessionLifecycle(conversationID: conversationID)
     }
 
     func releaseRunOrchestrator(runID: UUID) async {

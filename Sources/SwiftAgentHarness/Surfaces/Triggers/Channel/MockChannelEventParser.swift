@@ -1,7 +1,7 @@
 import Foundation
 
 enum MockChannelEventParser: ChannelRawEventParsing {
-    static func parseRawEvent(_ raw: MockChannelRawEvent) -> ChannelMessageEvent? {
+    static func parseRawEvent(_ raw: ChannelTransportRawEvent) -> ChannelMessageEvent? {
         guard !raw.text.isEmpty || raw.type != .text else { return nil }
         return ChannelMessageEvent(
             channel: raw.channel,

@@ -4,6 +4,7 @@ enum ChannelTriggerBuilder {
     static func build(
         event: ChannelMessageEvent,
         config: ChannelListenerConfig,
+        sessionGrammar: any ChannelSessionGrammarAdapting,
         trust: CommEnvelopeOriginTrust,
         effectiveWasMentioned: Bool,
         burst: ChannelDebounceBurstMetadata?
@@ -15,7 +16,15 @@ enum ChannelTriggerBuilder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payloadJSON = String(data: try encoder.encode(payload), encoding: .utf8) ?? event.text
-        let sessionResolution = ChannelSessionGrammar.resolve(event: event, config: config)
+        let sessionRaw = ChannelSessionRawIdentity(
+            channel: event.channel,
+            accountId: config.platformIdentity,
+            chatId: event.chatId,
+            threadId: event.threadId,
+            senderId: event.senderId,
+            platformMessageId: event.platformMessageId
+        )
+        let sessionResolution = sessionGrammar.resolveSessionConversation(raw: sessionRaw)
         var metadata: [String: String] = [
             "channel": event.channel.rawValue,
             "chatId": event.chatId,

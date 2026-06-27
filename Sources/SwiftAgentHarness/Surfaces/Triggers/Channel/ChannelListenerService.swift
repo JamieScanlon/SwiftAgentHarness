@@ -3,10 +3,15 @@ import Logging
 
 actor ChannelListenerService {
     private let channel: ChannelId
-    private let listener: MockChannelListener
+    private let listener: any ChannelSupervisedListening
+    private let security: any ChannelSecurityAdapting
+    private let sessionGrammar: any ChannelSessionGrammarAdapting
+    private let parseRawEvent: @Sendable (ChannelTransportRawEvent) -> ChannelMessageEvent?
     private let dataDirectory: URL
     private let mediaRoot: URL
     private let ingress: ChannelIngressAdapter
+    private let dedupe: any TriggerDedupeChecking
+    private let lifecycleCoordinator: ChannelSessionLifecycleCoordinator?
     private let logger: Logger
     private var pipeline: ChannelIntakePipeline?
     private var supervisor: ChannelTransportSupervisor?
@@ -14,17 +19,24 @@ actor ChannelListenerService {
 
     init(
         channel: ChannelId,
-        listener: MockChannelListener,
+        bundle: ChannelBuiltListenerBundle,
         dataDirectory: URL,
         mediaRoot: URL,
         ingress: ChannelIngressAdapter,
+        dedupe: any TriggerDedupeChecking,
+        lifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil,
         logger: Logger
     ) {
         self.channel = channel
-        self.listener = listener
+        self.listener = bundle.listener
+        self.security = bundle.plugin.security
+        self.sessionGrammar = bundle.plugin.sessionGrammar
+        self.parseRawEvent = bundle.parseRawEvent
         self.dataDirectory = dataDirectory
         self.mediaRoot = mediaRoot
         self.ingress = ingress
+        self.dedupe = dedupe
+        self.lifecycleCoordinator = lifecycleCoordinator
         self.logger = logger
     }
 
@@ -58,7 +70,15 @@ actor ChannelListenerService {
         let pipeline = ChannelIntakePipeline(
             channel: channel,
             config: listener.config,
+            security: security,
+            sessionGrammar: sessionGrammar,
             mediaRoot: mediaRoot,
+            dedup: ChannelMessageDedup(
+                dedupe: dedupe,
+                ttlSeconds: listener.config.dedupe.ttlSeconds,
+                logger: logger
+            ),
+            lifecycleCoordinator: lifecycleCoordinator,
             logger: logger
         ) { [ingress] trigger in
             _ = try? await ingress.ingest(trigger)
@@ -71,11 +91,12 @@ actor ChannelListenerService {
             await writeStatus(state: .fatal)
             return
         }
+        let parseRawEvent = parseRawEvent
         let transportSupervisor = ChannelTransportSupervisor(
             transport: listener.transportForSupervision(),
             logger: logger
         ) { [pipeline, listener, self] raw in
-            guard let event = MockChannelEventParser.parseRawEvent(raw) else { return }
+            guard let event = parseRawEvent(raw) else { return }
             await pipeline.process(event: event)
             listener.markTransportConnected()
             await self.writeStatus(state: listener.state)
@@ -105,8 +126,12 @@ actor ChannelListenerService {
         await writeStatus(state: .disconnected)
     }
 
-    func listenerInstance() -> MockChannelListener {
+    func listenerInstance() -> any ChannelSupervisedListening {
         listener
+    }
+
+    func cancelDebounce(burstKeys: Set<String>) async {
+        await pipeline?.cancelDebounce(burstKeys: burstKeys)
     }
 
     private func writeStatus(state: ChannelListenerState) async {

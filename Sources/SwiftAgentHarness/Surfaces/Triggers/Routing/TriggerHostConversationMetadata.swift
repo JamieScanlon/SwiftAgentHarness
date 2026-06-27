@@ -48,6 +48,14 @@ public enum TriggerHostConversationMetadata {
         return value
     }
 
+    public static func isChannelTriggerHost(_ metadata: JSON?) -> Bool {
+        guard isTriggerHost(metadata),
+              let trigger = triggerFromFingerprint(metadata) else {
+            return false
+        }
+        return trigger.source == .channel
+    }
+
     public static func isFullyConfiguredTriggerHost(
         metadata: JSON?,
         lineageKind: ConversationLineageKind,
