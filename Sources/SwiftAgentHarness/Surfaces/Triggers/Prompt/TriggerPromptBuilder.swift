@@ -55,6 +55,12 @@ struct TriggerPromptBuilder: Sendable {
         for (k, v) in trigger.sourceMetadata where k != "conversationID" {
             meta[k] = v
         }
+        let correlation = trigger.effectiveCorrelation()
+        meta["correlationId"] = correlation.correlationId
+        meta["rootId"] = correlation.rootId
+        if let parentTriggerId = correlation.parentTriggerId {
+            meta["parentTriggerId"] = parentTriggerId
+        }
         if trigger.source == .channel,
            trigger.payloadFormat == .structured,
            let channelPayload = decodeChannelPayload(trigger.payload) {

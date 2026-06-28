@@ -150,6 +150,25 @@ Runtime status: `{dataDirectory}/channel-status/{channel}.json` with stage count
 
 Admitted triggers are snapshotted to `{dataDirectory}/trigger_snapshots/<id>.json` for audit replay.
 
+### Cross-trigger correlation
+
+Each `HarnessTrigger` may carry an optional `TriggerCorrelation` triad:
+
+| Field | Meaning |
+|-------|---------|
+| `rootId` | First trigger in the logical workflow |
+| `parentTriggerId` | Immediate causal parent (`nil` for roots) |
+| `correlationId` | Shared workflow id (defaults to `rootId` for root triggers) |
+
+Lineage is assigned at **creation time** in ingress builders, `schedule_create`, and file-event producers — not stamped after dispatch. Root triggers (webhook, channel, standalone cron/file) set `rootId = correlationId = trigger.id`. Scheduled follow-ups inherit from the host trigger fingerprint (via `schedule_create`) or from explicit `rootId` / `parentTriggerId` / `correlationId` fields on file-event JSON.
+
+Durable query surfaces (no separate lineage store):
+
+- **`trigger_audit.jsonl`** — every activation decision includes the triad; filter by `correlationId` to list all legs (including rate-limited and dedup-hit).
+- **`trigger_snapshots/<id>.json`** — full trigger JSON for replay of any admitted leg.
+
+Lineage is best-effort over audit retention; rotated audit rows drop early legs from reconstructable chains.
+
 Default fire path enqueues to `{eventsDirectory}/replay-<uuid>.json`; the host's file-event watcher consumes it when the server process is running.
 
 ## Channels (Messaging-as-Interface)

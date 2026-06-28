@@ -4,9 +4,14 @@ import SwiftAgentKit
 
 public struct ScheduleToolProvider: ToolProvider {
     private let scheduler: TriggerSchedulerService
+    private let resolveHostTrigger: @Sendable () async -> HarnessTrigger?
 
-    public init(scheduler: TriggerSchedulerService) {
+    public init(
+        scheduler: TriggerSchedulerService,
+        resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil }
+    ) {
         self.scheduler = scheduler
+        self.resolveHostTrigger = resolveHostTrigger
     }
 
     public var name: String { "ScheduleTools" }
@@ -25,6 +30,9 @@ public struct ScheduleToolProvider: ToolProvider {
                     .init(name: "payloadText", description: "Prompt or event text", type: "string", required: true),
                     .init(name: "recurring", description: "Whether task repeats", type: "boolean", required: true),
                     .init(name: "conversationID", description: "Optional threaded conversation UUID", type: "string", required: false),
+                    .init(name: "rootId", description: "Optional workflow root trigger id", type: "string", required: false),
+                    .init(name: "parentTriggerId", description: "Optional parent trigger id", type: "string", required: false),
+                    .init(name: "correlationId", description: "Optional workflow correlation id", type: "string", required: false),
                 ],
                 type: .function
             ),
@@ -88,15 +96,40 @@ public struct ScheduleToolProvider: ToolProvider {
             schedule.expr = extractString(from: toolCall.arguments, key: "cronExpr")
         }
         let payloadKind = ScheduledTaskPayloadKind(rawValue: payloadKindRaw) ?? .agentTurn
+        let taskID = UUID().uuidString
+        let correlation = await resolveTaskCorrelation(
+            arguments: toolCall.arguments,
+            taskID: taskID
+        )
         let task = ScheduledTask(
+            id: taskID,
             schedule: schedule,
             payloadKind: payloadKind,
             payloadText: payloadText,
             recurring: recurring,
-            conversationID: extractString(from: toolCall.arguments, key: "conversationID")
+            conversationID: extractString(from: toolCall.arguments, key: "conversationID"),
+            correlation: correlation
         )
         let saved = try await scheduler.createTask(task)
         return "created id=\(saved.id)"
+    }
+
+    private func resolveTaskCorrelation(arguments: JSON, taskID: String) async -> TriggerCorrelation {
+        let explicitRoot = extractString(from: arguments, key: "rootId")
+        let explicitParent = extractString(from: arguments, key: "parentTriggerId")
+        let explicitCorrelation = extractString(from: arguments, key: "correlationId")
+        if let explicit = TriggerCorrelation.explicit(
+            rootId: explicitRoot,
+            parentTriggerId: explicitParent,
+            correlationId: explicitCorrelation,
+            fallbackTriggerID: taskID
+        ) {
+            return explicit
+        }
+        if let hostTrigger = await resolveHostTrigger() {
+            return .child(parent: hostTrigger, followUpKind: "scheduled")
+        }
+        return .root(triggerID: taskID)
     }
 
     private func list() async throws -> String {

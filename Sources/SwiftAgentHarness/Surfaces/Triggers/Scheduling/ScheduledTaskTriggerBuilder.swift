@@ -41,6 +41,9 @@ enum ScheduledTaskTriggerBuilder {
             metadata["conversationID"] = conversationID
             trigger.sourceMetadata = metadata
         }
+        if let correlation = task.correlation {
+            trigger.correlation = correlation
+        }
         return trigger
     }
 }

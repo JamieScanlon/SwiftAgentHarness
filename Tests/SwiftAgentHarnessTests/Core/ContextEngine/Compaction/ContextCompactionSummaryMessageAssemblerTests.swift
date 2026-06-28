@@ -31,5 +31,14 @@ struct ContextCompactionSummaryMessageAssemblerTests {
         #expect(assembled.messages.isEmpty)
         #expect(assembled.mergedIntoTail == true)
         #expect(tail[0].content == "Partial reply")
+        let mergedTail = assembled.mergedTail
+        #expect(mergedTail != nil)
+        #expect(mergedTail?.count == 2)
+        #expect(mergedTail?[0].id == tail[0].id)
+        #expect(mergedTail?[0].content.contains("REFERENCE ONLY") == true)
+        #expect(mergedTail?[0].content.contains("Summary body.") == true)
+        #expect(mergedTail?[0].content.contains("Partial reply") == true)
+        #expect(mergedTail?[1].id == tail[1].id)
+        #expect(mergedTail?[1].content == tail[1].content)
     }
 }

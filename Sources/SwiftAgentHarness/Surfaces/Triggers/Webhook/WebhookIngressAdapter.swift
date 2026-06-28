@@ -51,7 +51,8 @@ public struct WebhookIngressAdapter: Sendable {
                 payloadFormat: .json,
                 initiator: TriggerInitiator(kind: .external, id: route.name),
                 trust: route.trust,
-                routingMode: route.routingMode
+                routingMode: route.routingMode,
+                correlation: .root(triggerID: deliveryID)
             ),
             routingMode: route.routingMode,
             delegate: route.delegate,

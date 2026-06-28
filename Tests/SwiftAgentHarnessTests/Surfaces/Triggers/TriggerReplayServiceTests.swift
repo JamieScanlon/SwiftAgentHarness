@@ -101,6 +101,24 @@ struct TriggerReplayServiceTests {
         #expect(preview.prompt.systemReminder?.contains("not actively present") == true)
     }
 
+    @Test("fresh replay preserves workflow ids and links parent")
+    func freshReplayLineage() {
+        let trigger = HarnessTrigger(
+            id: "original-id",
+            source: .webhook,
+            payload: "x",
+            initiator: TriggerInitiator(kind: .external),
+            trust: .knownParty,
+            correlation: .root(triggerID: "original-id")
+        )
+        let replayed = TriggerReplayService.freshReplayID(trigger)
+        #expect(replayed.id.hasPrefix("replay:"))
+        #expect(replayed.correlation?.rootId == "original-id")
+        #expect(replayed.correlation?.correlationId == "original-id")
+        #expect(replayed.correlation?.parentTriggerId == "original-id")
+        #expect(replayed.correlation?.followUpKind == "replay")
+    }
+
     private func makeDispatch(runtime: CaptureRuntime, dedupe: (any TriggerDedupeChecking)? = nil) -> TriggerDispatchService {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: dedupe ?? ReplayDedupe()),

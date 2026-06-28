@@ -104,16 +104,8 @@ struct TriggerSymmetricOutputRouter: TriggerSymmetricOutputRouting {
     }
 
     private func recordAudit(trigger: HarnessTrigger, result: TriggerCompletionResult, delivery: String) {
-        auditLog.record(
-            TriggerAuditEntry(
-                triggerID: "\(trigger.id):completion:\(delivery)",
-                source: trigger.source,
-                trust: trigger.trust,
-                receivedAt: trigger.receivedAt,
-                decision: .admitted,
-                sessionID: result.childSessionID,
-                loggedAt: Date()
-            )
-        )
+        var entry = TriggerAuditEntry.from(trigger: trigger, decision: .admitted, sessionID: result.childSessionID)
+        entry.triggerID = "\(trigger.id):completion:\(delivery)"
+        auditLog.record(entry)
     }
 }

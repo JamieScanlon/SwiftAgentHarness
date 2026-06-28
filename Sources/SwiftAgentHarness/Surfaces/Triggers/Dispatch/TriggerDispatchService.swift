@@ -45,37 +45,38 @@ struct TriggerDispatchService: Sendable {
     }
 
     func ingest(_ trigger: HarnessTrigger) async throws -> TriggerActivationResult {
-        let decision = try await activationPolicy.evaluate(trigger)
+        let resolved = trigger.withRootCorrelation()
+        let decision = try await activationPolicy.evaluate(resolved)
         guard decision == .admitted else {
             return TriggerActivationResult(decision: decision, sessionID: nil)
         }
-        try snapshotStore?.save(trigger)
-        let route = try await sessionRouter.route(trigger)
+        try snapshotStore?.save(resolved)
+        let route = try await sessionRouter.route(resolved)
         guard let conversationID = route.conversationID else {
             return TriggerActivationResult(decision: .unauthorized, sessionID: nil)
         }
-        let built = promptBuilder.build(trigger: trigger)
+        let built = promptBuilder.build(trigger: resolved)
         switch route.routingMode {
         case .delegated:
             guard let delegatedDispatch else {
                 return TriggerActivationResult(decision: .unauthorized, sessionID: nil)
             }
             let childID = try await delegatedDispatch.dispatch(
-                trigger: trigger,
+                trigger: resolved,
                 hostConversationID: conversationID,
                 sessionKey: route.sessionKey,
                 built: built
             )
             return TriggerActivationResult(decision: .admitted, sessionID: childID)
         case .isolated, .threaded:
-            if trigger.source == .channel, let holder = channelRunStreaming, let service = holder.service() {
+            if resolved.source == .channel, let holder = channelRunStreaming, let service = holder.service() {
                 await attachChannelRunStreaming(
                     service: service,
-                    trigger: trigger,
+                    trigger: resolved,
                     conversationID: conversationID
                 )
             }
-            let outputReminder = trigger.source == .channel
+            let outputReminder = resolved.source == .channel
                 ? MessageOutputSystemPromptGuidance.channelOutputVerb
                 : nil
             let mergedReminder = [built.systemReminder, outputReminder]
@@ -86,11 +87,11 @@ struct TriggerDispatchService: Sendable {
                 conversationID: conversationID,
                 text: built.userMessageBody,
                 systemReminder: mergedReminder.isEmpty ? nil : mergedReminder,
-                inputTrustRaw: TriggerTrustCodec.inputTrustRaw(for: trigger.trust),
-                enableTools: trigger.enableTools,
-                enableAgents: trigger.enableAgents,
-                originSurface: trigger.sourceMetadata["channel"] ?? trigger.source.rawValue,
-                originSenderID: trigger.sourceMetadata["senderId"] ?? trigger.initiator.id
+                inputTrustRaw: TriggerTrustCodec.inputTrustRaw(for: resolved.trust),
+                enableTools: resolved.enableTools,
+                enableAgents: resolved.enableAgents,
+                originSurface: resolved.sourceMetadata["channel"] ?? resolved.source.rawValue,
+                originSenderID: resolved.sourceMetadata["senderId"] ?? resolved.initiator.id
             )
             return TriggerActivationResult(decision: .admitted, sessionID: conversationID)
         }

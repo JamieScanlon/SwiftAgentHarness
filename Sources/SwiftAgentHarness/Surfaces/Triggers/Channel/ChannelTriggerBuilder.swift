@@ -51,8 +51,9 @@ enum ChannelTriggerBuilder {
             enabled: config.includeKnownPartySecurityPreamble
         )
         let initiatorKind: TriggerInitiatorKind = event.senderId == config.primaryUser ? .user : .external
+        let triggerID = "\(event.channel.rawValue):\(event.platformMessageId)"
         let base = HarnessTrigger(
-            id: "\(event.channel.rawValue):\(event.platformMessageId)",
+            id: triggerID,
             source: .channel,
             sourceMetadata: metadata,
             receivedAt: event.receivedAt,
@@ -60,7 +61,8 @@ enum ChannelTriggerBuilder {
             payloadFormat: .structured,
             initiator: TriggerInitiator(kind: initiatorKind, id: event.senderId),
             trust: trust,
-            routingMode: config.routingMode
+            routingMode: config.routingMode,
+            correlation: .root(triggerID: triggerID)
         )
         return TriggerIngressMetadata.enrich(
             base,

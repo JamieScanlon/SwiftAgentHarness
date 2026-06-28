@@ -59,16 +59,6 @@ struct TriggerActivationPolicy: Sendable {
     }
 
     private func audit(_ trigger: HarnessTrigger, decision: TriggerActivationDecision) {
-        auditLog.record(
-            TriggerAuditEntry(
-                triggerID: trigger.id,
-                source: trigger.source,
-                trust: trigger.trust,
-                receivedAt: trigger.receivedAt,
-                decision: decision,
-                sessionID: nil,
-                loggedAt: Date()
-            )
-        )
+        auditLog.record(TriggerAuditEntry.from(trigger: trigger, decision: decision))
     }
 }

@@ -10,6 +10,7 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
     struct AssembledSummary: Sendable {
         let messages: [Message]
         let mergedIntoTail: Bool
+        let mergedTail: [Message]?
     }
 
     static func assemble(
@@ -18,7 +19,7 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
     ) -> AssembledSummary {
         let trimmed = summaryBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return AssembledSummary(messages: [], mergedIntoTail: false)
+            return AssembledSummary(messages: [], mergedIntoTail: false, mergedTail: nil)
         }
         let framed = referenceOnlyPrefix + trimmed
         if tail.isEmpty {
@@ -29,7 +30,7 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
                 timestamp: Date(),
                 toolCalls: []
             )
-            return AssembledSummary(messages: [message], mergedIntoTail: false)
+            return AssembledSummary(messages: [message], mergedIntoTail: false, mergedTail: nil)
         }
         if tail.first?.role == .user {
             let message = Message(
@@ -39,7 +40,7 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
                 timestamp: Date(),
                 toolCalls: []
             )
-            return AssembledSummary(messages: [message], mergedIntoTail: false)
+            return AssembledSummary(messages: [message], mergedIntoTail: false, mergedTail: nil)
         }
         if tail.first?.role == .assistant {
             var merged = tail
@@ -52,7 +53,7 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
                 toolCalls: first.toolCalls,
                 toolCallId: first.toolCallId
             )
-            return AssembledSummary(messages: [], mergedIntoTail: true)
+            return AssembledSummary(messages: [], mergedIntoTail: true, mergedTail: merged)
         }
         let message = Message(
             id: UUID(),
@@ -61,6 +62,6 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
             timestamp: Date(),
             toolCalls: []
         )
-        return AssembledSummary(messages: [message], mergedIntoTail: false)
+        return AssembledSummary(messages: [message], mergedIntoTail: false, mergedTail: nil)
     }
 }

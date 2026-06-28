@@ -14,6 +14,9 @@ struct FileEventPayload: Codable, Sendable, Equatable {
     var schedule: String?
     var timezone: String?
     var conversationID: String?
+    var rootId: String?
+    var parentTriggerId: String?
+    var correlationId: String?
 }
 
 struct FileEventTrustSidecar: Codable, Sendable, Equatable {

@@ -43,8 +43,9 @@ struct TriggerDispatchSnapshotTests {
         )
         let result = try await dispatch.ingest(trigger)
         #expect(result.decision == .admitted)
+        let expected = trigger.withRootCorrelation()
         let loaded = try store.load(triggerID: "save-me")
-        #expect(loaded == trigger)
+        #expect(loaded == expected)
     }
 
     private func makeTempDir() throws -> URL {

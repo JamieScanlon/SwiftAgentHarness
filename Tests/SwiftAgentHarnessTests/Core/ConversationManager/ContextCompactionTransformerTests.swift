@@ -130,7 +130,8 @@ struct ContextCompactionTransformerTests {
 
     private func summarizerPathConfig(
         pruneNames: [String] = [],
-        reinjectionEnabled: Bool = false
+        reinjectionEnabled: Bool = false,
+        tailMinMessageCount: Int = 1
     ) -> ContextCompactionConfiguration {
         ContextCompactionConfiguration(
             enabled: true,
@@ -151,7 +152,7 @@ struct ContextCompactionTransformerTests {
             proactiveSafetyBufferTokens: 500,
             proactiveOutputReserveTokens: 500,
             headMinMessageCount: 1,
-            tailMinMessageCount: 1,
+            tailMinMessageCount: tailMinMessageCount,
             tailTokenBudgetFraction: 0.0001,
             sessionMemorySwapBeforeCompactionEnabled: false,
             compactionReinjectionEnabled: reinjectionEnabled,
@@ -232,7 +233,8 @@ struct ContextCompactionTransformerTests {
         compactionStrategy: ContextCompactionStrategy = .default,
         compactionFocusQuery: String? = nil,
         compactionCachePolicy: ContextCompactionCachePolicy? = nil,
-        compactionDeterministicHygienePolicy: ContextCompactionDeterministicHygienePolicy? = nil
+        compactionDeterministicHygienePolicy: ContextCompactionDeterministicHygienePolicy? = nil,
+        branchParentConversationID: UUID? = nil
     ) -> ContextTransformInput {
         ContextTransformInput(
             messages: messages,
@@ -246,6 +248,7 @@ struct ContextCompactionTransformerTests {
             compactionModelContextLimitTokens: 2_500,
             compactionStrategy: compactionStrategy,
             compactionFocusQuery: compactionFocusQuery,
+            branchParentConversationID: branchParentConversationID,
             compactionCachePolicy: compactionCachePolicy,
             compactionDeterministicHygienePolicy: compactionDeterministicHygienePolicy,
             compactionPreviousSummaryText: compactionPreviousSummaryText,
@@ -468,6 +471,80 @@ struct ContextCompactionTransformerTests {
         #expect(!captured.messages.contains(where: { $0.content.contains("## Active Task\nold") }))
     }
 
+    @Test("Summarized checkpoint on branched conversation slices prefix before branch marker")
+    func summarizedCheckpointBranchPrefixSlicesCorrectly() async throws {
+        let cfg = summarizerPathConfig()
+        let prevSynth = Message(id: UUID(), role: .assistant, content: "## Active Task\nold", timestamp: Date(), toolCalls: [])
+        let newTail = Message(id: UUID(), role: .assistant, content: String(repeating: "N", count: 8_000), timestamp: Date(), toolCalls: [])
+        let summaryOut = Message(id: UUID(), role: .assistant, content: "## Active Task\nupdated", timestamp: Date(), toolCalls: [])
+        let summarizer = CapturingSummarizer(output: [summaryOut])
+        let transformer = ContextCompactionTransformer(config: cfg, summarizer: summarizer)
+        let transcript = compressibleTranscript() + [newTail]
+        let split = ContextCompactionCheckpointSupport.splitForCompaction(
+            transcript,
+            config: cfg,
+            modelContextLimitTokens: 2_500
+        )
+        let priorSummary = "prior summary body"
+        let output = try await transformer.transformContext(
+            baseTransformInput(
+                messages: transcript,
+                compactionEffectiveMiddle: [prevSynth, newTail],
+                compactionRawMiddleMessages: split.middle + [newTail],
+                compactionCheckpointKind: .summarized,
+                compactionCheckpointPrefixCount: 1,
+                compactionPreviousSummaryText: priorSummary,
+                branchParentConversationID: UUID()
+            )
+        )
+        #expect(output.diagnostics == ContextCompactionTransformer.summarizedDiagnostic)
+        let captured = await summarizer.snapshot()
+        #expect(captured.previousSummaryText == priorSummary)
+        #expect(captured.messages.count == 2)
+        #expect(captured.messages.first?.content.contains("[BranchContext]") == true)
+        #expect(captured.messages.last?.id == newTail.id)
+        #expect(!captured.messages.contains(where: { $0.content.contains("## Active Task\nold") }))
+    }
+
+    @Test("Summarized checkpoint noop on branched conversation preserves prior synthetic summary")
+    func summarizedCheckpointBranchNoNewTailPreservesPriorSynth() async throws {
+        let cfg = summarizerPathConfig()
+        let summarySynth = Message(id: UUID(), role: .assistant, content: "## Active Task\nexisting", timestamp: Date(), toolCalls: [])
+        let summarizer = CapturingSummarizer(output: [summarySynth])
+        let transformer = ContextCompactionTransformer(config: cfg, summarizer: summarizer)
+        let transcript = compressibleTranscript()
+        let split = ContextCompactionCheckpointSupport.splitForCompaction(
+            transcript,
+            config: cfg,
+            modelContextLimitTokens: 2_500
+        )
+        let output = try await transformer.transformContext(
+            baseTransformInput(
+                messages: transcript,
+                compactionEffectiveMiddle: [summarySynth],
+                compactionRawMiddleMessages: split.middle,
+                compactionCheckpointKind: .summarized,
+                compactionCheckpointPrefixCount: 1,
+                branchParentConversationID: UUID()
+            )
+        )
+        #expect(output.diagnostics == ContextCompactionTransformer.noopSummarizedNoNewTailDiagnostic)
+        #expect(await summarizer.snapshot().messages.isEmpty)
+        let before = ContextCompactionCheckpointSupport.splitForCompaction(
+            transcript,
+            config: cfg,
+            modelContextLimitTokens: 2_500
+        )
+        let middle = ContextCompactionCheckpointSupport.compactedPortionInOutput(
+            output.messages,
+            headCount: before.head.count,
+            tailCount: before.tail.count
+        )
+        #expect(middle.count == 2)
+        #expect(middle.first?.content.contains("[BranchContext]") == true)
+        #expect(middle.last?.content.contains("## Active Task\nexisting") == true)
+    }
+
     // MARK: - Summarizer input capture
 
     @Test("Summarizer receives pruned tool results for configured tool names")
@@ -532,6 +609,54 @@ struct ContextCompactionTransformerTests {
         #expect(!synthesized.isEmpty)
         let sourceIDs = Set(synthesized.flatMap(\.sourceMessageIDs))
         #expect(sourceIDs == Set(split.middle.map(\.id)))
+    }
+
+    @Test("Summarized output merges summary into first tail message when tail starts with assistant")
+    func summarizedOutputMergesSummaryWhenTailStartsWithAssistant() async throws {
+        let cfg = summarizerPathConfig(tailMinMessageCount: 2)
+        let summaryOut = Message(
+            id: UUID(),
+            role: .assistant,
+            content: "## Active Task\nfinish task",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        let summarizer = CapturingSummarizer(output: [summaryOut])
+        let transformer = ContextCompactionTransformer(config: cfg, summarizer: summarizer)
+        let partialAssistantID = UUID()
+        let transcript: [Message] = [
+            Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u1", timestamp: Date(), toolCalls: []),
+            Message(
+                id: UUID(),
+                role: .assistant,
+                content: String(repeating: "m", count: 8_000),
+                timestamp: Date(),
+                toolCalls: []
+            ),
+            Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
+            Message(
+                id: partialAssistantID,
+                role: .assistant,
+                content: "partial reply",
+                timestamp: Date(),
+                toolCalls: []
+            ),
+            Message(id: UUID(), role: .user, content: "u3 latest", timestamp: Date(), toolCalls: []),
+        ]
+        let split = ContextCompactionCheckpointSupport.splitForCompaction(
+            transcript,
+            config: cfg,
+            modelContextLimitTokens: 2_500
+        )
+        #expect(split.tail.first?.role == .assistant)
+        let output = try await transformer.transformContext(baseTransformInput(messages: transcript))
+        #expect(output.diagnostics == ContextCompactionTransformer.summarizedDiagnostic)
+        let tailMessages = Array(output.messages.suffix(split.tail.count))
+        #expect(tailMessages.first?.id == partialAssistantID)
+        #expect(tailMessages.first?.content.contains("REFERENCE ONLY") == true)
+        #expect(tailMessages.first?.content.contains("## Active Task\nfinish task") == true)
+        #expect(tailMessages.first?.content.contains("partial reply") == true)
     }
 
     // MARK: - Hygiene and cache policy

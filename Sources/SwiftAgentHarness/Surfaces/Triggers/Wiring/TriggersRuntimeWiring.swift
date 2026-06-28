@@ -137,6 +137,7 @@ public enum TriggersRuntimeWiring {
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
         resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
+        resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil },
         delegatedPorts: DelegatedPorts,
         logger: Logger
     ) -> TriggersRuntimeBundle {
@@ -148,6 +149,7 @@ public enum TriggersRuntimeWiring {
             createConversation: createConversation,
             resolveConversationByTitle: resolveConversationByTitle,
             taskRuns: .disabled,
+            resolveHostTrigger: resolveHostTrigger,
             delegatedPorts: delegatedPorts,
             logger: logger
         )
@@ -161,6 +163,7 @@ public enum TriggersRuntimeWiring {
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
         resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
         taskRuns: TriggerTaskRunPorts = .disabled,
+        resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil },
         delegatedPorts: DelegatedPorts,
         logger: Logger
     ) -> TriggersRuntimeBundle {
@@ -265,7 +268,10 @@ public enum TriggersRuntimeWiring {
             idempotency: idempotency,
             eventsDirectory: configuration.fileEventQueueEnabled ? resolvedEventsDirectory : nil
         )
-        let scheduleTools = ScheduleToolProvider(scheduler: scheduler)
+        let scheduleTools = ScheduleToolProvider(
+            scheduler: scheduler,
+            resolveHostTrigger: resolveHostTrigger
+        )
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: resolvedEventsDirectory,
             dispatch: dispatch,

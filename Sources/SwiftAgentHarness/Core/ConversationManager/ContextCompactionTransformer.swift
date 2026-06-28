@@ -556,33 +556,34 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             max(0, input.compactionCheckpointPrefixCount ?? 0),
             effectiveMiddle.count
         )
-        let strategyAdjusted = applyStrategyPolicy(
-            input: input,
-            head: head,
-            middle: effectiveMiddle
-        )
-        let prevSynth = Array(strategyAdjusted.prefix(prefixCount))
-        let newRawTail = Array(strategyAdjusted.dropFirst(prefixCount))
+        let prevSynth = Array(effectiveMiddle.prefix(prefixCount))
+        let newRawTail = Array(effectiveMiddle.dropFirst(prefixCount))
         if newRawTail.isEmpty {
-            return summarizedNoNewTailOutput(head: head, prevSynth: prevSynth, tail: tail)
+            let prevSynthWithBranch = branchAwareMiddleIfNeeded(input: input, middle: prevSynth)
+            return summarizedNoNewTailOutput(head: head, prevSynth: prevSynthWithBranch, tail: tail)
         }
         let deterministicNewTail = applyDeterministicPreCompactionHygiene(
             input: input,
             head: head,
             middle: newRawTail,
             toolCallNameResolutionContext: head + prevSynth + newRawTail,
-            includeToolResultPruning: true
+            includeToolResultPruning: true,
+            includeBranchContextMarker: false
         )
 
-        let composedMiddle = prevSynth + deterministicNewTail
+        let composedMiddle = branchAwareMiddleIfNeeded(
+            input: input,
+            middle: prevSynth + deterministicNewTail
+        )
         if prunedMiddleSatisfiesThreshold(input: input, head: head, prunedMiddle: composedMiddle, tail: tail) {
             // Per plan B.5: appended messages still carry tool-result content, so the kind is `.pruned`.
             return prunedShortCircuitOutput(head: head, prunedMiddle: composedMiddle, tail: tail)
         }
 
+        let summarizerMiddle = branchAwareMiddleIfNeeded(input: input, middle: deterministicNewTail)
         let summarizedNewTail = try await summarize(
             input: input,
-            middleForSummarizerLLM: deterministicNewTail,
+            middleForSummarizerLLM: summarizerMiddle,
             middleBudget: middleBudget
         )
         let mergedSynth = summarizedNewTail
@@ -697,8 +698,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
                 tail: tail
             )
             summaryMessages = assembled.messages
-            if assembled.mergedIntoTail {
-                effectiveTail = tail
+            if let mergedTail = assembled.mergedTail {
+                effectiveTail = mergedTail
                 summaryMessages = []
             }
         }
@@ -798,13 +799,18 @@ public struct ContextCompactionTransformer: ConversationTransforming {
     private func applyStrategyPolicy(
         input: ContextTransformInput,
         head: [Message],
-        middle: [Message]
+        middle: [Message],
+        includeBranchContextMarker: Bool = true
     ) -> [Message] {
         switch input.compactionStrategy {
         case .default:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         case .iterativeDelta, .focused:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         case .turnPrefix:
             guard let lastUserIndex = middle.lastIndex(where: { $0.role == .user }) else {
                 return middle
@@ -813,7 +819,9 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             let prefix = Array(middle.prefix(through: lastUserIndex))
             return prefix.isEmpty ? middle : prefix
         case .branchAware:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         }
     }
 
@@ -857,12 +865,14 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         head: [Message],
         middle: [Message],
         toolCallNameResolutionContext: [Message],
-        includeToolResultPruning: Bool
+        includeToolResultPruning: Bool,
+        includeBranchContextMarker: Bool = true
     ) -> [Message] {
         var staged = applyStrategyPolicy(
             input: input,
             head: head,
-            middle: middle
+            middle: middle,
+            includeBranchContextMarker: includeBranchContextMarker
         )
         staged = applyCacheAwarePruningIfConfigured(
             middle: staged,

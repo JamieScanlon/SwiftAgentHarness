@@ -41,6 +41,7 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
     var title: String?
     var routingMode: TriggerRoutingMode
     var delegate: TriggerDelegateProfile?
+    var correlation: TriggerCorrelation?
 
     init(
         id: String = UUID().uuidString,
@@ -58,7 +59,8 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         conversationID: String? = nil,
         title: String? = nil,
         routingMode: TriggerRoutingMode = .isolated,
-        delegate: TriggerDelegateProfile? = nil
+        delegate: TriggerDelegateProfile? = nil,
+        correlation: TriggerCorrelation? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -76,5 +78,6 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         self.title = title
         self.routingMode = routingMode
         self.delegate = delegate
+        self.correlation = correlation
     }
 }
