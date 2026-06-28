@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import OllamaKit
+import SwiftAgentHarness
 
 struct LMStudioGetModelsResponse: Codable, Sendable {
     var data: [LMStudioGetModelsResponseData]
@@ -21,27 +22,19 @@ struct LMStudioGetModelsResponseData: Codable, Sendable {
 }
 
 public struct OpenAITextInferenceProvider: TextInferenceProviding {
-    public let manifest: ProviderManifest = ProviderManifests.openai
+    public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .openAIAPI
 
-    public init() {}
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
         bundledStaticCatalogEntries(providerID: manifest.id)
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.resolvedBearerToken()
-        return OpenAILLM(
-            baseURL: context.binding.serverURL.absoluteString,
-            apiKey: apiKey,
-            model: context.binding.endpointModelId,
-            capabilities: context.model.capabilities,
-            requestFeatures: context.model.requestFeatures,
-            systemPrompt: context.systemPrompt,
-            logger: context.logger,
-            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
-        )
+        ProviderLLMBridge.makeOpenAIAdapter(context: context)
     }
 
     public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
@@ -57,10 +50,12 @@ public struct OpenAITextInferenceProvider: TextInferenceProviding {
 }
 
 public struct AnthropicTextInferenceProvider: TextInferenceProviding {
-    public let manifest: ProviderManifest = ProviderManifests.anthropic
+    public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .anthropic
 
-    public init() {}
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
         bundledStaticCatalogEntries(providerID: manifest.id)
@@ -77,17 +72,7 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.resolvedBearerToken()
-        return AnthropicLLM(
-            apiURL: context.binding.serverURL,
-            apiKey: apiKey,
-            model: context.binding.endpointModelId,
-            capabilities: context.model.capabilities,
-            requestFeatures: context.model.requestFeatures,
-            systemPrompt: context.systemPrompt,
-            logger: context.logger,
-            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
-        )
+        ProviderLLMBridge.makeAnthropicAdapter(context: context)
     }
 
     public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
@@ -107,10 +92,12 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
 }
 
 public struct OllamaTextInferenceProvider: TextInferenceProviding {
-    public let manifest: ProviderManifest = ProviderManifests.ollama
+    public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .ollama
 
-    public init() {}
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
         Constants.ollamaModelIDMap.map { name, config in
@@ -145,7 +132,10 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
                 continue
             }
             do {
-                let detail = try await fetchOllamaModelDetail(modelName: model.name, config: catalogEntry.modelConfig)
+                let detail = try await ProviderLLMBridge.fetchOllamaModelDetail(
+                    modelName: model.name,
+                    config: catalogEntry.modelConfig
+                )
                 var entry = catalogEntry.toRegistryEntry(
                     providerID: manifest.id,
                     serverURL: Constants.ollamaServerURL
@@ -173,7 +163,7 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
     public func prepareDynamicModel(_ context: ProviderDynamicPrepareContext) async -> ProviderCatalogEntry? {
         var entry = context.catalogEntry
         do {
-            let detail = try await fetchOllamaModelDetail(
+            let detail = try await ProviderLLMBridge.fetchOllamaModelDetail(
                 modelName: context.binding.endpointModelId,
                 config: entry.modelConfig
             )
@@ -186,51 +176,17 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        OllamaLLM(
-            model: context.binding.endpointModelId,
-            serverURL: context.binding.serverURL,
-            capabilities: context.model.capabilities,
-            requestFeatures: context.model.requestFeatures,
-            systemPrompt: context.systemPrompt,
-            logger: context.logger,
-            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
-        )
-    }
-
-    private func fetchOllamaModelDetail(
-        modelName: String,
-        config: ModelConfig
-    ) async throws -> (capabilities: Set<LLMCapability>, maxContextLength: Int?) {
-        let ollama = OllamaKit(baseURL: Constants.ollamaServerURL)
-        let data = OKModelInfoRequestData(name: modelName)
-        let response = try await ollama.modelInfo(data: data)
-        var caps = Set<LLMCapability>()
-        for capability in response.capabilities {
-            switch capability {
-            case .completion: caps.insert(.completion)
-            case .tools: caps.insert(.tools)
-            case .insert: caps.insert(.insert)
-            case .vision: caps.insert(.vision)
-            case .embedding: caps.insert(.embedding)
-            case .thinking: caps.insert(.thinking)
-            case .image: caps.insert(.imageGeneration)
-            case .audio: caps.insert(.audio)
-            }
-        }
-        for hardcodedCapability in config.hardcodedCapabilities {
-            caps.insert(hardcodedCapability)
-        }
-        ModelManager.normalizeReasoningCapabilities(&caps)
-        let maxContextLength = ModelManager.contextLength(from: response)
-        return (caps, maxContextLength)
+        ProviderLLMBridge.makeOllamaAdapter(context: context)
     }
 }
 
 public struct LMStudioTextInferenceProvider: TextInferenceProviding {
-    public let manifest: ProviderManifest = ProviderManifests.lmstudio
+    public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .lmStudio
 
-    public init() {}
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
         Constants.lmStudioModelIDMap.map { name, config in
@@ -297,15 +253,7 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        LMStudioLLM(
-            model: context.binding.endpointModelId,
-            serverURL: context.binding.serverURL,
-            capabilities: context.model.capabilities,
-            requestFeatures: context.model.requestFeatures,
-            systemPrompt: context.systemPrompt,
-            logger: context.logger,
-            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
-        )
+        ProviderLLMBridge.makeLMStudioAdapter(context: context)
     }
 
     private func lmStudioCapabilities(
@@ -343,9 +291,11 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
 
 public struct OpenRouterTextInferenceProvider: TextInferenceProviding {
     public let modelProtocol: ModelProtocol = .openAIAPI
-    public let manifest: ProviderManifest = ProviderManifests.openrouter
+    public let manifest: ProviderManifest
 
-    public init() {}
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
         bundledStaticCatalogEntries(providerID: manifest.id)
@@ -372,17 +322,7 @@ public struct OpenRouterTextInferenceProvider: TextInferenceProviding {
     }
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
-        let apiKey = context.resolvedBearerToken()
-        return OpenAILLM(
-            baseURL: context.binding.serverURL.absoluteString,
-            apiKey: apiKey,
-            model: context.binding.endpointModelId,
-            capabilities: context.model.capabilities,
-            requestFeatures: context.model.requestFeatures,
-            systemPrompt: context.systemPrompt,
-            logger: context.logger,
-            supportsEagerToolInputStreaming: context.supportsEagerToolInputStreaming
-        )
+        ProviderLLMBridge.makeOpenAIAdapter(context: context)
     }
 
     public func failoverError(_ error: Error) -> ProviderFailoverClassification {
@@ -390,20 +330,5 @@ public struct OpenRouterTextInferenceProvider: TextInferenceProviding {
             return .credentialExhausted
         }
         return DefaultProviderFailoverClassifier.classify(error)
-    }
-}
-
-private extension ProviderAdapterContext {
-    func resolvedBearerToken() -> String {
-        if let profile = resolvedCredential, profile.isDispatchReady, let token = profile.apiKey {
-            return token
-        }
-        if let credential = try? authProfileStore.resolveCredential(
-            providerID: binding.providerId,
-            authProfileLabel: binding.authProfile
-        ) {
-            return credential.bearerToken
-        }
-        fatalError("makeAdapter invoked without dispatch-ready credential for \(binding.providerId)")
     }
 }

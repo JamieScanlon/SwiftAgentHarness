@@ -26,5 +26,6 @@
     "iconRef": "openai-mark",
     "category": "frontier"
   },
-  "capabilitySlots": ["text-inference", "cli-inference-backend", "speech", "image-generation", "realtime-voice"]
+  "capabilitySlots": ["text-inference", "cli-inference-backend", "speech", "image-generation", "realtime-voice"],
+  "default": true
 }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftAgentKit
+import SwiftAgentHarnessProviders
 import Testing
 @testable import SwiftAgentHarness
 
@@ -417,6 +418,7 @@ struct MultiBindingFailoverLLMTests {
 
     @Test("heterogeneous failover replays anthropic thinking without signature on openAI target")
     func heterogeneousFailoverTransformsForeignThinking() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         HarnessMessageEnvelopeStore.resetForTesting()
         let assistantID = UUID()
         let assistant = Message(

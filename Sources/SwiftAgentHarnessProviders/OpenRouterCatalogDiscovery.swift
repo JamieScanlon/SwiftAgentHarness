@@ -1,35 +1,66 @@
 import Foundation
 import Logging
 import SwiftAgentKit
+import SwiftAgentHarness
 
-struct OpenRouterModelsResponse: Codable, Sendable {
-    var data: [OpenRouterModelRow]
+public struct OpenRouterModelsResponse: Codable, Sendable {
+    public var data: [OpenRouterModelRow]
 }
 
-struct OpenRouterModelRow: Codable, Sendable {
-    var id: String
-    var name: String?
-    var context_length: Int?
-    var pricing: OpenRouterModelPricing?
-    var architecture: OpenRouterModelArchitecture?
+public struct OpenRouterModelRow: Codable, Sendable {
+    public var id: String
+    public var name: String?
+    public var context_length: Int?
+    public var pricing: OpenRouterModelPricing?
+    public var architecture: OpenRouterModelArchitecture?
+
+    public init(
+        id: String,
+        name: String? = nil,
+        context_length: Int? = nil,
+        pricing: OpenRouterModelPricing? = nil,
+        architecture: OpenRouterModelArchitecture? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.context_length = context_length
+        self.pricing = pricing
+        self.architecture = architecture
+    }
 }
 
-struct OpenRouterModelPricing: Codable, Sendable {
-    var prompt: String?
-    var completion: String?
-    var input_cache_read: String?
+public struct OpenRouterModelPricing: Codable, Sendable {
+    public var prompt: String?
+    public var completion: String?
+    public var input_cache_read: String?
+
+    public init(prompt: String? = nil, completion: String? = nil, input_cache_read: String? = nil) {
+        self.prompt = prompt
+        self.completion = completion
+        self.input_cache_read = input_cache_read
+    }
 }
 
-struct OpenRouterModelArchitecture: Codable, Sendable {
-    var modality: String?
-    var input_modalities: [String]?
-    var output_modalities: [String]?
+public struct OpenRouterModelArchitecture: Codable, Sendable {
+    public var modality: String?
+    public var input_modalities: [String]?
+    public var output_modalities: [String]?
+
+    public init(
+        modality: String? = nil,
+        input_modalities: [String]? = nil,
+        output_modalities: [String]? = nil
+    ) {
+        self.modality = modality
+        self.input_modalities = input_modalities
+        self.output_modalities = output_modalities
+    }
 }
 
-enum OpenRouterCatalogDiscovery {
-    typealias FetchModels = @Sendable (URL, Logger?) async throws -> [OpenRouterModelRow]
+public enum OpenRouterCatalogDiscovery {
+    public typealias FetchModels = @Sendable (URL, Logger?) async throws -> [OpenRouterModelRow]
 
-    static func discoverEntries(
+    public static func discoverEntries(
         manifest: ProviderManifest,
         staticEntries: [ProviderCatalogEntry],
         logger: Logger?,
@@ -63,7 +94,7 @@ enum OpenRouterCatalogDiscovery {
             .map { $0.toRegistryEntry(providerID: manifest.id, serverURL: endpoint.baseURL) }
     }
 
-    static func resolveDynamicModel(
+    public static func resolveDynamicModel(
         context: ProviderDynamicModelContext,
         providerID: ProviderID,
         staticEntries: [ProviderCatalogEntry]
@@ -120,7 +151,7 @@ enum OpenRouterCatalogDiscovery {
         )
     }
 
-    static func costBudget(from pricing: OpenRouterModelPricing?) -> ModelCostBudget? {
+    public static func costBudget(from pricing: OpenRouterModelPricing?) -> ModelCostBudget? {
         guard let pricing else { return nil }
         let input = pricing.prompt.flatMap { perTokenUSDToPer1M($0) }
         let output = pricing.completion.flatMap { perTokenUSDToPer1M($0) }
@@ -133,7 +164,7 @@ enum OpenRouterCatalogDiscovery {
         )
     }
 
-    static func perTokenUSDToPer1M(_ raw: String) -> Double? {
+    public static func perTokenUSDToPer1M(_ raw: String) -> Double? {
         guard let value = Double(raw) else { return nil }
         return value * 1_000_000.0
     }
@@ -158,12 +189,14 @@ enum OpenRouterCatalogDiscovery {
     }
 
     private static func defaultFetchModels(baseURL: URL, logger: Logger?) async throws -> [OpenRouterModelRow] {
-        let apiManager = RestAPIManager(
-            baseURL: baseURL,
-            sseTimeoutInterval: 60.0,
-            logger: logger
-        )
-        let response: OpenRouterModelsResponse = try await apiManager.decodableRequest("models")
-        return response.data
+        let modelsURL = baseURL.appendingPathComponent("models")
+        var request = URLRequest(url: modelsURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data).data
     }
 }

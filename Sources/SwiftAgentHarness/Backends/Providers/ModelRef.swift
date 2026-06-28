@@ -26,7 +26,7 @@ public enum ModelRefParseError: Error, Equatable, Sendable {
 public enum ModelRefParser {
     public static func normalizeProviderID(_ raw: String) -> ProviderID {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let resolved = ProviderManifests.providerID(forAlias: trimmed) {
+        if let resolved = ProviderRegistry.providerID(forAlias: trimmed) {
             return resolved
         }
         return trimmed
@@ -69,8 +69,9 @@ public enum ModelRefParser {
 
     /// Infer provider from bare model id via registered manifest prefix patterns.
     public static func inferProvider(fromBareModelID modelID: String) -> ProviderID? {
+        ProviderRegistry.ensureBootstrapped()
         let lower = modelID.lowercased()
-        for manifest in ProviderManifests.all {
+        for manifest in ProviderRegistry.allManifests() {
             for prefix in manifest.modelSupport.modelPrefixes {
                 if lower.hasPrefix(prefix.lowercased()) {
                     return manifest.id

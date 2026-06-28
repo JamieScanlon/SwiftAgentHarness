@@ -1,44 +1,44 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("ProviderManifest decode")
 struct ProviderManifestDecodeTests {
-    @Test("Static catalog manifests decode from bundled JSON")
+    @Test("Bundled JSON manifests decode and validate")
     func bundledManifestsDecode() throws {
-        let bundledIDs: Set<ProviderID> = ["openai", "anthropic", "ollama", "lmstudio", "openrouter"]
-        for manifest in ProviderManifests.all where bundledIDs.contains(manifest.id) {
-            guard let data = ProviderManifestLoader.bundledManifestData(for: manifest.id) else {
-                Issue.record("Missing bundled manifest for \(manifest.id)")
-                continue
-            }
-            let decoded = try JSONDecoder().decode(ProviderManifest.self, from: data)
-            #expect(decoded.id == manifest.id)
-            #expect(decoded.label == manifest.label)
-            #expect(decoded.providerEndpoints.count == manifest.providerEndpoints.count)
-            #expect(decoded.modelSupport.modelPrefixes == manifest.modelSupport.modelPrefixes)
+        ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
+        for providerID in BundledProviderManifestLoader.bundledProviderIDs {
+            let manifest = try BundledProviderManifestLoader.loadManifest(for: providerID)
+            #expect(manifest.id == providerID)
+            #expect(!manifest.label.isEmpty)
+            #expect(!manifest.providerEndpoints.isEmpty)
         }
     }
 
-    @Test("Bundled JSON manifests match static ProviderManifests exactly")
-    func bundledManifestParityWithStaticCatalog() throws {
-        for manifest in ProviderManifests.all {
-            let bundled = try #require(
-                try ProviderManifestLoader.decodeBundledManifest(for: manifest.id),
-                "Missing bundled manifest for \(manifest.id)"
-            )
-            let normalizedStatic = ProviderManifestParity.normalize(manifest)
-            let normalizedBundled = ProviderManifestParity.normalize(bundled)
+    @Test("Bundled JSON manifests are stable across decode round-trip")
+    func bundledManifestRoundTrip() throws {
+        ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
+        for providerID in BundledProviderManifestLoader.bundledProviderIDs {
+            let manifest = try BundledProviderManifestLoader.loadManifest(for: providerID)
+            guard let data = ProviderManifestLoader.bundledManifestData(for: providerID) else {
+                Issue.record("Missing bundled manifest for \(providerID)")
+                continue
+            }
+            let decoded = try JSONDecoder().decode(ProviderManifest.self, from: data)
+            let normalizedA = ProviderManifestParity.normalize(manifest)
+            let normalizedB = ProviderManifestParity.normalize(decoded)
             #expect(
-                normalizedBundled == normalizedStatic,
-                "Bundled manifest drift for \(manifest.id): update manifests/\(manifest.id).manifest.json or ProviderManifests.\(manifest.id)"
+                normalizedA == normalizedB,
+                "Bundled manifest drift for \(providerID): update manifests/\(providerID).manifest.json"
             )
         }
     }
 
     @Test("Built-in catalog passes validation")
     func builtInCatalogValidates() throws {
-        try ProviderManifestValidation.validateAll(ProviderManifests.all)
+        ProviderResourceBundle.setResourceBundle(.module)
+        try ProviderManifestValidation.validateAll(try ProviderTestManifestSupport.loadAllManifests())
     }
 
     @Test("Prefix collision is rejected")

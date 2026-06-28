@@ -4,6 +4,22 @@ Wire-codec backend plugins for external inference endpoints. Implements the harn
 
 Providers are **not** the unit of model selection — the [Model Pool](../../Core/ModelPool/README.md) is. Providers supply manifests, auth shape, wire codecs, tool dialect, cache boundaries, and error taxonomy. The Pool owns rotation policy, failover decisions, budget, and scheduling.
 
+## Plugin model
+
+Two plugin flavors:
+
+1. **Code plugins** — compiled `ProviderRegistration` values (built-in set in `SwiftAgentHarnessProviders`, or third-party source compiled into the app). No runtime native loading.
+2. **Configuration plugins** — `*.providerconfig.json` files that parameterize a generic adapter (`adapterKind`, e.g. `openai-compat`) already shipped in the app.
+
+### Two registrations (do not conflate)
+
+| Term | Meaning |
+|---|---|
+| **Plugin registration** | Provider enters `ProviderRegistry` via `registerDefaults()` or `ConfigPluginLoader` → provider is **available** |
+| **Provider registration** (user opt-in) | User creates ≥1 active `AuthProfile` (or a `local` profile for credential-less providers) → provider is **registered** and participates in the Pool |
+
+Unregistered providers contribute nothing to discovery. `ModelManager` gates `syncRegistryFromDiscovery()` on `ProviderRegistry.registeredTextInferenceProviders(authStore:)`.
+
 ## Layer split
 
 | Concern | Owner |
@@ -21,32 +37,26 @@ Providers are **not** the unit of model selection — the [Model Pool](../../Cor
 ## Layout
 
 ```
-Backends/Providers/
-Bundled JSON under `manifests/` mirrors `ProviderManifests` for pluginsInspect-style offline inspection. Runtime bootstrap uses the Swift literals; `ProviderManifestValidationTests` asserts full parity so the two sources cannot drift silently (Ollama/LM Studio endpoint URLs normalize to bundled localhost forms).
-  catalogs/                     Bundled static model catalogs + overrides
-  ProviderManifest.swift        Static catalog (`ProviderManifests`)
-  ProviderManifestValidation.swift
-  ProviderManifestLoader.swift  Bundle.module manifest loading
-  ProviderCapabilitySlot.swift  11 parallel capability slots
-  ProviderRegistry.swift        Plugin registry (mirrors SandboxBackendRegistry)
-  ProviderPlugin.swift          TextInferenceProviding contract
-  ModelRef.swift                Canonical `provider/model-id` parsing
-  AuthProfile.swift             PooledCredential-shaped records
-  AuthProfileStore.swift        Env + auth-profiles.json + oauth-store resolution
-  ProviderOAuthTokenRefreshing.swift OAuth refresh seam (stub)
-  ProviderAuthOnboarding.swift  Provider onboarding seam (stub)
-  ProviderAuthChoice+AuthType.swift Auth choice typing + inference
-  AuthProfileCooldownState.swift
-  ProviderFailoverClassification.swift
-  ProviderPromptContribution.swift   CACHE_BOUNDARY marker + section overrides
-  ProviderToolSchemaNormalization.swift
-  ProviderRuntimeHooks.swift    Pool dispatch seam (tools, prompt, failover)
-  ProviderSlotRuntimeHooks.swift Non-text slot dispatch seam (registration only today)
-  TextInference/                Built-in text inference plugins
-  Slots/                        Non-text capability slot protocols (scaffold)
+Backends/Providers/             Plugin SDK (contracts + machinery)
+  ProviderRegistry.swift        Plugin registry + bootstrap hook
+  ProviderLifecycle.swift       available / registered / disabled
+  ProviderAdapterFactory.swift  Config-plugin factory registry
+  ProviderInstanceConfig.swift  Configuration-plugin schema + loader
+  ProviderLLMBridge.swift       Core wire-codec construction for plugins
+  ProviderResourceBundle.swift  Resource bundle pointer for JSON catalogs
+  …
+
+SwiftAgentHarnessProviders/     Foundational code plugins (separate target)
+  registerDefaults.swift        App entry point
+  manifests/*.manifest.json     Canonical provider metadata
+  catalogs/*.catalog.json       Bundled static model catalogs
 ```
 
+JSON manifests under `SwiftAgentHarnessProviders/manifests/` are the **single source of truth** for bundled provider metadata. `ProviderManifestValidationTests` guards decode round-trip stability.
+
 ## Built-in text-inference plugins
+
+Link `SwiftAgentHarnessProviders` and call `registerDefaults()`. Built-in plugins:
 
 | Provider ID | Adapter | Discovery |
 |---|---|---|
@@ -59,7 +69,7 @@ Bundled JSON under `manifests/` mirrors `ProviderManifests` for pluginsInspect-s
 ## Integration points
 
 - **`StandardModelLLMFactory.makeBindingAdapter`** delegates adapter construction to `ProviderRegistry`.
-- **`ModelManager.syncRegistryFromDiscovery`** merges entries from all registered text-inference plugins.
+- **`ModelManager.syncRegistryFromDiscovery`** merges entries from registered (opt-in) text-inference plugins only.
 - **`BindingFailoverClassifier`** consults provider `failoverError` before generic classification.
 - **`TurnLoop`** normalizes tools via `ProviderRuntimeHooks.normalizeTools`.
 - **`ProviderAdapterContext.compat`** carries per-model streaming dialect (`supportsEagerToolInputStreaming`, `thinkingFormat`). Adapters project the full **normalized event set** through `NormalizedStreamEmitter`; eager vs buffered tool-argument streaming follows `compat.supportsEagerToolInputStreaming`.
@@ -69,7 +79,7 @@ Bundled JSON under `manifests/` mirrors `ProviderManifests` for pluginsInspect-s
 
 ## Auth profiles (open-set)
 
-Manifest `providerAuthChoices` supports API key, OAuth, IAM, and ADC via optional `authType` (inferred from choice `id` when omitted). Validation requires `envVars` only for `.apiKey` choices — OAuth choices may use `envVars: []` with `onboardingScopes`.
+Manifest `providerAuthChoices` supports API key, OAuth, IAM, ADC, and **local** (base-URL-only confirmation for credential-less providers) via optional `authType`.
 
 - **`AuthProfileStore.resolveCredentialPool`** merges env keys, config file entries, and oauth-store records (`accessToken`/`refreshToken`/`expiresAt`).
 - **`AuthProfileStore.resolveCredential`** returns a dispatch-ready bearer token or throws `credentialRequiresOnboarding` / `credentialExpired`.

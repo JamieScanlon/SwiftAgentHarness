@@ -28,6 +28,30 @@ public enum ProviderRegistry {
     private nonisolated(unsafe) static var cliBackendIndex: [String: any CLIInferenceBackendProviding] = [:]
     private nonisolated(unsafe) static var slotIndex: [ProviderCapabilitySlot: [(ProviderID, any Sendable)]] = [:]
     private nonisolated(unsafe) static var bootstrapped = false
+    private nonisolated(unsafe) static var bootstrapHook: (@Sendable () -> Void)?
+
+    public static func installBootstrap(_ hook: @escaping @Sendable () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        bootstrapHook = hook
+    }
+
+    public static func ensureBootstrapped() {
+        lock.lock()
+        if bootstrapped {
+            lock.unlock()
+            return
+        }
+        bootstrapped = true
+        let hook = bootstrapHook
+        lock.unlock()
+        hook?()
+    }
+
+    @available(*, deprecated, message: "Use ensureBootstrapped() after installing a bootstrap hook via installBootstrap(_:)")
+    public static func bootstrapBuiltInsIfNeeded() {
+        ensureBootstrapped()
+    }
 
     public static func register(_ registration: ProviderRegistration) throws {
         lock.lock()
@@ -42,51 +66,13 @@ public enum ProviderRegistry {
         cliBackendIndex = [:]
         slotIndex = [:]
         bootstrapped = false
-    }
-
-    public static func bootstrapBuiltInsIfNeeded() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !bootstrapped else { return }
-        bootstrapped = true
-
-        let openaiManifest = ProviderManifests.openai
-        try? registerUnlocked(ProviderRegistration(
-            manifest: openaiManifest,
-            textInference: OpenAITextInferenceProvider(),
-            cliInferenceBackends: [
-                StubCLIInferenceBackendProvider(manifest: openaiManifest, cliBackendID: "openai-codex"),
-            ],
-            speech: StubSpeechProvider(manifest: openaiManifest),
-            realtimeVoice: StubRealtimeVoiceProvider(manifest: openaiManifest),
-            imageGeneration: StubImageGenerationProvider(manifest: openaiManifest)
-        ))
-
-        let anthropicManifest = ProviderManifests.anthropic
-        try? registerUnlocked(ProviderRegistration(
-            manifest: anthropicManifest,
-            textInference: AnthropicTextInferenceProvider(),
-            mediaUnderstanding: StubMediaUnderstandingProvider(manifest: anthropicManifest)
-        ))
-
-        try? registerUnlocked(ProviderRegistration(
-            manifest: ProviderManifests.ollama,
-            textInference: OllamaTextInferenceProvider()
-        ))
-        try? registerUnlocked(ProviderRegistration(
-            manifest: ProviderManifests.lmstudio,
-            textInference: LMStudioTextInferenceProvider()
-        ))
-        try? registerUnlocked(ProviderRegistration(
-            manifest: ProviderManifests.openrouter,
-            textInference: OpenRouterTextInferenceProvider()
-        ))
+        bootstrapHook = nil
     }
 
     private static func registerUnlocked(_ registration: ProviderRegistration) throws {
         try ProviderManifestValidation.validateRegistrationConsistency(registration)
         if registrations[registration.manifest.id] != nil {
-            fatalError("Duplicate provider registration: \(registration.manifest.id)")
+            throw ProviderRegistryError.duplicateRegistration(registration.manifest.id)
         }
         registrations[registration.manifest.id] = registration
         indexRegistration(registration)
@@ -109,7 +95,7 @@ public enum ProviderRegistry {
     }
 
     public static func registration(for providerID: ProviderID) throws -> ProviderRegistration {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         guard let registration = registrations[providerID] else {
@@ -122,22 +108,58 @@ public enum ProviderRegistry {
         try registration(for: providerID).manifest
     }
 
+    public static func optionalManifest(for providerID: ProviderID) -> ProviderManifest? {
+        try? manifest(for: providerID)
+    }
+
     public static func allManifests() -> [ProviderManifest] {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return registrations.values.map(\.manifest).sorted { $0.id < $1.id }
     }
 
     public static func allTextInferenceProviders() -> [any TextInferenceProviding] {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return registrations.values.compactMap(\.textInference)
     }
 
+    public static func registeredTextInferenceProviders(
+        authStore: AuthProfileStore
+    ) -> [any TextInferenceProviding] {
+        ensureBootstrapped()
+        lock.lock()
+        let candidates = registrations.values.compactMap { registration -> (ProviderManifest, any TextInferenceProviding)? in
+            guard let textInference = registration.textInference else { return nil }
+            return (registration.manifest, textInference)
+        }
+        lock.unlock()
+        return candidates.compactMap { manifest, textInference in
+            guard ProviderLifecycle.lifecycleState(for: manifest, authStore: authStore) == .registered else {
+                return nil
+            }
+            return textInference
+        }
+    }
+
+    public static func manifest(forAlias alias: String) -> ProviderManifest? {
+        ensureBootstrapped()
+        let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        return registrations.values.map(\.manifest).first { manifest in
+            manifest.id == normalized || manifest.providerAuthAliases.contains(normalized)
+        }
+    }
+
+    public static func providerID(forAlias alias: String) -> ProviderID? {
+        manifest(forAlias: alias)?.id
+    }
+
     public static func textInferenceProvider(for providerID: ProviderID) -> (any TextInferenceProviding)? {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return registrations[providerID]?.textInference
@@ -154,7 +176,7 @@ public enum ProviderRegistry {
         for slot: ProviderCapabilitySlot,
         providerID: ProviderID
     ) throws -> (any Sendable)? {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         guard let registration = registrations[providerID] else {
@@ -173,7 +195,7 @@ public enum ProviderRegistry {
         providerID: ProviderID,
         cliBackendID: String
     ) throws -> any CLIInferenceBackendProviding {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         guard registrations[providerID] != nil else {
@@ -187,7 +209,7 @@ public enum ProviderRegistry {
     }
 
     public static func allCLIInferenceBackends() -> [any CLIInferenceBackendProviding] {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return Array(cliBackendIndex.values)
@@ -198,14 +220,14 @@ public enum ProviderRegistry {
     }
 
     public static func allProviders(for slot: ProviderCapabilitySlot) -> [(ProviderID, any Sendable)] {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return slotIndex[slot] ?? []
     }
 
     public static func inspectSlots() -> [ProviderSlotInspectEntry] {
-        bootstrapBuiltInsIfNeeded()
+        ensureBootstrapped()
         lock.lock()
         defer { lock.unlock() }
         return registrations.values
@@ -223,5 +245,16 @@ public enum ProviderRegistry {
 
     public static func inspect() -> [ProviderManifest] {
         ProviderManifestValidation.inspect(allManifests())
+    }
+}
+
+extension ProviderBinding {
+    /// Resolves manifest/auth provider id when legacy bindings use ``ModelProtocol`` rawValue as ``providerId``.
+    public func canonicalProviderID() -> ProviderID {
+        if ProviderRegistry.optionalManifest(for: providerId) != nil {
+            return providerId
+        }
+        ProviderRegistry.ensureBootstrapped()
+        return ProviderRegistry.textInferenceProvider(forBinding: self)?.manifest.id ?? providerId
     }
 }

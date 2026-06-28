@@ -10,7 +10,7 @@ public enum ProviderRuntimeHooks {
         strictMode: Bool = false
     ) -> [ToolDefinition] {
         guard let binding else { return tools }
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return tools
         }
@@ -28,7 +28,7 @@ public enum ProviderRuntimeHooks {
         binding: ProviderBinding?
     ) -> ProviderSystemPromptContribution? {
         guard let binding else { return nil }
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return nil
         }
@@ -44,7 +44,7 @@ public enum ProviderRuntimeHooks {
         error: Error,
         providerID: ProviderID?
     ) -> ProviderFailoverClassification {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         if let providerID,
            let provider = ProviderRegistry.textInferenceProvider(for: providerID) {
             return provider.failoverError(error)
@@ -80,7 +80,7 @@ public enum ProviderRuntimeHooks {
         compat: ProviderModelCompat? = nil,
         targetCapabilities: Set<LLMCapability> = []
     ) -> [Message] {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return messages
         }
@@ -102,7 +102,7 @@ public enum ProviderRuntimeHooks {
         targetCapabilities: Set<LLMCapability> = [],
         logger: Logger? = nil
     ) -> [ProviderReplayValidationIssue] {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return []
         }
@@ -130,7 +130,7 @@ public enum ProviderRuntimeHooks {
         binding: ProviderBinding,
         catalogEntry: ProviderCatalogEntry
     ) async -> ProviderCatalogEntry {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return catalogEntry
         }
@@ -143,7 +143,7 @@ public enum ProviderRuntimeHooks {
     }
 
     public static func preferRuntimeResolvedModel(binding: ProviderBinding) -> Bool {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             return false
         }

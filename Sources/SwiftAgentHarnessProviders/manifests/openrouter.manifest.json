@@ -22,5 +22,6 @@
     "iconRef": "openrouter-mark",
     "category": "aggregator"
   },
-  "capabilitySlots": ["text-inference"]
+  "capabilitySlots": ["text-inference"],
+  "default": true
 }

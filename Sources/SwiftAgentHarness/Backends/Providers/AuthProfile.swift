@@ -5,6 +5,7 @@ public enum AuthProfileType: String, Sendable, Codable, Hashable {
     case oauth
     case iam
     case adc
+    case local
 }
 
 public enum AuthProfileStatus: String, Sendable, Codable, Hashable {
@@ -79,6 +80,8 @@ public struct AuthProfile: Sendable, Equatable, Hashable, Codable {
         case .oauth:
             guard let apiKey, !apiKey.isEmpty else { return false }
             return !isAccessTokenExpired()
+        case .local:
+            return baseURL != nil
         }
     }
 

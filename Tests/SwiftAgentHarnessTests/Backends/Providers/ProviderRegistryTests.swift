@@ -1,13 +1,13 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("ProviderRegistry")
 struct ProviderRegistryTests {
     @Test("Built-in providers register")
     func builtInProviders() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         let manifests = ProviderRegistry.allManifests()
         #expect(manifests.map(\.id).contains("openai"))
         #expect(manifests.map(\.id).contains("anthropic"))
@@ -18,15 +18,13 @@ struct ProviderRegistryTests {
 
     @Test("Text inference lookup by provider id")
     func textInferenceLookup() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         #expect(ProviderRegistry.textInferenceProvider(for: "anthropic") != nil)
     }
 
     @Test("Missing provider throws")
     func missingProvider() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         #expect(throws: ProviderRegistryError.self) {
             try ProviderRegistry.registration(for: "missing")
         }
@@ -34,42 +32,66 @@ struct ProviderRegistryTests {
 
     @Test("Inspect returns validated manifests")
     func inspect() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         let inspected = ProviderRegistry.inspect()
         #expect(!inspected.isEmpty)
     }
 
     @Test("Anthropic bootstrap registers media understanding stub")
     func anthropicMediaUnderstandingStub() throws {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         let slots = try ProviderRegistry.registeredSlots(for: "anthropic")
         #expect(slots.contains(.mediaUnderstanding))
     }
 
     @Test("allCLIInferenceBackends includes openai codex stub")
     func allCLIBackends() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestSupport.registerDefaultsForTesting()
         let ids = ProviderRegistry.allCLIInferenceBackends().map(\.cliBackendID)
         #expect(ids.contains("openai-codex"))
+    }
+
+    @Test("Duplicate registration throws")
+    func duplicateRegistrationThrows() throws {
+        ProviderTestSupport.registerDefaultsForTesting()
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
+        #expect(throws: ProviderRegistryError.duplicateRegistration("openai")) {
+            try ProviderRegistry.register(ProviderRegistration(
+                manifest: manifest,
+                textInference: OpenAITextInferenceProvider(manifest: manifest),
+                cliInferenceBackends: [
+                    StubCLIInferenceBackendProvider(manifest: manifest, cliBackendID: "openai-codex"),
+                ]
+            ))
+        }
+    }
+
+    @Test("ensureBootstrapped does not deadlock when hook registers providers")
+    func ensureBootstrappedDoesNotDeadlock() {
+        ProviderRegistry.resetForTesting()
+        ProviderRegistry.installBootstrap {
+            ProviderTestSupport.registerDefaultsForTesting()
+        }
+        ProviderRegistry.ensureBootstrapped()
+        #expect(!ProviderRegistry.allManifests().isEmpty)
     }
 }
 
 @Suite("Provider capability slot scaffolds")
 struct ProviderCapabilitySlotScaffoldTests {
     @Test("OpenAI manifest declares multiple capability slots")
-    func openAISlots() {
-        let slots = ProviderManifests.openai.capabilitySlots
+    func openAISlots() throws {
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
+        let slots = manifest.capabilitySlots
         #expect(slots.contains(.textInference))
         #expect(slots.contains(.speech))
         #expect(slots.contains(.imageGeneration))
     }
 
     @Test("Stub speech provider carries manifest")
-    func stubSpeechProvider() {
-        let stub = StubSpeechProvider(manifest: ProviderManifests.openai)
+    func stubSpeechProvider() throws {
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
+        let stub = StubSpeechProvider(manifest: manifest)
         #expect(stub.manifest.id == "openai")
     }
 }

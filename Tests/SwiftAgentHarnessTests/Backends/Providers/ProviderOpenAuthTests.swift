@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("Provider open-set auth")
@@ -125,7 +126,7 @@ struct ProviderOpenAuthTests {
 
     @Test("missing api key returns MissingAuthCredentialLLM from factory")
     func missingKeyUsesMissingAuthLLM() async throws {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         let store = AuthProfileStore(environment: [:])
         let binding = ProviderBinding(
             providerId: "openai",

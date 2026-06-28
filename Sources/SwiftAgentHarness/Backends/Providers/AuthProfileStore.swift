@@ -16,20 +16,23 @@ public struct AuthProfileStore: Sendable {
     public var authProfilesFileURL: URL?
     public var authProfilesFileData: Data?
     public var oauthRefresher: (any ProviderOAuthTokenRefreshing)?
+    public var seedProfiles: [AuthProfile]
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         defaultAuthProfileLabel: String? = nil,
         authProfilesFileURL: URL? = nil,
         authProfilesFileData: Data? = nil,
-        oauthRefresher: (any ProviderOAuthTokenRefreshing)? = nil
+        oauthRefresher: (any ProviderOAuthTokenRefreshing)? = nil,
+        seedProfiles: [AuthProfile] = []
     ) {
         self.environment = environment
-        self.defaultAuthProfileLabel = defaultAuthProfileLabel
-            ?? normalizedLabel(environment["SAH_SESSION_AUTH_PROFILE"])
         self.authProfilesFileURL = authProfilesFileURL
         self.authProfilesFileData = authProfilesFileData
         self.oauthRefresher = oauthRefresher
+        self.seedProfiles = seedProfiles
+        self.defaultAuthProfileLabel = defaultAuthProfileLabel
+            ?? normalizedLabel(environment["SAH_SESSION_AUTH_PROFILE"])
     }
 
     public static func production() -> AuthProfileStore {
@@ -44,11 +47,12 @@ public struct AuthProfileStore: Sendable {
         providerID: ProviderID,
         authProfileLabel: String? = nil
     ) throws -> [AuthProfile] {
-        guard ProviderManifests.manifest(for: providerID) != nil else {
+        guard ProviderRegistry.optionalManifest(for: providerID) != nil else {
             throw AuthProfileStoreError.manifestNotFound(providerID)
         }
         let label = normalizedLabel(authProfileLabel) ?? defaultAuthProfileLabel ?? "default"
         var candidates: [AuthProfile] = []
+        candidates.append(contentsOf: seedProfiles.filter { $0.providerID == providerID })
         candidates.append(contentsOf: resolveConfigCredentials(providerID: providerID, label: label))
         candidates.append(contentsOf: resolveEnvCredentials(providerID: providerID, label: label))
         let merged = mergeCredentialPool(candidates)
@@ -65,9 +69,13 @@ public struct AuthProfileStore: Sendable {
     ) throws -> ResolvedAuthCredential {
         let label = normalizedLabel(authProfileLabel) ?? defaultAuthProfileLabel ?? "default"
         let pool = try resolveCredentialPool(providerID: providerID, authProfileLabel: authProfileLabel)
-        if let ready = pool.first(where: \.isDispatchReady),
-           let bearer = ready.apiKey {
-            return ResolvedAuthCredential(profile: ready, bearerToken: bearer)
+        if let ready = pool.first(where: \.isDispatchReady) {
+            if ready.authType == .local {
+                return ResolvedAuthCredential(profile: ready, bearerToken: "")
+            }
+            if let bearer = ready.apiKey {
+                return ResolvedAuthCredential(profile: ready, bearerToken: bearer)
+            }
         }
         if pool.contains(where: \.requiresOnboarding) {
             throw AuthProfileStoreError.credentialRequiresOnboarding(providerID, profileLabel: label)
@@ -125,6 +133,19 @@ public struct AuthProfileStore: Sendable {
         suffix: String
     ) -> AuthProfile? {
         let authType = parseAuthType(entry) ?? .apiKey
+        if authType == .local {
+            guard let baseURL = parseBaseURL(entry) else { return nil }
+            let id = (entry["id"] as? String).flatMap(normalizedLabel)
+                ?? profileKey(providerID: providerID, label: label, suffix: suffix)
+            return AuthProfile(
+                id: id,
+                providerID: providerID,
+                authType: .local,
+                baseURL: baseURL,
+                priority: parsePriority(entry["priority"]) ?? 0,
+                source: .config
+            )
+        }
         let accessToken = scalarAccessToken(from: entry)
         let refreshToken = scalarRefreshToken(from: entry)
         let expiresAt = parseExpiresAt(entry)
@@ -180,7 +201,7 @@ public struct AuthProfileStore: Sendable {
     }
 
     private func resolveEnvCredentials(providerID: ProviderID, label: String) -> [AuthProfile] {
-        guard let manifest = ProviderManifests.manifest(for: providerID) else { return [] }
+        guard let manifest = ProviderRegistry.optionalManifest(for: providerID) else { return [] }
         var profiles: [AuthProfile] = []
         for choice in manifest.providerAuthChoices {
             guard choice.resolvedAuthType == .apiKey else { continue }
@@ -356,6 +377,16 @@ public struct AuthProfileStore: Sendable {
             return nil
         }
         return obj[providerID] as? [String: Any] ?? obj
+    }
+
+    private func parseBaseURL(_ entry: [String: Any]) -> URL? {
+        let raw = (entry["baseURL"] as? String)
+            ?? (entry["baseUrl"] as? String)
+            ?? (entry["base_url"] as? String)
+        guard let raw, let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        return url
     }
 
     private func parseAuthType(_ entry: [String: Any]) -> AuthProfileType? {

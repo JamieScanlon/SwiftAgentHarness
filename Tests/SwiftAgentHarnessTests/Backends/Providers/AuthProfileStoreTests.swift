@@ -1,11 +1,17 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("AuthProfileStore")
+@Suite("AuthProfileStore", .serialized)
 struct AuthProfileStoreTests {
+    private func prepare() {
+        ProviderTestManifestSupport.prepareRegistry()
+    }
+
     @Test("Env var resolution uses manifest-declared keys")
     func envResolution() throws {
+        prepare()
         let store = AuthProfileStore(environment: ["OPENAI_API_KEY": "sk-test"])
         let resolved = try store.resolveAPIKey(providerID: "openai")
         #expect(resolved.apiKey == "sk-test")
@@ -14,6 +20,7 @@ struct AuthProfileStoreTests {
 
     @Test("Profile-scoped env var takes precedence")
     func profileScopedEnv() throws {
+        prepare()
         let store = AuthProfileStore(
             environment: [
                 "OPENAI_API_KEY": "sk-default",
@@ -27,6 +34,7 @@ struct AuthProfileStoreTests {
 
     @Test("Config file entry ranks before env in credential pool")
     func fileOverridesEnv() throws {
+        prepare()
         let fileData = """
         {
           "work": {
@@ -48,6 +56,7 @@ struct AuthProfileStoreTests {
 
     @Test("Numbered env vars populate ordered pool")
     func numberedEnvPool() throws {
+        prepare()
         let store = AuthProfileStore(
             environment: [
                 "OPENAI_API_KEY": "sk-0",
@@ -62,6 +71,7 @@ struct AuthProfileStoreTests {
 
     @Test("Delimited env var expands into pool entries")
     func delimitedEnvPool() throws {
+        prepare()
         let store = AuthProfileStore(
             environment: ["OPENAI_API_KEYS": "sk-a,sk-b\nsk-c"]
         )
@@ -71,6 +81,7 @@ struct AuthProfileStoreTests {
 
     @Test("Config keys array preserves explicit priority and id")
     func configKeysArray() throws {
+        prepare()
         let fileData = """
         {
           "default": {
@@ -91,6 +102,7 @@ struct AuthProfileStoreTests {
 
     @Test("Duplicate secrets dedupe preferring config metadata")
     func dedupePrefersConfig() throws {
+        prepare()
         let fileData = """
         {
           "default": {
@@ -114,6 +126,7 @@ struct AuthProfileStoreTests {
 
     @Test("Empty pool throws credentialNotFound")
     func emptyPoolThrows() {
+        prepare()
         let store = AuthProfileStore(environment: [:])
         #expect(throws: AuthProfileStoreError.self) {
             _ = try store.resolveCredentialPool(providerID: "openai")

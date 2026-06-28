@@ -7,6 +7,7 @@ public extension AuthProfileType {
         case "oauth": return .oauth
         case "iam": return .iam
         case "adc": return .adc
+        case "local": return .local
         default: return .apiKey
         }
     }
@@ -14,6 +15,7 @@ public extension AuthProfileType {
     var requiresWireCredential: Bool {
         switch self {
         case .apiKey, .oauth, .iam, .adc: true
+        case .local: false
         }
     }
 }

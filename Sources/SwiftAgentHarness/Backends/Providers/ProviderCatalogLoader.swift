@@ -115,6 +115,12 @@ enum ProviderCatalogLoader {
                 subdirectory: "catalogs"
             ),
             Bundle.module.url(forResource: providerID, withExtension: "catalog.json"),
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "catalog.json",
+                subdirectory: "catalogs"
+            ),
+            ProviderResourceBundle.resourceBundle.url(forResource: providerID, withExtension: "catalog.json"),
         ]
         guard let url = candidates.compactMap({ $0 }).first else { return nil }
         return try? Data(contentsOf: url)
@@ -134,8 +140,8 @@ enum ProviderCatalogLoaderError: Error, Equatable, Sendable {
     case providerIDMismatch(expected: ProviderID, found: ProviderID)
 }
 
-enum ProviderCatalogStableID {
-    static func registryUUID(providerID: ProviderID, endpointModelId: String) -> UUID {
+public enum ProviderCatalogStableID {
+    public static func registryUUID(providerID: ProviderID, endpointModelId: String) -> UUID {
         let input = "SwiftAgentHarness.ProviderCatalog|\(providerID)|\(endpointModelId)"
         var bytes = Array(SHA256.hash(data: Data(input.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x40
@@ -149,6 +155,6 @@ enum ProviderCatalogStableID {
     }
 }
 
-func bundledStaticCatalogEntries(providerID: ProviderID) -> [ProviderCatalogEntry] {
+public func bundledStaticCatalogEntries(providerID: ProviderID) -> [ProviderCatalogEntry] {
     (try? ProviderCatalogLoader.decodeBundledCatalog(for: providerID)) ?? []
 }

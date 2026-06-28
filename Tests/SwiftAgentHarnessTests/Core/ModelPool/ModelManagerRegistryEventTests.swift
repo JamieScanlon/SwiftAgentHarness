@@ -45,7 +45,10 @@ struct ModelManagerRegistryEventTests {
     @Test("addModels emits .added events for new entries and caches snapshot")
     func addEmitsAddedEvent() async throws {
         let hub = StubResourceTopicHub()
-        let manager = ModelManager(registryTopicHub: hub)
+        let manager = ModelManager(
+            registryTopicHub: hub,
+            authProfileStore: AuthProfileStore(environment: [:])
+        )
         let model = Self.makeModel(name: "first")
         try await manager.addModels([model])
         let snapshots = await hub.snapshots
@@ -59,7 +62,10 @@ struct ModelManagerRegistryEventTests {
     @Test("Adding the same model twice is a no-op (no second event)")
     func unchangedRegistryEmitsNothing() async throws {
         let hub = StubResourceTopicHub()
-        let manager = ModelManager(registryTopicHub: hub)
+        let manager = ModelManager(
+            registryTopicHub: hub,
+            authProfileStore: AuthProfileStore(environment: [:])
+        )
         let model = Self.makeModel(name: "stable")
         try await manager.addModels([model])
         let eventsAfterFirst = await hub.events.count
@@ -73,7 +79,10 @@ struct ModelManagerRegistryEventTests {
     @Test("Cached snapshot stays current with the latest registry contents")
     func snapshotCacheStaysCurrent() async throws {
         let hub = StubResourceTopicHub()
-        let manager = ModelManager(registryTopicHub: hub)
+        let manager = ModelManager(
+            registryTopicHub: hub,
+            authProfileStore: AuthProfileStore(environment: [:])
+        )
         let first = Self.makeModel(name: "first")
         let second = Self.makeModel(name: "second")
         try await manager.addModels([first])

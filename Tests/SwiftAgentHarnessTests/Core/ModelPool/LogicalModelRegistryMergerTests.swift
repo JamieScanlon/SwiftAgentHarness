@@ -1,6 +1,7 @@
 import Foundation
 import SwiftAgentKit
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("LogicalModelRegistryMerger")
@@ -208,8 +209,9 @@ struct ModelManagerMultiBindingDiscoveryTests {
     func bundledCatalogMerge() throws {
         let anthropic = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let openRouter = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
-        let anthropicEndpoint = try #require(ProviderManifests.anthropic.defaultEndpoint?.baseURL)
-        let openRouterEndpoint = try #require(ProviderManifests.openrouter.defaultEndpoint?.baseURL)
+        ProviderTestManifestSupport.prepareRegistry()
+        let anthropicEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint?.baseURL)
+        let openRouterEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint?.baseURL)
 
         let discovered = anthropic.map {
             $0.toRegistryEntry(providerID: "anthropic", serverURL: anthropicEndpoint)

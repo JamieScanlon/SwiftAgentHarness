@@ -1,9 +1,10 @@
 import Foundation
 import SwiftAgentKit
+import SwiftAgentHarnessProviders
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("Provider message replay")
+@Suite("Provider message replay", .serialized)
 struct ProviderMessageReplayTests {
     @Test("transcript v4 round-trips thinking content blocks")
     func transcriptV4RoundTrip() throws {
@@ -36,6 +37,7 @@ struct ProviderMessageReplayTests {
 
     @Test("anthropic signed thinking preserved for anthropic target transform")
     func anthropicPreservesSignedThinking() {
+        ProviderTestManifestSupport.prepareRegistry()
         HarnessMessageEnvelopeStore.resetForTesting()
         let messageID = UUID()
         let message = Message(id: messageID, role: .assistant, content: "answer", timestamp: Date(), toolCalls: [])
@@ -62,6 +64,7 @@ struct ProviderMessageReplayTests {
 
     @Test("anthropic signed thinking converted for openai target transform")
     func openAIConvertsForeignThinking() {
+        ProviderTestManifestSupport.prepareRegistry()
         HarnessMessageEnvelopeStore.resetForTesting()
         let messageID = UUID()
         let message = Message(id: messageID, role: .assistant, content: "answer", timestamp: Date(), toolCalls: [])
@@ -89,6 +92,7 @@ struct ProviderMessageReplayTests {
 
     @Test("validateReplayTurns warns on unsigned thinking for anthropic target")
     func validateUnsignedThinking() {
+        ProviderTestManifestSupport.prepareRegistry()
         HarnessMessageEnvelopeStore.resetForTesting()
         let message = Message(id: UUID(), role: .assistant, content: "answer", timestamp: Date(), toolCalls: [])
         HarnessMessageEnvelopeStore.store(

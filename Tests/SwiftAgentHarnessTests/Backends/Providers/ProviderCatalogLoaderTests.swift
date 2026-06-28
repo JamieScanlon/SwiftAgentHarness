@@ -1,11 +1,13 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("ProviderCatalogLoader")
 struct ProviderCatalogLoaderTests {
     @Test("Bundled frontier catalogs decode from module resources")
     func bundledCatalogsDecode() throws {
+        ProviderTestManifestSupport.activateProviderResources()
         for providerID in ["openai", "anthropic", "openrouter"] {
             let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: providerID)
             #expect(!entries.isEmpty, "Expected non-empty catalog for \(providerID)")
@@ -48,7 +50,7 @@ struct ProviderCatalogLoaderTests {
     func compatForwardedToRegistry() throws {
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let sonnet = try #require(entries.first { $0.endpointModelId == "claude-sonnet-4-6" })
-        let endpoint = try #require(ProviderManifests.anthropic.defaultEndpoint)
+        let endpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint)
         let registryEntry = sonnet.toRegistryEntry(
             providerID: "anthropic",
             serverURL: endpoint.baseURL
@@ -83,20 +85,26 @@ struct ProviderCatalogLoaderTests {
 @Suite("Frontier provider static catalogs")
 struct FrontierProviderStaticCatalogTests {
     @Test("OpenAI static catalog is non-empty")
-    func openAIStaticCatalog() {
-        let provider = OpenAITextInferenceProvider()
+    func openAIStaticCatalog() throws {
+        ProviderTestManifestSupport.activateProviderResources()
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
+        let provider = OpenAITextInferenceProvider(manifest: manifest)
         #expect(!provider.staticCatalogEntries().isEmpty)
     }
 
     @Test("Anthropic static catalog is non-empty")
-    func anthropicStaticCatalog() {
-        let provider = AnthropicTextInferenceProvider()
+    func anthropicStaticCatalog() throws {
+        ProviderTestManifestSupport.activateProviderResources()
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "anthropic")
+        let provider = AnthropicTextInferenceProvider(manifest: manifest)
         #expect(!provider.staticCatalogEntries().isEmpty)
     }
 
     @Test("OpenRouter static seed is non-empty")
-    func openRouterStaticSeed() {
-        let provider = OpenRouterTextInferenceProvider()
+    func openRouterStaticSeed() throws {
+        ProviderTestManifestSupport.activateProviderResources()
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openrouter")
+        let provider = OpenRouterTextInferenceProvider(manifest: manifest)
         #expect(!provider.staticCatalogEntries().isEmpty)
     }
 }
@@ -105,12 +113,13 @@ struct FrontierProviderStaticCatalogTests {
 struct OpenRouterCatalogDiscoveryTests {
     @Test("Static seed retains curated cost over API pricing")
     func staticSeedWinsOnCost() async throws {
+        ProviderTestManifestSupport.activateProviderResources()
         let staticEntries = bundledStaticCatalogEntries(providerID: "openrouter")
         let curated = try #require(staticEntries.first { $0.endpointModelId == "openai/gpt-4o" })
         let curatedCost = try #require(curated.modelConfig.hardcodedCost)
 
         let entries = await OpenRouterCatalogDiscovery.discoverEntries(
-            manifest: ProviderManifests.openrouter,
+            manifest: try ProviderTestManifestSupport.loadManifest(for: "openrouter"),
             staticEntries: staticEntries,
             logger: nil,
             fetchModels: { _, _ in
@@ -133,6 +142,7 @@ struct OpenRouterCatalogDiscoveryTests {
 
     @Test("Unknown API model gets API-derived cost and stable UUID")
     func dynamicModelFromAPI() async throws {
+        ProviderTestManifestSupport.activateProviderResources()
         let staticEntries = bundledStaticCatalogEntries(providerID: "openrouter")
         let dynamicID = "meta-llama/llama-4-scout"
         let expectedUUID = ProviderCatalogStableID.registryUUID(
@@ -141,7 +151,7 @@ struct OpenRouterCatalogDiscoveryTests {
         )
 
         let entries = await OpenRouterCatalogDiscovery.discoverEntries(
-            manifest: ProviderManifests.openrouter,
+            manifest: try ProviderTestManifestSupport.loadManifest(for: "openrouter"),
             staticEntries: staticEntries,
             logger: nil,
             fetchModels: { _, _ in
@@ -168,10 +178,11 @@ struct OpenRouterCatalogDiscoveryTests {
     }
 
     @Test("Fetch failure falls back to static seed only")
-    func fetchFailureFallback() async {
+    func fetchFailureFallback() async throws {
+        ProviderTestManifestSupport.activateProviderResources()
         let staticEntries = bundledStaticCatalogEntries(providerID: "openrouter")
         let entries = await OpenRouterCatalogDiscovery.discoverEntries(
-            manifest: ProviderManifests.openrouter,
+            manifest: try ProviderTestManifestSupport.loadManifest(for: "openrouter"),
             staticEntries: staticEntries,
             logger: nil,
             fetchModels: { _, _ in
@@ -182,11 +193,12 @@ struct OpenRouterCatalogDiscoveryTests {
     }
 
     @Test("resolveDynamicModel uses static seed then stable fallback")
-    func resolveDynamicModel() {
+    func resolveDynamicModel() throws {
+        ProviderTestManifestSupport.activateProviderResources()
         let staticEntries = bundledStaticCatalogEntries(providerID: "openrouter")
         let context = ProviderDynamicModelContext(
             endpointModelId: "anthropic/claude-sonnet-4-6",
-            serverURL: ProviderManifests.openrouter.defaultEndpoint!.baseURL
+            serverURL: try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint!.baseURL
         )
         let resolved = OpenRouterCatalogDiscovery.resolveDynamicModel(
             context: context,
@@ -198,7 +210,7 @@ struct OpenRouterCatalogDiscoveryTests {
 
         let dynamicContext = ProviderDynamicModelContext(
             endpointModelId: "vendor/unknown-model",
-            serverURL: ProviderManifests.openrouter.defaultEndpoint!.baseURL
+            serverURL: try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint!.baseURL
         )
         let dynamic = OpenRouterCatalogDiscovery.resolveDynamicModel(
             context: dynamicContext,

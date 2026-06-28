@@ -168,7 +168,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)?
     ) -> any LLMProtocol {
         let credentialPool = (try? authProfileStore.resolveCredentialPool(
-            providerID: binding.providerId,
+            providerID: binding.canonicalProviderID(),
             authProfileLabel: binding.authProfile
         )) ?? []
         let makeCredentialStack: @Sendable (AuthProfile?) -> any LLMProtocol = { credential in
@@ -254,7 +254,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         if let override {
             return override(binding)
         }
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
             fatalError("No text-inference provider registered for binding \(binding.providerId)/\(binding.modelProtocol.rawValue)")
         }
@@ -262,7 +262,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         if let resolvedCredential {
             resolved = resolvedCredential
         } else if let credential = try? authProfileStore.resolveCredential(
-            providerID: binding.providerId,
+            providerID: binding.canonicalProviderID(),
             authProfileLabel: binding.authProfile
         ) {
             resolved = credential.profile
@@ -274,7 +274,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         }
         if requiresWireCredential, resolved?.isDispatchReady != true {
             return MissingAuthCredentialLLM(
-                providerID: binding.providerId,
+                providerID: binding.canonicalProviderID(),
                 endpointModelId: binding.endpointModelId
             )
         }

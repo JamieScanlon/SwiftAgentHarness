@@ -71,7 +71,10 @@ struct PublicAPISurfaceTests {
 
     @Test("ModelManager and ModelPoolCostLedger initializers are public")
     func modelPoolExports() async {
-        let manager = ModelManager(logger: Logger(label: "public-api-test"))
+        let manager = ModelManager(
+            logger: Logger(label: "public-api-test"),
+            authProfileStore: AuthProfileStore(environment: [:])
+        )
         let ledger = ModelPoolCostLedger()
         _ = await manager.getAvailableModels()
         await ledger.setConversationMaxUSD(conversationID: UUID(), maxUSD: 1.0)
@@ -80,7 +83,7 @@ struct PublicAPISurfaceTests {
     @Test("APILayer wiring entry points are public")
     func apiLayerWiring() async throws {
         let api = APILayer(port: 0)
-        let manager = ModelManager()
+        let manager = ModelManager(authProfileStore: AuthProfileStore(environment: [:]))
         await api.setModelManager(manager)
         await api.setBudgetReporting(NilBudgetReporting())
         await api.stop()

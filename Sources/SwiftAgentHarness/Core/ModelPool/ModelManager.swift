@@ -25,17 +25,20 @@ public actor ModelManager {
     /// Optional provider for runtime-observed performance overlays.
     private var observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)?
     private let providerPreference: ModelPoolProviderPreferenceConfiguration
+    private let authProfileStore: AuthProfileStore
 
     public init(
         logger: Logger? = nil,
         registryTopicHub: (any ModelPoolResourceTopicPublishing)? = nil,
         observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)? = nil,
-        providerPreference: ModelPoolProviderPreferenceConfiguration? = nil
+        providerPreference: ModelPoolProviderPreferenceConfiguration? = nil,
+        authProfileStore: AuthProfileStore = .production()
     ) {
         self.logger = logger
         self.registryTopicHub = registryTopicHub
         self.observedPerformanceProvider = observedPerformanceProvider
         self.providerPreference = providerPreference ?? ModelPoolProviderPreferenceConfiguration.loadFromPromptConfigBundle(logger: logger)
+        self.authProfileStore = authProfileStore
     }
 
     /// Discovers models from Ollama and LM Studio, merges into the registry, and returns DTOs.
@@ -79,9 +82,11 @@ public actor ModelManager {
         } catch {
             return nil
         }
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
-        guard let provider = ProviderRegistry.textInferenceProvider(for: modelRef.providerID),
-              let endpoint = ProviderManifests.manifest(for: modelRef.providerID)?.defaultEndpoint
+        ProviderRegistry.ensureBootstrapped()
+        guard let manifest = ProviderRegistry.optionalManifest(for: modelRef.providerID),
+              ProviderLifecycle.lifecycleState(for: manifest, authStore: authProfileStore) == .registered,
+              let provider = ProviderRegistry.textInferenceProvider(for: modelRef.providerID),
+              let endpoint = manifest.defaultEndpoint
         else {
             return nil
         }
@@ -147,9 +152,9 @@ public actor ModelManager {
     }
 
     private func syncRegistryFromDiscovery() async {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderRegistry.ensureBootstrapped()
         var discovered: [ModelRegistryEntry] = []
-        for provider in ProviderRegistry.allTextInferenceProviders() {
+        for provider in ProviderRegistry.registeredTextInferenceProviders(authStore: authProfileStore) {
             for entry in await provider.discoverEntries(logger: logger) {
                 discovered.append(entry)
             }
@@ -220,7 +225,7 @@ public actor ModelManager {
 
 
     /// Extracts max context length from Ollama model info (model_info family context_length or parameters num_ctx).
-    static func contextLength(from response: OKModelInfoResponse) -> Int? {
+    public static func contextLength(from response: OKModelInfoResponse) -> Int? {
         let family = response.details.family
         if let ctx: Int = response.modelInfo.getProperty(family: family, property: "context_length") {
             return ctx
@@ -372,7 +377,7 @@ public actor ModelManager {
     }
 
     /// If both `.thinking` and `.reasoningRequired` appear, keep required-only semantics.
-    static func normalizeReasoningCapabilities(_ caps: inout Set<LLMCapability>) {
+    public static func normalizeReasoningCapabilities(_ caps: inout Set<LLMCapability>) {
         if caps.contains(.reasoningRequired) {
             caps.remove(.thinking)
         }

@@ -184,4 +184,5 @@ public enum ProviderRegistryError: Error, Equatable, Sendable {
     case notRegistered(ProviderID)
     case slotUnavailable(ProviderCapabilitySlot, providerID: ProviderID)
     case cliBackendNotFound(providerID: ProviderID, cliBackendID: String)
+    case duplicateRegistration(ProviderID)
 }

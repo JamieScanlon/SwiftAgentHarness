@@ -1,6 +1,7 @@
 import Foundation
 import SwiftAgentKit
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 private actor FactoryFailoverStubLLM: LLMProtocol {
@@ -72,6 +73,7 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("makeBindingAdapter selects native adapter per ModelProtocol")
     func adapterDispatchPerProtocol() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let prompt = try await Self.systemPrompt()
         let model = Self.model()
         let store = AuthProfileStore(
@@ -100,10 +102,12 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("merged bundled Sonnet registry entry wraps in MultiBindingFailoverLLM")
     func mergedBundledSonnetUsesMultiBindingFailover() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let anthropicCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let openRouterCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
-        let anthropicEndpoint = try #require(ProviderManifests.anthropic.defaultEndpoint?.baseURL)
-        let openRouterEndpoint = try #require(ProviderManifests.openrouter.defaultEndpoint?.baseURL)
+        ProviderTestManifestSupport.activateProviderResources()
+        let anthropicEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint?.baseURL)
+        let openRouterEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint?.baseURL)
         let discovered = anthropicCatalog.map {
             $0.toRegistryEntry(providerID: "anthropic", serverURL: anthropicEndpoint)
         } + openRouterCatalog.map {
@@ -136,6 +140,7 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("multiple provider bindings wrap factory stack in MultiBindingFailoverLLM")
     func multiBindingUsesFailoverWrapper() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let factory = StandardModelLLMFactory(
             advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
         )
@@ -159,6 +164,7 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("factory heterogeneous binding failover uses cross-provider adapters")
     func factoryHeterogeneousBindingFailover() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         var factory = StandardModelLLMFactory(
             advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
         )

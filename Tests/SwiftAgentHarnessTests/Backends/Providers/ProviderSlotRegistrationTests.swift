@@ -1,13 +1,13 @@
 import Foundation
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 @Suite("Provider slot registration")
 struct ProviderSlotRegistrationTests {
     @Test("OpenAI bootstrap registers declared non-text stubs")
     func openAIBootstrapRegistersStubs() throws {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         let slots = try ProviderRegistry.registeredSlots(for: "openai")
         #expect(slots.contains(.textInference))
         #expect(slots.contains(.cliInferenceBackend))
@@ -18,8 +18,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("CLI backend lookup resolves openai-codex stub")
     func cliBackendLookup() throws {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         let backend = try ProviderRegistry.cliInferenceBackend(providerID: "openai", cliBackendID: "openai-codex")
         #expect(backend.cliBackendID == "openai-codex")
         #expect(backend.manifest.id == "openai")
@@ -27,8 +26,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("CLI backend lookup throws when missing")
     func cliBackendNotFound() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         #expect(throws: ProviderRegistryError.self) {
             try ProviderRegistry.cliInferenceBackend(providerID: "openai", cliBackendID: "missing")
         }
@@ -52,7 +50,7 @@ struct ProviderSlotRegistrationTests {
         try ProviderRegistry.register(
             ProviderRegistration(
                 manifest: manifest,
-                textInference: OpenAITextInferenceProvider()
+                textInference: OpenAITextInferenceProvider(manifest: manifest)
             )
         )
         #expect(throws: ProviderRegistryError.self) {
@@ -61,14 +59,14 @@ struct ProviderSlotRegistrationTests {
     }
 
     @Test("Undeclared slot registration is rejected")
-    func undeclaredSlotRegistrationRejected() {
+    func undeclaredSlotRegistrationRejected() throws {
         ProviderRegistry.resetForTesting()
-        let manifest = ProviderManifests.ollama
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "ollama")
         #expect(throws: ProviderManifestValidationError.self) {
             try ProviderRegistry.register(
                 ProviderRegistration(
                     manifest: manifest,
-                    textInference: OllamaTextInferenceProvider(),
+                    textInference: OllamaTextInferenceProvider(manifest: manifest),
                     speech: StubSpeechProvider(manifest: manifest)
                 )
             )
@@ -76,14 +74,14 @@ struct ProviderSlotRegistrationTests {
     }
 
     @Test("Missing CLI backend registration is rejected when slot declared")
-    func missingCLIBackendRegistrationRejected() {
+    func missingCLIBackendRegistrationRejected() throws {
         ProviderRegistry.resetForTesting()
-        let manifest = ProviderManifests.openai
+        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
         #expect(throws: ProviderManifestValidationError.self) {
             try ProviderRegistry.register(
                 ProviderRegistration(
                     manifest: manifest,
-                    textInference: OpenAITextInferenceProvider(),
+                    textInference: OpenAITextInferenceProvider(manifest: manifest),
                     cliInferenceBackends: []
                 )
             )
@@ -92,8 +90,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("ProviderSlotRuntimeHooks delegates to registry")
     func slotRuntimeHooksDelegate() throws {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         let backend = try ProviderSlotRuntimeHooks.cliInferenceBackend(
             providerID: "openai",
             cliBackendID: "openai-codex"
@@ -105,8 +102,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("inspectSlots reports declared vs registered matrix")
     func inspectSlotsSnapshot() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         let entries = ProviderRegistry.inspectSlots()
         let openai = entries.first { $0.providerID == "openai" }
         #expect(openai != nil)

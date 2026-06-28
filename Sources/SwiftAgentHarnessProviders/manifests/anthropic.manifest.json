@@ -24,5 +24,6 @@
     "iconRef": "anthropic-mark",
     "category": "frontier"
   },
-  "capabilitySlots": ["text-inference", "media-understanding"]
+  "capabilitySlots": ["text-inference", "media-understanding"],
+  "default": true
 }

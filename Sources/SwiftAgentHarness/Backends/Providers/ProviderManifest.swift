@@ -85,6 +85,8 @@ public struct ProviderManifest: Sendable, Equatable, Codable, Hashable {
     public var uiHints: ProviderUIHints?
     /// Capability slots this plugin participates in.
     public var capabilitySlots: [ProviderCapabilitySlot]
+    /// UI hint only: prominently offer during first-run setup. Does not affect lifecycle.
+    public var `default`: Bool
 
     public init(
         id: ProviderID,
@@ -95,7 +97,8 @@ public struct ProviderManifest: Sendable, Equatable, Codable, Hashable {
         modelSupport: ProviderModelSupport,
         cliBackends: [ProviderCLIBackend] = [],
         uiHints: ProviderUIHints? = nil,
-        capabilitySlots: [ProviderCapabilitySlot] = [.textInference]
+        capabilitySlots: [ProviderCapabilitySlot] = [.textInference],
+        default: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -106,121 +109,53 @@ public struct ProviderManifest: Sendable, Equatable, Codable, Hashable {
         self.cliBackends = cliBackends
         self.uiHints = uiHints
         self.capabilitySlots = capabilitySlots
+        self.default = `default`
     }
 
     public var defaultEndpoint: ProviderEndpoint? {
         providerEndpoints.first
     }
-}
 
-public enum ProviderManifests {
-    public static let openai = ProviderManifest(
-        id: "openai",
-        label: "OpenAI",
-        providerEndpoints: [
-            ProviderEndpoint(id: "openai-default", baseURL: URL(string: "https://api.openai.com/v1")!),
-        ],
-        providerAuthAliases: ["openai", "gpt"],
-        providerAuthChoices: [
-            ProviderAuthChoice(
-                id: "api-key",
-                label: "API Key",
-                envVars: ["SAH_OPENAI_API_KEY", "OPENAI_API_KEY"],
-                cliFlag: "--openai-key",
-                cliOption: "openaiKey",
-                authType: .apiKey
-            ),
-        ],
-        modelSupport: ProviderModelSupport(modelPrefixes: ["gpt-", "o1-", "o3-", "o4-"]),
-        cliBackends: [
-            ProviderCLIBackend(id: "openai-codex", label: "Codex CLI"),
-        ],
-        uiHints: ProviderUIHints(iconRef: "openai-mark", category: "frontier"),
-        capabilitySlots: [.textInference, .cliInferenceBackend, .speech, .imageGeneration, .realtimeVoice]
-    )
-
-    public static let anthropic = ProviderManifest(
-        id: "anthropic",
-        label: "Anthropic",
-        providerEndpoints: [
-            ProviderEndpoint(id: "anthropic-default", baseURL: URL(string: "https://api.anthropic.com")!),
-        ],
-        providerAuthAliases: ["anthropic", "claude"],
-        providerAuthChoices: [
-            ProviderAuthChoice(
-                id: "api-key",
-                label: "API Key",
-                envVars: ["SAH_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
-                cliFlag: "--anthropic-key",
-                cliOption: "anthropicKey",
-                authType: .apiKey
-            ),
-        ],
-        modelSupport: ProviderModelSupport(modelPrefixes: ["claude-"]),
-        uiHints: ProviderUIHints(iconRef: "anthropic-mark", category: "frontier"),
-        capabilitySlots: [.textInference, .mediaUnderstanding]
-    )
-
-    public static let ollama = ProviderManifest(
-        id: "ollama",
-        label: "Ollama",
-        providerEndpoints: [
-            ProviderEndpoint(id: "ollama-default", baseURL: Constants.ollamaServerURL),
-        ],
-        providerAuthAliases: ["ollama"],
-        providerAuthChoices: [],
-        modelSupport: ProviderModelSupport(modelPrefixes: []),
-        uiHints: ProviderUIHints(iconRef: "ollama-mark", category: "local"),
-        capabilitySlots: [.textInference]
-    )
-
-    public static let lmstudio = ProviderManifest(
-        id: "lmstudio",
-        label: "LM Studio",
-        providerEndpoints: [
-            ProviderEndpoint(id: "lmstudio-default", baseURL: Constants.lmStudioServerURL),
-        ],
-        providerAuthAliases: ["lmstudio", "lm-studio"],
-        providerAuthChoices: [],
-        modelSupport: ProviderModelSupport(modelPrefixes: []),
-        uiHints: ProviderUIHints(iconRef: "lmstudio-mark", category: "local"),
-        capabilitySlots: [.textInference]
-    )
-
-    public static let openrouter = ProviderManifest(
-        id: "openrouter",
-        label: "OpenRouter",
-        providerEndpoints: [
-            ProviderEndpoint(id: "openrouter-default", baseURL: URL(string: "https://openrouter.ai/api/v1")!),
-        ],
-        providerAuthAliases: ["openrouter"],
-        providerAuthChoices: [
-            ProviderAuthChoice(
-                id: "api-key",
-                label: "API Key",
-                envVars: ["SAH_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
-                authType: .apiKey
-            ),
-        ],
-        modelSupport: ProviderModelSupport(modelPrefixes: []),
-        uiHints: ProviderUIHints(iconRef: "openrouter-mark", category: "aggregator"),
-        capabilitySlots: [.textInference]
-    )
-
-    public static let all: [ProviderManifest] = [openai, anthropic, ollama, lmstudio, openrouter]
-
-    public static func manifest(for providerID: ProviderID) -> ProviderManifest? {
-        all.first { $0.id == providerID }
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ProviderID.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        providerEndpoints = try container.decode([ProviderEndpoint].self, forKey: .providerEndpoints)
+        providerAuthAliases = try container.decodeIfPresent([String].self, forKey: .providerAuthAliases) ?? []
+        providerAuthChoices = try container.decodeIfPresent([ProviderAuthChoice].self, forKey: .providerAuthChoices) ?? []
+        modelSupport = try container.decode(ProviderModelSupport.self, forKey: .modelSupport)
+        cliBackends = try container.decodeIfPresent([ProviderCLIBackend].self, forKey: .cliBackends) ?? []
+        uiHints = try container.decodeIfPresent(ProviderUIHints.self, forKey: .uiHints)
+        capabilitySlots = try container.decodeIfPresent([ProviderCapabilitySlot].self, forKey: .capabilitySlots) ?? [.textInference]
+        `default` = try container.decodeIfPresent(Bool.self, forKey: .default) ?? false
     }
 
-    public static func manifest(forAlias alias: String) -> ProviderManifest? {
-        let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return all.first { manifest in
-            manifest.id == normalized || manifest.providerAuthAliases.contains(normalized)
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case providerEndpoints
+        case providerAuthAliases
+        case providerAuthChoices
+        case modelSupport
+        case cliBackends
+        case uiHints
+        case capabilitySlots
+        case `default`
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encode(providerEndpoints, forKey: .providerEndpoints)
+        try container.encode(providerAuthAliases, forKey: .providerAuthAliases)
+        try container.encode(providerAuthChoices, forKey: .providerAuthChoices)
+        try container.encode(modelSupport, forKey: .modelSupport)
+        try container.encode(cliBackends, forKey: .cliBackends)
+        try container.encodeIfPresent(uiHints, forKey: .uiHints)
+        try container.encode(capabilitySlots, forKey: .capabilitySlots)
+        if `default` {
+            try container.encode(`default`, forKey: .default)
         }
-    }
-
-    public static func providerID(forAlias alias: String) -> ProviderID? {
-        manifest(forAlias: alias)?.id
     }
 }

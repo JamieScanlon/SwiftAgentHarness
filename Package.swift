@@ -13,6 +13,10 @@ let package = Package(
             name: "SwiftAgentHarness",
             targets: ["SwiftAgentHarness"]
         ),
+        .library(
+            name: "SwiftAgentHarnessProviders",
+            targets: ["SwiftAgentHarnessProviders"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.19.0"),
@@ -34,14 +38,25 @@ let package = Package(
             ],
             resources: [
                 .process("Backends/ExecutionEnvironments/manifests"),
-                .process("Backends/Providers/manifests"),
-                .process("Backends/Providers/catalogs"),
+            ]
+        ),
+        .target(
+            name: "SwiftAgentHarnessProviders",
+            dependencies: [
+                "SwiftAgentHarness",
+                .product(name: "OllamaKit", package: "OllamaKit"),
+                .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
+            ],
+            resources: [
+                .process("manifests"),
+                .process("catalogs"),
             ]
         ),
         .testTarget(
             name: "SwiftAgentHarnessTests",
             dependencies: [
                 "SwiftAgentHarness",
+                "SwiftAgentHarnessProviders",
                 .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitOrchestrator", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitSkills", package: "SwiftAgentKit"),

@@ -5,6 +5,7 @@ import SwiftAgentKit
 import SwiftAgentKitOrchestrator
 import SwiftAgentKitMCP
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 private extension MCPManager {
@@ -44,7 +45,7 @@ struct OrchestratorRuntimeServiceTests {
         session: HarnessRuntimeSession,
         model: Model
     ) async throws -> ModelConversation {
-        ProviderRegistry.bootstrapBuiltInsIfNeeded()
+        ProviderTestManifestSupport.prepareRegistry()
         _ = try await session.createConversation(with: model, userSystemPrompt: "sys", topic: nil, description: nil)
         let conversation = try #require(await session.currentConversation())
         await session.testing_setCurrentConversationID(conversation.id)
