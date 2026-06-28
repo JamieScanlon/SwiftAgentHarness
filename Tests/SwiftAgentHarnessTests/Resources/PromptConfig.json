@@ -4,7 +4,10 @@
     "includeAgentSkills": false
   },
   "settings": {
-    "skillsFolderPath": "/skills"
+    "skillsFolderPath": "/skills",
+    "modelPoolProviderPreference": {
+      "order": ["anthropic", "openai", "ollama", "lmstudio", "openrouter"]
+    }
   },
   "agentHarness": {
     "strictAgentHarnessPrompts": true

@@ -68,6 +68,8 @@ struct BundledCatalogModelRow: Codable, Sendable {
     var cost: BundledCatalogCost?
     var requestFeatures: BundledCatalogRequestFeatures?
     var compat: ProviderModelCompat?
+    var canonicalModelKey: String?
+    var modelFamily: String?
 
     func toProviderCatalogEntry() -> ProviderCatalogEntry {
         let protocolValue = ModelProtocol(rawValue: modelProtocol) ?? .openAIAPI
@@ -76,7 +78,9 @@ struct BundledCatalogModelRow: Codable, Sendable {
             modelProtocol: protocolValue,
             hardcodedCapabilities: (capabilities ?? []).compactMap { LLMCapability(rawValue: $0) },
             hardcodedRequestFeatures: requestFeatures?.toModelRequestFeatures(),
-            hardcodedCost: cost?.toModelCostBudget()
+            hardcodedCost: cost?.toModelCostBudget(),
+            canonicalModelKey: canonicalModelKey,
+            modelFamily: modelFamily
         )
         return ProviderCatalogEntry(
             registryID: registryId,
@@ -89,7 +93,9 @@ struct BundledCatalogModelRow: Codable, Sendable {
                 let set = Set(caps.compactMap { LLMCapability(rawValue: $0) })
                 return set.isEmpty ? nil : set
             },
-            compat: compat
+            compat: compat,
+            canonicalModelKey: canonicalModelKey,
+            modelFamily: modelFamily
         )
     }
 }

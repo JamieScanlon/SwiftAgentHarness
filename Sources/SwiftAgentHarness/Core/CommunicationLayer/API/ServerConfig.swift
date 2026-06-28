@@ -68,6 +68,8 @@ public struct ServerConfig {
     public var modelPoolFailoverMaxRetriesOverride: Int? = nil
     public var modelPoolFailoverBaseDelayOverride: TimeInterval? = nil
     public var modelPoolFailoverMaxDelayOverride: TimeInterval? = nil
+    /// Override provider preference order for multi-binding merge (first = primary).
+    public var modelPoolProviderPreferenceOrderOverride: [ProviderID]? = nil
     /// Poll interval for dynamic capability discovery refresh (`tools/registry` etc.).
     public var dynamicCapabilityDiscoveryPollSeconds: UInt64 = 15
     /// Optional HMAC secret for signed `conversation/{id}/events` resume tokens on WebSocket subscribe. When unset, clients cannot use `resumeToken`.
@@ -133,6 +135,7 @@ public struct ServerConfig {
         modelPoolFailoverMaxRetriesOverride: Int? = nil,
         modelPoolFailoverBaseDelayOverride: TimeInterval? = nil,
         modelPoolFailoverMaxDelayOverride: TimeInterval? = nil,
+        modelPoolProviderPreferenceOrderOverride: [ProviderID]? = nil,
         dynamicCapabilityDiscoveryPollSeconds: UInt64 = 15,
         websocketResumeTokenHMACSecret: String? = nil,
         topicReplayCapacities: TopicReplayCapacityConfiguration = .default,
@@ -183,6 +186,7 @@ public struct ServerConfig {
         self.modelPoolFailoverMaxRetriesOverride = modelPoolFailoverMaxRetriesOverride.map { max(0, $0) }
         self.modelPoolFailoverBaseDelayOverride = modelPoolFailoverBaseDelayOverride.map { max(0, $0) }
         self.modelPoolFailoverMaxDelayOverride = modelPoolFailoverMaxDelayOverride.map { max(0, $0) }
+        self.modelPoolProviderPreferenceOrderOverride = modelPoolProviderPreferenceOrderOverride
         self.dynamicCapabilityDiscoveryPollSeconds = max(1, dynamicCapabilityDiscoveryPollSeconds)
         self.websocketResumeTokenHMACSecret = websocketResumeTokenHMACSecret
         self.topicReplayCapacities = topicReplayCapacities

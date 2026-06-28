@@ -6,6 +6,8 @@
       "registryId": "c3000003-0003-4000-8000-000000000001",
       "endpointModelId": "anthropic/claude-sonnet-4-6",
       "displayName": "Claude Sonnet 4.6 (via OpenRouter)",
+      "canonicalModelKey": "claude-sonnet-4-6",
+      "modelFamily": "claude-sonnet",
       "modelProtocol": "openAIAPI",
       "capabilities": ["completion", "tools", "vision", "thinking"],
       "maxContextLength": 200000,

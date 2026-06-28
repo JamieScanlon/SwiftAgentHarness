@@ -151,8 +151,14 @@ def preserve_registry_ids(
     existing: dict[str, dict[str, Any]],
 ) -> None:
     for endpoint_id, row in merged.items():
-        if endpoint_id in existing and "registryId" in existing[endpoint_id]:
-            row["registryId"] = existing[endpoint_id]["registryId"]
+        prior = existing.get(endpoint_id)
+        if prior is None:
+            continue
+        if "registryId" in prior:
+            row["registryId"] = prior["registryId"]
+        for optional_key in ("canonicalModelKey", "modelFamily"):
+            if optional_key in prior:
+                row[optional_key] = prior[optional_key]
 
 
 def apply_overrides(

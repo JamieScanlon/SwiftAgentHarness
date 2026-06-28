@@ -115,9 +115,10 @@ public enum TransientErrorClassifier {
 
 /// Mapping from thrown errors to cross-binding failover decisions.
 ///
-/// Uses ``TransientErrorClassifier`` for transient classes, and additionally marks
-/// binding-scoped terminal classes (for example `modelNotFound` on one backend) as
-/// eligible to try the next binding for the same logical model.
+/// Transient errors (rate limits, timeouts, network blips) advance to the next binding via
+/// ``TransientErrorClassifier``. The ``LLMError`` switch below handles binding-scoped terminal
+/// classes that should still rotate (`modelNotFound`, `unsupportedCapability`, …) versus
+/// truly terminal classes (`authenticationFailed`, `invalidRequest`, …).
 public enum BindingFailoverClassifier {
     public static func classify(_ error: Error, providerID: ProviderID? = nil) -> BindingFailoverDecision {
         if error is CancellationError { return .terminal }
@@ -135,10 +136,12 @@ public enum BindingFailoverClassifier {
         switch llmError {
         case .modelNotFound, .unsupportedCapability, .invalidResponse, .imageGenerationError:
             return .tryNextBinding
+        case .rateLimitExceeded, .timeout:
+            return .tryNextBinding
         case .networkError(let inner):
             return classify(inner, providerID: providerID)
         case .invalidRequest, .quotaExceeded, .authenticationFailed, .unknown,
-             .rateLimitExceeded, .timeout, .queueFull, .queueTimeout:
+             .queueFull, .queueTimeout:
             return .terminal
         }
     }

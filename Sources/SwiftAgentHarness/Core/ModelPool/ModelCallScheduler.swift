@@ -40,14 +40,14 @@ public actor ModelCallScheduler: ModelCallScheduling {
     private var refillTickerTask: Task<Void, Never>?
     private let onPoolHealthChange: (@Sendable (PoolHealthPayload) async -> Void)?
     /// Notified after every per-model in-flight delta (acquire/release). Drives ``ModelStatePayload/inFlightCount``.
-    private let onModelInFlightChange: (@Sendable (UUID, Int) async -> Void)?
+    private let onModelInFlightChange: (@Sendable (UUID, Int, Int?) async -> Void)?
 
     public init(
         maxConcurrent: Int = 8,
         backgroundStarvationGrace: TimeInterval = 5.0,
         policy: ModelCallSchedulerPolicy = ModelCallSchedulerPolicy(),
         onPoolHealthChange: (@Sendable (PoolHealthPayload) async -> Void)? = nil,
-        onModelInFlightChange: (@Sendable (UUID, Int) async -> Void)? = nil
+        onModelInFlightChange: (@Sendable (UUID, Int, Int?) async -> Void)? = nil
     ) {
         self.maxConcurrent = max(1, maxConcurrent)
         self.backgroundStarvationGrace = max(0, backgroundStarvationGrace)
@@ -78,6 +78,53 @@ public actor ModelCallScheduler: ModelCallScheduling {
 
     public func inFlightCount(for modelID: UUID) -> Int {
         inFlightByModel[modelID] ?? 0
+    }
+
+    /// Effective concurrent-call cap for `modelID` (per-model override, policy default, then global `maxConcurrent`).
+    public func concurrencyLimit(for modelID: UUID) -> Int {
+        effectiveModelCap(for: modelID) ?? maxConcurrent
+    }
+
+    /// Wires scheduler in-flight notifications into ``ModelInvocationCoordinator`` for state payload publishing.
+    public static func wiredForInvocationTracking(
+        coordinator: ModelInvocationCoordinator,
+        maxConcurrent: Int = 8,
+        backgroundStarvationGrace: TimeInterval = 5.0,
+        policy: ModelCallSchedulerPolicy = ModelCallSchedulerPolicy(),
+        onPoolHealthChange: (@Sendable (PoolHealthPayload) async -> Void)? = nil
+    ) -> ModelCallScheduler {
+        ModelCallScheduler(
+            maxConcurrent: maxConcurrent,
+            backgroundStarvationGrace: backgroundStarvationGrace,
+            policy: policy,
+            onPoolHealthChange: onPoolHealthChange,
+            onModelInFlightChange: { modelID, count, concurrencyLimit in
+                await coordinator.recordInFlight(
+                    modelID: modelID,
+                    count: count,
+                    concurrencyLimit: concurrencyLimit
+                )
+            }
+        )
+    }
+
+    /// When both arguments are nil, returns a scheduler wired to a fresh coordinator.
+    public static func resolveInvocationTrackingPair(
+        scheduler: (any ModelCallScheduling)?,
+        coordinator: (any ModelInvocationLifecycleTracking)?
+    ) -> (any ModelCallScheduling, any ModelInvocationLifecycleTracking) {
+        if let scheduler, let coordinator {
+            return (scheduler, coordinator)
+        }
+        if scheduler == nil, coordinator == nil {
+            let coordinator = ModelInvocationCoordinator()
+            let scheduler = wiredForInvocationTracking(coordinator: coordinator)
+            return (scheduler, coordinator)
+        }
+        if let scheduler {
+            return (scheduler, coordinator ?? ModelInvocationCoordinator())
+        }
+        return (ModelCallScheduler(), coordinator!)
     }
 
     public func acquire(for modelID: UUID, priority: ModelRequestPriority) async {
@@ -154,7 +201,7 @@ public actor ModelCallScheduler: ModelCallScheduling {
 
     private func emitModelInFlight(modelID: UUID, count: Int) async {
         guard let onModelInFlightChange else { return }
-        await onModelInFlightChange(modelID, count)
+        await onModelInFlightChange(modelID, count, concurrencyLimit(for: modelID))
     }
 
     private func resumeWaitersIfPossible() {

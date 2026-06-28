@@ -318,6 +318,33 @@ struct MultiBindingFailoverLLMTests {
         #expect(hasSucceededSecondary)
     }
 
+    @Test("secondary binding failure does not emit spurious succeeded telemetry")
+    func secondaryFailureOmitsPrematureSucceeded() async throws {
+        let collector = MultiBindingAttemptCollector()
+        let primary = BindingScriptedLLM(sendQueue: [.failure(LLMError.timeout)])
+        let secondary = BindingScriptedLLM(sendQueue: [.failure(LLMError.modelNotFound("missing"))])
+        let llm = MultiBindingFailoverLLM(
+            bindings: [Self.binding("a", priority: 0), Self.binding("b", priority: 1)],
+            makeBindingLLM: { binding in
+                binding.endpointModelId == "a" ? primary : secondary
+            },
+            modelID: UUID(),
+            attemptObserver: { observation in
+                await collector.append(observation)
+            }
+        )
+        await #expect(throws: LLMError.self) {
+            _ = try await llm.send([], config: LLMRequestConfig())
+        }
+        let rows = await collector.rows
+        #expect(!rows.contains { row in
+            row.kind == .bindingFailover && row.outcome == .succeeded && row.endpointModelID == "b"
+        })
+        #expect(rows.contains { row in
+            row.kind == .bindingFailover && row.outcome == .terminalFailure && row.endpointModelID == "b"
+        })
+    }
+
     @Test("auth probe remains visible through retry prompt-cache and response-cache wrappers")
     func authProbeDelegatesThroughWrappers() async throws {
         let deniedBase = AuthProbeBindingLLM(allowAuth: false)

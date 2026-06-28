@@ -12,6 +12,10 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
     public var authProfile: String?
     /// Downward-only override of the model entry's ``ModelRequestFeatures/toolChoiceModes``.
     public var toolChoiceModesOverride: Set<ToolChoiceMode>?
+    /// Per-binding pricing (may differ from the entry-level primary cost on multi-binding rows).
+    public var cost: ModelCostBudget?
+    /// Per-binding routing metadata (rate limits, etc.).
+    public var routing: ModelRoutingMetadata?
 
     public init(
         providerId: String,
@@ -20,7 +24,9 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         serverURL: URL,
         priority: Int = 0,
         authProfile: String? = nil,
-        toolChoiceModesOverride: Set<ToolChoiceMode>? = nil
+        toolChoiceModesOverride: Set<ToolChoiceMode>? = nil,
+        cost: ModelCostBudget? = nil,
+        routing: ModelRoutingMetadata? = nil
     ) {
         self.providerId = providerId
         self.modelProtocol = modelProtocol
@@ -29,6 +35,8 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         self.priority = priority
         self.authProfile = authProfile
         self.toolChoiceModesOverride = toolChoiceModesOverride
+        self.cost = cost
+        self.routing = routing
     }
 }
 
@@ -52,6 +60,8 @@ public struct ModelRegistryEntry: Sendable, Hashable {
     public var routing: ModelRoutingMetadata?
     /// Provider-specific declarative quirks (spec: catalog `compat` block).
     public var compat: ProviderModelCompat?
+    /// Stable logical-model identity for cross-provider binding merge (family + version).
+    public var canonicalModelKey: String?
 
     public init(
         id: UUID,
@@ -66,7 +76,8 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         cost: ModelCostBudget? = nil,
         performance: ModelObservedPerformance? = nil,
         routing: ModelRoutingMetadata? = nil,
-        compat: ProviderModelCompat? = nil
+        compat: ProviderModelCompat? = nil,
+        canonicalModelKey: String? = nil
     ) {
         self.id = id
         self.family = family
@@ -81,6 +92,7 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         self.performance = performance
         self.routing = routing
         self.compat = compat
+        self.canonicalModelKey = canonicalModelKey
     }
 
     /// Primary wire target for the shared ``Model`` DTO (lowest `priority` wins).
@@ -129,13 +141,16 @@ public struct ModelRegistryEntry: Sendable, Hashable {
 
     /// Builds a minimal registry row from an existing ``Model`` (e.g. cache hydration).
     public static func from(model: Model, cost: ModelCostBudget? = nil) -> ModelRegistryEntry {
+        let resolvedCost = cost ?? model.cost
         let binding = ProviderBinding(
             providerId: model.modelProtocol.rawValue,
             modelProtocol: model.modelProtocol,
             endpointModelId: model.modelName,
             serverURL: model.serverURL,
             priority: 0,
-            authProfile: nil
+            authProfile: nil,
+            cost: resolvedCost,
+            routing: model.routing
         )
         return ModelRegistryEntry(
             id: model.id,
@@ -147,7 +162,7 @@ public struct ModelRegistryEntry: Sendable, Hashable {
             maxOutputTokens: nil,
             providers: [binding],
             useClasses: [],
-            cost: cost ?? model.cost,
+            cost: resolvedCost,
             performance: model.performance,
             routing: model.routing
         )

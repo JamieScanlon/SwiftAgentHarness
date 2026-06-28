@@ -31,6 +31,8 @@ public struct ProviderCatalogEntry: Sendable {
     public var maxOutputTokens: Int?
     public var capabilities: Set<LLMCapability>?
     public var compat: ProviderModelCompat?
+    public var canonicalModelKey: String?
+    public var modelFamily: String?
 
     public init(
         registryID: UUID,
@@ -40,7 +42,9 @@ public struct ProviderCatalogEntry: Sendable {
         maxContextLength: Int? = nil,
         maxOutputTokens: Int? = nil,
         capabilities: Set<LLMCapability>? = nil,
-        compat: ProviderModelCompat? = nil
+        compat: ProviderModelCompat? = nil,
+        canonicalModelKey: String? = nil,
+        modelFamily: String? = nil
     ) {
         self.registryID = registryID
         self.endpointModelId = endpointModelId
@@ -50,6 +54,8 @@ public struct ProviderCatalogEntry: Sendable {
         self.maxOutputTokens = maxOutputTokens
         self.capabilities = capabilities
         self.compat = compat
+        self.canonicalModelKey = canonicalModelKey ?? modelConfig.canonicalModelKey
+        self.modelFamily = modelFamily ?? modelConfig.modelFamily
     }
 
     public func toRegistryEntry(
@@ -59,6 +65,9 @@ public struct ProviderCatalogEntry: Sendable {
         priority: Int = 0,
         toolChoiceModesOverride: Set<ToolChoiceMode>? = nil
     ) -> ModelRegistryEntry {
+        let entryCost = modelConfig.hardcodedCost
+        let entryRouting = modelConfig.hardcodedRouting
+            ?? ModelManager.defaultRoutingMetadata(for: modelConfig.modelProtocol)
         let binding = ProviderBinding(
             providerId: providerID,
             modelProtocol: modelConfig.modelProtocol,
@@ -66,11 +75,15 @@ public struct ProviderCatalogEntry: Sendable {
             serverURL: serverURL,
             priority: priority,
             authProfile: authProfile,
-            toolChoiceModesOverride: toolChoiceModesOverride
+            toolChoiceModesOverride: toolChoiceModesOverride,
+            cost: entryCost,
+            routing: entryRouting
         )
+        let resolvedKey = canonicalModelKey
+        let resolvedFamily = modelFamily ?? resolvedKey.flatMap(LogicalModelKey.inferredFamily(from:))
         return ModelRegistryEntry(
             id: registryID,
-            family: providerID,
+            family: resolvedFamily,
             displayName: displayName ?? endpointModelId,
             capabilities: capabilities ?? Set(modelConfig.hardcodedCapabilities),
             requestFeatures: ModelManager.mergedRequestFeaturesFromConfig(modelConfig),
@@ -78,10 +91,10 @@ public struct ProviderCatalogEntry: Sendable {
             maxOutputTokens: maxOutputTokens,
             providers: [binding],
             useClasses: [],
-            cost: modelConfig.hardcodedCost,
-            routing: modelConfig.hardcodedRouting
-                ?? ModelManager.defaultRoutingMetadata(for: modelConfig.modelProtocol),
-            compat: compat
+            cost: entryCost,
+            routing: entryRouting,
+            compat: compat,
+            canonicalModelKey: resolvedKey
         )
     }
 }

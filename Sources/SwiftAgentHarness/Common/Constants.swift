@@ -72,6 +72,10 @@ public struct ModelConfig: Sendable {
     public var hardcodedCost: ModelCostBudget?
     /// Optional routing metadata overlay attached to discovered registry entries.
     public var hardcodedRouting: ModelRoutingMetadata?
+    /// Stable logical-model identity for cross-provider binding merge.
+    public var canonicalModelKey: String?
+    /// Coarse model family for ranking (e.g. `claude-sonnet`), distinct from ``canonicalModelKey``.
+    public var modelFamily: String?
 
     public init(
         uuid: UUID,
@@ -79,7 +83,9 @@ public struct ModelConfig: Sendable {
         hardcodedCapabilities: [LLMCapability] = [],
         hardcodedRequestFeatures: ModelRequestFeatures? = nil,
         hardcodedCost: ModelCostBudget? = nil,
-        hardcodedRouting: ModelRoutingMetadata? = nil
+        hardcodedRouting: ModelRoutingMetadata? = nil,
+        canonicalModelKey: String? = nil,
+        modelFamily: String? = nil
     ) {
         self.uuid = uuid
         self.modelProtocol = modelProtocol
@@ -87,6 +93,8 @@ public struct ModelConfig: Sendable {
         self.hardcodedRequestFeatures = hardcodedRequestFeatures
         self.hardcodedCost = hardcodedCost
         self.hardcodedRouting = hardcodedRouting
+        self.canonicalModelKey = canonicalModelKey
+        self.modelFamily = modelFamily
     }
 }
 

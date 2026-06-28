@@ -3,6 +3,23 @@ import Logging
 import SwiftAgentKit
 import OllamaKit
 
+struct LMStudioGetModelsResponse: Codable, Sendable {
+    var data: [LMStudioGetModelsResponseData]
+}
+
+struct LMStudioGetModelsResponseData: Codable, Sendable {
+    var id: String
+    var object: String
+    var type: String
+    var publisher: String
+    var arch: String
+    var compatibility_type: String
+    var quantization: String
+    var state: String
+    var max_context_length: Int
+    var capabilities: [String]?
+}
+
 public struct OpenAITextInferenceProvider: TextInferenceProviding {
     public let manifest: ProviderManifest = ProviderManifests.openai
     public let modelProtocol: ModelProtocol = .openAIAPI

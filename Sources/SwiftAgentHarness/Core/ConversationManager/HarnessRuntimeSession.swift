@@ -129,14 +129,18 @@ public actor HarnessRuntimeSession {
         registryEntryProvider: (@Sendable (UUID) async -> ModelRegistryEntry?)? = nil,
         rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])? = nil,
         delegateCostTracker: (any DelegateCostTracking)? = nil,
-        callScheduler: any ModelCallScheduling = ModelCallScheduler(),
-        invocationCoordinator: any ModelInvocationLifecycleTracking = ModelInvocationCoordinator(),
+        callScheduler: (any ModelCallScheduling)? = nil,
+        invocationCoordinator: (any ModelInvocationLifecycleTracking)? = nil,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         contextEngineSlotID: String = "default",
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         compactionProviderFactory: (any ContextCompactionProviderFactoring)? = nil,
         modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService())
     ) {
+        let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
+            scheduler: callScheduler,
+            coordinator: invocationCoordinator
+        )
         let (resolvedFactory, resolvedTracker) = ModelPoolRuntimeWiring.resolve(
             llmFactory: llmFactory,
             delegateCostTracker: delegateCostTracker,
@@ -157,7 +161,7 @@ public actor HarnessRuntimeSession {
             logger: logger
         )
         let compactionScheduling = ContextCompactionLLMScheduling(
-            scheduler: callScheduler,
+            scheduler: resolvedScheduler,
             modelID: ContextCompactionLLMScheduling.modelID(
                 model: transformConfig.contextCompaction.model,
                 ollamaServerURL: transformConfig.contextCompaction.ollamaServerURL
@@ -182,8 +186,8 @@ public actor HarnessRuntimeSession {
             registryEntryProvider: registryEntryProvider,
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: resolvedTracker,
-            callScheduler: callScheduler,
-            invocationCoordinator: invocationCoordinator,
+            callScheduler: resolvedScheduler,
+            invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
             modeRegistry: modeRegistry,
@@ -466,8 +470,8 @@ public actor HarnessRuntimeSession {
         registryEntryProvider: (@Sendable (UUID) async -> ModelRegistryEntry?)? = nil,
         rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])? = nil,
         delegateCostTracker: (any DelegateCostTracking)? = nil,
-        callScheduler: any ModelCallScheduling = ModelCallScheduler(),
-        invocationCoordinator: any ModelInvocationLifecycleTracking = ModelInvocationCoordinator(),
+        callScheduler: (any ModelCallScheduling)? = nil,
+        invocationCoordinator: (any ModelInvocationLifecycleTracking)? = nil,
         compactionCoordinator: CompactionConcurrencyCoordinator = CompactionConcurrencyCoordinator(),
         contextEngine: (any ContextEngine)? = nil,
         derivedEventStore: (any DerivedEventStore)? = nil,
@@ -476,6 +480,10 @@ public actor HarnessRuntimeSession {
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
     ) {
+        let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
+            scheduler: callScheduler,
+            coordinator: invocationCoordinator
+        )
         let stack = ConversationPersistenceStack.makeForTesting(
             container: container,
             logger: logger,
@@ -496,8 +504,8 @@ public actor HarnessRuntimeSession {
             registryEntryProvider: registryEntryProvider,
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: delegateCostTracker,
-            callScheduler: callScheduler,
-            invocationCoordinator: invocationCoordinator,
+            callScheduler: resolvedScheduler,
+            invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: contextEngine,
             modeRegistry: modeRegistry,

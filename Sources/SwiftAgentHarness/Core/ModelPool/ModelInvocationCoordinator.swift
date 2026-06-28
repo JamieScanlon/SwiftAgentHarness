@@ -42,6 +42,7 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
     private var streamingReasoningOnly: [UUID: Bool] = [:]
     private var connectingTasks: [UUID: Task<Void, Never>] = [:]
     private var latestInFlight: [UUID: Int] = [:]
+    private var latestConcurrencyLimit: [UUID: Int] = [:]
     /// Wall-clock of the most recent terminal phase per model (`.done`/`.errored`/`.cancelled`).
     /// Surfaces on ``ModelStatePayload/lastCompletedAt`` so subscribers can render "x ago" without
     /// keeping their own latency history. Reset only on first observation; never cleared.
@@ -173,11 +174,15 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
 
     /// Updates the cached per-model in-flight count (sourced from ``ModelCallScheduler``) and republishes
     /// `model/{id}/state` if the rendered payload changed.
-    public func recordInFlight(modelID: UUID, count: Int) async {
+    public func recordInFlight(modelID: UUID, count: Int, concurrencyLimit: Int? = nil) async {
         if count > 0 {
             latestInFlight[modelID] = count
+            if let concurrencyLimit {
+                latestConcurrencyLimit[modelID] = concurrencyLimit
+            }
         } else {
             latestInFlight.removeValue(forKey: modelID)
+            latestConcurrencyLimit.removeValue(forKey: modelID)
         }
         await publishIfPayloadChanged(modelID: modelID)
     }
@@ -360,10 +365,10 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
         )
         let aggregateSnapshot = await communicationAggregates?.snapshot(for: modelID) ?? ModelCommunicationAggregatesSnapshot()
         let inFlight = latestInFlight[modelID]
-        let limit = 8
+        let limit = latestConcurrencyLimit[modelID]
         let accepting: Bool?
         let status: ModelStatePayload.SchedulabilityStatus?
-        if let inFlight {
+        if let inFlight, let limit {
             accepting = inFlight < limit
             status = inFlight >= limit ? .saturated : .accepting
         } else {

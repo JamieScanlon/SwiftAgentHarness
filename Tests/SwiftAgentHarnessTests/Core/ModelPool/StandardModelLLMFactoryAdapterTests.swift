@@ -98,6 +98,42 @@ struct StandardModelLLMFactoryAdapterTests {
         }
     }
 
+    @Test("merged bundled Sonnet registry entry wraps in MultiBindingFailoverLLM")
+    func mergedBundledSonnetUsesMultiBindingFailover() async throws {
+        let anthropicCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
+        let openRouterCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
+        let anthropicEndpoint = try #require(ProviderManifests.anthropic.defaultEndpoint?.baseURL)
+        let openRouterEndpoint = try #require(ProviderManifests.openrouter.defaultEndpoint?.baseURL)
+        let discovered = anthropicCatalog.map {
+            $0.toRegistryEntry(providerID: "anthropic", serverURL: anthropicEndpoint)
+        } + openRouterCatalog.map {
+            $0.toRegistryEntry(providerID: "openrouter", serverURL: openRouterEndpoint)
+        }
+        let merged = LogicalModelRegistryMerger.merge(
+            entries: discovered,
+            providerPreference: .specDefaults
+        )
+        let sonnet = try #require(merged.values.first { $0.canonicalModelKey == "claude-sonnet-4-6" })
+        #expect(sonnet.providers.count == 2)
+
+        let factory = StandardModelLLMFactory(
+            advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
+        )
+        let llm = factory.makeBaseLLM(
+            model: sonnet.toModel(),
+            providerBindings: sonnet.providers,
+            conversationID: UUID(),
+            ownerAccountID: nil,
+            systemPrompt: try await Self.systemPrompt(),
+            logger: nil
+        )
+        guard let budget = llm as? BudgetEnforcingLLM else {
+            Issue.record("expected BudgetEnforcingLLM wrapper")
+            return
+        }
+        #expect(budget.base is MultiBindingFailoverLLM)
+    }
+
     @Test("multiple provider bindings wrap factory stack in MultiBindingFailoverLLM")
     func multiBindingUsesFailoverWrapper() async throws {
         let factory = StandardModelLLMFactory(

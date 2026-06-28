@@ -115,6 +115,23 @@ struct ModelInvocationCoordinatorTests {
         #expect(tuples[0].1.inFlightCount == nil)
     }
 
+    @Test("recordInFlight with concurrencyLimit drives schedulability status")
+    func recordInFlightConcurrencyLimit() async throws {
+        let collector = PhasePayloadCollector()
+        let coordinator = ModelInvocationCoordinator { modelID, payload in
+            await collector.appendTuple((modelID, payload))
+        }
+        let modelID = UUID()
+        await coordinator.recordTransition(modelID: modelID, phase: .streaming, callID: UUID())
+        await coordinator.recordInFlight(modelID: modelID, count: 3, concurrencyLimit: 3)
+        let tuples = await collector.tuples
+        let payload = try #require(tuples.last?.1)
+        #expect(payload.concurrencyLimit == 3)
+        #expect(payload.inFlightCount == 3)
+        #expect(payload.accepting == false)
+        #expect(payload.status == .saturated)
+    }
+
     @Test("Conversation sink fires for calls with conversationID")
     func conversationSinkFiresWithConversationID() async throws {
         let modelCollector = PhasePayloadCollector()

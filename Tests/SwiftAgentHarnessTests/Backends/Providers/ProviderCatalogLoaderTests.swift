@@ -32,6 +32,16 @@ struct ProviderCatalogLoaderTests {
         let sonnet = try #require(entries.first { $0.endpointModelId == "claude-sonnet-4-6" })
         #expect(sonnet.compat?.thinkingFormat == "anthropic-extended-thinking")
         #expect(sonnet.compat?.supportsEagerToolInputStreaming == true)
+        #expect(sonnet.canonicalModelKey == "claude-sonnet-4-6")
+        #expect(sonnet.modelFamily == "claude-sonnet")
+    }
+
+    @Test("OpenRouter sonnet row shares canonicalModelKey with Anthropic")
+    func openRouterCanonicalKey() throws {
+        let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
+        let sonnet = try #require(entries.first { $0.endpointModelId == "anthropic/claude-sonnet-4-6" })
+        #expect(sonnet.canonicalModelKey == "claude-sonnet-4-6")
+        #expect(sonnet.modelFamily == "claude-sonnet")
     }
 
     @Test("toRegistryEntry forwards compat onto ModelRegistryEntry")
@@ -45,6 +55,10 @@ struct ProviderCatalogLoaderTests {
         )
         #expect(registryEntry.compat?.thinkingFormat == "anthropic-extended-thinking")
         #expect(registryEntry.cost?.inputPer1MUSD == 3.0)
+        #expect(registryEntry.family == "claude-sonnet")
+        #expect(registryEntry.family != "anthropic")
+        #expect(registryEntry.canonicalModelKey == "claude-sonnet-4-6")
+        #expect(registryEntry.providers.first?.cost?.inputPer1MUSD == 3.0)
     }
 
     @Test("Stable registry UUID is deterministic")

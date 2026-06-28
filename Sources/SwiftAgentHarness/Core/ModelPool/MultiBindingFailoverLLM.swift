@@ -163,6 +163,7 @@ struct MultiBindingFailoverLLM: LLMProtocol {
                 throw LLMError.authenticationFailed
             }
             do {
+                let result = try await work(llm)
                 if index > 0 {
                     await emitAttempt(
                         binding: binding,
@@ -171,7 +172,7 @@ struct MultiBindingFailoverLLM: LLMProtocol {
                         error: nil
                     )
                 }
-                return try await work(llm)
+                return result
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
