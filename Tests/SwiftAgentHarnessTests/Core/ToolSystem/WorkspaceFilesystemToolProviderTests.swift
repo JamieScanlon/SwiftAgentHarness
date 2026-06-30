@@ -51,7 +51,10 @@ struct WorkspaceFilesystemToolProviderTests {
         perCallElevationModes: [String: ElevatedMode] = [WorkspaceFilesystemToolProvider.bashToolName: .ask],
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         senderIdentity: ExecSenderIdentity = .cliDefault,
-        approvalDelivery: any ExecApprovalDelivering
+        headless: Bool = false,
+        approvalDelivery: any ExecApprovalDelivering,
+        useStubBashRunner: Bool = false,
+        stubSandboxExitCode: Int32 = 126
     ) -> WorkspaceFilesystemToolProvider {
         let execRuntime = ExecRuntimeService(
             workspaceRoot: workspace.path,
@@ -61,16 +64,38 @@ struct WorkspaceFilesystemToolProviderTests {
             sessionKey: "test-session",
             agentID: "test-agent",
             isMainSession: false,
-            memoryDirectory: memory.path
+            memoryDirectory: memory.path,
+            headless: headless
         )
+        let bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)? =
+            useStubBashRunner
+            ? stubBashRunnerFactory(
+                execRuntime: execRuntime,
+                sandboxExitCode: stubSandboxExitCode
+            )
+            : nil
         return WorkspaceFilesystemToolProvider(
             workspaceRoot: workspace.path,
             execRuntime: execRuntime,
             runtimeContext: runtimeContext,
             perCallElevationModes: perCallElevationModes,
             elevatedAllowlist: elevatedAllowlist,
-            resolveSenderIdentity: { senderIdentity }
+            resolveSenderIdentity: { senderIdentity },
+            bashRunnerFactory: bashRunnerFactory
         )
+    }
+
+    private func stubBashRunnerFactory(
+        execRuntime: ExecRuntimeService,
+        sandboxExitCode: Int32 = 126
+    ) -> @Sendable (ExecRuntimeContext) -> any BashShellRunning {
+        { context in
+            StubBashRunner(
+                execRuntime: execRuntime,
+                runtimeContext: context,
+                sandboxExitCode: sandboxExitCode
+            )
+        }
     }
 
     private func call(_ name: String, args: [String: String], id: String = "call-1") -> ToolCall {
@@ -485,14 +510,175 @@ struct WorkspaceFilesystemToolProviderTests {
         ).executeTool(bashCall(command: "echo hi", elevated: true))
         #expect(await recorder.requestCount == 0)
     }
+
+    @Test("sandbox denial escalates to approval and succeeds when approved")
+    func sandboxDenialEscalatesToApproval() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "echo elevated-ok", elevated: nil))
+        #expect(await recorder.requestCount == 1)
+        #expect(result.success == true)
+        #expect(result.content.contains("elevated-ok"))
+    }
+
+    @Test("sandbox denial returns denial reason when approval denied")
+    func sandboxDenialApprovalDenied() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery(result: .denied("User rejected command"))
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "xcodebuild", elevated: nil))
+        #expect(await recorder.requestCount == 1)
+        #expect(result.success == false)
+        #expect(result.error == "User rejected command")
+        #expect(result.error?.contains("exit 126") == false)
+    }
+
+    @Test("sandbox denial does not escalate when per-call map is empty")
+    func sandboxDenialNoEscalationWithoutPerCallMap() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            perCallElevationModes: [:],
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "xcodebuild", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(result.success == false)
+        #expect(result.error?.contains("elevation is not available") == true)
+    }
+
+    @Test("sandbox denial does not escalate when sender not allowlisted")
+    func sandboxDenialNoEscalationSenderNotAllowed() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            elevatedAllowlist: ElevatedAllowlist(allowFrom: ["discord": ["user-123"]]),
+            senderIdentity: ExecSenderIdentity(surface: "discord", senderID: "intruder"),
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "xcodebuild", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(result.success == false)
+        #expect(result.error?.contains("elevation is not available") == true)
+    }
+
+    @Test("sandbox denial skips approval prompt when command is durably granted")
+    func sandboxDenialSkipsPromptWithDurableGrant() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let store = ExecApprovalStore()
+        await store.addDurableApproval(command: "echo")
+        let recorder = RecordingExecApprovalDelivery(grantStore: store)
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "echo elevated-ok", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(result.success == true)
+        #expect(result.content.contains("elevated-ok"))
+    }
+
+    @Test("non-126 sandbox failure does not escalate")
+    func non126FailureDoesNotEscalate() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true,
+            stubSandboxExitCode: 1
+        ).executeTool(bashCall(command: "false", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(result.success == false)
+        #expect(result.error?.contains("exit 1") == true)
+    }
+
+    @Test("sandbox denial escalation denied in headless mode")
+    func sandboxDenialHeadlessDenied() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let recorder = RecordingExecApprovalDelivery()
+        let result = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            headless: true,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "xcodebuild", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(result.success == false)
+        #expect(result.error?.contains("headless mode") == true)
+        #expect(result.error?.contains("exit 126") == false)
+    }
+}
+
+private struct StubBashRunner: BashShellRunning {
+    let execRuntime: ExecRuntimeService
+    let runtimeContext: ExecRuntimeContext
+    let sandboxExitCode: Int32
+
+    func runBash(
+        command: String,
+        runInBackground: Bool,
+        usePty: Bool,
+        approvalContextLines: [String]
+    ) async throws -> ExecSupervisorResult {
+        if !runtimeContext.elevated.isActive {
+            throw SandboxBackendError.nonZeroExit(sandboxExitCode, "")
+        }
+        return try await execRuntime.runShell(
+            command: command,
+            context: runtimeContext,
+            runInBackground: runInBackground,
+            usePty: usePty,
+            approvalContextLines: approvalContextLines
+        )
+    }
 }
 
 private actor RecordingExecApprovalDelivery: ExecApprovalDelivering {
     private(set) var requestCount = 0
+    private let result: ExecApprovalDeliveryResult
+    private let grantStore: ExecApprovalStore
+
+    init(
+        result: ExecApprovalDeliveryResult = .approved,
+        grantStore: ExecApprovalStore = ExecApprovalStore()
+    ) {
+        self.result = result
+        self.grantStore = grantStore
+    }
 
     func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
+        if headless {
+            return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
+        }
+        if await grantStore.isDurableApproved(command: request.command) {
+            return .approved
+        }
         requestCount += 1
-        return .approved
+        return result
     }
 
     func sendFollowup(approvalID: String, approved: Bool) async {}

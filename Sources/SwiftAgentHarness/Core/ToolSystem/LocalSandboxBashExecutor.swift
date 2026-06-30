@@ -1,15 +1,30 @@
 import Foundation
 
-struct LocalSandboxBashExecutor: Sendable {
+protocol BashShellRunning: Sendable {
+    func runBash(
+        command: String,
+        runInBackground: Bool,
+        usePty: Bool,
+        approvalContextLines: [String]
+    ) async throws -> ExecSupervisorResult
+}
+
+struct LocalSandboxBashExecutor: BashShellRunning, Sendable {
     let execRuntime: ExecRuntimeService
     let runtimeContext: ExecRuntimeContext
 
-    func runBash(command: String, runInBackground: Bool = false, usePty: Bool = false) async throws -> ExecSupervisorResult {
+    func runBash(
+        command: String,
+        runInBackground: Bool = false,
+        usePty: Bool = false,
+        approvalContextLines: [String] = []
+    ) async throws -> ExecSupervisorResult {
         try await execRuntime.runShell(
             command: command,
             context: runtimeContext,
             runInBackground: runInBackground,
-            usePty: usePty
+            usePty: usePty,
+            approvalContextLines: approvalContextLines
         )
     }
 

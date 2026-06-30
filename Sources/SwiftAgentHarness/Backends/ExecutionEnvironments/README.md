@@ -50,6 +50,12 @@ Resolved by `SandboxConfigResolver`:
 - `/approve <id> [durable]` — CLI fallback resolution
 - `POST /api/exec-approvals/:id` — REST resolution
 
+### Sandbox-denial escalation
+
+When a sandboxed `bash` call fails with exit code **126** (command found but not executable in the sandbox), the harness may automatically escalate to the elevated exec-approval path if the tool is listed in `toolPolicy.elevated.perCall` and the sender is allowlisted via `toolPolicy.elevated.allowFrom`. On approval, the command runs on the host via `ElevatedExecHost`. If escalation is unavailable, the tool returns an explicit error instead of a bare exit-126 message.
+
+Classification lives in `SandboxBackendError.isSandboxExecDenial`; orchestration is in `WorkspaceFilesystemToolProvider.bash()`.
+
 ## Buffered vs supervised exec
 
 | API | Use | Cancellation |

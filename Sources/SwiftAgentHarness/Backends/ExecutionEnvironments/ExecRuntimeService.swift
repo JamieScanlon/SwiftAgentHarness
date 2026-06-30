@@ -117,11 +117,16 @@ public struct ExecRuntimeService: Sendable {
         context: ExecRuntimeContext,
         runInBackground: Bool = false,
         requiresApproval: Bool = false,
-        usePty: Bool = false
+        usePty: Bool = false,
+        approvalContextLines: [String] = []
     ) async throws -> ExecSupervisorResult {
         if context.elevated.isActive {
             if ElevatedExecHost.requiresExecApproval(mode: context.elevated.mode) {
-                try await requestExecApproval(command: command, context: context)
+                try await requestExecApproval(
+                    command: command,
+                    context: context,
+                    approvalContextLines: approvalContextLines
+                )
             }
             return try await ElevatedExecHost.run(
                 context: context.elevated,
@@ -130,7 +135,11 @@ public struct ExecRuntimeService: Sendable {
             )
         }
         if requiresApproval {
-            try await requestExecApproval(command: command, context: context)
+            try await requestExecApproval(
+                command: command,
+                context: context,
+                approvalContextLines: approvalContextLines
+            )
         }
         let handle = try await backendHandle(context: context)
         let params = SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot, usePty: usePty)
@@ -154,16 +163,23 @@ public struct ExecRuntimeService: Sendable {
         return result
     }
 
-    private func requestExecApproval(command: String, context: ExecRuntimeContext) async throws {
+    private func requestExecApproval(
+        command: String,
+        context: ExecRuntimeContext,
+        approvalContextLines: [String] = []
+    ) async throws {
         let title = context.elevated.isActive
-            ? "Approve elevated shell command?"
+            ? "Run command outside the sandbox?"
             : "Approve shell command?"
+        var contextLines = [command]
+        if !approvalContextLines.isEmpty {
+            contextLines.append(contentsOf: approvalContextLines)
+        } else if context.elevated.isActive {
+            contextLines.append("Runs on the host outside the sandbox.")
+        }
         let presentation = ApprovalPresentation.standard(
             title: title,
-            context: [
-                command,
-                context.elevated.isActive ? "Runs on the host outside the sandbox." : "",
-            ]
+            context: contextLines
         )
         let request = ExecApprovalRequest(
             id: UUID().uuidString,
