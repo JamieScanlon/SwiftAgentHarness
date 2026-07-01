@@ -39,8 +39,8 @@ struct MessagePresentationTests {
 
 @Suite("Message output post processor")
 struct MessageOutputPostProcessorTests {
-    @Test("message tool only replaces assistant content from message tool args")
-    func messageToolOnly() {
+    @Test("prose preserved when message call present")
+    func prosePreservedWithMessageCall() {
         let toolCall = ToolCall(
             name: MessageToolArgumentsParser.toolName,
             arguments: .object([
@@ -57,21 +57,22 @@ struct MessageOutputPostProcessorTests {
                 toolCalls: [toolCall]
             )
         )
-        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .messageToolOnly)
-        #expect(processed.message.content == "Delivered")
+        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .structuredPreferred)
+        #expect(processed.message.content == "raw prose")
+        #expect(processed.message.toolCalls.count == 1)
     }
 
-    @Test("legacy policy preserves assistant content")
-    func legacyPreserves() {
+    @Test("streamed prose policy preserves assistant content")
+    func streamedProsePreserves() {
         let envelope = HarnessMessageEnvelope(
             message: Message(id: UUID(), role: .assistant, content: "hello", timestamp: Date())
         )
-        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .legacyStreamedText)
+        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .streamedProse)
         #expect(processed.message.content == "hello")
     }
 
-    @Test("message tool only clears bare prose without message tool")
-    func bareProseEmpty() {
+    @Test("prose preserved without message tool")
+    func prosePreservedWithoutMessageTool() {
         let envelope = HarnessMessageEnvelope(
             message: Message(
                 id: UUID(),
@@ -81,7 +82,29 @@ struct MessageOutputPostProcessorTests {
                 toolCalls: []
             )
         )
-        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .messageToolOnly)
-        #expect(processed.message.content == "")
+        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .structuredPreferred)
+        #expect(processed.message.content == "raw prose only")
+    }
+
+    @Test("structured-only reply uses textFallback")
+    func structuredOnlyUsesTextFallback() {
+        let toolCall = ToolCall(
+            name: MessageToolArgumentsParser.toolName,
+            arguments: .object([
+                "blocks": .string(#"[{"type":"text","text":"Structured only"}]"#),
+            ]),
+            id: "call-1"
+        )
+        let envelope = HarnessMessageEnvelope(
+            message: Message(
+                id: UUID(),
+                role: .assistant,
+                content: "",
+                timestamp: Date(),
+                toolCalls: [toolCall]
+            )
+        )
+        let processed = MessageOutputPostProcessor.apply(envelope: envelope, policy: .structuredPreferred)
+        #expect(processed.message.content == "Structured only")
     }
 }

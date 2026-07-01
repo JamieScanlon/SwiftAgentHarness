@@ -84,7 +84,33 @@ private func registerOpenRouter() throws {
 
 /// Test helper: reset registry and register defaults.
 public enum ProviderTestSupport {
+    private static let registryLock = NSRecursiveLock()
+
     public static func registerDefaultsForTesting() {
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if hasBundledDefaultsRegistered() {
+            return
+        }
+        resetAndRegisterDefaultsUnlocked()
+    }
+
+    /// Runs a test body against a custom registry state and restores bundled defaults afterward.
+    public static func withRegistryIsolation<R>(_ body: () throws -> R) rethrows -> R {
+        registryLock.lock()
+        defer {
+            resetAndRegisterDefaultsUnlocked()
+            registryLock.unlock()
+        }
+        return try body()
+    }
+
+    private static func hasBundledDefaultsRegistered() -> Bool {
+        let ids = Set(ProviderRegistry.allManifests().map(\.id))
+        return ["openai", "anthropic", "ollama", "lmstudio", "openrouter"].allSatisfy { ids.contains($0) }
+    }
+
+    private static func resetAndRegisterDefaultsUnlocked() {
         ProviderRegistry.resetForTesting()
         ProviderLifecycle.resetForTesting()
         ProviderAdapterFactoryRegistry.resetForTesting()

@@ -109,18 +109,21 @@ struct BundledProviderCatalogFile: Codable, Sendable {
 enum ProviderCatalogLoader {
     static func bundledCatalogData(for providerID: ProviderID) -> Data? {
         let candidates = [
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "catalog.json",
+                subdirectory: "catalogs"
+            ),
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "catalog.json"
+            ),
             Bundle.module.url(
                 forResource: providerID,
                 withExtension: "catalog.json",
                 subdirectory: "catalogs"
             ),
             Bundle.module.url(forResource: providerID, withExtension: "catalog.json"),
-            ProviderResourceBundle.resourceBundle.url(
-                forResource: providerID,
-                withExtension: "catalog.json",
-                subdirectory: "catalogs"
-            ),
-            ProviderResourceBundle.resourceBundle.url(forResource: providerID, withExtension: "catalog.json"),
         ]
         guard let url = candidates.compactMap({ $0 }).first else { return nil }
         return try? Data(contentsOf: url)

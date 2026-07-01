@@ -30,7 +30,7 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
     public var orchestratorPoolIdleTTLSeconds: Int
     /// Max resident orchestrator pool entries (VRAM cap for loaded models); pairs with idle TTL eviction.
     public var orchestratorPoolMaxEntries: Int
-    /// When a turn's `originSurface` is in this set, keep legacy streamed assistant prose instead of the `message` tool output verb.
+    /// Deprecated: no longer affects output policy. Kept for PromptConfig backward compatibility.
     public var legacyStreamedTextSurfaces: Set<String>
 
     public static let `default` = AgentHarnessConfiguration(

@@ -332,6 +332,72 @@ struct StreamingSurfaceEngineTests {
             #expect(blockIndices.allSatisfy { $0 < finalIndex })
         }
     }
+
+    @Test("Message tool arg fragments render visible text at token delta")
+    func messageToolPartialRenderingTokenDelta() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .terminal, sink: sink)
+        await engine.ingest(.toolCallStarted(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            contentIndex: 0
+        ))
+        await engine.ingest(.toolCall(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            argumentsFragment: #"{"blocks":[{"type":"text","text":"Hel"#,
+            blockIndex: nil
+        ))
+        await engine.ingest(.toolCall(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            argumentsFragment: #"lo"}]}"#,
+            blockIndex: nil
+        ))
+        await engine.finish(final: StreamingFinalPayload(text: "Hello"))
+        let actions = await sink.actions
+        #expect(actions.contains(.tokenDelta("Hello")))
+    }
+
+    @Test("Message tool completed args render when args were buffered")
+    func messageToolCompletedRendering() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .terminal, sink: sink)
+        let arguments = #"{"blocks":[{"type":"text","text":"buffered visible"}]}"#
+        await engine.ingest(.toolCallStarted(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            contentIndex: 0
+        ))
+        await engine.ingest(.toolCallCompleted(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            arguments: arguments,
+            blockIndex: nil
+        ))
+        await engine.finish(final: StreamingFinalPayload(text: "buffered visible"))
+        let actions = await sink.actions
+        #expect(actions.contains(.tokenDelta("buffered visible")))
+    }
+
+    @Test("Message tool visible text suppressed when prose already streamed")
+    func messageToolDuplicateSuppressed() async {
+        let sink = RecordingStreamingSurfaceSink()
+        let engine = StreamingSurfaceEngine(capabilities: .terminal, sink: sink)
+        await engine.ingest(.text("Hello world"))
+        await engine.ingest(.toolCall(
+            toolName: MessageToolArgumentsParser.toolName,
+            toolCallId: "call-1",
+            argumentsFragment: #"{"blocks":[{"type":"text","text":"Hello world"}]}"#,
+            blockIndex: nil
+        ))
+        await engine.finish(final: StreamingFinalPayload(text: "Hello world"))
+        let tokenDeltas = await sink.actions.compactMap { action -> String? in
+            if case .tokenDelta(let text) = action { return text }
+            return nil
+        }
+        #expect(tokenDeltas.joined() == "Hello world")
+    }
 }
 
 private func coalescingTestCaps() -> StreamingSurfaceCapabilities {

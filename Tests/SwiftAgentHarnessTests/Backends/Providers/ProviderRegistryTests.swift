@@ -3,7 +3,7 @@ import Testing
 import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("ProviderRegistry")
+@Suite("ProviderRegistry", .serialized)
 struct ProviderRegistryTests {
     @Test("Built-in providers register")
     func builtInProviders() {
@@ -68,12 +68,14 @@ struct ProviderRegistryTests {
 
     @Test("ensureBootstrapped does not deadlock when hook registers providers")
     func ensureBootstrappedDoesNotDeadlock() {
-        ProviderRegistry.resetForTesting()
-        ProviderRegistry.installBootstrap {
-            ProviderTestSupport.registerDefaultsForTesting()
+        ProviderTestSupport.withRegistryIsolation {
+            ProviderRegistry.resetForTesting()
+            ProviderRegistry.installBootstrap {
+                ProviderTestSupport.registerDefaultsForTesting()
+            }
+            ProviderRegistry.ensureBootstrapped()
+            #expect(!ProviderRegistry.allManifests().isEmpty)
         }
-        ProviderRegistry.ensureBootstrapped()
-        #expect(!ProviderRegistry.allManifests().isEmpty)
     }
 }
 

@@ -15,6 +15,7 @@ public actor StreamingSurfaceEngine {
     private var accumulatedText = ""
     private var messageEndBuffer = ""
     private var cancelled = false
+    private var messageToolStreamer = MessageToolStreamingAccumulator()
 
     public init(capabilities: StreamingSurfaceCapabilities, sink: any StreamingSurfaceSink) {
         self.capabilities = capabilities
@@ -57,9 +58,22 @@ public actor StreamingSurfaceEngine {
             if capabilities.granularity == .tokenDelta {
                 await sink.sendReasoningDelta(text)
             }
-        case .toolCall(let toolName, _, _, _):
+        case .toolCall(let toolName, let toolCallId, let argumentsFragment, _):
+            await ingestMessageToolArguments(
+                id: toolCallId,
+                name: toolName,
+                fragment: argumentsFragment ?? ""
+            )
             await routeToolProgress(toolName: toolName)
-        case .toolCallStarted(let toolName, _, _), .toolCallCompleted(let toolName, _, _, _):
+        case .toolCallStarted(let toolName, let toolCallId, _):
+            messageToolStreamer.registerToolCall(id: toolCallId, name: toolName)
+            await routeToolProgress(toolName: toolName)
+        case .toolCallCompleted(let toolName, let toolCallId, let arguments, _):
+            await ingestMessageToolCompleted(
+                id: toolCallId,
+                name: toolName,
+                arguments: arguments
+            )
             await routeToolProgress(toolName: toolName)
         case .surfaceIntent:
             break
@@ -158,6 +172,43 @@ public actor StreamingSurfaceEngine {
     }
 
     // MARK: - Routing
+
+    private func ingestMessageToolArguments(id: String?, name: String?, fragment: String) async {
+        guard let visible = messageToolStreamer.ingestArgumentsFragment(
+            id: id,
+            name: name,
+            fragment: fragment
+        ), !visible.isEmpty else {
+            return
+        }
+        await routeMessageToolVisibleText(visible)
+    }
+
+    private func ingestMessageToolCompleted(id: String?, name: String?, arguments: String) async {
+        guard let visible = messageToolStreamer.ingestCompleted(
+            id: id,
+            name: name,
+            arguments: arguments
+        ), !visible.isEmpty else {
+            return
+        }
+        await routeMessageToolVisibleText(visible)
+    }
+
+    private func routeMessageToolVisibleText(_ visible: String) async {
+        guard !isDuplicateOfStreamedProse(visible) else { return }
+        accumulatedText += visible
+        await routeText(visible)
+    }
+
+    private func isDuplicateOfStreamedProse(_ text: String) -> Bool {
+        let normalizedIncoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedIncoming.isEmpty else { return true }
+        let normalizedAccumulated = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedAccumulated == normalizedIncoming { return true }
+        if normalizedAccumulated.hasSuffix(normalizedIncoming) { return true }
+        return false
+    }
 
     private func routeText(_ text: String) async {
         switch capabilities.granularity {
@@ -297,6 +348,7 @@ public actor StreamingSurfaceEngine {
         accumulatedText = ""
         messageEndBuffer = ""
         cancelled = false
+        messageToolStreamer = MessageToolStreamingAccumulator()
         mediaLedger.reset()
         await pacedSender.reset()
         chunker = BlockChunker(

@@ -83,6 +83,12 @@ struct ToolCallStreamingPolicyTests {
             )
         )
         #expect(
+            ProviderRuntimeHooks.effectiveSupportsEagerToolInputStreaming(
+                binding: openAIBinding,
+                compat: nil
+            )
+        )
+        #expect(
             !ProviderRuntimeHooks.effectiveSupportsEagerToolInputStreaming(
                 binding: openAIBinding,
                 compat: ProviderModelCompat(supportsEagerToolInputStreaming: false)

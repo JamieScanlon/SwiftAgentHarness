@@ -7,15 +7,12 @@ enum MessageOutputPostProcessor {
         envelope: HarnessMessageEnvelope,
         policy: MessageOutputPolicy
     ) -> HarnessMessageEnvelope {
-        guard policy == .messageToolOnly else { return envelope }
+        _ = policy
         var out = envelope
+        guard out.message.content.isEmpty else { return out }
         if let messageCall = out.message.toolCalls.first(where: { $0.name == MessageToolArgumentsParser.toolName }),
            let presentation = presentation(from: messageCall) {
             out.message.content = presentation.textFallback()
-            return out
-        }
-        if out.message.toolCalls.isEmpty {
-            out.message.content = ""
         }
         return out
     }

@@ -67,7 +67,7 @@ public enum ProviderRuntimeHooks {
             return supportsEagerToolInputStreaming
         }
         switch binding.providerId {
-        case "anthropic":
+        case "anthropic", "openai":
             return true
         default:
             return false

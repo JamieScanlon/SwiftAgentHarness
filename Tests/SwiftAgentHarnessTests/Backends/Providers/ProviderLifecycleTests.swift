@@ -90,33 +90,35 @@ struct ModelManagerLifecycleGateTests {
 struct ConfigPluginLoaderTests {
     @Test("Decodes and registers openai-compat config plugin")
     func loadsConfigPlugin() throws {
-        ProviderRegistry.resetForTesting()
-        ProviderAdapterFactoryRegistry.resetForTesting()
-        DefaultProviderAdapterFactories.installAll()
+        try ProviderTestSupport.withRegistryIsolation {
+            ProviderRegistry.resetForTesting()
+            ProviderAdapterFactoryRegistry.resetForTesting()
+            DefaultProviderAdapterFactories.installAll()
 
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
 
-        let configURL = dir.appendingPathComponent("llamacpp-local.providerconfig.json")
-        let json = """
-        {
-          "schemaVersion": 1,
-          "adapterKind": "openai-compat",
-          "id": "llamacpp-local",
-          "label": "llama.cpp (local)",
-          "providerEndpoints": [{ "id": "default", "baseUrl": "http://127.0.0.1:8080/v1" }],
-          "providerAuthChoices": [],
-          "modelSupport": { "modelPrefixes": [] },
-          "capabilitySlots": ["text-inference"]
+            let configURL = dir.appendingPathComponent("llamacpp-local.providerconfig.json")
+            let json = """
+            {
+              "schemaVersion": 1,
+              "adapterKind": "openai-compat",
+              "id": "llamacpp-local",
+              "label": "llama.cpp (local)",
+              "providerEndpoints": [{ "id": "default", "baseUrl": "http://127.0.0.1:8080/v1" }],
+              "providerAuthChoices": [],
+              "modelSupport": { "modelPrefixes": [] },
+              "capabilitySlots": ["text-inference"]
+            }
+            """
+            try json.write(to: configURL, atomically: true, encoding: .utf8)
+
+            let loaded = try ConfigPluginLoader.loadAll(from: dir)
+            #expect(loaded == ["llamacpp-local"])
+            #expect(ProviderRegistry.textInferenceProvider(for: "llamacpp-local") != nil)
         }
-        """
-        try json.write(to: configURL, atomically: true, encoding: .utf8)
-
-        let loaded = try ConfigPluginLoader.loadAll(from: dir)
-        #expect(loaded == ["llamacpp-local"])
-        #expect(ProviderRegistry.textInferenceProvider(for: "llamacpp-local") != nil)
     }
 
     @Test("Rejects duplicate provider id")

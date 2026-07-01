@@ -39,8 +39,8 @@ public struct MessageToolProvider: ToolProvider, ToolDescriptorHinting {
             ToolDefinition(
                 name: Self.toolName,
                 description: """
-                Emit user-visible output as a portable presentation. Use this tool for every reply on messaging channels. \
-                Do not rely on free-form assistant text for user-visible content.
+                Emit structured or native user-visible output. Use for buttons, selects, titled/toned blocks, \
+                or explicit delivery actions (media). Ordinary prose should be written directly as assistant text.
                 """,
                 parameters: [
                     .init(name: "title", description: "Optional headline.", type: "string", required: false),

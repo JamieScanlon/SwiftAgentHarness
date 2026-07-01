@@ -135,7 +135,7 @@ private actor AuthProbeBindingLLM: LLMProtocol, AdapterAuthProbing {
     func observedSendCalls() -> Int { sendCalls }
 }
 
-@Suite("MultiBindingFailoverLLM")
+@Suite("MultiBindingFailoverLLM", .serialized)
 struct MultiBindingFailoverLLMTests {
     private static func binding(_ endpoint: String, priority: Int) -> ProviderBinding {
         ProviderBinding(

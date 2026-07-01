@@ -3,55 +3,55 @@ import Testing
 
 @Suite("MessageOutputPolicy")
 struct MessageOutputPolicyTests {
-    @Test("nil or empty surface uses legacy streaming")
-    func nilSurfaceLegacy() {
-        #expect(MessageOutputPolicyResolver.policy(originSurface: nil) == .legacyStreamedText)
-        #expect(MessageOutputPolicyResolver.policy(originSurface: "") == .legacyStreamedText)
+    @Test("nil or empty surface uses streamed prose")
+    func nilSurfaceStreamedProse() {
+        #expect(MessageOutputPolicyResolver.policy(originSurface: nil) == .streamedProse)
+        #expect(MessageOutputPolicyResolver.policy(originSurface: "") == .streamedProse)
     }
 
-    @Test("channel surfaces always use message tool only")
+    @Test("channel surfaces use structured preferred guidance")
     func channelSurfaces() {
-        #expect(MessageOutputPolicyResolver.policy(originSurface: "slack") == .messageToolOnly)
-        #expect(MessageOutputPolicyResolver.policy(originSurface: "telegram") == .messageToolOnly)
+        #expect(MessageOutputPolicyResolver.policy(originSurface: "slack") == .structuredPreferred)
+        #expect(MessageOutputPolicyResolver.policy(originSurface: "telegram") == .structuredPreferred)
     }
 
-    @Test("interactive surfaces default to message tool only")
-    func interactiveDefaultMessageToolOnly() {
+    @Test("interactive surfaces use structured preferred guidance")
+    func interactiveStructuredPreferred() {
         #expect(
             MessageOutputPolicyResolver.policy(originSurface: InteractiveSurfaceID.tui)
-                == .messageToolOnly
+                == .structuredPreferred
         )
         #expect(
             MessageOutputPolicyResolver.policy(originSurface: InteractiveSurfaceID.rest)
-                == .messageToolOnly
+                == .structuredPreferred
         )
         #expect(
             MessageOutputPolicyResolver.policy(originSurface: InteractiveSurfaceID.cli)
-                == .messageToolOnly
+                == .structuredPreferred
         )
     }
 
-    @Test("legacyStreamedTextSurfaces opts specific surfaces out")
-    func interactiveOptOut() {
+    @Test("legacyStreamedTextSurfaces is deprecated and ignored")
+    func legacyOptOutIgnored() {
         let optOut: Set<String> = [InteractiveSurfaceID.cli]
         #expect(
             MessageOutputPolicyResolver.policy(
                 originSurface: InteractiveSurfaceID.tui,
                 legacyStreamedTextSurfaces: optOut
-            ) == .messageToolOnly
+            ) == .structuredPreferred
         )
         #expect(
             MessageOutputPolicyResolver.policy(
                 originSurface: InteractiveSurfaceID.cli,
                 legacyStreamedTextSurfaces: optOut
-            ) == .legacyStreamedText
+            ) == .structuredPreferred
         )
     }
 
-    @Test("unknown surface defaults to message tool only")
-    func unknownSurfaceMessageToolOnly() {
+    @Test("unknown surface uses structured preferred guidance")
+    func unknownSurfaceStructuredPreferred() {
         #expect(
-            MessageOutputPolicyResolver.policy(originSurface: "custom-client") == .messageToolOnly
+            MessageOutputPolicyResolver.policy(originSurface: "custom-client") == .structuredPreferred
         )
     }
 }
@@ -69,10 +69,11 @@ struct MessageOutputTurnConfigurationTests {
         )
         #expect(configuration.originSurface == InteractiveSurfaceID.rest)
         #expect(configuration.ephemeralSystemReminder?.contains("Output contract:") == true)
+        #expect(configuration.ephemeralSystemReminder?.contains("normal text") == true)
     }
 
-    @Test("REST send skips guidance when surface opts out")
-    func restSendLegacyOptOut() {
+    @Test("REST send still injects guidance when legacyStreamedTextSurfaces is set")
+    func restSendLegacyOptOutDeprecated() {
         let harness = AgentHarnessConfiguration(
             strictAgentHarnessPrompts: true,
             maxTurnLoopContinuationRounds: 1,
@@ -95,7 +96,7 @@ struct MessageOutputTurnConfigurationTests {
             harness: harness
         )
         #expect(configuration.originSurface == InteractiveSurfaceID.rest)
-        #expect(configuration.ephemeralSystemReminder == nil)
+        #expect(configuration.ephemeralSystemReminder?.contains("Output contract:") == true)
     }
 
     @Test("ComposerSubmission builds TUI runtime configuration")
@@ -141,18 +142,18 @@ struct MessageOutputSystemPromptGuidanceTests {
     func mergedReminder() {
         let merged = MessageOutputSystemPromptGuidance.mergedReminder(
             existing: "prior context",
-            policy: .messageToolOnly
+            policy: .structuredPreferred
         )
         #expect(merged?.contains("prior context") == true)
         #expect(merged?.contains("Output contract:") == true)
     }
 
-    @Test("legacy policy leaves reminder unchanged")
-    func legacyLeavesReminder() {
+    @Test("streamed prose policy leaves reminder unchanged")
+    func streamedProseLeavesReminder() {
         #expect(
             MessageOutputSystemPromptGuidance.mergedReminder(
                 existing: "keep",
-                policy: .legacyStreamedText
+                policy: .streamedProse
             ) == "keep"
         )
     }

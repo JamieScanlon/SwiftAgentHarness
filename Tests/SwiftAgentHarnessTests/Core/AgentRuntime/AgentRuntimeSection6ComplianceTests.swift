@@ -765,7 +765,7 @@ struct AgentRuntimeSection6ComplianceTests {
             llmFactory: ScriptedLLMFactory(
                 llm: ScriptedStreamingLLM(
                     modelName: "llm-one",
-                    chunks: ["A", "B"],
+                    chunks: [],
                     finalContent: "assistant-one",
                     chunkDelayNanos: 30_000_000,
                     finalDelayNanos: 60_000_000
@@ -778,7 +778,7 @@ struct AgentRuntimeSection6ComplianceTests {
             llmFactory: ScriptedLLMFactory(
                 llm: ScriptedStreamingLLM(
                     modelName: "llm-two",
-                    chunks: ["X", "Y"],
+                    chunks: [],
                     finalContent: "assistant-two",
                     chunkDelayNanos: 30_000_000,
                     finalDelayNanos: 60_000_000

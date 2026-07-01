@@ -3,7 +3,7 @@ import Testing
 import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("Provider slot registration")
+@Suite("Provider slot registration", .serialized)
 struct ProviderSlotRegistrationTests {
     @Test("OpenAI bootstrap registers declared non-text stubs")
     func openAIBootstrapRegistersStubs() throws {
@@ -34,57 +34,63 @@ struct ProviderSlotRegistrationTests {
 
     @Test("Declared slot without registration throws slotUnavailable")
     func slotUnavailableWhenDeclaredButMissing() throws {
-        ProviderRegistry.resetForTesting()
-        let manifest = ProviderManifest(
-            id: "partial",
-            label: "Partial",
-            providerEndpoints: [
-                ProviderEndpoint(id: "partial-default", baseURL: URL(string: "https://partial.example/v1")!),
-            ],
-            providerAuthChoices: [
-                ProviderAuthChoice(id: "api-key", label: "Key", envVars: ["PARTIAL_KEY"]),
-            ],
-            modelSupport: ProviderModelSupport(modelPrefixes: ["partial-"]),
-            capabilitySlots: [.textInference, .speech]
-        )
-        try ProviderRegistry.register(
-            ProviderRegistration(
-                manifest: manifest,
-                textInference: OpenAITextInferenceProvider(manifest: manifest)
+        try ProviderTestSupport.withRegistryIsolation {
+            ProviderRegistry.resetForTesting()
+            let manifest = ProviderManifest(
+                id: "partial",
+                label: "Partial",
+                providerEndpoints: [
+                    ProviderEndpoint(id: "partial-default", baseURL: URL(string: "https://partial.example/v1")!),
+                ],
+                providerAuthChoices: [
+                    ProviderAuthChoice(id: "api-key", label: "Key", envVars: ["PARTIAL_KEY"]),
+                ],
+                modelSupport: ProviderModelSupport(modelPrefixes: ["partial-"]),
+                capabilitySlots: [.textInference, .speech]
             )
-        )
-        #expect(throws: ProviderRegistryError.self) {
-            _ = try ProviderRegistry.provider(for: .speech, providerID: "partial")
+            try ProviderRegistry.register(
+                ProviderRegistration(
+                    manifest: manifest,
+                    textInference: OpenAITextInferenceProvider(manifest: manifest)
+                )
+            )
+            #expect(throws: ProviderRegistryError.self) {
+                _ = try ProviderRegistry.provider(for: .speech, providerID: "partial")
+            }
         }
     }
 
     @Test("Undeclared slot registration is rejected")
     func undeclaredSlotRegistrationRejected() throws {
-        ProviderRegistry.resetForTesting()
-        let manifest = try ProviderTestManifestSupport.loadManifest(for: "ollama")
-        #expect(throws: ProviderManifestValidationError.self) {
-            try ProviderRegistry.register(
-                ProviderRegistration(
-                    manifest: manifest,
-                    textInference: OllamaTextInferenceProvider(manifest: manifest),
-                    speech: StubSpeechProvider(manifest: manifest)
+        try ProviderTestSupport.withRegistryIsolation {
+            ProviderRegistry.resetForTesting()
+            let manifest = try ProviderTestManifestSupport.loadManifest(for: "ollama")
+            #expect(throws: ProviderManifestValidationError.self) {
+                try ProviderRegistry.register(
+                    ProviderRegistration(
+                        manifest: manifest,
+                        textInference: OllamaTextInferenceProvider(manifest: manifest),
+                        speech: StubSpeechProvider(manifest: manifest)
+                    )
                 )
-            )
+            }
         }
     }
 
     @Test("Missing CLI backend registration is rejected when slot declared")
     func missingCLIBackendRegistrationRejected() throws {
-        ProviderRegistry.resetForTesting()
-        let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
-        #expect(throws: ProviderManifestValidationError.self) {
-            try ProviderRegistry.register(
-                ProviderRegistration(
-                    manifest: manifest,
-                    textInference: OpenAITextInferenceProvider(manifest: manifest),
-                    cliInferenceBackends: []
+        try ProviderTestSupport.withRegistryIsolation {
+            ProviderRegistry.resetForTesting()
+            let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
+            #expect(throws: ProviderManifestValidationError.self) {
+                try ProviderRegistry.register(
+                    ProviderRegistration(
+                        manifest: manifest,
+                        textInference: OpenAITextInferenceProvider(manifest: manifest),
+                        cliInferenceBackends: []
+                    )
                 )
-            )
+            }
         }
     }
 

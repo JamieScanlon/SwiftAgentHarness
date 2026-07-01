@@ -181,7 +181,7 @@ Channel code is split across two surface trees:
 | [`Surfaces/Triggers/Channel/`](Channel/) | Inbound provenance: intake, trust, session grammar, transport, lifecycle; assembles `ChannelPlugin` from surface + trigger slots |
 
 - **`ChannelPlugin`** (Triggers) — composed runtime record: `surface` + `security` + `sessionGrammar` + platform `listener`.
-- **Core `message` tool** — registered in `OrchestratorRuntimeService.buildToolManager`; channel turns use `MessageOutputPolicy.messageToolOnly` (free-form assistant text is not user-visible). Interactive transcript surfaces default to the same policy; opt out via `agentHarness.legacyStreamedTextSurfaces` in PromptConfig.
+- **Core `message` tool** — registered in `OrchestratorRuntimeService.buildToolManager`; assistant prose always streams as `text_delta`. The `message` tool is additive for structured/native output (blocks, buttons, media). Channel and interactive turns use `MessageOutputPolicy.structuredPreferred` for prompt guidance.
 - **Session grammar** — `ChannelSessionGrammar.resolveSessionConversation` + `parentFallbackCandidates` wired through `TriggerSessionRouter`.
 - **Lifecycle helpers** — `ChannelTypingKeepalive`, `ChannelTransportSupervisor`, `ChannelSessionLifecycleCoordinator`. Session reset drains per-conversation tasks; channel `stop()` tears down transport separately.
 
