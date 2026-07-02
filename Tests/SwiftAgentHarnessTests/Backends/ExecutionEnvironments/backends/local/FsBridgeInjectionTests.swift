@@ -73,9 +73,9 @@ struct FsBridgeInjectionTests {
     }
 
     @Test("docker argv forwards args after script")
-    func dockerForwardsArgs() {
+    func dockerForwardsArgs() throws {
         let params = SandboxBackendCommandParams(script: #"cat "$1""#, args: [quotePath])
-        let argv = DockerSandboxShellCommand.argv(containerName: "c", workdir: "/w", params: params)
+        let argv = try DockerSandboxShellCommand.argv(containerName: "c", workdir: "/w", params: params)
         #expect(argv.suffix(2) == ["--", quotePath])
         #expect(!params.script.contains(quotePath))
     }

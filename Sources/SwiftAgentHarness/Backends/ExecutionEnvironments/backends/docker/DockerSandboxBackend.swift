@@ -42,16 +42,20 @@ public struct DockerSandboxBackendHandle: SandboxBackendHandle {
         let trimmed = params.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         try await ensureContainer()
-        let argv = params.usePty
-            ? ["docker", "exec", "-it", "-w", params.workdir ?? workdir, containerName, "/bin/bash", "-c", trimmed]
-            : ["docker", "exec", "-w", params.workdir ?? workdir, containerName, "/bin/bash", "-c", trimmed]
-        return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
+        let argv = try DockerSandboxShellCommand.execArgv(
+            containerName: containerName,
+            workdir: params.workdir ?? workdir,
+            command: trimmed,
+            env: params.env,
+            usePty: params.usePty
+        )
+        return SandboxBackendExecSpec(argv: argv, cwd: nil, usePty: params.usePty)
     }
 
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         try await ensureContainer()
-        let argv = DockerSandboxShellCommand.argv(containerName: containerName, workdir: workdir, params: params)
-        let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
+        let argv = try DockerSandboxShellCommand.argv(containerName: containerName, workdir: workdir, params: params)
+        let result = try await ShellProcessRunner.run(argv: argv, stdin: params.stdin)
         return SandboxBackendCommandResult(stdout: result.stdout, stderr: result.stderr, code: result.exitCode)
     }
 

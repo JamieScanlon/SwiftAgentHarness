@@ -301,8 +301,8 @@ struct WorkspaceMirrorOpenShellTests {
     }
 
     @Test("openshell exec argv includes sandbox and command")
-    func openshellArgv() {
-        let argv = OpenShellSandboxArgv.exec(
+    func openshellArgv() throws {
+        let argv = try OpenShellSandboxArgv.exec(
             cliPath: "/usr/local/bin/openshell",
             sandboxName: "test-sandbox",
             workdir: "/workspace",

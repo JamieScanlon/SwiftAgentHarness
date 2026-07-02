@@ -152,25 +152,33 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         try await seedRemoteWorkspaceIfNeeded()
         let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
+        let remoteCommand = try SSHRemoteShellCommand.wrapWithEnv(
+            params.env,
+            remoteCommand: "cd \(shellPath) && \(trimmed)"
+        )
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(shellPath) && \(trimmed)",
+            remoteCommand: remoteCommand,
             usePty: params.usePty
         )
-        return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
+        return SandboxBackendExecSpec(argv: argv, cwd: nil, usePty: params.usePty)
     }
 
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         try await seedRemoteWorkspaceIfNeeded()
         let remoteScript = SSHRemoteShellCommand.build(params: params)
         let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
+        let remoteCommand = try SSHRemoteShellCommand.wrapWithEnv(
+            params.env,
+            remoteCommand: "cd \(shellPath) && \(remoteScript)"
+        )
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(shellPath) && \(remoteScript)"
+            remoteCommand: remoteCommand
         )
-        let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
+        let result = try await ShellProcessRunner.run(argv: argv, stdin: params.stdin)
         return SandboxBackendCommandResult(stdout: result.stdout, stderr: result.stderr, code: result.exitCode)
     }
 

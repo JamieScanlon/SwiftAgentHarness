@@ -26,8 +26,16 @@ enum OpenShellHostTools {
 }
 
 enum OpenShellSandboxArgv {
-    static func exec(cliPath: String, sandboxName: String, workdir: String, command: String, usePty: Bool) -> [String] {
+    static func exec(
+        cliPath: String,
+        sandboxName: String,
+        workdir: String,
+        command: String,
+        usePty: Bool,
+        env: [String: String] = [:]
+    ) throws -> [String] {
         var argv = [cliPath, "exec", "--sandbox", sandboxName, "--workdir", workdir]
+        argv += try OpenShellSandboxEnvPolicy.execFlags(env: env)
         if usePty { argv.append("--tty") }
         argv.append(contentsOf: ["--", "/bin/bash", "-lc", command])
         return argv
@@ -80,14 +88,15 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
         let cliPath = try OpenShellHostTools.requireCLI()
         try ensureMirrorDirectory()
         try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: hostWorkspace, mirrorRoot: mirrorRoot)
-        let argv = OpenShellSandboxArgv.exec(
+        let argv = try OpenShellSandboxArgv.exec(
             cliPath: cliPath,
             sandboxName: sandboxName,
             workdir: workdir,
             command: trimmed,
-            usePty: params.usePty
+            usePty: params.usePty,
+            env: params.env
         )
-        return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
+        return SandboxBackendExecSpec(argv: argv, cwd: nil, usePty: params.usePty)
     }
 
     public func finalizeExec(params: SandboxFinalizeExecParams) async throws {
@@ -99,14 +108,15 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
         let cliPath = try OpenShellHostTools.requireCLI()
         try ensureMirrorDirectory()
         try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: hostWorkspace, mirrorRoot: mirrorRoot)
-        let argv = OpenShellSandboxArgv.exec(
+        let argv = try OpenShellSandboxArgv.exec(
             cliPath: cliPath,
             sandboxName: sandboxName,
             workdir: workdir,
             command: params.script,
-            usePty: false
+            usePty: false,
+            env: params.env
         )
-        let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
+        let result = try await ShellProcessRunner.run(argv: argv, stdin: params.stdin)
         if result.exitCode == 0 {
             try await WorkspaceMirrorSync.shared.syncAfter(hostRoot: hostWorkspace, mirrorRoot: mirrorRoot)
         }

@@ -44,18 +44,50 @@ enum SSHRemoteShellCommand {
         let quotedArgs = params.args.map(shellQuote).joined(separator: " ")
         return "bash -c \(quotedScript) -- \(quotedArgs)"
     }
+
+    static func wrapWithEnv(_ env: [String: String], remoteCommand: String) throws -> String {
+        let pairs = try SandboxRemoteEnvPolicy.sortedPairs(env)
+        guard !pairs.isEmpty else { return remoteCommand }
+        let exports = pairs.map { key, value in
+            "export \(key)=\(shellQuote(value))"
+        }.joined(separator: "; ")
+        return "\(exports); \(remoteCommand)"
+    }
 }
 
 enum DockerSandboxShellCommand {
-    static func argv(containerName: String, workdir: String, params: SandboxBackendCommandParams) -> [String] {
-        var argv = [
-            "docker", "exec", "-i", "-w", params.workdir ?? workdir, containerName,
-            "/bin/bash", "-c", params.script,
-        ]
-        if !params.args.isEmpty {
-            argv += ["--"] + params.args
+    static func execArgv(
+        containerName: String,
+        workdir: String,
+        command: String,
+        env: [String: String] = [:],
+        args: [String] = [],
+        stdin: Bool = false,
+        usePty: Bool = false
+    ) throws -> [String] {
+        var argv = ["docker", "exec"]
+        if usePty {
+            argv.append("-it")
+        } else if stdin {
+            argv.append("-i")
+        }
+        argv += try DockerSandboxEnvPolicy.execFlags(env: env)
+        argv += ["-w", workdir, containerName, "/bin/bash", "-c", command]
+        if !args.isEmpty {
+            argv += ["--"] + args
         }
         return argv
+    }
+
+    static func argv(containerName: String, workdir: String, params: SandboxBackendCommandParams) throws -> [String] {
+        try execArgv(
+            containerName: containerName,
+            workdir: params.workdir ?? workdir,
+            command: params.script,
+            env: params.env,
+            args: params.args,
+            stdin: true
+        )
     }
 }
 
