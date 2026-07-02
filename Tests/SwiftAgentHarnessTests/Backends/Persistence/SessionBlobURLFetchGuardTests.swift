@@ -152,6 +152,19 @@ struct SessionBlobURLFetchGuardTests {
         }
     }
 
+    @Test func blocksHostnameResolvingToUnspecifiedIPv4() {
+        let url = URL(string: "https://evil.example/image.png")!
+        let resolver = StubSessionBlobHostResolver(addresses: [sockaddrIPv4("0.0.0.0")])
+        do {
+            _ = try SessionBlobURLFetchGuard.validateResolvedAddresses(url: url, resolver: resolver)
+            Issue.record("expected blocked resolved address")
+        } catch SessionPersistenceError.transcriptPayloadInvalid {
+            #expect(Bool(true))
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+    }
+
     @Test func validateResolvedAddressesPreservesOriginalHostnameForTLS() throws {
         let url = URL(string: "https://example.com/path?q=1")!
         let resolver = StubSessionBlobHostResolver(addresses: [sockaddrIPv4("93.184.216.34")])
