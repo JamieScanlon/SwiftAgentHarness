@@ -73,7 +73,7 @@ public enum SandboxBackendManifests {
         id: "openshell",
         label: "OpenShell",
         workspaceModel: .mirror,
-        capabilities: SandboxBackendCapabilities(browser: false, bindMounts: false, persistentRuntime: true),
+        capabilities: SandboxBackendCapabilities(browser: false, bindMounts: true, persistentRuntime: true),
         adapterID: "tool-env.openshell.default",
         hostTools: ["openshell"]
     )

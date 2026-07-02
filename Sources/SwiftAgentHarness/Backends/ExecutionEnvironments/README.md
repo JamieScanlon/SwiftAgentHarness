@@ -40,7 +40,7 @@ Resolved by `SandboxConfigResolver`:
 | `local` | host-canonical | macOS Seatbelt / Linux bwrap |
 | `docker` | host-canonical | bind-mount workspace |
 | `ssh` | remote-canonical | seed-once remote root |
-| `openshell` | mirror | `openshell` CLI; sync-before/sync-after via `WorkspaceMirrorSync` |
+| `openshell` | mirror | `openshell` CLI; mirror bind-mount at sandbox create; sync-before/sync-after via `WorkspaceMirrorSync` |
 | `docker-browser` | host-canonical | separate Chromium container |
 
 ## Exec approval
@@ -66,6 +66,16 @@ Classification lives in `SandboxBackendError.isSandboxExecDenial`; orchestration
 `runShellCommand` on Docker and SSH backends uses `run`. Cancelling a large remote `readFile` or interrupting an SSH seed may leave remote or in-container work running. That is acceptable for the short FS-bridge ops this path serves; agent exec uses the supervised path instead.
 
 Background exec does not call `finalizeExec` today; mirror sync-after applies to foreground supervised exec only.
+
+## OpenShell gateway setup
+
+OpenShell sandboxes are auto-created per scope with the harness mirror directory bind-mounted at the configured `workdir` (default `/workspace`). Prerequisites:
+
+1. Register and select a gateway: `openshell gateway add … --local --name local` then `openshell gateway select local`
+2. Enable bind mounts for the active compute driver in `gateway.toml` (e.g. `[openshell.drivers.docker] enable_bind_mounts = true`, or the Podman equivalent)
+3. Ensure the `openshell` CLI is on `PATH` (`/opt/homebrew/bin/openshell`, `/usr/local/bin/openshell`, or `/usr/bin/openshell`)
+
+The harness rsyncs host workspace → mirror before exec and mirror → host after exec (including failed commands). Sandbox exec writes land in the mirror via the bind mount.
 
 ## Related
 

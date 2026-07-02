@@ -102,6 +102,9 @@ struct RemoteSandboxEnvOverlayTests {
         #expect(envIdx < sepIdx)
         #expect(argv.contains("SAH_TEST_OVERLAY=visible"))
         #expect(argv.contains("--tty"))
+        #expect(argv.contains("sandbox"))
+        #expect(argv.contains("exec"))
+        #expect(argv.contains("-n"))
     }
 
     @Test("SandboxRemoteEnvPolicy rejects invalid env keys")

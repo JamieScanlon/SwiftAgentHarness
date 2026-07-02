@@ -7,6 +7,9 @@ public enum SandboxConfigHash {
         if config.backend == "docker-browser" {
             let browser = config.browser
             payload = "\(config.mode.rawValue)|\(config.scope.rawValue)|\(config.backend)|\(browser.image)|\(browser.network)|\(browser.pidsLimit)|\(browser.memoryLimit)|\(browser.cpus)"
+        } else if config.backend == "openshell" {
+            let openshell = config.openshell ?? OpenShellSandboxSettings()
+            payload = "\(config.mode.rawValue)|\(config.scope.rawValue)|\(config.backend)|\(openshell.sandboxName ?? "")|\(openshell.workdir)|\(openshell.computeDriver)|\(openshell.fromImage)"
         } else {
             payload = "\(config.mode.rawValue)|\(config.scope.rawValue)|\(config.backend)|\(config.docker.image)|\(config.docker.network)|\(config.docker.pidsLimit)|\(config.docker.memoryLimit)|\(config.docker.cpus)"
         }

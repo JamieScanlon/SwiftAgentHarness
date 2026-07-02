@@ -300,7 +300,7 @@ struct WorkspaceMirrorOpenShellTests {
         #expect(bridge is LocalHostFsBridge)
     }
 
-    @Test("openshell exec argv includes sandbox and command")
+    @Test("openshell exec argv includes sandbox exec subcommand and command")
     func openshellArgv() throws {
         let argv = try OpenShellSandboxArgv.exec(
             cliPath: "/usr/local/bin/openshell",
@@ -310,6 +310,9 @@ struct WorkspaceMirrorOpenShellTests {
             usePty: true
         )
         #expect(argv.first == "/usr/local/bin/openshell")
+        #expect(argv.contains("sandbox"))
+        #expect(argv.contains("exec"))
+        #expect(argv.contains("-n"))
         #expect(argv.contains("test-sandbox"))
         #expect(argv.contains("--tty"))
         #expect(argv.contains("npm test"))
