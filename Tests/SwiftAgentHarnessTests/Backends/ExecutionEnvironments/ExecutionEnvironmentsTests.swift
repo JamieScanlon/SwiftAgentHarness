@@ -105,9 +105,24 @@ struct SandboxConfigResolverTests {
 
     @Test("scope key resolves per axis")
     func scopeKey() {
-        #expect(SandboxConfigResolver.resolveScopeKey(scope: .agent, sessionKey: "s", agentID: "a") == "agent:a")
-        #expect(SandboxConfigResolver.resolveScopeKey(scope: .session, sessionKey: "s", agentID: "a") == "session:s")
+        #expect(SandboxConfigResolver.resolveScopeKey(scope: .agent, sessionKey: "s", agentID: "a") == "agent-a")
+        #expect(SandboxConfigResolver.resolveScopeKey(scope: .session, sessionKey: "s", agentID: "a") == "session-s")
         #expect(SandboxConfigResolver.resolveScopeKey(scope: .shared, sessionKey: "s", agentID: "a") == "shared")
+    }
+
+    @Test("scope key sanitizes shell metacharacters")
+    func scopeKeySanitizesMetacharacters() {
+        let malicious = "x; rm -rf / #"
+        let scopeKey = SandboxConfigResolver.resolveScopeKey(scope: .session, sessionKey: malicious, agentID: "a")
+        #expect(scopeKey == "session-x__rm_-rf____")
+        #expect(!scopeKey.contains(";"))
+        #expect(!scopeKey.contains(" "))
+    }
+
+    @Test("scope key empty component falls back to unknown")
+    func scopeKeyEmptyComponent() {
+        #expect(SandboxConfigResolver.resolveScopeKey(scope: .agent, sessionKey: "s", agentID: "") == "agent-unknown")
+        #expect(SandboxConfigResolver.sanitizeScopeComponent("") == "unknown")
     }
 }
 
@@ -258,7 +273,7 @@ struct WorkspaceMirrorOpenShellTests {
     func openshellCLIGating() async throws {
         let params = CreateSandboxBackendParams(
             sessionKey: "sess",
-            scopeKey: "agent:1",
+            scopeKey: "agent-1",
             workspaceDir: "/tmp",
             agentWorkspaceDir: "/tmp",
             config: SandboxConfig(

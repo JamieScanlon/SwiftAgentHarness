@@ -73,7 +73,7 @@ struct SSHHostToolsTests {
         )
         let params = SandboxBackendDescribeRuntimeParams(
             sessionKey: "session",
-            scopeKey: "agent:default",
+            scopeKey: "agent-default",
             config: config
         )
         await #expect(throws: SandboxBackendError.hostToolMissing(tool: "rsync", location: "alice@example.com")) {

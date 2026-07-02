@@ -33,10 +33,12 @@ actor SSHWorkspaceSyncCache {
     ) async throws {
         try SSHHostTools.requireLocalRsync()
 
+        let quotedRemoteRoot = SSHRemoteShellCommand.shellQuote(remoteRoot)
+
         _ = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "mkdir -p \(remoteRoot)"
+            remoteCommand: "mkdir -p \(quotedRemoteRoot)"
         ))
 
         var entry = entries[remoteRoot] ?? Entry(
@@ -50,7 +52,7 @@ actor SSHWorkspaceSyncCache {
         let markerCheck = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "test -f \(remoteRoot)/\(Self.seedMarker)"
+            remoteCommand: "test -f \(quotedRemoteRoot)/\(Self.seedMarker)"
         ))
         let remoteSeeded = markerCheck.exitCode == 0
 
@@ -116,7 +118,7 @@ actor SSHWorkspaceSyncCache {
         _ = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "touch \(remoteRoot)/\(Self.seedMarker)"
+            remoteCommand: "touch \(SSHRemoteShellCommand.shellQuote(remoteRoot))/\(Self.seedMarker)"
         ))
         entry.fileSync.trackTree(hostRoot: hostWorkspace, remoteRoot: remoteRoot)
         entry.seeded = true

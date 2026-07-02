@@ -77,6 +77,16 @@ public struct FileSyncManager: Sendable {
     }
 }
 
+enum SSHSandboxRemoteRoot {
+    static func path(scopeKey: String) -> String {
+        "/tmp/sah-\(scopeKey)"
+    }
+
+    static func shellQuotedPath(scopeKey: String) -> String {
+        SSHRemoteShellCommand.shellQuote(path(scopeKey: scopeKey))
+    }
+}
+
 public struct SSHSandboxBackendHandle: SandboxBackendHandle {
     public let id: SandboxBackendID = "ssh"
     public let runtimeId: String
@@ -96,7 +106,7 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
         guard let ssh = params.config.ssh else { throw SandboxBackendError.commandFailed("SSH settings missing") }
         self.settings = ssh
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
-        self.remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.remoteRoot = SSHSandboxRemoteRoot.path(scopeKey: params.scopeKey)
         self.workdir = remoteRoot
         self.runtimeId = remoteRoot
         self.runtimeLabel = "\(ssh.user)@\(ssh.host)"
@@ -109,10 +119,11 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
         let trimmed = params.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         try await seedRemoteWorkspaceIfNeeded()
+        let quotedRemoteRoot = SSHRemoteShellCommand.shellQuote(remoteRoot)
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(remoteRoot) && \(trimmed)",
+            remoteCommand: "cd \(quotedRemoteRoot) && \(trimmed)",
             usePty: params.usePty
         )
         return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
@@ -121,10 +132,11 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         try await seedRemoteWorkspaceIfNeeded()
         let remoteScript = SSHRemoteShellCommand.build(params: params)
+        let quotedRemoteRoot = SSHRemoteShellCommand.shellQuote(remoteRoot)
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(remoteRoot) && \(remoteScript)"
+            remoteCommand: "cd \(quotedRemoteRoot) && \(remoteScript)"
         )
         let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
         return SandboxBackendCommandResult(stdout: result.stdout, stderr: result.stderr, code: result.exitCode)
@@ -218,15 +230,16 @@ public struct SSHSandboxBackendManager: SandboxBackendManager {
         try SSHHostTools.requireLocalRsync()
         let control = SSHControlMaster(settings: ssh)
         try await SSHHostTools.requireRemoteRsync(control: control, settings: ssh, runner: syncRunner)
-        let remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let remoteRoot = SSHSandboxRemoteRoot.path(scopeKey: params.scopeKey)
         return SandboxBackendRuntimeInfo(runtimeId: remoteRoot, running: true, configMatches: true, runtimeLabel: remoteRoot)
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
         guard let ssh = params.config.ssh else { return }
-        let remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let remoteRoot = SSHSandboxRemoteRoot.path(scopeKey: params.scopeKey)
         let control = SSHControlMaster(settings: ssh)
-        let argv = SSHSandboxArgv.exec(control: control, settings: ssh, remoteCommand: "rm -rf \(remoteRoot)")
+        let quotedRemoteRoot = SSHRemoteShellCommand.shellQuote(remoteRoot)
+        let argv = SSHSandboxArgv.exec(control: control, settings: ssh, remoteCommand: "rm -rf \(quotedRemoteRoot)")
         _ = try await ShellProcessRunner.run(argv: argv)
         await SSHWorkspaceSyncCache.shared.remove(remoteRoot: remoteRoot)
     }

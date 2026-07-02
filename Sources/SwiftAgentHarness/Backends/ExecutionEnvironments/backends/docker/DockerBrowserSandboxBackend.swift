@@ -40,7 +40,7 @@ public struct DockerBrowserSandboxBackendHandle: SandboxBackendHandle {
     private let settings: BrowserSandboxSettings
 
     init(params: CreateSandboxBackendParams) {
-        self.containerName = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.containerName = "sah-browser-\(params.scopeKey)"
         self.settings = params.config.browser
         self.workdir = "/home/browser"
         self.runtimeId = containerName
@@ -77,14 +77,14 @@ public struct DockerBrowserSandboxBackendManager: SandboxBackendManager {
     public init() {}
 
     public func describeRuntime(params: SandboxBackendDescribeRuntimeParams) async throws -> SandboxBackendRuntimeInfo {
-        let name = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-browser-\(params.scopeKey)"
         let inspect = try await ShellProcessRunner.run(argv: ["docker", "inspect", "-f", "{{.State.Running}}", name])
         let running = String(data: inspect.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
         return SandboxBackendRuntimeInfo(runtimeId: name, running: running, configMatches: true, runtimeLabel: name)
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
-        let name = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-browser-\(params.scopeKey)"
         _ = try await ShellProcessRunner.run(argv: ["docker", "rm", "-f", name])
     }
 }

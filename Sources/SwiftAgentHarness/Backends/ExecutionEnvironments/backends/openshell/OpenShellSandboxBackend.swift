@@ -61,8 +61,8 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
         let openshell = params.config.openshell ?? OpenShellSandboxSettings()
         self.settings = openshell
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
-        self.sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
-        self.mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey)"
+        self.mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey)"
         self.workdir = openshell.workdir
         self.runtimeId = sandboxName
         self.runtimeLabel = sandboxName
@@ -120,7 +120,7 @@ public struct OpenShellSandboxBackendManager: SandboxBackendManager {
         guard let openshell = params.config.openshell else {
             throw SandboxBackendError.commandFailed("OpenShell settings missing")
         }
-        let sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey)"
         let argv = OpenShellSandboxArgv.describe(cliPath: cliPath, sandboxName: sandboxName)
         let result = try await ShellProcessRunner.run(argv: argv)
         return SandboxBackendRuntimeInfo(
@@ -134,8 +134,8 @@ public struct OpenShellSandboxBackendManager: SandboxBackendManager {
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
         guard let openshell = params.config.openshell else { return }
         let cliPath = try OpenShellHostTools.requireCLI()
-        let sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
-        let mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey)"
+        let mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey)"
         _ = try await ShellProcessRunner.run(argv: OpenShellSandboxArgv.delete(cliPath: cliPath, sandboxName: sandboxName))
         await WorkspaceMirrorSync.shared.remove(mirrorRoot: mirrorRoot)
     }

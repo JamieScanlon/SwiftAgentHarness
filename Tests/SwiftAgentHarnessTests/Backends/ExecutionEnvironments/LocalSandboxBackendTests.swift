@@ -23,7 +23,7 @@ struct LocalSandboxBackendTests {
         try "hi".write(to: file, atomically: true, encoding: .utf8)
         let handle = LocalSandboxBackendHandle(params: CreateSandboxBackendParams(
             sessionKey: "s",
-            scopeKey: "agent:a",
+            scopeKey: "agent-a",
             workspaceDir: dir.path,
             agentWorkspaceDir: dir.path,
             config: SandboxConfig(mode: .all, scope: .agent, backend: "local", sandboxingActive: true)
@@ -41,7 +41,7 @@ struct LocalSandboxBackendTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let handle = LocalSandboxBackendHandle(params: CreateSandboxBackendParams(
             sessionKey: "s",
-            scopeKey: "agent:a",
+            scopeKey: "agent-a",
             workspaceDir: dir.path,
             agentWorkspaceDir: dir.path,
             config: SandboxConfig(mode: .all, scope: .agent, backend: "local", sandboxingActive: true)
@@ -67,7 +67,7 @@ struct LocalSandboxUnavailableTests {
     func unavailable() async {
         let handle = LocalSandboxBackendHandle(params: CreateSandboxBackendParams(
             sessionKey: "s",
-            scopeKey: "agent:a",
+            scopeKey: "agent-a",
             workspaceDir: "/tmp",
             agentWorkspaceDir: "/tmp",
             config: SandboxConfig(mode: .all, scope: .agent, backend: "local", sandboxingActive: true)

@@ -27,7 +27,7 @@ public struct DockerSandboxBackendHandle: SandboxBackendHandle {
     private let configHash: String
 
     init(params: CreateSandboxBackendParams) {
-        self.containerName = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.containerName = "sah-sandbox-\(params.scopeKey)"
         self.settings = params.config.docker
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
         self.configHash = SandboxConfigHash.compute(config: params.config)
@@ -160,7 +160,7 @@ public struct DockerSandboxBackendManager: SandboxBackendManager {
     public init() {}
 
     public func describeRuntime(params: SandboxBackendDescribeRuntimeParams) async throws -> SandboxBackendRuntimeInfo {
-        let name = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-sandbox-\(params.scopeKey)"
         let running = try await DockerSandboxInspect.isRunning(containerName: name)
         let currentHash = SandboxConfigHash.compute(config: params.config)
         let labelHash = running ? try await DockerSandboxInspect.configHash(containerName: name) : nil
@@ -169,7 +169,7 @@ public struct DockerSandboxBackendManager: SandboxBackendManager {
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
-        let name = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-sandbox-\(params.scopeKey)"
         _ = try await ShellProcessRunner.run(argv: ["docker", "rm", "-f", name])
     }
 }

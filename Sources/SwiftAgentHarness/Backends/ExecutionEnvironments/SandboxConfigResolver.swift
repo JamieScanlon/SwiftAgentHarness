@@ -1,10 +1,20 @@
 import Foundation
 
 public enum SandboxConfigResolver {
+    private static let allowedScopeComponentCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+
+    public static func sanitizeScopeComponent(_ value: String) -> String {
+        let sanitized = value.unicodeScalars.map { scalar in
+            allowedScopeComponentCharacters.contains(scalar) ? Character(scalar) : "_"
+        }
+        let result = String(sanitized)
+        return result.isEmpty ? "unknown" : result
+    }
+
     public static func resolveScopeKey(scope: SandboxScope, sessionKey: String, agentID: String) -> String {
         switch scope {
-        case .agent: return "agent:\(agentID)"
-        case .session: return "session:\(sessionKey)"
+        case .agent: return "agent-\(sanitizeScopeComponent(agentID))"
+        case .session: return "session-\(sanitizeScopeComponent(sessionKey))"
         case .shared: return "shared"
         }
     }
