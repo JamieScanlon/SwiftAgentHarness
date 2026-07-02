@@ -186,6 +186,7 @@ public struct ExecRuntimeService: Sendable {
             command: command,
             title: title,
             description: command,
+            allowsDurableBypass: !context.elevated.isActive,
             presentation: presentation
         )
         switch await approvalDelivery.requestApproval(request, headless: context.headless) {

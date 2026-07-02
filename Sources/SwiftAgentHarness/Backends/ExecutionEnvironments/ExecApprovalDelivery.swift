@@ -6,6 +6,8 @@ public struct ExecApprovalRequest: Sendable, Equatable {
     public let command: String
     public let title: String
     public let description: String
+    /// When false, name-scoped durable grants must not bypass approval (elevated/host exec).
+    public let allowsDurableBypass: Bool
     /// Portable presentation a surface renders natively (and core degrades to text).
     public let presentation: ApprovalPresentation
 
@@ -14,12 +16,14 @@ public struct ExecApprovalRequest: Sendable, Equatable {
         command: String,
         title: String,
         description: String,
+        allowsDurableBypass: Bool = true,
         presentation: ApprovalPresentation? = nil
     ) {
         self.id = id
         self.command = command
         self.title = title
         self.description = description
+        self.allowsDurableBypass = allowsDurableBypass
         self.presentation = presentation ?? ApprovalPresentation.standard(
             title: title,
             context: [command, description == command ? "" : description]
@@ -64,10 +68,16 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
         if headless {
             return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
         }
-        if await store.isDurableApproved(command: request.command) {
+        if request.allowsDurableBypass,
+           await store.isDurableApproved(command: request.command) {
             return .approved
         }
-        await store.registerPending(id: request.id, command: request.command, presentation: request.presentation)
+        await store.registerPending(
+            id: request.id,
+            command: request.command,
+            allowsDurableBypass: request.allowsDurableBypass,
+            presentation: request.presentation
+        )
         guard let route else {
             return .deferred(request.presentation.textFallback(approvalID: request.id))
         }
@@ -154,10 +164,16 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
         if headless {
             return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
         }
-        if await store.isDurableApproved(command: request.command) {
+        if request.allowsDurableBypass,
+           await store.isDurableApproved(command: request.command) {
             return .approved
         }
-        await store.registerPending(id: request.id, command: request.command, presentation: request.presentation)
+        await store.registerPending(
+            id: request.id,
+            command: request.command,
+            allowsDurableBypass: request.allowsDurableBypass,
+            presentation: request.presentation
+        )
         await onPending?(request)
         if let resolution = await store.waitForResolution(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
             switch resolution {

@@ -107,6 +107,35 @@ struct ExecApprovalTests {
         #expect(await store.isDurableApproved(command: "bash -lc 'ls'") == false)
     }
 
+    @Test("elevated allow-always does not persist durable grant")
+    func elevatedAllowAlwaysDoesNotPersistGrant() async {
+        let store = ExecApprovalStore()
+        await store.registerPending(id: "elevated-git", command: "git status", allowsDurableBypass: false)
+        let resolution = await store.resolve(id: "elevated-git", approved: true, durable: true)
+        #expect(resolution == .approved(durable: true))
+        #expect(await store.listDurableGrants() == [])
+        #expect(await store.isDurableApproved(command: "git push") == false)
+    }
+
+    @Test("delivery skips durable lookup when bypass disallowed")
+    func deliverySkipsDurableLookupWhenBypassDisallowed() async {
+        let grants = InMemoryExecApprovalGrantStore(commandNames: ["curl"])
+        let store = ExecApprovalStore(grantStore: grants)
+        let delivery = DefaultExecApprovalDelivery(store: store, waitTimeoutSeconds: 5)
+        let request = ExecApprovalRequest(
+            id: "req-no-bypass",
+            command: "curl https://example.com",
+            title: "Exec approval",
+            description: "curl https://example.com",
+            allowsDurableBypass: false
+        )
+        async let result = delivery.requestApproval(request, headless: false)
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        let resolved = await store.resolve(id: "req-no-bypass", approved: true)
+        #expect(resolved == .approved(durable: false))
+        #expect(await result == .approved)
+    }
+
     @Test("in-memory grant store add/remove/list/isGranted")
     func inMemoryGrantStore() async {
         let grants = InMemoryExecApprovalGrantStore()

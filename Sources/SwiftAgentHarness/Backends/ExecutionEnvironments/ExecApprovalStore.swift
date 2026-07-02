@@ -13,6 +13,7 @@ public actor ExecApprovalStore {
 
     private let coordinator: ApprovalCoordinator
     private var commands: [String: String] = [:]
+    private var allowsDurableBypassByID: [String: Bool] = [:]
     private var grantStore: any ExecApprovalGrantStore
 
     public init(
@@ -29,8 +30,14 @@ public actor ExecApprovalStore {
         self.grantStore = grantStore
     }
 
-    public func registerPending(id: String, command: String, presentation: ApprovalPresentation? = nil) async {
+    public func registerPending(
+        id: String,
+        command: String,
+        allowsDurableBypass: Bool = true,
+        presentation: ApprovalPresentation? = nil
+    ) async {
         commands[id] = command
+        allowsDurableBypassByID[id] = allowsDurableBypass
         // Exec uses a caller-supplied wait timeout, so the registration timeout is a
         // large placeholder; the deny default only applies if a tool-style wait is used.
         _ = await coordinator.register(
@@ -70,8 +77,9 @@ public actor ExecApprovalStore {
     }
 
     /// When `durable` is true, a persisted grant is stored only when a safe grant key
-    /// can be derived (interpreter/wrapper prefixes are peeled). Unpeelable interpreter
-    /// commands still resolve as allow-always for the pending request but leave no grant.
+    /// can be derived (interpreter/wrapper prefixes are peeled) and the pending request
+    /// allowed durable bypass (elevated/host exec does not persist grants). Unpeelable
+    /// interpreter commands still resolve as allow-always for the pending request but leave no grant.
     @discardableResult
     public func resolve(
         id: String,
@@ -81,7 +89,8 @@ public actor ExecApprovalStore {
     ) async -> ExecApprovalResolution? {
         guard await coordinator.isPending(id: id) else { return nil }
         let command = commands.removeValue(forKey: id)
-        if approved, durable, let command {
+        let allowsDurableBypass = allowsDurableBypassByID.removeValue(forKey: id) ?? true
+        if approved, durable, allowsDurableBypass, let command {
             await addDurableApproval(command: command)
         }
         let decision: ApprovalDecision = approved ? (durable ? .allowAlways : .allowOnce) : .deny

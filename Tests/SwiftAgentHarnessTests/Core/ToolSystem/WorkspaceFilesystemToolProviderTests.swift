@@ -579,8 +579,8 @@ struct WorkspaceFilesystemToolProviderTests {
         #expect(result.error?.contains("elevation is not available") == true)
     }
 
-    @Test("sandbox denial skips approval prompt when command is durably granted")
-    func sandboxDenialSkipsPromptWithDurableGrant() async throws {
+    @Test("sandbox denial still prompts when command is durably granted")
+    func sandboxDenialStillPromptsWithDurableGrant() async throws {
         let fixture = try makeFixture()
         defer { cleanup(fixture.workspace) }
         let store = ExecApprovalStore()
@@ -592,9 +592,24 @@ struct WorkspaceFilesystemToolProviderTests {
             approvalDelivery: recorder,
             useStubBashRunner: true
         ).executeTool(bashCall(command: "echo elevated-ok", elevated: nil))
-        #expect(await recorder.requestCount == 0)
+        #expect(await recorder.requestCount == 1)
         #expect(result.success == true)
         #expect(result.content.contains("elevated-ok"))
+    }
+
+    @Test("elevated exec ignores pre-seeded durable name grant")
+    func elevatedExecIgnoresPreSeededDurableGrant() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let store = ExecApprovalStore()
+        await store.addDurableApproval(command: "git status")
+        let recorder = RecordingExecApprovalDelivery(grantStore: store)
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder
+        ).executeTool(bashCall(command: "git status", elevated: true))
+        #expect(await recorder.requestCount == 1)
     }
 
     @Test("durable grant from bash -lc does not pre-approve unrelated bash commands")
@@ -610,7 +625,7 @@ struct WorkspaceFilesystemToolProviderTests {
             approvalDelivery: recorder,
             useStubBashRunner: true
         ).executeTool(bashCall(command: "echo elevated-ok", elevated: nil))
-        #expect(await recorder.requestCount == 0)
+        #expect(await recorder.requestCount == 1)
         #expect(approvedEcho.success == true)
 
         _ = try await elevatedProvider(
@@ -619,7 +634,7 @@ struct WorkspaceFilesystemToolProviderTests {
             approvalDelivery: recorder,
             useStubBashRunner: true
         ).executeTool(bashCall(command: "bash -lc 'rm -rf /'", elevated: nil))
-        #expect(await recorder.requestCount == 1)
+        #expect(await recorder.requestCount == 2)
     }
 
     @Test("non-126 sandbox failure does not escalate")
@@ -699,7 +714,8 @@ private actor RecordingExecApprovalDelivery: ExecApprovalDelivering {
         if headless {
             return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
         }
-        if await grantStore.isDurableApproved(command: request.command) {
+        if request.allowsDurableBypass,
+           await grantStore.isDurableApproved(command: request.command) {
             return .approved
         }
         requestCount += 1
