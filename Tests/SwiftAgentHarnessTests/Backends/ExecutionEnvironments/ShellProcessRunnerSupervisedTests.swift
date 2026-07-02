@@ -9,7 +9,7 @@ import Darwin
 #endif
 
 #if os(macOS) || os(Linux)
-@Suite("ShellProcessRunner supervised process group")
+@Suite("ShellProcessRunner supervised process group", .serialized)
 struct ShellProcessRunnerSupervisedTests {
     private func tempPIDPath() -> String {
         FileManager.default.temporaryDirectory
@@ -67,7 +67,8 @@ struct ShellProcessRunnerSupervisedTests {
         defer { try? FileManager.default.removeItem(atPath: pidPath) }
         let task = Task {
             try await ShellProcessRunner.runSupervised(
-                argv: ["/bin/bash", "-c", grandchildScript(pidPath: pidPath)]
+                argv: ["/bin/bash", "-c", grandchildScript(pidPath: pidPath)],
+                timeoutSeconds: 10
             )
         }
         let grandchild = await readPID(from: pidPath)
@@ -139,6 +140,27 @@ struct ShellProcessRunnerSupervisedTests {
             inheritHostEnvironment: false
         )
         #expect(leaked.exitCode == 1)
+    }
+
+    @Test("bare executable name resolves via PATH without cwd")
+    func bareNameSupervised() async throws {
+        let result = try await ShellProcessRunner.runSupervised(
+            argv: ["true"],
+            timeoutSeconds: 10
+        )
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("unresolved bare name throws hostToolMissing for supervised spawn")
+    func bareNameMissingSupervised() async {
+        await #expect(throws: SandboxBackendError.hostToolMissing(tool: "sah-definitely-missing-tool", location: "gateway")) {
+            try await ShellProcessRunner.runSupervised(
+                argv: ["sah-definitely-missing-tool"],
+                env: ["PATH": "/nonexistent/bin"],
+                timeoutSeconds: 10,
+                inheritHostEnvironment: false
+            )
+        }
     }
 }
 #endif
