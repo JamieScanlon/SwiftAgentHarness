@@ -2,7 +2,7 @@ import Foundation
 import Vapor
 
 /// When ``requireAuthenticatedOwnerOnMutations`` is true, REST/WS mutations require
-/// ``APISessionContext/authenticatedOwnerAccountID`` (typically from ``X-SAH-Authenticated-Owner``)
+/// ``APISessionContext/authenticatedOwnerAccountID`` (from a validated ``Authorization: Bearer`` JWT)
 /// and conversation rows must carry the same ``ModelConversation/ownerAccountID``.
 public struct TenancyPolicySettings: Sendable {
     public var requireAuthenticatedOwnerOnMutations: Bool
@@ -15,7 +15,7 @@ public struct TenancyPolicySettings: Sendable {
 }
 
 enum APILayerTenancyResponses {
-    static let unauthorizedMissingOwnerJSON = #"{"type":"error","message":"Authenticated owner required (set X-SAH-Authenticated-Owner)"}"#
+    static let unauthorizedMissingOwnerJSON = #"{"type":"error","message":"Authenticated owner required (valid Authorization Bearer token)"}"#
     static let forbiddenTenantJSON = #"{"type":"error","message":"Conversation not accessible for this owner"}"#
 
     static func unauthorizedMissingOwner() -> Response {
@@ -65,7 +65,7 @@ extension APILayerWebSocketDependencies {
     func tenancyEnsureAuthenticatedOwnerForMutation() -> String? {
         guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return nil }
         guard APISessionContext.authenticatedOwnerAccountID != nil else {
-            return "Authenticated owner required (set X-SAH-Authenticated-Owner on WebSocket handshake)"
+            return "Authenticated owner required (valid Authorization Bearer token on WebSocket handshake)"
         }
         return nil
     }
@@ -73,7 +73,7 @@ extension APILayerWebSocketDependencies {
     func tenancyEnsureConversationTenant(conversationID: UUID) async -> String? {
         guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return nil }
         guard let scope = APISessionContext.authenticatedOwnerAccountID else {
-            return "Authenticated owner required (set X-SAH-Authenticated-Owner on WebSocket handshake)"
+            return "Authenticated owner required (valid Authorization Bearer token on WebSocket handshake)"
         }
         guard let conv = await conversation.apiGetConversation(id: conversationID) else {
             return "Conversation not found"
@@ -93,7 +93,7 @@ extension APILayerWebSocketDependencies {
     func tenancyFailureMessageIfConversationAccessForbidden(conversationID: UUID) async -> String? {
         guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return nil }
         guard let scope = APISessionContext.authenticatedOwnerAccountID else {
-            return "Authenticated owner required (set X-SAH-Authenticated-Owner on WebSocket handshake)"
+            return "Authenticated owner required (valid Authorization Bearer token on WebSocket handshake)"
         }
         guard let conv = await conversation.apiGetConversation(id: conversationID) else {
             return "Conversation not found"

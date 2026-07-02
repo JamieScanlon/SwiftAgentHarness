@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SwiftAgentHarness HTTP API
-  version: 1.33.0
+  version: 1.35.0
   description: |
     Control plane for SwiftAgentHarness (Vapor `/api` group). Does not include WebSocket `/ws` —
     see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
@@ -45,11 +45,11 @@ info:
 
     **v1.15.0:** Per-client REST/WS session headers and cookies remain for request scoping and tenancy alignment.
 
-    **v1.16.0:** **`GET/PUT/DELETE /conversations/{id}/engine-artifacts`** (+ keyed paths): raw-byte upload/download (**`application/octet-stream`**), JSON key listing, **`413`** when over configured max body size, **`501`** when harness artifact storage is unavailable. Strict tenancy: optional **`X-SAH-Authenticated-Owner`** (UUID) when **`requireAuthenticatedTenantOnAPI`** is enabled — see **`Documentation/CRUD_QUERY_API_INVENTORY.md`**.
+    **v1.16.0:** **`GET/PUT/DELETE /conversations/{id}/engine-artifacts`** (+ keyed paths): raw-byte upload/download (**`application/octet-stream`**), JSON key listing, **`413`** when over configured max body size, **`501`** when harness artifact storage is unavailable. Strict tenancy: validated **`Authorization: Bearer`** JWT when **`requireAuthenticatedTenantOnAPI`** is enabled — see **`Documentation/CRUD_QUERY_API_INVENTORY.md`**.
 
     **v1.17.0:** **`ConversationRunInfo`** parity with spec **`terminalReason`**, **`markerKind`**, optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
 
-    **v1.19.0:** **`POST /conversations/{id}/branch`** HTTP strict preconditions: optional **`If-Match`** against parent transcript tail (**`msg-*`**, **`msg-none`** when empty); **`428`**/**`412`** when **`ServerConfig.httpPreconditionsStrictMode`** is enabled (same ETag family as send). Tenancy operator note: **`GET /conversations`** / **`GET /search`** do not auto-scope to **`X-SAH-Authenticated-Owner`** — supply **`owner`** query when **`requireAuthenticatedTenantOnAPI`** isolation is required (**`Documentation/CRUD_QUERY_API_INVENTORY.md`**).
+    **v1.19.0:** **`POST /conversations/{id}/branch`** HTTP strict preconditions: optional **`If-Match`** against parent transcript tail (**`msg-*`**, **`msg-none`** when empty); **`428`**/**`412`** when **`ServerConfig.httpPreconditionsStrictMode`** is enabled (same ETag family as send). Tenancy operator note: **`GET /conversations`** / **`GET /search`** do not auto-scope to the Bearer JWT `sub` claim — supply **`owner`** query when **`requireAuthenticatedTenantOnAPI`** isolation is required (**`Documentation/CRUD_QUERY_API_INVENTORY.md`**).
 
     **v1.20.0:** Legacy websocket **`type:patch_conversation`** is removed (deterministic error envelope). Canonical control-plane patch mutation is **`PATCH /conversations/{id}`** only, with strict precondition support (**`If-Match`** → **`412`**/**`428`**) and structured **`type:error`** envelopes for bad ID/not found validation paths.
 
@@ -91,6 +91,8 @@ info:
     **v1.33.0:** Tool listing split: **`GET /tools`** returns the global registered catalog (unfiltered); **`GET /conversations/{id}/tools`** returns effective tools for that conversation (mode profile, routing whitelist, disabled tools). Replaces removed **`GET /conversations/{id}/available-tools`**.
 
     **v1.34.0:** Skill listing split: **`GET /conversations/{id}/skills`** returns effective skills for that conversation (mode profile, routing whitelist, disabled skills). Replaces removed **`GET /conversations/{id}/available-skills`** for picker/UI reads; global **`GET /skills`** remains the registry read with ETag support.
+
+    **v1.35.0:** Strict authenticated tenancy now requires validated **`Authorization: Bearer`** harness access JWTs (HS256; `sub` = owner UUID via `ServerConfig.apiAccessTokenHS256Secret`). Legacy **`X-SAH-Authenticated-Owner`** is ignored. `APILayer.start()` fails closed when `requireAuthenticatedTenantOnAPI` is enabled without a configured secret.
 
     **v1.18.0:** **`Documentation/SESSION_SCOPING.md`** documents explicit conversation-id routing on REST and legacy WS control frames.
 
@@ -302,7 +304,7 @@ paths:
             A non-empty value that is not a valid UUID returns **400** (no silent unscoped list).
 
             **Strict tenancy (`requireAuthenticatedTenantOnAPI`):** the server does **not** infer this from
-            **`X-SAH-Authenticated-Owner`** — pass **`owner=<principal UUID>`** when you need tenant-isolated catalog results.
+            the Bearer JWT `sub` claim — pass **`owner=<principal UUID>`** when you need tenant-isolated catalog results.
           schema:
             type: string
             format: uuid
@@ -996,7 +998,7 @@ paths:
       summary: List cached engine artifact keys for a conversation
       description: |
         Returns JSON `{ "keys": [string] }`. Requires harness-backed artifact storage for this conversation; otherwise **501**.
-        When strict authenticated tenancy is enabled, send **`X-SAH-Authenticated-Owner`** matching the conversation **`ownerAccountID`**.
+        When strict authenticated tenancy is enabled, send **`Authorization: Bearer`** with a harness access JWT whose `sub` matches the conversation **`ownerAccountID`**.
       parameters:
         - $ref: "#/components/parameters/ConversationId"
       responses:
@@ -1546,6 +1548,17 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
 components:
+  securitySchemes:
+    HarnessAccessBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256 harness access JWT verified with `ServerConfig.apiAccessTokenHS256Secret`.
+        The owner principal is the JWT `sub` claim (UUID string). Required for strict tenancy
+        mutations when `requireAuthenticatedTenantOnAPI` is enabled. Legacy `X-SAH-Authenticated-Owner`
+        is not trusted.
+
   parameters:
     ConversationId:
       name: id

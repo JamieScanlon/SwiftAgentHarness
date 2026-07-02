@@ -47,6 +47,20 @@ private enum APILayerRESTTestSupport {
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
         )
     }
+
+    static let strictTenancyAuthSettings = APIAccessTokenAuthenticationSettings(hs256Secret: "rest-coverage-test-secret")
+
+    static func configureStrictTenancyAuth(on api: APILayer) async {
+        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await api.setAPIAccessTokenAuthenticationSettings(strictTenancyAuthSettings)
+    }
+
+    static func bearerAuthorization(ownerAccountID: UUID) async throws -> String {
+        try await HarnessAPIAccessTokenFactory.authorizationHeaderValue(
+            ownerAccountID: ownerAccountID,
+            settings: strictTenancyAuthSettings
+        )
+    }
 }
 
 @Suite("APILayer REST routes", .serialized)
@@ -1115,7 +1129,7 @@ struct APILayerRESTCoverageTests {
         }
     }
 
-    @Test("GET /api/conversations paged list does not infer owner from tenancy header without owner query")
+    @Test("GET /api/conversations paged list does not infer owner from bearer token without owner query")
     func strictTenancyPagedListExplicitOwnerFilterOnly() async throws {
         let container = try APILayerRESTTestSupport.makeContainer()
         let runtimeSession = APILayerRESTTestSupport.makeChatManager(container: container)
@@ -1123,7 +1137,9 @@ struct APILayerRESTCoverageTests {
         let api = APILayer(port: 0)
         let ownerA = UUID()
         let ownerB = UUID()
-        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
+        let authA = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: ownerA)
+        let authB = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: ownerB)
 
         try await withApp { app in
             await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: StubModelProvider(models: [model]))
@@ -1132,7 +1148,7 @@ struct APILayerRESTCoverageTests {
             var cidB = ""
             try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerA.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: authA)
                 req.body = .init(string: createJSON)
             }, afterResponse: { res async throws in
                 let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
@@ -1140,7 +1156,7 @@ struct APILayerRESTCoverageTests {
             })
             try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerB.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: authB)
                 req.body = .init(string: createJSON)
             }, afterResponse: { res async throws in
                 let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
@@ -1151,7 +1167,7 @@ struct APILayerRESTCoverageTests {
                 .GET,
                 "/api/conversations?summary=true&limit=50",
                 beforeRequest: { req in
-                    req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerA.uuidString)
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
                 },
                 afterResponse: { res async throws in
                     #expect(res.status == .ok)
@@ -1167,7 +1183,7 @@ struct APILayerRESTCoverageTests {
                 .GET,
                 "/api/conversations?summary=true&limit=50&owner=\(ownerA.uuidString)",
                 beforeRequest: { req in
-                    req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerA.uuidString)
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
                 },
                 afterResponse: { res async throws in
                     #expect(res.status == .ok)
@@ -3041,14 +3057,15 @@ struct APILayerRESTCoverageTests {
         }
     }
 
-    @Test("POST /api/conversations/:id/tool-approvals returns 401 when strict tenancy requires owner header")
+    @Test("POST /api/conversations/:id/tool-approvals returns 401 when strict tenancy requires bearer token")
     func strictTenancyToolApprovalRequiresOwnerHeader() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()
         let runtime = ProtocolOnlyRuntimeGatewayStub()
         let model = APILayerRESTTestSupport.makeTestModel()
         let owner = UUID()
         let api = APILayer(port: 0)
-        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
+        let auth = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: owner)
         var conversationID = ""
 
         try await withApp { app in
@@ -3061,7 +3078,7 @@ struct APILayerRESTCoverageTests {
             let createJSON = #"{"modelRef":"\#(model.id.uuidString)","userSystemPrompt":"tool approval tenancy"}"#
             try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: owner.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: auth)
                 req.body = .init(string: createJSON)
             }, afterResponse: { res async throws in
                 let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
@@ -3261,14 +3278,15 @@ struct APILayerRESTCoverageTests {
         }
     }
 
-    @Test("POST /api/conversations/:id/completion-announcements returns 401 when strict tenancy requires owner header")
+    @Test("POST /api/conversations/:id/completion-announcements returns 401 when strict tenancy requires bearer token")
     func strictTenancyCompletionAnnounceRequiresOwnerHeader() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()
         let runtime = ProtocolOnlyRuntimeGatewayStub()
         let model = APILayerRESTTestSupport.makeTestModel()
         let owner = UUID()
         let api = APILayer(port: 0)
-        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
+        let auth = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: owner)
         var conversationID = ""
 
         try await withApp { app in
@@ -3281,7 +3299,7 @@ struct APILayerRESTCoverageTests {
             let createJSON = #"{"modelRef":"\#(model.id.uuidString)","userSystemPrompt":"completion tenancy"}"#
             try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: owner.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: auth)
                 req.body = .init(string: createJSON)
             }, afterResponse: { res async throws in
                 let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
@@ -3424,13 +3442,13 @@ struct APILayerRESTCoverageTests {
         #expect(idA != idB)
     }
 
-    @Test("POST /api/conversations returns 401 when strict tenancy requires authenticated owner header")
+    @Test("POST /api/conversations returns 401 when strict tenancy requires bearer token")
     func strictTenancyCreateRequiresOwnerHeader() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()
         let runtime = ProtocolOnlyRuntimeGatewayStub()
         let model = APILayerRESTTestSupport.makeTestModel()
         let api = APILayer(port: 0)
-        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
 
         try await withApp { app in
             await api.configureRoutesForTesting(
@@ -3457,7 +3475,9 @@ struct APILayerRESTCoverageTests {
         let api = APILayer(port: 0)
         let ownerA = UUID()
         let ownerB = UUID()
-        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
+        let authA = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: ownerA)
+        let authB = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: ownerB)
 
         try await withApp { app in
             await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: StubModelProvider(models: [model]))
@@ -3465,7 +3485,7 @@ struct APILayerRESTCoverageTests {
             var cid = ""
             try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerA.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: authA)
                 req.body = .init(string: createJSON)
             }, afterResponse: { res async throws in
                 let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
@@ -3476,7 +3496,7 @@ struct APILayerRESTCoverageTests {
             let bumpJSON = #"{"topic":"cross-tenant"}"#
             try await app.testing().test(.PATCH, "/api/conversations/\(cid)", beforeRequest: { req in
                 req.headers.contentType = .json
-                req.headers.replaceOrAdd(name: "X-SAH-Authenticated-Owner", value: ownerB.uuidString)
+                req.headers.replaceOrAdd(name: .authorization, value: authB)
                 req.body = .init(string: bumpJSON)
             }, afterResponse: { res async throws in
                 #expect(res.status == .forbidden)
