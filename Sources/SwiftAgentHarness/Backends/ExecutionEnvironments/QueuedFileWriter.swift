@@ -11,51 +11,25 @@ public enum QueuedFileWriterError: Error, Equatable {
     case unstableFile
     case hardlinkTarget
     case openFailed
+    case writeFailed
 }
 
 public enum QueuedFileWriter {
-    private static let lock = NSLock()
-    private nonisolated(unsafe) static var tailQueues: [String: [() throws -> Void]] = [:]
+    private static let coordinator = Coordinator()
 
-    public static func resetForTesting() {
-        lock.lock()
-        defer { lock.unlock() }
-        tailQueues = [:]
+    public static func resetForTesting() async {
+        await coordinator.resetForTesting()
     }
 
-    public static func write(data: Data, to path: String) throws {
-        try enqueue(path: path) {
+    public static func write(data: Data, to path: String) async throws {
+        try await coordinator.enqueue(path: path) {
             try safeWrite(data: data, to: path)
         }
     }
 
-    public static func append(data: Data, to path: String) throws {
-        try enqueue(path: path) {
+    public static func append(data: Data, to path: String) async throws {
+        try await coordinator.enqueue(path: path) {
             try safeAppend(data: data, to: path)
-        }
-    }
-
-    private static func enqueue(path: String, operation: @escaping () throws -> Void) throws {
-        let key = FilesystemCanonicalPath.resolve(path)
-        lock.lock()
-        tailQueues[key, default: []].append(operation)
-        let shouldRun = tailQueues[key]?.count == 1
-        lock.unlock()
-        guard shouldRun else { return }
-        while true {
-            lock.lock()
-            guard let next = tailQueues[key]?.first else {
-                lock.unlock()
-                break
-            }
-            lock.unlock()
-            try next()
-            lock.lock()
-            tailQueues[key]?.removeFirst()
-            if tailQueues[key]?.isEmpty == true {
-                tailQueues[key] = nil
-            }
-            lock.unlock()
         }
     }
 
@@ -80,10 +54,41 @@ public enum QueuedFileWriter {
         guard fd >= 0 else { throw QueuedFileWriterError.openFailed }
         defer { close(fd) }
         try verifyStableOpenedFile(fd: fd, expectedPath: canonicalPath)
-        data.withUnsafeBytes { buffer in
-            _ = Darwin.write(fd, buffer.baseAddress, buffer.count)
+        try writeAll(data: data, to: fd)
+    }
+
+    private static func writeAll(data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            var totalWritten = 0
+            let totalCount = buffer.count
+            while totalWritten < totalCount {
+                let written = posixWrite(
+                    fd,
+                    baseAddress.advanced(by: totalWritten),
+                    totalCount - totalWritten
+                )
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw QueuedFileWriterError.writeFailed
+                }
+                if written == 0 {
+                    throw QueuedFileWriterError.writeFailed
+                }
+                totalWritten += written
+            }
         }
     }
+
+    #if os(Linux)
+    private static func posixWrite(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int {
+        Glibc.write(fd, buffer, count)
+    }
+    #else
+    private static func posixWrite(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int {
+        Darwin.write(fd, buffer, count)
+    }
+    #endif
 
     static func assertNoSymlinkParents(_ path: String) throws {
         var ancestor = (path as NSString).deletingLastPathComponent
@@ -106,5 +111,46 @@ public enum QueuedFileWriter {
     private static func isSymlink(_ path: String) -> Bool {
         var st = stat()
         return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+    }
+}
+
+private actor Coordinator {
+    struct PendingOp {
+        let perform: @Sendable () throws -> Void
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private var queues: [String: [PendingOp]] = [:]
+    private var draining: Set<String> = []
+
+    func resetForTesting() {
+        queues = [:]
+        draining = []
+    }
+
+    func enqueue(path: String, perform: @Sendable @escaping () throws -> Void) async throws {
+        let key = FilesystemCanonicalPath.resolve(path)
+        try await withCheckedThrowingContinuation { continuation in
+            queues[key, default: []].append(PendingOp(perform: perform, continuation: continuation))
+            if draining.insert(key).inserted {
+                Task { await drain(key: key) }
+            }
+        }
+    }
+
+    private func drain(key: String) async {
+        defer { draining.remove(key) }
+        while let op = queues[key]?.first {
+            queues[key]?.removeFirst()
+            if queues[key]?.isEmpty == true {
+                queues[key] = nil
+            }
+            do {
+                try op.perform()
+                op.continuation.resume()
+            } catch {
+                op.continuation.resume(throwing: error)
+            }
+        }
     }
 }

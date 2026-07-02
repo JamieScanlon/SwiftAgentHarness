@@ -29,7 +29,7 @@ public struct LocalHostFsBridge: SandboxFsBridge {
 
     public func writeFile(path: String, content: Data) async throws {
         let resolved = try resolveWritePath(raw: path, requireExists: false)
-        try QueuedFileWriter.write(data: content, to: resolved)
+        try await QueuedFileWriter.write(data: content, to: resolved)
     }
 
     public func mkdir(path: String) async throws {
