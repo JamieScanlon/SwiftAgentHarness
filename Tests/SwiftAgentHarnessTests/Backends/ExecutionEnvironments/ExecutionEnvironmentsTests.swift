@@ -113,11 +113,63 @@ struct SandboxConfigResolverTests {
 
 @Suite("Path policy")
 struct PathPolicyTests {
+    private func makeBindFixture() throws -> (workspace: URL, sibling: URL, child: URL, outside: URL) {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("path-policy-bind-\(UUID().uuidString)", isDirectory: true)
+        let workspace = base.appendingPathComponent("workspace", isDirectory: true)
+        let sibling = base.appendingPathComponent("workspace-secrets", isDirectory: true)
+        let child = workspace.appendingPathComponent("subdir", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        return (workspace, sibling, child, outside)
+    }
+
+    private func cleanupBindFixture(_ workspace: URL) {
+        try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
+    }
+
     @Test("toRelativeWorkspacePath rejects escape")
     func relativeRejectsEscape() throws {
         let root = FileManager.default.temporaryDirectory.path
         #expect(throws: SandboxBackendError.self) {
             try PathPolicy.toRelativeWorkspacePath(root: root, candidate: "/etc/passwd")
+        }
+    }
+
+    @Test("validateBindSource accepts allowlisted workspace root")
+    func validateBindSourceAcceptsWorkspaceRoot() throws {
+        let fixture = try makeBindFixture()
+        defer { cleanupBindFixture(fixture.workspace) }
+        let resolved = try PathPolicy.validateBindSource(fixture.workspace.path, allowlist: [fixture.workspace.path])
+        #expect(resolved == FilesystemCanonicalPath.resolve(fixture.workspace.path))
+    }
+
+    @Test("validateBindSource accepts path inside workspace")
+    func validateBindSourceAcceptsChildPath() throws {
+        let fixture = try makeBindFixture()
+        defer { cleanupBindFixture(fixture.workspace) }
+        let resolved = try PathPolicy.validateBindSource(fixture.child.path, allowlist: [fixture.workspace.path])
+        #expect(resolved == FilesystemCanonicalPath.resolve(fixture.child.path))
+    }
+
+    @Test("validateBindSource rejects sibling prefix collision")
+    func validateBindSourceRejectsSiblingPrefixCollision() throws {
+        let fixture = try makeBindFixture()
+        defer { cleanupBindFixture(fixture.workspace) }
+        #expect(throws: SandboxBackendError.pathEscapes(fixture.sibling.path)) {
+            try PathPolicy.validateBindSource(fixture.sibling.path, allowlist: [fixture.workspace.path])
+        }
+    }
+
+    @Test("validateBindSource rejects path outside allowlist")
+    func validateBindSourceRejectsOutsidePath() throws {
+        let fixture = try makeBindFixture()
+        defer { cleanupBindFixture(fixture.workspace) }
+        #expect(throws: SandboxBackendError.pathEscapes(fixture.outside.path)) {
+            try PathPolicy.validateBindSource(fixture.outside.path, allowlist: [fixture.workspace.path])
         }
     }
 }

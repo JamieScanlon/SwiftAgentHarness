@@ -127,7 +127,7 @@ public enum PathPolicy {
 
     public static func validateBindSource(_ source: String, allowlist: [String]) throws -> String {
         let canonical = FilesystemCanonicalPath.resolve(source)
-        guard allowlist.contains(where: { canonical.hasPrefix(FilesystemCanonicalPath.resolve($0)) }) else {
+        guard isPathInsideAnyRoot(canonical, roots: allowlist) else {
             throw SandboxBackendError.pathEscapes(source)
         }
         return canonical
