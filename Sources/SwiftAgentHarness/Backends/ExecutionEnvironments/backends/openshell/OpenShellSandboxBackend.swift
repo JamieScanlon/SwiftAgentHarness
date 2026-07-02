@@ -62,7 +62,7 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
         self.settings = openshell
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
         self.sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey)"
-        self.mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey)"
+        self.mirrorRoot = SandboxHostPaths.openshellMirrorRoot(scopeKey: params.scopeKey).path
         self.workdir = openshell.workdir
         self.runtimeId = sandboxName
         self.runtimeLabel = sandboxName
@@ -70,10 +70,15 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
         self.env = nil
     }
 
+    private func ensureMirrorDirectory() throws {
+        try SandboxHostPaths.ensureDirectory(at: URL(fileURLWithPath: mirrorRoot, isDirectory: true))
+    }
+
     public func buildExecSpec(params: SandboxBuildExecSpecParams) async throws -> SandboxBackendExecSpec {
         let trimmed = params.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         let cliPath = try OpenShellHostTools.requireCLI()
+        try ensureMirrorDirectory()
         try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: hostWorkspace, mirrorRoot: mirrorRoot)
         let argv = OpenShellSandboxArgv.exec(
             cliPath: cliPath,
@@ -92,6 +97,7 @@ public struct OpenShellSandboxBackendHandle: SandboxBackendHandle {
 
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         let cliPath = try OpenShellHostTools.requireCLI()
+        try ensureMirrorDirectory()
         try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: hostWorkspace, mirrorRoot: mirrorRoot)
         let argv = OpenShellSandboxArgv.exec(
             cliPath: cliPath,
@@ -135,7 +141,7 @@ public struct OpenShellSandboxBackendManager: SandboxBackendManager {
         guard let openshell = params.config.openshell else { return }
         let cliPath = try OpenShellHostTools.requireCLI()
         let sandboxName = openshell.sandboxName ?? "sah-\(params.scopeKey)"
-        let mirrorRoot = "/tmp/sah-openshell-\(params.scopeKey)"
+        let mirrorRoot = SandboxHostPaths.openshellMirrorRoot(scopeKey: params.scopeKey).path
         _ = try await ShellProcessRunner.run(argv: OpenShellSandboxArgv.delete(cliPath: cliPath, sandboxName: sandboxName))
         await WorkspaceMirrorSync.shared.remove(mirrorRoot: mirrorRoot)
     }

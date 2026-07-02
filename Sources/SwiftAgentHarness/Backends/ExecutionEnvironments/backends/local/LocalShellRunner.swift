@@ -400,13 +400,15 @@ import CryptoKit
 import Logging
 
 enum LocalSeatbelt {
-    static func profile(workspaceRoot: String, memoryDirectory: String?) -> String {
+    static func profile(workspaceRoot: String, memoryDirectory: String?, tmpDirectory: String) -> String {
         var lines = [
             "(version 1)",
             "(import \"dyld-support.sb\")",
             "(deny default)",
             "(allow file-read* (subpath \(q(workspaceRoot))))",
             "(allow file-write* (subpath \(q(workspaceRoot))))",
+            "(allow file-read* (subpath \(q(tmpDirectory))))",
+            "(allow file-write* (subpath \(q(tmpDirectory))))",
             "(allow file-read* (subpath \"/bin\"))",
             "(allow file-read* (subpath \"/usr\"))",
             "(allow file-read* (subpath \"/System/Library\"))",
@@ -420,8 +422,6 @@ enum LocalSeatbelt {
             "(allow mach-lookup)",
             "(allow signal)",
             "(allow ipc-posix-shm*)",
-            "(allow file-read* (subpath \"/tmp\"))",
-            "(allow file-write* (subpath \"/tmp\"))",
             "(allow file-read-metadata)",
             "(deny network*)",
         ]
@@ -432,8 +432,8 @@ enum LocalSeatbelt {
         return lines.joined(separator: "\n")
     }
 
-    static func wrapExecArgv(command: String, workspaceRoot: String, memoryDirectory: String?) -> [String] {
-        let profile = profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory)
+    static func wrapExecArgv(command: String, workspaceRoot: String, memoryDirectory: String?, tmpDirectory: String) -> [String] {
+        let profile = profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory, tmpDirectory: tmpDirectory)
         return ["/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "-c", command]
     }
 
@@ -489,9 +489,20 @@ enum LinuxBwrap {
 #endif
 
 public enum LocalExecArgv {
-    public static func sandboxed(command: String, workspaceRoot: String, memoryDirectory: String?, env: [String: String]) -> [String] {
+    public static func sandboxed(
+        command: String,
+        workspaceRoot: String,
+        memoryDirectory: String?,
+        tmpDirectory: String,
+        env: [String: String]
+    ) -> [String] {
         #if os(macOS)
-        return LocalSeatbelt.wrapExecArgv(command: command, workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory)
+        return LocalSeatbelt.wrapExecArgv(
+            command: command,
+            workspaceRoot: workspaceRoot,
+            memoryDirectory: memoryDirectory,
+            tmpDirectory: tmpDirectory
+        )
         #elseif os(Linux)
         return LinuxBwrap.wrapExecArgv(command: command, workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory, env: env)
         #else
