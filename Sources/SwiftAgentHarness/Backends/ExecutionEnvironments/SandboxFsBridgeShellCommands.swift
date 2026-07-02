@@ -58,3 +58,25 @@ enum DockerSandboxShellCommand {
         return argv
     }
 }
+
+enum LocalSandboxShellCommand {
+    static func argv(
+        params: SandboxBackendCommandParams,
+        workspaceRoot: String,
+        memoryDirectory: String?,
+        tmpDirectory: String,
+        env: [String: String]
+    ) -> [String] {
+        var argv = LocalExecArgv.sandboxed(
+            command: params.script,
+            workspaceRoot: workspaceRoot,
+            memoryDirectory: memoryDirectory,
+            tmpDirectory: tmpDirectory,
+            env: env
+        )
+        if !params.args.isEmpty {
+            argv += ["--"] + params.args
+        }
+        return argv
+    }
+}

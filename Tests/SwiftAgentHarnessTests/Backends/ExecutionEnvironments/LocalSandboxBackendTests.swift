@@ -36,6 +36,54 @@ struct LocalSandboxBackendTests {
         #expect(String(data: result.stdout, encoding: .utf8)?.contains("hi") == true)
     }
 
+    @Test("runShellCommand forwards args as positional parameters")
+    func runShellCommandForwardsArgs() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-args-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileName = "hello.txt"
+        let file = dir.appendingPathComponent(fileName)
+        try "positional-args".write(to: file, atomically: true, encoding: .utf8)
+        let handle = LocalSandboxBackendHandle(params: CreateSandboxBackendParams(
+            sessionKey: "s",
+            scopeKey: "agent-args",
+            workspaceDir: dir.path,
+            agentWorkspaceDir: dir.path,
+            config: SandboxConfig(mode: .all, scope: .agent, backend: "local", sandboxingActive: true)
+        ))
+        let result = try await handle.runShellCommand(params: SandboxBackendCommandParams(
+            script: #"cat "$1""#,
+            args: [fileName]
+        ))
+        #expect(result.code == 0)
+        #expect(String(data: result.stdout, encoding: .utf8)?.contains("positional-args") == true)
+    }
+
+    @Test("runShellCommand forwards args with special characters in path")
+    func runShellCommandForwardsArgsWithSpecialCharacters() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-args-quote-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileName = "foo'.txt"
+        let file = dir.appendingPathComponent(fileName)
+        try "quoted-path".write(to: file, atomically: true, encoding: .utf8)
+        let handle = LocalSandboxBackendHandle(params: CreateSandboxBackendParams(
+            sessionKey: "s",
+            scopeKey: "agent-args-quote",
+            workspaceDir: dir.path,
+            agentWorkspaceDir: dir.path,
+            config: SandboxConfig(mode: .all, scope: .agent, backend: "local", sandboxingActive: true)
+        ))
+        let result = try await handle.runShellCommand(params: SandboxBackendCommandParams(
+            script: #"cat "$1""#,
+            args: [fileName]
+        ))
+        #expect(result.code == 0)
+        #expect(String(data: result.stdout, encoding: .utf8)?.contains("quoted-path") == true)
+    }
+
     @Test("sandboxed exec does not inherit arbitrary host keys")
     func sandboxIsolatesEnvironment() async throws {
         let dir = FileManager.default.temporaryDirectory

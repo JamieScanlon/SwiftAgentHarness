@@ -79,4 +79,18 @@ struct FsBridgeInjectionTests {
         #expect(argv.suffix(2) == ["--", quotePath])
         #expect(!params.script.contains(quotePath))
     }
+
+    @Test("local argv forwards args after script")
+    func localForwardsArgs() {
+        let params = SandboxBackendCommandParams(script: #"cat "$1""#, args: [quotePath])
+        let argv = LocalSandboxShellCommand.argv(
+            params: params,
+            workspaceRoot: "/w",
+            memoryDirectory: nil,
+            tmpDirectory: "/tmp/sah",
+            env: [:]
+        )
+        #expect(argv.suffix(2) == ["--", quotePath])
+        #expect(!params.script.contains(quotePath))
+    }
 }

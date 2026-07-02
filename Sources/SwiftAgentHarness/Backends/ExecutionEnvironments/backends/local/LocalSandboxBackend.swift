@@ -51,8 +51,8 @@ public struct LocalSandboxBackendHandle: SandboxBackendHandle {
         guard LocalExecArgv.isSandboxAvailable else { throw SandboxBackendError.sandboxUnavailable }
         let cwd = params.workdir ?? workdir
         let childEnv = try childEnvironment(overlay: params.env, cwd: cwd)
-        let argv = LocalExecArgv.sandboxed(
-            command: params.script,
+        let argv = LocalSandboxShellCommand.argv(
+            params: params,
             workspaceRoot: workdir,
             memoryDirectory: memoryDirectory,
             tmpDirectory: tmpDirectory,
