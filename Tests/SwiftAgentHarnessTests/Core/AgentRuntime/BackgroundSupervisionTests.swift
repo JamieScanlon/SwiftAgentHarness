@@ -220,6 +220,50 @@ struct BackgroundSupervisionTests {
         #expect(stderr.contains("err-msg"))
     }
 
+    // MARK: - Completion waiters
+
+    @Test("kill resumes infinite waitForCompletion waiters with nil")
+    func killResumesInfiniteWaitForCompletion() async throws {
+        let registry = BashProcessRegistry()
+        let id = try await registry.register(
+            sessionSlug: "s",
+            argv: ["/bin/bash", "-c", "sleep 60"],
+            env: [:],
+            cwd: nil
+        )
+        let waitTask = Task {
+            await registry.waitForCompletion(id: id, sessionSlug: "s", timeoutSeconds: nil)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await registry.kill(id: id, sessionSlug: "s")
+        let result = await waitTask.value
+        #expect(result == nil)
+    }
+
+    @Test("TTL reap resumes infinite waitForCompletion waiters with nil")
+    func ttlReapResumesInfiniteWaitForCompletion() async throws {
+        let registry = BashProcessRegistry()
+        let id = try await registry.register(
+            sessionSlug: "s",
+            argv: ["/bin/bash", "-c", "sleep 60"],
+            env: [:],
+            cwd: nil
+        )
+        let waitTask = Task {
+            await registry.waitForCompletion(id: id, sessionSlug: "s", timeoutSeconds: nil)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await registry.markSessionExpiredForTesting(id: id)
+        _ = try await registry.register(
+            sessionSlug: "s",
+            argv: ["/bin/bash", "-c", "true"],
+            env: [:],
+            cwd: nil
+        )
+        let result = await waitTask.value
+        #expect(result == nil)
+    }
+
     @Test("slow command auto-backgrounds when budget elapses")
     func slowCommandAutoBackgrounds() async throws {
         let registry = BashProcessRegistry()

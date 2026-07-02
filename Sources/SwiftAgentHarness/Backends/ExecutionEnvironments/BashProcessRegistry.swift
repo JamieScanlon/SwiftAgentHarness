@@ -304,7 +304,7 @@ public actor BashProcessRegistry {
     private func killUnchecked(id: String) {
         handles.removeValue(forKey: id)?.terminate()
         sessions.removeValue(forKey: id)
-        completionWaiters.removeValue(forKey: id)
+        resumeCompletionWaiters(id: id, result: nil)
     }
 
     static func pollDelta(buffer: DataBuffer, surfacedBytes: inout Int) -> (data: Data, truncated: Bool) {
@@ -315,7 +315,10 @@ public actor BashProcessRegistry {
 
     private func complete(id: String, result: ShellProcessRunner.RunResult?) {
         let handle = handles.removeValue(forKey: id)
-        guard var session = sessions[id], let result else { return }
+        guard var session = sessions[id], let result else {
+            resumeCompletionWaiters(id: id, result: nil)
+            return
+        }
         if let handle {
             session.stdoutTruncated = handle.liveStdoutBuffer.isTruncated
             session.stderrTruncated = handle.liveStderrBuffer.isTruncated
@@ -334,6 +337,13 @@ public actor BashProcessRegistry {
         let expired = sessions.filter { $0.value.isExpired }.keys
         for id in expired { handles.removeValue(forKey: id)?.terminate() }
         sessions = sessions.filter { !$0.value.isExpired }
+        for id in expired { resumeCompletionWaiters(id: id, result: nil) }
+    }
+
+    func markSessionExpiredForTesting(id: String) {
+        guard var session = sessions[id] else { return }
+        session.createdAt = Date.distantPast
+        sessions[id] = session
     }
 
     public func resetForTesting() {
