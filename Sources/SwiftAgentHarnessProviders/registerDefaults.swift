@@ -84,25 +84,22 @@ private func registerOpenRouter() throws {
 
 /// Test helper: reset registry and register defaults.
 public enum ProviderTestSupport {
-    private static let registryLock = NSRecursiveLock()
-
     public static func registerDefaultsForTesting() {
-        registryLock.lock()
-        defer { registryLock.unlock() }
-        if hasBundledDefaultsRegistered() {
-            return
+        ProviderRegistry.withExclusiveRegistryAccess {
+            ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
+            if hasBundledDefaultsRegistered() {
+                return
+            }
+            resetAndRegisterDefaultsUnlocked()
         }
-        resetAndRegisterDefaultsUnlocked()
     }
 
     /// Runs a test body against a custom registry state and restores bundled defaults afterward.
     public static func withRegistryIsolation<R>(_ body: () throws -> R) rethrows -> R {
-        registryLock.lock()
-        defer {
-            resetAndRegisterDefaultsUnlocked()
-            registryLock.unlock()
+        try ProviderRegistry.withExclusiveRegistryAccess {
+            defer { resetAndRegisterDefaultsUnlocked() }
+            return try body()
         }
-        return try body()
     }
 
     private static func hasBundledDefaultsRegistered() -> Bool {
@@ -111,10 +108,12 @@ public enum ProviderTestSupport {
     }
 
     private static func resetAndRegisterDefaultsUnlocked() {
+        ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
         ProviderRegistry.resetForTesting()
         ProviderLifecycle.resetForTesting()
         ProviderAdapterFactoryRegistry.resetForTesting()
         registerDefaults(options: .init(installBootstrapHook: true))
+        ProviderRegistry.markBootstrapCompleteForTesting()
     }
 
     /// Credential profiles for bundled providers whose discovery uses static catalogs only (no live probes).

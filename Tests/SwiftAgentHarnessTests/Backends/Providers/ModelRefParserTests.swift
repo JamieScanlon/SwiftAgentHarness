@@ -6,6 +6,7 @@ import Testing
 struct ModelRefParserTests {
     @Test("Slash form splits at first slash")
     func slashForm() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let ref = try ModelRefParser.parse("openrouter/anthropic/claude-sonnet-4-6")
         #expect(ref.providerID == "openrouter")
         #expect(ref.modelID == "anthropic/claude-sonnet-4-6")
@@ -13,6 +14,7 @@ struct ModelRefParserTests {
 
     @Test("Provider aliases normalize")
     func providerAliases() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let ref = try ModelRefParser.parse("gpt/gpt-5.5")
         #expect(ref.providerID == "openai")
         #expect(ref.modelID == "gpt-5.5")
@@ -20,6 +22,7 @@ struct ModelRefParserTests {
 
     @Test("Bare model uses defaultProvider")
     func defaultProvider() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let ref = try ModelRefParser.parse("gemma3:27b", defaultProvider: "ollama")
         #expect(ref.providerID == "ollama")
         #expect(ref.modelID == "gemma3:27b")
@@ -27,6 +30,7 @@ struct ModelRefParserTests {
 
     @Test("Bare model infers provider from prefix")
     func prefixInference() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let ref = try ModelRefParser.parse("claude-sonnet-4-6")
         #expect(ref.providerID == "anthropic")
         #expect(ref.modelID == "claude-sonnet-4-6")
@@ -34,6 +38,7 @@ struct ModelRefParserTests {
 
     @Test("Plugin normalizeProviderModelId hook is applied")
     func modelNormalizationHook() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let ref = try ModelRefParser.parse(
             "anthropic/opus",
             normalizeModelID: { providerID, modelID in

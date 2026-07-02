@@ -32,6 +32,21 @@ actor RecordingConversationStreamConsumer: ConversationStreamConsumer {
     func reset() {
         actions = []
     }
+
+    func waitUntilSatisfied(
+        timeout: Duration = .seconds(5),
+        _ predicate: @Sendable ([RecordedConversationStreamAction]) -> Bool
+    ) async -> [RecordedConversationStreamAction] {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if predicate(actions) {
+                return actions
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return actions
+    }
 }
 
 @Suite("ConversationStreamSurfaceDriver")

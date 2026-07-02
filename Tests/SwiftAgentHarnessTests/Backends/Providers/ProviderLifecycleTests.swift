@@ -152,30 +152,32 @@ struct ConfigPluginLoaderTests {
 
     @Test("Rejects unknown adapter kind")
     func rejectsUnknownAdapterKind() throws {
-        ProviderTestManifestSupport.prepareRegistry()
-        ProviderAdapterFactoryRegistry.resetForTesting()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+        try ProviderTestSupport.withRegistryIsolation {
+            ProviderTestManifestSupport.prepareRegistry()
+            ProviderAdapterFactoryRegistry.resetForTesting()
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
 
-        let configURL = dir.appendingPathComponent("unknown.providerconfig.json")
-        let json = """
-        {
-          "schemaVersion": 1,
-          "adapterKind": "unknown-kind",
-          "id": "custom",
-          "label": "Custom",
-          "providerEndpoints": [{ "id": "default", "baseUrl": "http://127.0.0.1:8080/v1" }],
-          "providerAuthChoices": [],
-          "modelSupport": { "modelPrefixes": [] },
-          "capabilitySlots": ["text-inference"]
-        }
-        """
-        try json.write(to: configURL, atomically: true, encoding: .utf8)
+            let configURL = dir.appendingPathComponent("unknown.providerconfig.json")
+            let json = """
+            {
+              "schemaVersion": 1,
+              "adapterKind": "unknown-kind",
+              "id": "custom",
+              "label": "Custom",
+              "providerEndpoints": [{ "id": "default", "baseUrl": "http://127.0.0.1:8080/v1" }],
+              "providerAuthChoices": [],
+              "modelSupport": { "modelPrefixes": [] },
+              "capabilitySlots": ["text-inference"]
+            }
+            """
+            try json.write(to: configURL, atomically: true, encoding: .utf8)
 
-        #expect(throws: ProviderInstanceConfigError.unknownAdapterKind("unknown-kind")) {
-            try ConfigPluginLoader.load(from: configURL)
+            #expect(throws: ProviderInstanceConfigError.unknownAdapterKind("unknown-kind")) {
+                try ConfigPluginLoader.load(from: configURL)
+            }
         }
     }
 }

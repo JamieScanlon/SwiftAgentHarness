@@ -3,7 +3,7 @@ import Testing
 import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("ProviderManifest decode")
+@Suite("ProviderManifest decode", .serialized)
 struct ProviderManifestDecodeTests {
     @Test("Bundled JSON manifests decode and validate")
     func bundledManifestsDecode() throws {
@@ -37,7 +37,6 @@ struct ProviderManifestDecodeTests {
 
     @Test("Built-in catalog passes validation")
     func builtInCatalogValidates() throws {
-        ProviderResourceBundle.setResourceBundle(.module)
         try ProviderManifestValidation.validateAll(try ProviderTestManifestSupport.loadAllManifests())
     }
 

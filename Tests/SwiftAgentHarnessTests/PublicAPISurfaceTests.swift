@@ -2,10 +2,17 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import Testing
+import SwiftAgentHarnessProviders
 import SwiftAgentHarness
 
 @Suite("Public API surface (non-testable import)")
 struct PublicAPISurfaceTests {
+    @Test("Provider registry bootstrap is linked for the test target")
+    func providerRegistryBootstrapLinked() {
+        #expect(testTargetBootstrapGate)
+        #expect(!ProviderRegistry.allManifests().isEmpty)
+    }
+
     @Test("SubAgentHostingPolicy is constructible with public members")
     func subAgentHostingPolicy() {
         let policy = SubAgentHostingPolicy(

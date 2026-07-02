@@ -6,13 +6,8 @@ import SwiftAgentHarnessProviders
 public enum TestTargetBootstrap {
     public static func ensureProvidersRegistered() {
         ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
-        if !ProviderRegistry.allManifests().isEmpty {
-            return
-        }
         bootstrap()
-        if ProviderRegistry.allManifests().isEmpty {
-            ProviderTestSupport.registerDefaultsForTesting()
-        }
+        ProviderRegistry.markBootstrapCompleteForTesting()
     }
 }
 
@@ -24,4 +19,5 @@ public enum TestTargetBootstrapGate {
     }()
 }
 
-private let _testTargetBootstrapGate: Bool = TestTargetBootstrapGate.linked
+/// Referenced from ``PublicAPISurfaceTests`` so bootstrap is never dead-stripped.
+let testTargetBootstrapGate: Bool = TestTargetBootstrapGate.linked

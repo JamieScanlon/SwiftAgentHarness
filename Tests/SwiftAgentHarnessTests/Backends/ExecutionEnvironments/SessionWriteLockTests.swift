@@ -6,7 +6,7 @@ import Testing
 import Darwin
 #endif
 
-@Suite("Session write lock (SEC-004)")
+@Suite("Session write lock (SEC-004)", .serialized)
 struct SessionWriteLockTests {
     private func tempLockURL() -> URL {
         FileManager.default.temporaryDirectory
@@ -122,26 +122,29 @@ struct SessionWriteLockTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("sah-session-lock-excl-\(UUID().uuidString)", isDirectory: true)
         let lockURL = dir.appendingPathComponent("sandbox-registry.lock")
-        let target = dir.appendingPathComponent("counter.txt")
         defer { try? FileManager.default.removeItem(at: dir) }
 
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try "0".write(to: target, atomically: true, encoding: .utf8)
 
-        await withTaskGroup(of: Void.self) { group in
+        final class LockedCounter: @unchecked Sendable {
+            private var value = 0
+            func increment() { value += 1 }
+            var current: Int { value }
+        }
+        let counter = LockedCounter()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<8 {
                 group.addTask {
-                    try? SessionWriteLock.withLock(lockURL: lockURL, timeoutMs: 10_000) {
-                        let raw = (try? String(contentsOf: target, encoding: .utf8)) ?? "0"
-                        let value = (Int(raw) ?? 0) + 1
-                        try? String(value).write(to: target, atomically: true, encoding: .utf8)
+                    try SessionWriteLock.withLock(lockURL: lockURL, timeoutMs: 30_000) {
+                        counter.increment()
                     }
                 }
             }
+            try await group.waitForAll()
         }
 
-        let final = try String(contentsOf: target, encoding: .utf8)
-        #expect(final == "8")
+        #expect(counter.current == 8)
     }
 
     #if canImport(Darwin)

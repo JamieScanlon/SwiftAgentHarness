@@ -69,7 +69,6 @@ public enum ModelRefParser {
 
     /// Infer provider from bare model id via registered manifest prefix patterns.
     public static func inferProvider(fromBareModelID modelID: String) -> ProviderID? {
-        ProviderRegistry.ensureBootstrapped()
         let lower = modelID.lowercased()
         for manifest in ProviderRegistry.allManifests() {
             for prefix in manifest.modelSupport.modelPrefixes {

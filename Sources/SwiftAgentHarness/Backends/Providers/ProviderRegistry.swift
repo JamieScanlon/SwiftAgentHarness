@@ -23,29 +23,83 @@ public struct ProviderSlotInspectEntry: Sendable, Equatable {
 }
 
 public enum ProviderRegistry {
+    private enum BootstrapPhase: Equatable {
+        case idle
+        case running
+        case complete
+    }
+
     private static let lock = NSLock()
+    private static let accessLock = NSRecursiveLock()
+    private static let bootstrapCondition = NSCondition()
     private nonisolated(unsafe) static var registrations: [ProviderID: ProviderRegistration] = [:]
     private nonisolated(unsafe) static var cliBackendIndex: [String: any CLIInferenceBackendProviding] = [:]
     private nonisolated(unsafe) static var slotIndex: [ProviderCapabilitySlot: [(ProviderID, any Sendable)]] = [:]
-    private nonisolated(unsafe) static var bootstrapped = false
+    private nonisolated(unsafe) static var bootstrapPhase: BootstrapPhase = .idle
+    private nonisolated(unsafe) static var bootstrapThread: Thread?
     private nonisolated(unsafe) static var bootstrapHook: (@Sendable () -> Void)?
 
     public static func installBootstrap(_ hook: @escaping @Sendable () -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        bootstrapHook = hook
+        withRegistryAccess {
+            lock.lock()
+            defer { lock.unlock() }
+            bootstrapHook = hook
+        }
+    }
+
+    public static func withExclusiveRegistryAccess<R>(_ body: () throws -> R) rethrows -> R {
+        try withRegistryAccess(body)
+    }
+
+    private static func withRegistryAccess<R>(_ body: () throws -> R) rethrows -> R {
+        accessLock.lock()
+        defer { accessLock.unlock() }
+        return try body()
     }
 
     public static func ensureBootstrapped() {
-        lock.lock()
-        if bootstrapped {
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+        }
+    }
+
+    private static func ensureBootstrappedUnlocked() {
+        bootstrapCondition.lock()
+        if bootstrapPhase == .complete {
+            lock.lock()
+            let hasRegistrations = !registrations.isEmpty
             lock.unlock()
+            if hasRegistrations {
+                bootstrapCondition.unlock()
+                return
+            }
+            bootstrapPhase = .idle
+        }
+        if bootstrapPhase == .running {
+            if bootstrapThread == Thread.current {
+                bootstrapCondition.unlock()
+                return
+            }
+            while bootstrapPhase == .running {
+                bootstrapCondition.wait()
+            }
+            bootstrapCondition.unlock()
             return
         }
-        bootstrapped = true
+
+        bootstrapPhase = .running
+        bootstrapThread = Thread.current
         let hook = bootstrapHook
-        lock.unlock()
+        bootstrapCondition.unlock()
         hook?()
+        bootstrapCondition.lock()
+        lock.lock()
+        let hasRegistrations = !registrations.isEmpty
+        lock.unlock()
+        bootstrapPhase = hasRegistrations ? .complete : .idle
+        bootstrapThread = nil
+        bootstrapCondition.broadcast()
+        bootstrapCondition.unlock()
     }
 
     @available(*, deprecated, message: "Use ensureBootstrapped() after installing a bootstrap hook via installBootstrap(_:)")
@@ -54,19 +108,32 @@ public enum ProviderRegistry {
     }
 
     public static func register(_ registration: ProviderRegistration) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        try registerUnlocked(registration)
+        try withRegistryAccess {
+            lock.lock()
+            defer { lock.unlock() }
+            try registerUnlocked(registration)
+        }
     }
 
     public static func resetForTesting() {
-        lock.lock()
-        defer { lock.unlock() }
-        registrations = [:]
-        cliBackendIndex = [:]
-        slotIndex = [:]
-        bootstrapped = false
-        bootstrapHook = nil
+        withRegistryAccess {
+            bootstrapCondition.lock()
+            if bootstrapPhase == .running && bootstrapThread != Thread.current {
+                while bootstrapPhase == .running {
+                    bootstrapCondition.wait()
+                }
+            }
+            bootstrapPhase = .idle
+            bootstrapThread = nil
+            bootstrapHook = nil
+            bootstrapCondition.unlock()
+
+            lock.lock()
+            defer { lock.unlock() }
+            registrations = [:]
+            cliBackendIndex = [:]
+            slotIndex = [:]
+        }
     }
 
     private static func registerUnlocked(_ registration: ProviderRegistration) throws {
@@ -95,13 +162,15 @@ public enum ProviderRegistry {
     }
 
     public static func registration(for providerID: ProviderID) throws -> ProviderRegistration {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        guard let registration = registrations[providerID] else {
-            throw ProviderRegistryError.notRegistered(providerID)
+        try withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            guard let registration = registrations[providerID] else {
+                throw ProviderRegistryError.notRegistered(providerID)
+            }
+            return registration
         }
-        return registration
     }
 
     public static func manifest(for providerID: ProviderID) throws -> ProviderManifest {
@@ -113,44 +182,52 @@ public enum ProviderRegistry {
     }
 
     public static func allManifests() -> [ProviderManifest] {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return registrations.values.map(\.manifest).sorted { $0.id < $1.id }
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations.values.map(\.manifest).sorted { $0.id < $1.id }
+        }
     }
 
     public static func allTextInferenceProviders() -> [any TextInferenceProviding] {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return registrations.values.compactMap(\.textInference)
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations.values.compactMap(\.textInference)
+        }
     }
 
     public static func registeredTextInferenceProviders(
         authStore: AuthProfileStore
     ) -> [any TextInferenceProviding] {
-        ensureBootstrapped()
-        lock.lock()
-        let candidates = registrations.values.compactMap { registration -> (ProviderManifest, any TextInferenceProviding)? in
-            guard let textInference = registration.textInference else { return nil }
-            return (registration.manifest, textInference)
-        }
-        lock.unlock()
-        return candidates.compactMap { manifest, textInference in
-            guard ProviderLifecycle.lifecycleState(for: manifest, authStore: authStore) == .registered else {
-                return nil
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            let candidates = registrations.values.compactMap { registration -> (ProviderManifest, any TextInferenceProviding)? in
+                guard let textInference = registration.textInference else { return nil }
+                return (registration.manifest, textInference)
             }
-            return textInference
+            lock.unlock()
+            return candidates.compactMap { manifest, textInference in
+                guard ProviderLifecycle.lifecycleState(for: manifest, authStore: authStore) == .registered else {
+                    return nil
+                }
+                return textInference
+            }
         }
     }
 
     public static func manifest(forAlias alias: String) -> ProviderManifest? {
-        ensureBootstrapped()
-        let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        lock.lock()
-        defer { lock.unlock() }
-        return registrations.values.map(\.manifest).first { manifest in
-            manifest.id == normalized || manifest.providerAuthAliases.contains(normalized)
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations.values.map(\.manifest).first { manifest in
+                manifest.id == normalized || manifest.providerAuthAliases.contains(normalized)
+            }
         }
     }
 
@@ -159,60 +236,87 @@ public enum ProviderRegistry {
     }
 
     public static func textInferenceProvider(for providerID: ProviderID) -> (any TextInferenceProviding)? {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return registrations[providerID]?.textInference
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations[providerID]?.textInference
+        }
+    }
+
+    private static func textInferenceProviderUnlocked(forBinding binding: ProviderBinding) -> (any TextInferenceProviding)? {
+        if let byID = registrations[binding.providerId]?.textInference {
+            return byID
+        }
+        return registrations.values.compactMap(\.textInference).first { $0.modelProtocol == binding.modelProtocol }
     }
 
     public static func textInferenceProvider(forBinding binding: ProviderBinding) -> (any TextInferenceProviding)? {
-        if let byID = textInferenceProvider(for: binding.providerId) {
-            return byID
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            if let provider = textInferenceProviderUnlocked(forBinding: binding) {
+                lock.unlock()
+                return provider
+            }
+            lock.unlock()
+            bootstrapCondition.lock()
+            bootstrapPhase = .idle
+            bootstrapCondition.unlock()
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return textInferenceProviderUnlocked(forBinding: binding)
         }
-        return allTextInferenceProviders().first { $0.modelProtocol == binding.modelProtocol }
     }
 
     public static func provider(
         for slot: ProviderCapabilitySlot,
         providerID: ProviderID
     ) throws -> (any Sendable)? {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        guard let registration = registrations[providerID] else {
-            throw ProviderRegistryError.notRegistered(providerID)
+        try withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            guard let registration = registrations[providerID] else {
+                throw ProviderRegistryError.notRegistered(providerID)
+            }
+            if let implementation = registration.implementation(for: slot) {
+                return implementation
+            }
+            if Set(registration.manifest.capabilitySlots).contains(slot) {
+                throw ProviderRegistryError.slotUnavailable(slot, providerID: providerID)
+            }
+            return nil
         }
-        if let implementation = registration.implementation(for: slot) {
-            return implementation
-        }
-        if Set(registration.manifest.capabilitySlots).contains(slot) {
-            throw ProviderRegistryError.slotUnavailable(slot, providerID: providerID)
-        }
-        return nil
     }
 
     public static func cliInferenceBackend(
         providerID: ProviderID,
         cliBackendID: String
     ) throws -> any CLIInferenceBackendProviding {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        guard registrations[providerID] != nil else {
-            throw ProviderRegistryError.notRegistered(providerID)
+        try withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            guard registrations[providerID] != nil else {
+                throw ProviderRegistryError.notRegistered(providerID)
+            }
+            let key = cliBackendKey(providerID: providerID, cliBackendID: cliBackendID)
+            guard let backend = cliBackendIndex[key] else {
+                throw ProviderRegistryError.cliBackendNotFound(providerID: providerID, cliBackendID: cliBackendID)
+            }
+            return backend
         }
-        let key = cliBackendKey(providerID: providerID, cliBackendID: cliBackendID)
-        guard let backend = cliBackendIndex[key] else {
-            throw ProviderRegistryError.cliBackendNotFound(providerID: providerID, cliBackendID: cliBackendID)
-        }
-        return backend
     }
 
     public static func allCLIInferenceBackends() -> [any CLIInferenceBackendProviding] {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return Array(cliBackendIndex.values)
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return Array(cliBackendIndex.values)
+        }
     }
 
     public static func registeredSlots(for providerID: ProviderID) throws -> Set<ProviderCapabilitySlot> {
@@ -220,27 +324,41 @@ public enum ProviderRegistry {
     }
 
     public static func allProviders(for slot: ProviderCapabilitySlot) -> [(ProviderID, any Sendable)] {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return slotIndex[slot] ?? []
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return slotIndex[slot] ?? []
+        }
     }
 
     public static func inspectSlots() -> [ProviderSlotInspectEntry] {
-        ensureBootstrapped()
-        lock.lock()
-        defer { lock.unlock() }
-        return registrations.values
-            .map { registration in
-                ProviderSlotInspectEntry(
-                    providerID: registration.manifest.id,
-                    declaredSlots: registration.manifest.capabilitySlots,
-                    registeredSlots: registration.registeredSlots(),
-                    cliBackendIDs: registration.manifest.cliBackends.map(\.id),
-                    registeredCLIBackendIDs: registration.registeredCLIBackendIDs
-                )
-            }
-            .sorted { $0.providerID < $1.providerID }
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations.values
+                .map { registration in
+                    ProviderSlotInspectEntry(
+                        providerID: registration.manifest.id,
+                        declaredSlots: registration.manifest.capabilitySlots,
+                        registeredSlots: registration.registeredSlots(),
+                        cliBackendIDs: registration.manifest.cliBackends.map(\.id),
+                        registeredCLIBackendIDs: registration.registeredCLIBackendIDs
+                    )
+                }
+                .sorted { $0.providerID < $1.providerID }
+        }
+    }
+
+    public static func markBootstrapCompleteForTesting() {
+        withRegistryAccess {
+            bootstrapCondition.lock()
+            bootstrapPhase = .complete
+            bootstrapThread = nil
+            bootstrapCondition.broadcast()
+            bootstrapCondition.unlock()
+        }
     }
 
     public static func inspect() -> [ProviderManifest] {

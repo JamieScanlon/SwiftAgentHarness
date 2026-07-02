@@ -3,7 +3,7 @@ import Testing
 import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("Provider open-set auth")
+@Suite("Provider open-set auth", .serialized)
 struct ProviderOpenAuthTests {
     @Test("spec OAuth choice validates with empty envVars")
     func specOAuthChoiceValidates() throws {
@@ -58,6 +58,7 @@ struct ProviderOpenAuthTests {
 
     @Test("config oauth profile round-trips through credential pool")
     func configOAuthProfileRoundTrip() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let fileData = """
         {
           "default": {
@@ -83,6 +84,7 @@ struct ProviderOpenAuthTests {
 
     @Test("expired access token is excluded from dispatch resolution")
     func expiredAccessTokenExcluded() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let fileData = """
         {
           "default": {
@@ -106,6 +108,7 @@ struct ProviderOpenAuthTests {
 
     @Test("refresh-only oauth requires onboarding on resolveCredential")
     func refreshOnlyRequiresOnboarding() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let fileData = """
         {
           "default": {

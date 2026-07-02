@@ -254,9 +254,12 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         if let override {
             return override(binding)
         }
-        ProviderRegistry.ensureBootstrapped()
         guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
-            fatalError("No text-inference provider registered for binding \(binding.providerId)/\(binding.modelProtocol.rawValue)")
+            return MissingTextInferenceProviderLLM(
+                providerID: binding.canonicalProviderID(),
+                modelProtocol: binding.modelProtocol,
+                endpointModelId: binding.endpointModelId
+            )
         }
         let resolved: AuthProfile?
         if let resolvedCredential {

@@ -3,7 +3,7 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("CommunicationLayerConversationStreamSource")
+@Suite("CommunicationLayerConversationStreamSource", .serialized)
 struct CommunicationLayerConversationStreamSourceTests {
     @Test("Drives consumer end-to-end from published topic events")
     func endToEndFromHub() async throws {
@@ -23,7 +23,7 @@ struct CommunicationLayerConversationStreamSourceTests {
             await source.start(driving: consumer)
         }
 
-        try? await Task.sleep(for: .milliseconds(20))
+        try await Task.sleep(for: .milliseconds(50))
 
         await hub.broadcastTransient(
             conversationID: conversationID,
@@ -65,13 +65,17 @@ struct CommunicationLayerConversationStreamSourceTests {
             runID: runID
         )
 
-        try? await Task.sleep(for: .milliseconds(100))
+        let expectedFinish = StreamingFinalPayload(text: "from topic", media: [])
+        let actions = await consumer.waitUntilSatisfied { actions in
+            actions.contains(.ingest(.text("tok")))
+                && actions.contains(.flushSegment)
+                && actions.contains(.finish(expectedFinish))
+        }
         await source.teardown()
-        driveTask.cancel()
+        _ = await driveTask.result
 
-        let actions = await consumer.actions
         #expect(actions.contains(.ingest(.text("tok"))))
         #expect(actions.contains(.flushSegment))
-        #expect(actions.contains(.finish(StreamingFinalPayload(text: "from topic"))))
+        #expect(actions.contains(.finish(expectedFinish)))
     }
 }

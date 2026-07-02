@@ -50,7 +50,7 @@ public actor CommunicationLayerConversationStreamSource {
         guard subscriberToken == nil else { return }
         self.continuation = continuation
         let token = await hub.registerInProcessSubscriber { line in
-            Task { await self.handleIncomingLine(line) }
+            await self.handleIncomingLine(line)
         }
         subscriberToken = token
         await hub.subscribeInProcess(

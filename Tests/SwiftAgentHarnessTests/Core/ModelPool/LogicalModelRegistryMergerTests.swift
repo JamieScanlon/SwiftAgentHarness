@@ -16,6 +16,7 @@ struct LogicalModelRegistryMergerTests {
     }
 
     private static func bundledSonnetEntry(providerID: String, endpoint: URL) throws -> ModelRegistryEntry {
+        ProviderTestManifestSupport.activateProviderResources()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: providerID)
         let endpointModelId = providerID == "openrouter"
             ? "anthropic/claude-sonnet-4-6"
@@ -207,9 +208,9 @@ struct LogicalModelKeyTests {
 struct ModelManagerMultiBindingDiscoveryTests {
     @Test("bundled frontier catalogs merge Sonnet into one registry row")
     func bundledCatalogMerge() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let anthropic = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let openRouter = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
-        ProviderTestManifestSupport.prepareRegistry()
         let anthropicEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint?.baseURL)
         let openRouterEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint?.baseURL)
 
