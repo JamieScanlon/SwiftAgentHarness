@@ -228,6 +228,52 @@ struct SandboxConfigHashTests {
         )
         #expect(SandboxConfigHash.compute(config: base) != SandboxConfigHash.compute(config: modified))
     }
+
+    @Test("browser hash is stable for same config")
+    func stableBrowserHash() {
+        let config = SandboxConfig(
+            mode: .nonMain,
+            scope: .agent,
+            backend: "docker-browser",
+            sandboxingActive: true
+        )
+        #expect(SandboxConfigHash.compute(config: config) == SandboxConfigHash.compute(config: config))
+    }
+
+    @Test("browser hash changes when browser limit fields change")
+    func hashChangesWithBrowserLimits() {
+        let base = SandboxConfig(
+            mode: .nonMain,
+            scope: .agent,
+            backend: "docker-browser",
+            sandboxingActive: true
+        )
+        let modified = SandboxConfig(
+            mode: .nonMain,
+            scope: .agent,
+            backend: "docker-browser",
+            sandboxingActive: true,
+            browser: BrowserSandboxSettings(pidsLimit: 256, memoryLimit: "2g", cpus: 1.0)
+        )
+        #expect(SandboxConfigHash.compute(config: base) != SandboxConfigHash.compute(config: modified))
+    }
+
+    @Test("browser hash differs from docker hash for equivalent limits")
+    func browserHashDistinctFromDocker() {
+        let docker = SandboxConfig(
+            mode: .nonMain,
+            scope: .agent,
+            backend: "docker",
+            sandboxingActive: true
+        )
+        let browser = SandboxConfig(
+            mode: .nonMain,
+            scope: .agent,
+            backend: "docker-browser",
+            sandboxingActive: true
+        )
+        #expect(SandboxConfigHash.compute(config: docker) != SandboxConfigHash.compute(config: browser))
+    }
 }
 
 @Suite("Workspace mirror sync and OpenShell")

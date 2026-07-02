@@ -56,15 +56,27 @@ public struct SSHSandboxSettings: Sendable, Equatable, Codable {
 
 public struct BrowserSandboxSettings: Sendable, Equatable, Codable {
     public var image: String
+    public var network: String
+    public var pidsLimit: Int
+    public var memoryLimit: String
+    public var cpus: Double
     public var allowHostControl: Bool
     public var cdpSourceRange: String?
 
     public init(
         image: String = "sah-sandbox-browser:bookworm-slim",
+        network: String = "sah-sandbox-browser",
+        pidsLimit: Int = 512,
+        memoryLimit: String = "4g",
+        cpus: Double = 2.0,
         allowHostControl: Bool = false,
         cdpSourceRange: String? = nil
     ) {
         self.image = image
+        self.network = network
+        self.pidsLimit = pidsLimit
+        self.memoryLimit = memoryLimit
+        self.cpus = cpus
         self.allowHostControl = allowHostControl
         self.cdpSourceRange = cdpSourceRange
     }
