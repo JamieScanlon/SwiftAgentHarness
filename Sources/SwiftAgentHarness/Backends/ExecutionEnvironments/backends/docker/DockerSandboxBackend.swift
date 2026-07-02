@@ -106,8 +106,7 @@ public struct DockerFsBridge: SandboxFsBridge {
         )
         let rel = try PathPolicy.toRelativeWorkspacePath(root: context.workspaceRoot, candidate: resolved)
         let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.stat(rel: rel))
-        let size = Int64(String(data: result.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0") ?? 0
-        return SandboxFsStat(isDirectory: false, size: size, exists: result.code == 0)
+        return SandboxFsStat.parse(from: result)
     }
 
     public func readFile(path: String) async throws -> Data {

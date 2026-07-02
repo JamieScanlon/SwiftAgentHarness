@@ -3,7 +3,7 @@ import Foundation
 enum SandboxFsBridgeShellCommands {
     static func stat(rel: String) -> SandboxBackendCommandParams {
         SandboxBackendCommandParams(
-            script: #"stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1""#,
+            script: #"if ! test -e "$1"; then exit 1; fi; kind="$([ -d "$1" ] && echo 1 || echo 0)"; if size=$(stat -f '%z' "$1"); then :; elif size=$(stat -c '%s' "$1"); then :; else exit 1; fi; printf '%s\t%s\n' "$kind" "$size""#,
             args: [rel]
         )
     }

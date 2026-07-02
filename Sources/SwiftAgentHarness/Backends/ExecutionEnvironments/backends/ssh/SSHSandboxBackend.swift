@@ -201,9 +201,8 @@ public struct RemoteFsBridge: SandboxFsBridge {
 
     public func stat(path: String) async throws -> SandboxFsStat {
         let rel = try relativePath(path)
-        let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.exists(rel: rel))
-        let exists = String(data: result.stdout, encoding: .utf8)?.contains("yes") == true
-        return SandboxFsStat(isDirectory: false, size: 0, exists: exists)
+        let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.stat(rel: rel))
+        return SandboxFsStat.parse(from: result)
     }
 
     public func readFile(path: String) async throws -> Data {
