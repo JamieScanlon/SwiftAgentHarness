@@ -28,11 +28,12 @@ struct WorkspaceFilesystemToolProviderTests {
         workspace: URL,
         memory: URL,
         memoryWriteOnly: Bool = false,
-        isMainSession: Bool = false
+        isMainSession: Bool = false,
+        sessionKey: String = "test-session"
     ) -> WorkspaceFilesystemToolProvider {
         let execRuntime = ExecRuntimeService(workspaceRoot: workspace.path)
         let runtimeContext = ExecRuntimeContext(
-            sessionKey: "test-session",
+            sessionKey: sessionKey,
             agentID: "test-agent",
             isMainSession: isMainSession,
             memoryDirectory: memory.path,
@@ -670,6 +671,79 @@ struct WorkspaceFilesystemToolProviderTests {
         #expect(result.success == false)
         #expect(result.error?.contains("headless mode") == true)
         #expect(result.error?.contains("exit 126") == false)
+    }
+
+    private func bashCallBackground(command: String, id: String = "call-1") -> ToolCall {
+        ToolCall(
+            name: WorkspaceFilesystemToolProvider.bashToolName,
+            arguments: .object([
+                "command": .string(command),
+                "run_in_background": .boolean(true),
+            ]),
+            id: id
+        )
+    }
+
+    @Test("process tools reject foreign session task IDs (SEC-009)")
+    func processToolsRejectForeignSessionTaskIDs() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+
+        let providerA = provider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            isMainSession: true,
+            sessionKey: "session-a"
+        )
+        let providerB = provider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            isMainSession: true,
+            sessionKey: "session-b"
+        )
+
+        let bashResult = try await providerA.executeTool(
+            bashCallBackground(command: "echo owner-marker; sleep 10")
+        )
+        #expect(bashResult.success == true)
+        guard bashResult.content.hasPrefix("background task: ") else {
+            Issue.record("Expected background task id in bash output")
+            return
+        }
+        let taskID = String(bashResult.content.dropFirst("background task: ".count))
+
+        let foreignPoll = try await providerB.executeTool(call(
+            WorkspaceFilesystemToolProvider.processToolName,
+            args: ["task_id": taskID]
+        ))
+        #expect(foreignPoll.success == false)
+        #expect(foreignPoll.error == "task not found")
+
+        let foreignKill = try await providerB.executeTool(call(
+            WorkspaceFilesystemToolProvider.processToolName,
+            args: ["task_id": taskID, "action": "kill"]
+        ))
+        #expect(foreignKill.success == false)
+        #expect(foreignKill.error == "task not found")
+
+        let foreignSendKeys = try await providerB.executeTool(call(
+            WorkspaceFilesystemToolProvider.processSendKeysToolName,
+            args: ["task_id": taskID, "keys": "pwn"]
+        ))
+        #expect(foreignSendKeys.success == false)
+        #expect(foreignSendKeys.error?.contains("process not found") == true)
+
+        let ownerPoll = try await providerA.executeTool(call(
+            WorkspaceFilesystemToolProvider.processToolName,
+            args: ["task_id": taskID]
+        ))
+        #expect(ownerPoll.success == true)
+        #expect(ownerPoll.content.contains("owner-marker") || ownerPoll.content.contains("running"))
+
+        _ = try await providerA.executeTool(call(
+            WorkspaceFilesystemToolProvider.processToolName,
+            args: ["task_id": taskID, "action": "kill"]
+        ))
     }
 }
 

@@ -90,7 +90,7 @@ struct ShellProcessRunnerSupervisedTests {
         )
         let grandchild = await readPID(from: pidPath)
         #expect(grandchild != nil)
-        await BashProcessRegistry.shared.kill(id: id)
+        await BashProcessRegistry.shared.kill(id: id, sessionSlug: "s")
         if let grandchild { #expect(await awaitDead(grandchild)) }
         await BashProcessRegistry.shared.resetForTesting()
     }

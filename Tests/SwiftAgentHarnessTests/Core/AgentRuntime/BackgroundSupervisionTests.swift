@@ -41,17 +41,17 @@ struct BackgroundSupervisionTests {
             cwd: nil
         )
         try await Task.sleep(nanoseconds: 50_000_000)
-        try await registry.sendKeys(id: id, data: Data("hello\n".utf8))
+        try await registry.sendKeys(id: id, sessionSlug: "s", data: Data("hello\n".utf8))
         var found = false
         for _ in 0..<20 {
             try await Task.sleep(nanoseconds: 50_000_000)
-            if let snap = await registry.snapshot(id: id),
+            if let snap = await registry.snapshot(id: id, sessionSlug: "s"),
                snap.output.contains("hello") {
                 found = true
                 break
             }
         }
-        await registry.kill(id: id)
+        await registry.kill(id: id, sessionSlug: "s")
         #expect(found, "output should contain echoed 'hello'")
     }
 
@@ -95,7 +95,7 @@ struct BackgroundSupervisionTests {
         var snap1: ProcessSessionSnapshot?
         for _ in 0..<20 {
             try await Task.sleep(nanoseconds: 100_000_000)
-            if let s = await registry.snapshot(id: id),
+            if let s = await registry.snapshot(id: id, sessionSlug: "s"),
                s.output.contains("hello") {
                 snap1 = s
                 break
@@ -104,20 +104,20 @@ struct BackgroundSupervisionTests {
         #expect(snap1?.output.contains("hello") == true)
 
         // Second snapshot without any poll should still show full output
-        let snap2 = await registry.snapshot(id: id)
+        let snap2 = await registry.snapshot(id: id, sessionSlug: "s")
         #expect(snap2?.output.contains("hello") == true, "snapshot must not advance the offset")
 
         // First consuming poll should show the delta
-        let polled1 = await registry.poll(id: id)
+        let polled1 = await registry.poll(id: id, sessionSlug: "s")
         let out1 = polled1.map { String(decoding: $0.pendingStdout, as: UTF8.self) } ?? ""
         #expect(out1.contains("hello"))
 
         // Second consecutive poll should see no new bytes (process hasn't emitted more)
-        let polled2 = await registry.poll(id: id)
+        let polled2 = await registry.poll(id: id, sessionSlug: "s")
         let out2 = polled2.map { String(decoding: $0.pendingStdout, as: UTF8.self) } ?? ""
         #expect(out2.isEmpty, "second poll should yield empty delta")
 
-        await registry.kill(id: id)
+        await registry.kill(id: id, sessionSlug: "s")
     }
 
     // MARK: - Bounded live buffer
@@ -136,13 +136,13 @@ struct BackgroundSupervisionTests {
         var snap: ProcessSessionSnapshot?
         for _ in 0..<30 {
             try await Task.sleep(nanoseconds: 100_000_000)
-            if let s = await registry.snapshot(id: id), s.output.count >= cap / 2 {
+            if let s = await registry.snapshot(id: id, sessionSlug: "s"), s.output.count >= cap / 2 {
                 snap = s
                 break
             }
         }
-        let polled = await registry.poll(id: id)
-        await registry.kill(id: id)
+        let polled = await registry.poll(id: id, sessionSlug: "s")
+        await registry.kill(id: id, sessionSlug: "s")
         #expect(snap?.truncated == true)
         #expect((snap?.output.count ?? 0) <= cap)
         #expect(polled?.stdoutTruncated == true)
@@ -200,14 +200,14 @@ struct BackgroundSupervisionTests {
         var sawOutput = false
         for _ in 0..<60 {
             try await Task.sleep(nanoseconds: 100_000_000)
-            if let snap = await registry.snapshot(id: taskID),
+            if let snap = await registry.snapshot(id: taskID, sessionSlug: "s"),
                snap.output.contains("started") {
                 sawOutput = true
                 break
             }
         }
         #expect(sawOutput)
-        await registry.kill(id: taskID)
+        await registry.kill(id: taskID, sessionSlug: "s")
     }
 
     // MARK: - Docker / SSH argv

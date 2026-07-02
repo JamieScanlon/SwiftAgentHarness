@@ -29,7 +29,7 @@ struct LocalSandboxBashExecutor: BashShellRunning, Sendable {
     }
 
     func pollProcess(taskID: String) async -> (status: String, stdout: String)? {
-        guard let session = await BashProcessRegistry.shared.poll(id: taskID) else {
+        guard let session = await BashProcessRegistry.shared.poll(id: taskID, sessionSlug: runtimeContext.sessionKey) else {
             return nil
         }
         var stdout = String(decoding: session.pendingStdout, as: UTF8.self)
@@ -44,7 +44,7 @@ struct LocalSandboxBashExecutor: BashShellRunning, Sendable {
     }
 
     func terminalSnapshot(taskID: String) async -> (output: String, truncated: Bool, exitCode: Int32?)? {
-        guard let snap = await BashProcessRegistry.shared.snapshot(id: taskID) else { return nil }
+        guard let snap = await BashProcessRegistry.shared.snapshot(id: taskID, sessionSlug: runtimeContext.sessionKey) else { return nil }
         var output = snap.output
         if snap.truncated {
             output += "\n[log truncated: earlier output dropped]"
@@ -52,7 +52,16 @@ struct LocalSandboxBashExecutor: BashShellRunning, Sendable {
         return (output, snap.truncated, snap.exitCode)
     }
 
-    func killProcess(taskID: String) async {
-        await BashProcessRegistry.shared.kill(id: taskID)
+    @discardableResult
+    func killProcess(taskID: String) async -> Bool {
+        await BashProcessRegistry.shared.kill(id: taskID, sessionSlug: runtimeContext.sessionKey)
+    }
+
+    func sendKeys(taskID: String, keys: String) async throws {
+        try await BashProcessRegistry.shared.sendKeys(
+            id: taskID,
+            sessionSlug: runtimeContext.sessionKey,
+            data: Data(keys.utf8)
+        )
     }
 }

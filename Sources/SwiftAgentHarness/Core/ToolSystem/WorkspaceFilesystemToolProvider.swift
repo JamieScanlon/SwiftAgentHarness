@@ -430,8 +430,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         let taskID = extractString(from: toolCall.arguments, key: "task_id") ?? ""
         let action = extractString(from: toolCall.arguments, key: "action") ?? "poll"
         if action == "kill" {
-            await bashExecutor(for: runtimeContext).killProcess(taskID: taskID)
-            return ok(toolCall, "killed \(taskID)")
+            let killed = await bashExecutor(for: runtimeContext).killProcess(taskID: taskID)
+            if killed {
+                return ok(toolCall, "killed \(taskID)")
+            }
+            return err(toolCall, "task not found")
         }
         guard let session = await bashExecutor(for: runtimeContext).pollProcess(taskID: taskID) else {
             return err(toolCall, "task not found")
@@ -443,8 +446,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         let taskID = extractString(from: toolCall.arguments, key: "task_id") ?? ""
         let keys = extractString(from: toolCall.arguments, key: "keys") ?? ""
         do {
-            try await BashProcessRegistry.shared.sendKeys(id: taskID, data: Data(keys.utf8))
+            try await bashExecutor(for: runtimeContext).sendKeys(taskID: taskID, keys: keys)
             return ok(toolCall, "sent keys")
+        } catch let error as SandboxBackendError {
+            return err(toolCall, sandboxErrorMessage(error))
         } catch {
             return err(toolCall, error.localizedDescription)
         }
