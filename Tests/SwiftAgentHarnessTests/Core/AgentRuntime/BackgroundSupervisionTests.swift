@@ -183,6 +183,43 @@ struct BackgroundSupervisionTests {
         #expect(stdout.contains("inline"))
     }
 
+    @Test("foreground budget preserves stderr on failing command")
+    func foregroundBudgetPreservesStderrOnFailure() async throws {
+        let registry = BashProcessRegistry()
+        let result = try await registry.runWithForegroundBudget(
+            sessionSlug: "s",
+            argv: ["/bin/bash", "-c", "echo out; echo err >&2; exit 1"],
+            env: [:],
+            cwd: nil,
+            budgetSeconds: 5
+        )
+        guard case .completed(let stdout, let stderr, let exitCode) = result.outcome else {
+            Issue.record("expected inline completion, got \(result.outcome)")
+            return
+        }
+        #expect(exitCode == 1)
+        #expect(stdout.contains("out"))
+        #expect(stderr.contains("err"))
+    }
+
+    @Test("post-completion poll delivers stderr delta")
+    func postCompletionPollDeliversStderrDelta() async throws {
+        let registry = BashProcessRegistry()
+        let id = try await registry.register(
+            sessionSlug: "s",
+            argv: ["/bin/bash", "-c", "echo err-msg >&2"],
+            env: [:],
+            cwd: nil
+        )
+        defer { Task { await registry.kill(id: id, sessionSlug: "s") } }
+
+        _ = await registry.waitForCompletion(id: id, sessionSlug: "s", timeoutSeconds: 5)
+
+        let polled = await registry.poll(id: id, sessionSlug: "s")
+        let stderr = polled.map { String(decoding: $0.pendingStderr, as: UTF8.self) } ?? ""
+        #expect(stderr.contains("err-msg"))
+    }
+
     @Test("slow command auto-backgrounds when budget elapses")
     func slowCommandAutoBackgrounds() async throws {
         let registry = BashProcessRegistry()

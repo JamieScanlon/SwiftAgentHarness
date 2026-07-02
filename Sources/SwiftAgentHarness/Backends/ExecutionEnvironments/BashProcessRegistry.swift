@@ -18,6 +18,7 @@ public struct ProcessSession: Sendable, Identifiable, Equatable {
     public var pendingStdout: Data
     public var pendingStderr: Data
     public var aggregated: Data
+    public var aggregatedStderr: Data
     public var tail: Data
     public var exitCode: Int32?
     public var createdAt: Date
@@ -116,6 +117,7 @@ public actor BashProcessRegistry {
             pendingStdout: Data(),
             pendingStderr: Data(),
             aggregated: Data(),
+            aggregatedStderr: Data(),
             tail: Data(),
             exitCode: nil,
             createdAt: Date(),
@@ -201,7 +203,11 @@ public actor BashProcessRegistry {
         guard handles[id] == nil, let session = sessions[id], let exitCode = session.exitCode else {
             return nil
         }
-        return ShellProcessRunner.RunResult(stdout: session.aggregated, stderr: Data(), exitCode: exitCode)
+        return ShellProcessRunner.RunResult(
+            stdout: session.aggregated,
+            stderr: session.aggregatedStderr,
+            exitCode: exitCode
+        )
     }
 
     private func resumeCompletionWaiters(id: String, result: ShellProcessRunner.RunResult?) {
@@ -235,12 +241,19 @@ public actor BashProcessRegistry {
 
             session.tail = Data(handle.liveStdout.suffix(4096))
         } else {
-            let dropped = max(0, session.totalStdoutBytes - session.aggregated.count)
-            let start = max(session.surfacedStdoutBytes, dropped)
-            let localOffset = start - dropped
-            session.pendingStdout = localOffset < session.aggregated.count
-                ? Data(session.aggregated.dropFirst(localOffset)) : Data()
+            let stdoutDropped = max(0, session.totalStdoutBytes - session.aggregated.count)
+            let stdoutStart = max(session.surfacedStdoutBytes, stdoutDropped)
+            let stdoutLocalOffset = stdoutStart - stdoutDropped
+            session.pendingStdout = stdoutLocalOffset < session.aggregated.count
+                ? Data(session.aggregated.dropFirst(stdoutLocalOffset)) : Data()
             session.surfacedStdoutBytes = session.totalStdoutBytes
+
+            let stderrDropped = max(0, session.totalStderrBytes - session.aggregatedStderr.count)
+            let stderrStart = max(session.surfacedStderrBytes, stderrDropped)
+            let stderrLocalOffset = stderrStart - stderrDropped
+            session.pendingStderr = stderrLocalOffset < session.aggregatedStderr.count
+                ? Data(session.aggregatedStderr.dropFirst(stderrLocalOffset)) : Data()
+            session.surfacedStderrBytes = session.totalStderrBytes
         }
         session.lastPolledAt = Date()
         sessions[id] = session
@@ -310,6 +323,7 @@ public actor BashProcessRegistry {
             session.totalStderrBytes = handle.liveStderrBuffer.totalBytes
         }
         session.aggregated = result.stdout
+        session.aggregatedStderr = result.stderr
         session.tail = Data(result.stdout.suffix(4096))
         session.exitCode = result.exitCode
         sessions[id] = session
