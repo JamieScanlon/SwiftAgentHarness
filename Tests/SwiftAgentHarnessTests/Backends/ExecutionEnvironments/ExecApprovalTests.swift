@@ -45,6 +45,68 @@ struct ExecApprovalTests {
         #expect(ExecApprovalStore.commandName(from: "") == nil)
     }
 
+    @Test("durableGrantCommandName keeps plain command-name grants")
+    func durableGrantCommandNamePlainCommands() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "git push origin main") == "git")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "  npm   test ") == "npm")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "ls\t-la") == "ls")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "echo\nhi") == "echo")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "   ") == nil)
+    }
+
+    @Test("durableGrantCommandName peels shell interpreters to inner command")
+    func durableGrantCommandNameShellPeeling() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls -la'") == "ls")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -c \"git push\"") == "git")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "/bin/bash -- -lc 'npm test'") == "npm")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "sh -c 'echo hi'") == "echo")
+    }
+
+    @Test("durableGrantCommandName peels env and prefix wrappers")
+    func durableGrantCommandNameWrapperPeeling() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "env FOO=bar git push") == "git")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "sudo npm test") == "npm")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "nice -n 10 git status") == "git")
+    }
+
+    @Test("durableGrantCommandName fails closed for unpeelable interpreters")
+    func durableGrantCommandNameFailClosed() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash script.sh") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "xargs") == nil)
+    }
+
+    @Test("durable approval of bash -lc keys on inner command not bash")
+    func durableApprovalShellInterpreterPeeling() async {
+        let store = ExecApprovalStore()
+        await store.registerPending(id: "shell-1", command: "bash -lc 'ls -la'")
+        _ = await store.resolve(id: "shell-1", approved: true, durable: true)
+        #expect(await store.isDurableApproved(command: "ls -l"))
+        #expect(await store.isDurableApproved(command: "bash -lc 'rm -rf /'") == false)
+        #expect(await store.listDurableGrants() == ["ls"])
+    }
+
+    @Test("durable approval of bash -lc git grants git cross-argument access")
+    func durableApprovalShellInterpreterGitCrossArg() async {
+        let store = ExecApprovalStore()
+        await store.registerPending(id: "shell-git", command: "bash -c \"git push origin main\"")
+        _ = await store.resolve(id: "shell-git", approved: true, durable: true)
+        #expect(await store.isDurableApproved(command: "git status --short"))
+        #expect(await store.isDurableApproved(command: "bash -lc 'git pull'"))
+    }
+
+    @Test("durable approval of bare bash does not persist a grant")
+    func durableApprovalBareBashNoGrant() async {
+        let grants = InMemoryExecApprovalGrantStore()
+        let store = ExecApprovalStore(grantStore: grants)
+        await store.registerPending(id: "bare-bash", command: "bash")
+        let resolution = await store.resolve(id: "bare-bash", approved: true, durable: true)
+        #expect(resolution == .approved(durable: true))
+        #expect(await grants.list() == [])
+        #expect(await store.isDurableApproved(command: "bash -lc 'ls'") == false)
+    }
+
     @Test("in-memory grant store add/remove/list/isGranted")
     func inMemoryGrantStore() async {
         let grants = InMemoryExecApprovalGrantStore()

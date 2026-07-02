@@ -158,9 +158,9 @@ public actor FilePermissionRuleStore: PermissionRuleStore {
 }
 
 /// Adapts a `PermissionRuleStore` to the exec-approval grant interface so durable
-/// exec grants can share the scopable, persistable rule backend. Command-name
-/// grants map onto `.commandName` scopes, preserving the historical "any args for
-/// this command" semantics while gaining persistence and a shared vocabulary.
+/// exec grants can share the scopable, persistable rule backend. Grant keys map
+/// onto `.commandName` scopes using post-peel inner command names while preserving
+/// cross-argument grants for the same underlying command.
 public actor PermissionRuleExecApprovalGrantStore: ExecApprovalGrantStore {
     private let store: any PermissionRuleStore
 

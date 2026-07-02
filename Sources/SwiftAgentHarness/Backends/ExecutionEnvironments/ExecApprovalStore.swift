@@ -43,12 +43,12 @@ public actor ExecApprovalStore {
     }
 
     public func isDurableApproved(command: String) async -> Bool {
-        guard let name = Self.commandName(from: command) else { return false }
+        guard let name = ExecApprovalGrantCommandName.durableGrantCommandName(from: command) else { return false }
         return await grantStore.isGranted(commandName: name)
     }
 
     public func addDurableApproval(command: String) async {
-        guard let name = Self.commandName(from: command) else { return }
+        guard let name = ExecApprovalGrantCommandName.durableGrantCommandName(from: command) else { return }
         await grantStore.add(commandName: name)
     }
 
@@ -69,6 +69,9 @@ public actor ExecApprovalStore {
         return true
     }
 
+    /// When `durable` is true, a persisted grant is stored only when a safe grant key
+    /// can be derived (interpreter/wrapper prefixes are peeled). Unpeelable interpreter
+    /// commands still resolve as allow-always for the pending request but leave no grant.
     @discardableResult
     public func resolve(
         id: String,
@@ -109,9 +112,8 @@ public actor ExecApprovalStore {
         }
     }
 
-    /// Extracts the command NAME (first executable token) from a full command
-    /// string. Leading environment assignments are out of scope.
+    /// Legacy first-token extraction without interpreter peeling.
     static func commandName(from command: String) -> String? {
-        command.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init)
+        ExecApprovalGrantCommandName.commandName(from: command)
     }
 }

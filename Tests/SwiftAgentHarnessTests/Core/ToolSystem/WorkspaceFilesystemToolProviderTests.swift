@@ -597,6 +597,31 @@ struct WorkspaceFilesystemToolProviderTests {
         #expect(result.content.contains("elevated-ok"))
     }
 
+    @Test("durable grant from bash -lc does not pre-approve unrelated bash commands")
+    func durableGrantFromBashInterpreterDoesNotBypassShell() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let store = ExecApprovalStore()
+        await store.addDurableApproval(command: "bash -lc 'echo elevated-ok'")
+        let recorder = RecordingExecApprovalDelivery(grantStore: store)
+        let approvedEcho = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "echo elevated-ok", elevated: nil))
+        #expect(await recorder.requestCount == 0)
+        #expect(approvedEcho.success == true)
+
+        _ = try await elevatedProvider(
+            workspace: fixture.workspace,
+            memory: fixture.memory,
+            approvalDelivery: recorder,
+            useStubBashRunner: true
+        ).executeTool(bashCall(command: "bash -lc 'rm -rf /'", elevated: nil))
+        #expect(await recorder.requestCount == 1)
+    }
+
     @Test("non-126 sandbox failure does not escalate")
     func non126FailureDoesNotEscalate() async throws {
         let fixture = try makeFixture()

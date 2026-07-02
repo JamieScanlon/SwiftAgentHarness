@@ -1,10 +1,7 @@
 import Foundation
 
-/// Durable exec-approval grants keyed by command name (the first executable token).
-///
-/// Hosts can supply a persistent implementation so that durable grants survive
-/// restarts and apply across differing arguments for the same command. The
-/// default in-memory implementation preserves the historical behavior.
+/// Durable exec-approval grants keyed by grant command name (the inner command after
+/// interpreter/wrapper peeling, or the first token for normal commands).
 public protocol ExecApprovalGrantStore: Sendable {
     func isGranted(commandName: String) async -> Bool
     func add(commandName: String) async
