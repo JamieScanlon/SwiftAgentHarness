@@ -34,6 +34,13 @@ struct SSHSandboxBackendTests {
         #expect(!control.baseArgs.contains("22") || control.baseArgs.contains("2222"))
     }
 
+    @Test("control master socket lives under .ssh not /tmp")
+    func controlMasterSocketUnderSSH() {
+        #expect(control.socketPath.contains("/.ssh/sah-control-"))
+        #expect(control.socketPath.hasSuffix(".sock"))
+        #expect(!control.socketPath.contains("/tmp/sah-ssh-"))
+    }
+
     @Test("-tt precedes host when usePty")
     func ttPrecedesHostWhenUsePty() throws {
         let argv = SSHSandboxArgv.exec(
@@ -96,6 +103,9 @@ private final class SSHWorkspaceSyncSpy: SSHWorkspaceSyncRunning, @unchecked Sen
         if let last = argv.last, last == "command -v rsync" {
             return ShellProcessRunner.RunResult(stdout: Data("/usr/bin/rsync\n".utf8), stderr: Data(), exitCode: 0)
         }
+        if let last = argv.last, last.contains("umask 077"), last.contains("mkdir -p \"$target\"") {
+            return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
+        }
         if let last = argv.last, last.contains("test -f"), last.contains(SSHWorkspaceSyncCache.seedMarker) {
             return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: markerPresent ? 0 : 1)
         }
@@ -133,16 +143,18 @@ struct SSHWorkspaceSyncCacheTests {
         let spy = SSHWorkspaceSyncSpy()
         let cache = SSHWorkspaceSyncCache()
         await cache.setRunnerForTesting(spy)
-        let remote = "/tmp/sah-test-\(UUID().uuidString)"
+        let scopeKey = "test-\(UUID().uuidString)"
 
         try await cache.prepare(
             control: control,
             settings: settings,
             hostWorkspace: host,
-            remoteRoot: remote
+            scopeKey: scopeKey
         )
 
         #expect(spy.runs.contains { $0.first == "rsync" && $0.contains("--delete") })
+        let rsyncRun = try #require(spy.runs.first { $0.first == "rsync" && $0.contains("--delete") })
+        #expect(rsyncRun.contains("alice@example.com:.sah/workspaces/\(scopeKey)/"))
         let rsyncCount = spy.runs.filter { $0.first == "rsync" && $0.contains("--delete") }.count
         #expect(rsyncCount == 1)
 
@@ -150,7 +162,7 @@ struct SSHWorkspaceSyncCacheTests {
             control: control,
             settings: settings,
             hostWorkspace: host,
-            remoteRoot: remote
+            scopeKey: scopeKey
         )
         let rsyncCountAfter = spy.runs.filter { $0.first == "rsync" && $0.contains("--delete") }.count
         #expect(rsyncCountAfter == 1)
@@ -163,13 +175,13 @@ struct SSHWorkspaceSyncCacheTests {
         let spy = SSHWorkspaceSyncSpy()
         let cache = SSHWorkspaceSyncCache()
         await cache.setRunnerForTesting(spy)
-        let remote = "/tmp/sah-incr-\(UUID().uuidString)"
+        let scopeKey = "incr-\(UUID().uuidString)"
 
         try await cache.prepare(
             control: control,
             settings: settings,
             hostWorkspace: host,
-            remoteRoot: remote
+            scopeKey: scopeKey
         )
 
         let file = URL(fileURLWithPath: host).appendingPathComponent("file.txt")
@@ -179,7 +191,7 @@ struct SSHWorkspaceSyncCacheTests {
             control: control,
             settings: settings,
             hostWorkspace: host,
-            remoteRoot: remote
+            scopeKey: scopeKey
         )
 
         let incremental = spy.runs.filter { $0.first == "rsync" && !$0.contains("--delete") }
@@ -193,16 +205,43 @@ struct SSHWorkspaceSyncCacheTests {
         let spy = RemoteRsyncMissingSyncSpy()
         let cache = SSHWorkspaceSyncCache()
         await cache.setRunnerForTesting(spy)
-        let remote = "/tmp/sah-missing-rsync-\(UUID().uuidString)"
+        let scopeKey = "missing-rsync-\(UUID().uuidString)"
 
         await #expect(throws: SandboxBackendError.hostToolMissing(tool: "rsync", location: "alice@example.com")) {
             try await cache.prepare(
                 control: control,
                 settings: settings,
                 hostWorkspace: host,
-                remoteRoot: remote
+                scopeKey: scopeKey
             )
         }
+    }
+
+    @Test("prepare throws when secure workspace setup fails")
+    func prepareThrowsWhenSecureSetupFails() async throws {
+        let host = try makeHostWorkspace()
+        defer { try? FileManager.default.removeItem(atPath: host) }
+        let spy = SecurePrepareFailureSyncSpy()
+        let cache = SSHWorkspaceSyncCache()
+        await cache.setRunnerForTesting(spy)
+
+        await #expect(throws: SandboxBackendError.self) {
+            try await cache.prepare(
+                control: control,
+                settings: settings,
+                hostWorkspace: host,
+                scopeKey: "squatted"
+            )
+        }
+    }
+}
+
+private final class SecurePrepareFailureSyncSpy: SSHWorkspaceSyncRunning, @unchecked Sendable {
+    func run(argv: [String]) async throws -> ShellProcessRunner.RunResult {
+        if let last = argv.last, last.contains("umask 077") {
+            return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 1)
+        }
+        return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
     }
 }
 
