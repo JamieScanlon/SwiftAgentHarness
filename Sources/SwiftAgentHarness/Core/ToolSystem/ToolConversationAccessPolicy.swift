@@ -5,16 +5,28 @@ import Foundation
 enum ToolConversationAccessPolicy {
     /// Resolves the effective tenant scope for tool data access.
     static func resolveOwnerScope(
+        strictTenancy: Bool,
         authenticatedOwnerAccountID: UUID?,
         callerConversation: ModelConversation?,
         registryOwnerAccountID: UUID?
     ) -> UUID? {
-        authenticatedOwnerAccountID
+        if strictTenancy {
+            return authenticatedOwnerAccountID
+        }
+        return authenticatedOwnerAccountID
             ?? callerConversation?.ownerAccountID
             ?? registryOwnerAccountID
     }
 
-    static func isOwnerAccessible(targetOwner: UUID?, ownerScope: UUID?) -> Bool {
+    static func isOwnerAccessible(
+        targetOwner: UUID?,
+        ownerScope: UUID?,
+        strictTenancy: Bool
+    ) -> Bool {
+        if strictTenancy {
+            guard let ownerScope else { return false }
+            return targetOwner == ownerScope
+        }
         guard let ownerScope else { return true }
         return targetOwner == ownerScope
     }
@@ -86,9 +98,14 @@ enum ToolConversationAccessPolicy {
         callerScope: ConversationScope?,
         ownerScope: UUID?,
         callerLineageRoot: UUID?,
-        targetLineageRoot: UUID?
+        targetLineageRoot: UUID?,
+        strictTenancy: Bool
     ) -> Bool {
-        guard isOwnerAccessible(targetOwner: target.ownerAccountID, ownerScope: ownerScope) else {
+        guard isOwnerAccessible(
+            targetOwner: target.ownerAccountID,
+            ownerScope: ownerScope,
+            strictTenancy: strictTenancy
+        ) else {
             return false
         }
         guard let callerScope else { return true }
@@ -105,7 +122,8 @@ enum ToolConversationAccessPolicy {
         _ rows: [ConversationMetadata],
         callerScope: ConversationScope?,
         ownerScope: UUID?,
-        callerLineageRoot: UUID?
+        callerLineageRoot: UUID?,
+        strictTenancy: Bool
     ) -> [ConversationMetadata] {
         let metadataByID: [UUID: ConversationMetadata] = Dictionary(
             uniqueKeysWithValues: rows.compactMap { row in
@@ -115,7 +133,11 @@ enum ToolConversationAccessPolicy {
         )
         return rows.filter { row in
             guard let rowID = UUID(uuidString: row.id) else { return false }
-            guard isOwnerAccessible(targetOwner: row.ownerAccountID, ownerScope: ownerScope) else {
+            guard isOwnerAccessible(
+                targetOwner: row.ownerAccountID,
+                ownerScope: ownerScope,
+                strictTenancy: strictTenancy
+            ) else {
                 return false
             }
             guard let callerScope else { return true }

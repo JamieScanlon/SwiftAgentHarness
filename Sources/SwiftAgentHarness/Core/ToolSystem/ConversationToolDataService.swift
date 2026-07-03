@@ -8,17 +8,20 @@ actor ConversationToolDataService {
     private let controlPlane: any ConversationControlPlaneServicing
     private let agentRuntime: any AgentRuntimeStreamingServicing
     private let selection: ConversationSelectionAccessing
+    private let tenancyPolicy: TenancyPolicySettings
 
     init(
         catalog: any ConversationCatalogServicing,
         controlPlane: any ConversationControlPlaneServicing,
         agentRuntime: any AgentRuntimeStreamingServicing,
-        selection: ConversationSelectionAccessing
+        selection: ConversationSelectionAccessing,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.catalog = catalog
         self.controlPlane = controlPlane
         self.agentRuntime = agentRuntime
         self.selection = selection
+        self.tenancyPolicy = tenancyPolicy
     }
 
     func serviceListConversationMetadata(visibility: ConversationCatalogVisibilityFilter) async -> [ConversationMetadata] {
@@ -28,7 +31,8 @@ actor ConversationToolDataService {
             rows,
             callerScope: context.scope,
             ownerScope: context.ownerScope,
-            callerLineageRoot: context.callerLineageRoot
+            callerLineageRoot: context.callerLineageRoot,
+            strictTenancy: tenancyPolicy.requireAuthenticatedOwnerOnMutations
         )
     }
 
@@ -105,6 +109,7 @@ actor ConversationToolDataService {
             callerConversation = nil
         }
         let ownerScope = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: tenancyPolicy.requireAuthenticatedOwnerOnMutations,
             authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID,
             callerConversation: callerConversation,
             registryOwnerAccountID: await catalog.registryOwnerAccountID()
@@ -136,7 +141,8 @@ actor ConversationToolDataService {
             callerScope: context.scope,
             ownerScope: context.ownerScope,
             callerLineageRoot: context.callerLineageRoot,
-            targetLineageRoot: targetLineageRoot
+            targetLineageRoot: targetLineageRoot,
+            strictTenancy: tenancyPolicy.requireAuthenticatedOwnerOnMutations
         )
     }
 

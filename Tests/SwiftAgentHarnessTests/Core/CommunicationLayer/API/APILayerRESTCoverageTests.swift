@@ -1129,8 +1129,8 @@ struct APILayerRESTCoverageTests {
         }
     }
 
-    @Test("GET /api/conversations paged list does not infer owner from bearer token without owner query")
-    func strictTenancyPagedListExplicitOwnerFilterOnly() async throws {
+    @Test("GET /api/conversations paged list auto-scopes to bearer owner under strict tenancy")
+    func strictTenancyPagedListAutoScopesToBearerOwner() async throws {
         let container = try APILayerRESTTestSupport.makeContainer()
         let runtimeSession = APILayerRESTTestSupport.makeChatManager(container: container)
         let model = APILayerRESTTestSupport.makeTestModel()
@@ -1175,7 +1175,7 @@ struct APILayerRESTCoverageTests {
                     let items = json?["items"] as? [[String: Any]]
                     let ids = items?.compactMap { $0["id"] as? String } ?? []
                     #expect(ids.contains(cidA))
-                    #expect(ids.contains(cidB))
+                    #expect(ids.contains(cidB) == false)
                 }
             )
 
@@ -1192,6 +1192,25 @@ struct APILayerRESTCoverageTests {
                     let ids = items?.compactMap { $0["id"] as? String } ?? []
                     #expect(ids.contains(cidA))
                     #expect(ids.contains(cidB) == false)
+                }
+            )
+
+            try await app.testing().test(
+                .GET,
+                "/api/conversations?summary=true&limit=50&owner=\(ownerB.uuidString)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .forbidden)
+                }
+            )
+
+            try await app.testing().test(
+                .GET,
+                "/api/conversations?summary=true&limit=50",
+                afterResponse: { res async throws in
+                    #expect(res.status == .unauthorized)
                 }
             )
         }

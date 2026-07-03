@@ -1088,7 +1088,7 @@ public actor APILayer {
             }
         )
         logger.info("Registering canonical route GET /api/conversations (paged list)")
-        app.get("api", "conversations") { req async throws -> Response in
+        api.get("conversations") { req async throws -> Response in
             try await APILayerConversationsModule.conversationListHTTPResponse(req: req, dependencies: dependencies)
         }
         APILayerRESTModuleRegistry(modules: APILayerModuleAssembly.restModules())

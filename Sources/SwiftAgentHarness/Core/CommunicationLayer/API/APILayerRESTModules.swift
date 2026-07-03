@@ -699,7 +699,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             headers.add(name: .contentType, value: "application/json")
             return Response(status: .badRequest, headers: headers, body: .init(data: data))
         }
-        let page = await dependencies.conversation.apiSearchConversations(query: searchReq)
+        let (forbidden, resolvedOwner) = dependencies.tenancyResolveCollectionOwnerScope(
+            explicitOwner: searchReq.ownerAccountID
+        )
+        if let forbidden { return forbidden }
+        var scopedSearchReq = searchReq
+        scopedSearchReq.ownerAccountID = resolvedOwner
+        let page = await dependencies.conversation.apiSearchConversations(query: scopedSearchReq)
         do {
             let enc = JSONEncoder()
             let data = try enc.encode(page)
@@ -729,7 +735,12 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             ?? req.logger[metadataKey: "request-id"]?.description
             ?? "unknown"
         dependencies.logger.warning("Handling GET /api/conversations request-id=\(requestID) query=\(req.url.query ?? "")")
-        let query = try Self.conversationListQuery(from: req)
+        var query = try Self.conversationListQuery(from: req)
+        let (forbidden, resolvedOwner) = dependencies.tenancyResolveCollectionOwnerScope(
+            explicitOwner: query.ownerAccountID
+        )
+        if let forbidden { return forbidden }
+        query.ownerAccountID = resolvedOwner
         let page = await dependencies.conversation.apiListConversations(query: query)
         let enc = JSONEncoder()
         let data = try enc.encode(page)

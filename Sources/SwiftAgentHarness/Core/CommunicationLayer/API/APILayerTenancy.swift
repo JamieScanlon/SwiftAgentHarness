@@ -129,4 +129,19 @@ extension APILayerRouteDependencies {
         }
         return nil
     }
+
+    /// Resolves owner scope for collection list/search queries (`GET /api/conversations`, `GET /api/search`).
+    /// Strict mode requires a Bearer JWT owner, rejects mismatched explicit `owner=` query params, and forces scope to the authenticated principal.
+    func tenancyResolveCollectionOwnerScope(explicitOwner: UUID?) -> (forbidden: Response?, resolvedOwner: UUID?) {
+        guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else {
+            return (nil, explicitOwner)
+        }
+        guard let scope = APISessionContext.authenticatedOwnerAccountID else {
+            return (APILayerTenancyResponses.unauthorizedMissingOwner(), nil)
+        }
+        if let explicitOwner, explicitOwner != scope {
+            return (APILayerTenancyResponses.forbiddenTenant(), nil)
+        }
+        return (nil, scope)
+    }
 }

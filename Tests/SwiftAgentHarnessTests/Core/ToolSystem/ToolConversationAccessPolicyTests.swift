@@ -1,219 +1,156 @@
-import EasyJSON
 import Foundation
 import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
-private enum ToolConversationAccessPolicyTestSupport {
-    static func makeModel(name: String = "test-model") -> Model {
-        Model(
-            id: UUID(),
-            protocol: .openAIAPI,
-            modelName: name,
-            serverURL: URL(string: "http://localhost:1234")!,
-            capabilities: [.completion],
-            modelProtocol: .openAIAPI
-        )
-    }
-
-    static func makeConversation(
-        id: UUID = UUID(),
-        parentConversationID: UUID? = nil,
-        ownerAccountID: UUID? = nil,
-        metadata: JSON? = nil,
-        lineageKind: ConversationLineageKind = .root,
-        origin: ConversationOrigin = .user
-    ) -> ModelConversation {
-        let now = Date()
-        return ModelConversation(
-            id: id,
-            model: makeModel(),
-            messages: [],
-            createdAt: now,
-            updatedAt: now,
-            topic: nil,
-            description: nil,
-            metadata: metadata,
-            parentConversationID: parentConversationID,
-            ownerAccountID: ownerAccountID,
-            lineageKind: lineageKind,
-            origin: origin
-        )
-    }
-
-    static func metadata(id: UUID, owner: UUID, parent: UUID?) -> ConversationMetadata {
-        ConversationMetadata(
-            id: id.uuidString,
-            modelName: "m",
-            topic: nil,
-            description: nil,
-            messageCount: 0,
-            createdAt: "2020-01-01T00:00:00Z",
-            updatedAt: "2020-01-01T00:00:00Z",
-            ownerAccountID: owner,
-            parentConversationID: parent,
-            lineageKind: parent == nil ? .root : .branch,
-            origin: .user
-        )
-    }
-}
-
 @Suite("ToolConversationAccessPolicy")
 struct ToolConversationAccessPolicyTests {
-    @Test("resolveOwnerScope prefers JWT over caller conversation owner")
-    func resolveOwnerScopePriority() {
-        let jwtOwner = UUID()
-        let callerOwner = UUID()
-        let caller = ToolConversationAccessPolicyTestSupport.makeConversation(ownerAccountID: callerOwner)
-        let resolved = ToolConversationAccessPolicy.resolveOwnerScope(
-            authenticatedOwnerAccountID: jwtOwner,
-            callerConversation: caller,
-            registryOwnerAccountID: UUID()
-        )
-        #expect(resolved == jwtOwner)
-    }
 
-    @Test("resolveOwnerScope falls back to caller conversation owner")
-    func resolveOwnerScopeCallerFallback() {
+    @Test("strict tenancy resolveOwnerScope uses authenticated owner only")
+    func strictResolveOwnerScopeUsesAuthenticatedOwnerOnly() {
+        let authenticated = UUID()
         let callerOwner = UUID()
-        let caller = ToolConversationAccessPolicyTestSupport.makeConversation(ownerAccountID: callerOwner)
-        let resolved = ToolConversationAccessPolicy.resolveOwnerScope(
+        let registryOwner = UUID()
+        let caller = ModelConversation(
+            id: UUID(),
+            model: HarnessConversationTestFixtures.makeTestModel(),
+            messages: [],
+            createdAt: Date(),
+            updatedAt: Date(),
+            ownerAccountID: callerOwner
+        )
+
+        let scope = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: true,
+            authenticatedOwnerAccountID: authenticated,
+            callerConversation: caller,
+            registryOwnerAccountID: registryOwner
+        )
+        #expect(scope == authenticated)
+
+        let nilAuth = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: true,
             authenticatedOwnerAccountID: nil,
             callerConversation: caller,
-            registryOwnerAccountID: UUID()
+            registryOwnerAccountID: registryOwner
         )
-        #expect(resolved == callerOwner)
+        #expect(nilAuth == nil)
     }
 
-    @Test("isOwnerAccessible passes when owner scope is nil")
-    func ownerAccessibleNilScope() {
-        #expect(ToolConversationAccessPolicy.isOwnerAccessible(targetOwner: UUID(), ownerScope: nil))
-    }
-
-    @Test("isOwnerAccessible requires exact owner match when scope is set")
-    func ownerAccessibleRequiresMatch() {
-        let owner = UUID()
-        #expect(ToolConversationAccessPolicy.isOwnerAccessible(targetOwner: owner, ownerScope: owner))
-        #expect(!ToolConversationAccessPolicy.isOwnerAccessible(targetOwner: UUID(), ownerScope: owner))
-        #expect(!ToolConversationAccessPolicy.isOwnerAccessible(targetOwner: nil, ownerScope: owner))
-    }
-
-    @Test("lineageRoot walks parent chain for branches")
-    func lineageRootWalksParents() {
-        let rootID = UUID()
-        let branchID = UUID()
-        let root = ToolConversationAccessPolicyTestSupport.makeConversation(id: rootID, lineageKind: .root)
-        let branch = ToolConversationAccessPolicyTestSupport.makeConversation(
-            id: branchID,
-            parentConversationID: rootID,
-            lineageKind: .branch
+    @Test("loose tenancy resolveOwnerScope preserves fallback chain")
+    func looseResolveOwnerScopeUsesFallbackChain() {
+        let callerOwner = UUID()
+        let registryOwner = UUID()
+        let caller = ModelConversation(
+            id: UUID(),
+            model: HarnessConversationTestFixtures.makeTestModel(),
+            messages: [],
+            createdAt: Date(),
+            updatedAt: Date(),
+            ownerAccountID: callerOwner
         )
-        let lookup: [UUID: ModelConversation] = [rootID: root, branchID: branch]
 
-        let branchRoot = ToolConversationAccessPolicy.lineageRoot(for: branch) { id in
-            lookup[id]
+        let fromCaller = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            callerConversation: caller,
+            registryOwnerAccountID: registryOwner
+        )
+        #expect(fromCaller == callerOwner)
+
+        let fromRegistry = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            callerConversation: nil,
+            registryOwnerAccountID: registryOwner
+        )
+        #expect(fromRegistry == registryOwner)
+    }
+
+    @Test("strict tenancy isOwnerAccessible fails closed when owner scope is nil")
+    func strictOwnerAccessibleFailsClosedWithoutScope() {
+        #expect(
+            ToolConversationAccessPolicy.isOwnerAccessible(
+                targetOwner: UUID(),
+                ownerScope: nil,
+                strictTenancy: true
+            ) == false
+        )
+        #expect(
+            ToolConversationAccessPolicy.isOwnerAccessible(
+                targetOwner: UUID(),
+                ownerScope: nil,
+                strictTenancy: false
+            ) == true
+        )
+    }
+
+    @Test("strict tenancy list_conversations returns only authenticated owner rows")
+    func strictTenancyListConversationsScopesToAuthenticatedOwner() async throws {
+        let fixture = try HarnessConversationTestFixtures.makeHarnessRuntimeHost(label: "tool-strict-tenant")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let convA = try fixture.stack.conversationManager.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: "owner-a",
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat,
+            ownerAccountID: ownerA
+        )
+        let convB = try fixture.stack.conversationManager.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: "owner-b",
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat,
+            ownerAccountID: ownerB
+        )
+        try fixture.stack.conversationManager.resetConversationsFromCatalog(availableModels: [model])
+        try await fixture.host.resetConversationsFromCatalog(availableModels: [model])
+
+        let domain = fixture.services.conversationDomainServices
+        let strictToolData = ConversationToolDataService(
+            catalog: domain.catalog,
+            controlPlane: domain.controlPlane,
+            agentRuntime: fixture.services.agentRuntimeSessionService,
+            selection: fixture.services.selection,
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        )
+        let toolProvider = ConversationsToolProvider(dataProvider: strictToolData)
+
+        let scoped = try await APISessionContext.$authenticatedOwnerAccountID.withValue(ownerA) {
+            try await toolProvider.executeTool(
+                ToolCall(
+                    name: ConversationsToolProvider.listConversationsToolName,
+                    arguments: .object([:]),
+                    id: "list-scoped"
+                )
+            )
         }
-        #expect(branchRoot == rootID)
-    }
+        #expect(scoped.success == true)
+        let scopedPayload = try #require(scoped.content.data(using: .utf8))
+        let scopedRows = try JSONDecoder().decode([ConversationMetadata].self, from: scopedPayload)
+        let scopedIDs = Set(scopedRows.compactMap { UUID(uuidString: $0.id) })
+        #expect(scopedIDs.contains(convA.id))
+        #expect(scopedIDs.contains(convB.id) == false)
 
-    @Test("lineageRoot uses subAgentRootConversationID metadata")
-    func lineageRootSubAgentMetadata() {
-        let rootID = UUID()
-        let subAgentID = UUID()
-        let metadata: JSON = .object([
-            "subAgentRootConversationID": .string(rootID.uuidString.lowercased()),
-            "subAgentDepth": .integer(1),
-        ])
-        let subAgent = ToolConversationAccessPolicyTestSupport.makeConversation(
-            id: subAgentID,
-            parentConversationID: rootID,
-            metadata: metadata,
-            lineageKind: .subAgent,
-            origin: .system
-        )
-        let root = ToolConversationAccessPolicy.lineageRoot(for: subAgent) { _ in nil }
-        #expect(root == rootID)
-    }
-
-    @Test("isLineageAccessible allows self and same root siblings")
-    func lineageAccessibleSameTree() {
-        let rootID = UUID()
-        let callerID = UUID()
-        let siblingID = UUID()
-        let callerScope = ConversationScope(
-            selfID: callerID,
-            parentID: rootID,
-            rootID: rootID,
-            lineageKind: .branch,
-            origin: .user
-        )
-        #expect(
-            ToolConversationAccessPolicy.isLineageAccessible(
-                callerScope: callerScope,
-                targetConversationID: callerID,
-                callerLineageRoot: rootID,
-                targetLineageRoot: rootID
+        let empty = try await APISessionContext.$authenticatedOwnerAccountID.withValue(nil) {
+            try await toolProvider.executeTool(
+                ToolCall(
+                    name: ConversationsToolProvider.listConversationsToolName,
+                    arguments: .object([:]),
+                    id: "list-empty"
+                )
             )
-        )
-        #expect(
-            ToolConversationAccessPolicy.isLineageAccessible(
-                callerScope: callerScope,
-                targetConversationID: siblingID,
-                callerLineageRoot: rootID,
-                targetLineageRoot: rootID
-            )
-        )
-    }
-
-    @Test("isLineageAccessible denies unrelated roots when scope is set")
-    func lineageAccessibleDeniesUnrelatedRoots() {
-        let callerScope = ConversationScope(
-            selfID: UUID(),
-            parentID: nil,
-            rootID: UUID(),
-            lineageKind: .root,
-            origin: .user
-        )
-        #expect(
-            !ToolConversationAccessPolicy.isLineageAccessible(
-                callerScope: callerScope,
-                targetConversationID: UUID(),
-                callerLineageRoot: UUID(),
-                targetLineageRoot: UUID()
-            )
-        )
-    }
-
-    @Test("filterAccessibleMetadata applies owner and lineage filters")
-    func filterAccessibleMetadata() {
-        let owner = UUID()
-        let otherOwner = UUID()
-        let rootID = UUID()
-        let branchID = UUID()
-        let unrelatedID = UUID()
-        let callerScope = ConversationScope(
-            selfID: rootID,
-            parentID: nil,
-            rootID: rootID,
-            lineageKind: .root,
-            origin: .user
-        )
-        let rows: [ConversationMetadata] = [
-            ToolConversationAccessPolicyTestSupport.metadata(id: rootID, owner: owner, parent: nil),
-            ToolConversationAccessPolicyTestSupport.metadata(id: branchID, owner: owner, parent: rootID),
-            ToolConversationAccessPolicyTestSupport.metadata(id: unrelatedID, owner: owner, parent: nil),
-            ToolConversationAccessPolicyTestSupport.metadata(id: UUID(), owner: otherOwner, parent: nil),
-        ]
-        let filtered = ToolConversationAccessPolicy.filterAccessibleMetadata(
-            rows,
-            callerScope: callerScope,
-            ownerScope: owner,
-            callerLineageRoot: rootID
-        )
-        let ids = Set(filtered.map(\.id))
-        #expect(ids.contains(rootID.uuidString))
-        #expect(ids.contains(branchID.uuidString))
-        #expect(!ids.contains(unrelatedID.uuidString))
-        #expect(filtered.allSatisfy { $0.ownerAccountID == owner })
+        }
+        #expect(empty.success == true)
+        let emptyPayload = try #require(empty.content.data(using: .utf8))
+        let emptyRows = try JSONDecoder().decode([ConversationMetadata].self, from: emptyPayload)
+        #expect(emptyRows.isEmpty)
     }
 }

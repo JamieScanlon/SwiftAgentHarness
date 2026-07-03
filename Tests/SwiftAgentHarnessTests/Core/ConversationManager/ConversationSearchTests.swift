@@ -169,4 +169,86 @@ struct ConversationSearchRESTTests {
             }
         }
     }
+
+    @Test("strict tenancy auto-scopes search hits to bearer owner")
+    func strictTenancySearchAutoScopesToBearerOwner() async throws {
+        let fixture = try HarnessConversationTestFixtures.makeHarnessRuntimeHost(label: "search-strict-tenant")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = ConversationSearchTestSupport.makeModel()
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let tokenA = "strictSearchOwnerAToken918273"
+        let tokenB = "strictSearchOwnerBToken918273"
+        _ = try await HarnessConversationTestFixtures.seedSearchableConversation(
+            stack: fixture.stack,
+            model: model,
+            userContent: tokenA,
+            ownerAccountID: ownerA
+        )
+        _ = try await HarnessConversationTestFixtures.seedSearchableConversation(
+            stack: fixture.stack,
+            model: model,
+            userContent: tokenB,
+            ownerAccountID: ownerB
+        )
+
+        let api = APILayer(port: 0)
+        await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
+        await api.setAPIAccessTokenAuthenticationSettings(
+            APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret")
+        )
+        let authA = try await HarnessAPIAccessTokenFactory.authorizationHeaderValue(
+            ownerAccountID: ownerA,
+            settings: APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret")
+        )
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                runtimeSession: fixture.host,
+                modelProvider: SearchRESTModelProvider(models: [model])
+            )
+
+            try await app.testing().test(
+                .GET,
+                "/api/search?q=\(tokenA)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    let decoded = try JSONDecoder().decode(ConversationSearchResponse.self, from: Data(res.body.readableBytesView))
+                    #expect(decoded.totalHitCount == 1)
+                }
+            )
+
+            try await app.testing().test(
+                .GET,
+                "/api/search?q=\(tokenB)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    let decoded = try JSONDecoder().decode(ConversationSearchResponse.self, from: Data(res.body.readableBytesView))
+                    #expect(decoded.totalHitCount == 0)
+                }
+            )
+
+            try await app.testing().test(
+                .GET,
+                "/api/search?q=\(tokenA)&owner=\(ownerB.uuidString)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .authorization, value: authA)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .forbidden)
+                }
+            )
+
+            try await app.testing().test(.GET, "/api/search?q=\(tokenA)") { res async throws in
+                #expect(res.status == .unauthorized)
+            }
+        }
+    }
 }

@@ -36,12 +36,14 @@ public enum HarnessRuntimeSessionFactory {
     static func makeForTesting(
         deps: ConversationRuntimeDependencies,
         persistenceDomain: ConversationPersistenceDomain? = nil,
-        wireMemorySubAgents: Bool = false
+        wireMemorySubAgents: Bool = false,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) -> Services {
         makeServices(
             deps: deps,
             persistenceDomain: persistenceDomain ?? deps.persistenceDomain,
-            wireMemorySubAgents: wireMemorySubAgents
+            wireMemorySubAgents: wireMemorySubAgents,
+            tenancyPolicy: tenancyPolicy
         )
     }
 
@@ -64,12 +66,14 @@ public enum HarnessRuntimeSessionFactory {
         compactionCoordinator: CompactionConcurrencyCoordinator,
         contextEngine: any ContextEngine,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
-        wireMemorySubAgents: Bool = false
+        wireMemorySubAgents: Bool = false,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) -> (HarnessRuntimeSession, Services) {
         let services = makeServices(
             deps: runtimeDependencies,
             persistenceDomain: persistenceDomain,
-            wireMemorySubAgents: wireMemorySubAgents
+            wireMemorySubAgents: wireMemorySubAgents,
+            tenancyPolicy: tenancyPolicy
         )
         let session = HarnessRuntimeSession(
             persistenceDomain: persistenceDomain,
@@ -98,7 +102,8 @@ public enum HarnessRuntimeSessionFactory {
     static func makeServices(
         deps: ConversationRuntimeDependencies,
         persistenceDomain: ConversationPersistenceDomain,
-        wireMemorySubAgents: Bool = false
+        wireMemorySubAgents: Bool = false,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) -> Services {
         let orchestrationCore = AgentRuntimeOrchestrationCore(
             maxPoolEntries: deps.agentHarness.orchestratorPoolMaxEntries,
@@ -133,7 +138,8 @@ public enum HarnessRuntimeSessionFactory {
             skillActivation: skillActivationService,
             sessionProjection: sessionProjection,
             contextProjection: contextProjectionService,
-            registryOwnerAccountScope: { nil }
+            registryOwnerAccountScope: { nil },
+            tenancyPolicy: tenancyPolicy
         )
         selection.install(service: conversationSelectionRuntimeService)
         let subAgentPoolResolved = SubAgentPoolRuntimeWiring.resolve(
@@ -272,7 +278,8 @@ public enum HarnessRuntimeSessionFactory {
             catalog: conversationDomainServices.catalog,
             controlPlane: conversationDomainServices.controlPlane,
             agentRuntime: agentRuntimeSessionService,
-            selection: selection
+            selection: selection,
+            tenancyPolicy: tenancyPolicy
         )
         orchestratorRuntimeService.installToolCollaborators(
             toolApproval: toolApprovalRuntimeService,

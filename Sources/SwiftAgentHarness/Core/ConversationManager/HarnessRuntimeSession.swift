@@ -214,7 +214,8 @@ public actor HarnessRuntimeSession {
         compactionCoordinator: CompactionConcurrencyCoordinator,
         contextEngine: any ContextEngine,
         modeRegistry: any ModeRegistryAccessing,
-        runtimeLaneConfiguration: RuntimeLaneConfiguration = .default
+        runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -235,7 +236,8 @@ public actor HarnessRuntimeSession {
             contextEngine: contextEngine,
             modeRegistry: modeRegistry,
             runtimeLaneConfiguration: runtimeLaneConfiguration,
-            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
+            tenancyPolicy: tenancyPolicy
         )
     }
 
@@ -258,7 +260,8 @@ public actor HarnessRuntimeSession {
         contextEngine: any ContextEngine,
         modeRegistry: any ModeRegistryAccessing,
         runtimeLaneConfiguration: RuntimeLaneConfiguration,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -310,7 +313,8 @@ public actor HarnessRuntimeSession {
             compactionCoordinator: compactionCoordinator,
             contextEngine: contextEngine,
             runtimeExecutorFactory: runtimeExecutorFactory,
-            wireMemorySubAgents: true
+            wireMemorySubAgents: true,
+            tenancyPolicy: tenancyPolicy
         )
         return (session, services)
     }
@@ -335,7 +339,8 @@ public actor HarnessRuntimeSession {
         contextEngine: (any ContextEngine)?,
         modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService()),
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         let alignedFactory = StandardModelLLMFactory.aligningAccounting(
             factory: llmFactory,
@@ -387,7 +392,8 @@ public actor HarnessRuntimeSession {
         )
         let services = HarnessRuntimeSessionFactory.makeServices(
             deps: runtimeDependencies,
-            persistenceDomain: persistenceDomain
+            persistenceDomain: persistenceDomain,
+            tenancyPolicy: tenancyPolicy
         )
         self.init(
             persistenceDomain: persistenceDomain,
