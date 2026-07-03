@@ -78,11 +78,15 @@ enum WorkspaceGrepRunner {
         } catch let error as SandboxBackendError {
             switch error {
             case .nonZeroExit(let code, let output):
-                return sandboxPipelineResult(exitCode: code, output: output)
+                let pipeline = sandboxPipelineResult(exitCode: code, output: output)
+                if case .failure(.executionFailed) = pipeline {
+                    return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
+                }
+                return pipeline
             case .emptyCommand, .sandboxUnavailable:
                 return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
             default:
-                return .failure(.executionFailed(error.localizedDescription))
+                return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
             }
         } catch {
             return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)

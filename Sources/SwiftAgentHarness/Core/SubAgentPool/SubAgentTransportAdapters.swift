@@ -24,12 +24,7 @@ enum SubAgentTransportPermissionGate {
     }
 
     static func permissionAlreadyGranted(_ request: SubAgentTransportInvocationRequest) -> Bool {
-        guard let metadata = request.launchPlan.request.metadata,
-              case .object(let object) = metadata,
-              case .boolean(true) = object["permissionAlreadyGranted"] else {
-            return false
-        }
-        return true
+        request.launchPlan.request.permissionAlreadyGranted
     }
 }
 

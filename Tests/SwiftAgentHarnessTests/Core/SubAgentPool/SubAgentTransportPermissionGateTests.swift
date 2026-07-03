@@ -27,17 +27,13 @@ struct SubAgentTransportPermissionGateTests {
             availableToolInfo: toolEntry.availableToolInfo
         )
         let pool = DefaultSubAgentPool()
-        var metadata: JSON = .object([:])
-        if permissionAlreadyGranted {
-            metadata = .object(["permissionAlreadyGranted": .boolean(true)])
-        }
         let launchPlan = try pool.planLaunch(
             SubAgentLaunchRequest(
                 context: .isolated,
                 subagentType: SubAgentTransportKind.a2a.rawValue,
                 runInBackground: true,
                 agentID: agentID,
-                metadata: metadata
+                permissionAlreadyGranted: permissionAlreadyGranted
             ),
             parentConversationID: UUID()
         )

@@ -442,6 +442,8 @@ struct SubAgentLaunchRequest: Sendable {
     var description: String?
     var metadata: JSON?
     var interactionMode: String?
+    /// Harness-internal trust signal: delegate tool approval already cleared upstream (model-turn path only).
+    var permissionAlreadyGranted: Bool
 
     init(
         context: SubAgentLaunchContext,
@@ -459,7 +461,8 @@ struct SubAgentLaunchRequest: Sendable {
         topic: String? = nil,
         description: String? = nil,
         metadata: JSON? = nil,
-        interactionMode: String? = nil
+        interactionMode: String? = nil,
+        permissionAlreadyGranted: Bool = false
     ) {
         self.context = context
         self.userMessageID = userMessageID
@@ -477,6 +480,7 @@ struct SubAgentLaunchRequest: Sendable {
         self.description = description
         self.metadata = metadata
         self.interactionMode = interactionMode
+        self.permissionAlreadyGranted = permissionAlreadyGranted
     }
 
     init(spawnRequest request: SubAgentSpawnRequest) {
@@ -500,9 +504,18 @@ struct SubAgentLaunchRequest: Sendable {
             userSystemPrompt: request.userSystemPrompt,
             topic: request.topic,
             description: request.description,
-            metadata: request.metadata,
-            interactionMode: request.interactionMode
+            metadata: Self.sanitizedClientMetadata(request.metadata),
+            interactionMode: request.interactionMode,
+            permissionAlreadyGranted: false
         )
+    }
+
+    static func sanitizedClientMetadata(_ metadata: JSON?) -> JSON? {
+        guard case .object(var object) = metadata else { return metadata }
+        object = object.filter { key, _ in
+            !key.lowercased().hasPrefix("permission")
+        }
+        return object.isEmpty ? nil : .object(object)
     }
 }
 

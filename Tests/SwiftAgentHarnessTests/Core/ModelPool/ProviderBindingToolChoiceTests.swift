@@ -1,6 +1,7 @@
 import Foundation
 @testable import SwiftAgentHarness
 import SwiftAgentKit
+import SwiftAgentHarnessProviders
 import Testing
 
 @Suite("ProviderBinding toolChoice override")
@@ -65,6 +66,7 @@ struct ProviderBindingToolChoiceTests {
 
     @Test("makeBindingAdapter applies per-binding toolChoiceModes override")
     func factoryAppliesBindingOverride() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let prompt = try await SystemPrompt(
             includeCurrentDateTime: false,
             includeAgentSkills: false,

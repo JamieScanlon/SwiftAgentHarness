@@ -23,6 +23,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let onMemoryWrite: (@Sendable (String) async -> Void)?
     private let logger: Logger?
     private let bashRunnerFactory: @Sendable (ExecRuntimeContext) -> any BashShellRunning
+    private let grepForceInProcess: Bool
 
     public var name: String { "WorkspaceFilesystem" }
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
@@ -46,7 +47,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        grepForceInProcess: Bool = false
     ) {
         self.init(
             workspaceRoot: workspaceRoot,
@@ -57,7 +59,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             resolveSenderIdentity: resolveSenderIdentity,
             onMemoryWrite: onMemoryWrite,
             logger: logger,
-            bashRunnerFactory: nil
+            bashRunnerFactory: nil,
+            grepForceInProcess: grepForceInProcess
         )
     }
 
@@ -70,7 +73,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
         logger: Logger? = nil,
-        bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?
+        bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?,
+        grepForceInProcess: Bool = false
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)
         self.execRuntime = execRuntime
@@ -80,6 +84,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.resolveSenderIdentity = resolveSenderIdentity
         self.onMemoryWrite = onMemoryWrite
         self.logger = logger
+        self.grepForceInProcess = grepForceInProcess
         self.bashRunnerFactory = bashRunnerFactory ?? { context in
             LocalSandboxBashExecutor(execRuntime: execRuntime, runtimeContext: context)
         }
@@ -298,7 +303,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             searchRoot: sub,
             workspaceRoot: workspaceRoot,
             execRuntime: execRuntime,
-            runtimeContext: runtimeContext
+            runtimeContext: runtimeContext,
+            forceInProcess: grepForceInProcess
         ) {
         case .success(let output):
             return ok(toolCall, output)

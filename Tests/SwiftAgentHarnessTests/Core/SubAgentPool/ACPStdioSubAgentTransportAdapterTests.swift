@@ -118,7 +118,7 @@ struct ACPStdioSubAgentTransportAdapterTests {
                 taskDescription: "Run delegated work",
                 subagentType: SubAgentTransportKind.acpStdio.rawValue,
                 agentID: agentName,
-                metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+                permissionAlreadyGranted: true
             ),
             parentConversationID: parentConversationID
         )
@@ -177,7 +177,7 @@ struct ACPStdioSubAgentTransportAdapterTests {
                 subagentType: SubAgentTransportKind.acpStdio.rawValue,
                 runInBackground: true,
                 agentID: "delegate_acp_worker",
-                metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+                permissionAlreadyGranted: true
             ),
             parentConversationID: parentConversationID
         )

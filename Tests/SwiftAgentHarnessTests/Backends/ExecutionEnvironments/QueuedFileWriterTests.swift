@@ -24,15 +24,18 @@ struct QueuedFileWriterTests {
         try FileManager.default.linkItem(at: fileURL, to: hardlinkURL)
 
         let path = fileURL.path
+        let appendFinished = AsyncStream<Void>.makeStream()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
+                defer { appendFinished.continuation.yield(()) }
                 await #expect(throws: QueuedFileWriterError.hardlinkTarget) {
                     try await QueuedFileWriter.append(data: Data("blocked".utf8), to: path)
                 }
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: 100_000)
+                var iterator = appendFinished.stream.makeAsyncIterator()
+                _ = await iterator.next()
                 try FileManager.default.removeItem(at: hardlinkURL)
                 try await QueuedFileWriter.write(data: Data("recovered".utf8), to: path)
             }
@@ -57,9 +60,11 @@ struct QueuedFileWriterTests {
         try FileManager.default.linkItem(at: fileURL, to: hardlinkURL)
 
         let path = fileURL.path
+        let appendFailed = AsyncStream<Void>.makeStream()
 
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
+                defer { appendFailed.continuation.yield(()) }
                 do {
                     try await QueuedFileWriter.append(data: Data("first".utf8), to: path)
                     return "unexpected-success"
@@ -68,7 +73,8 @@ struct QueuedFileWriterTests {
                 }
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: 100_000)
+                var iterator = appendFailed.stream.makeAsyncIterator()
+                _ = await iterator.next()
                 try FileManager.default.removeItem(at: hardlinkURL)
                 try await QueuedFileWriter.write(data: Data("second".utf8), to: path)
                 return "write-ok"

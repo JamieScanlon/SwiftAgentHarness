@@ -42,7 +42,8 @@ struct WorkspaceFilesystemToolProviderTests {
         return WorkspaceFilesystemToolProvider(
             workspaceRoot: workspace.path,
             execRuntime: execRuntime,
-            runtimeContext: runtimeContext
+            runtimeContext: runtimeContext,
+            grepForceInProcess: true
         )
     }
 
@@ -82,7 +83,8 @@ struct WorkspaceFilesystemToolProviderTests {
             perCallElevationModes: perCallElevationModes,
             elevatedAllowlist: elevatedAllowlist,
             resolveSenderIdentity: { senderIdentity },
-            bashRunnerFactory: bashRunnerFactory
+            bashRunnerFactory: bashRunnerFactory,
+            grepForceInProcess: true
         )
     }
 

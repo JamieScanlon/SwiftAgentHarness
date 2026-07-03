@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 import Testing
@@ -107,6 +108,109 @@ struct SubAgentPoolBoundaryTests {
         #expect(normalized.modelRef == "test-model")
         #expect(normalized.userSystemPrompt == "legacy-prompt")
         #expect(normalized.runInBackground == true)
+    }
+
+    @Test("normalizeLaunchRequest strips reserved permission metadata keys")
+    func normalizeLaunchRequestStripsReservedPermissionMetadata() {
+        let pool = DefaultSubAgentPool()
+        let request = SubAgentSpawnRequest(
+            context: .isolated,
+            taskDescription: "task",
+            metadata: .object([
+                "permissionAlreadyGranted": .boolean(true),
+                "permissionPolicyOverride": .string("auto"),
+                "custom": .string("ok"),
+            ])
+        )
+        let normalized = pool.normalizeLaunchRequest(request)
+        #expect(normalized.permissionAlreadyGranted == false)
+        guard case .object(let object) = normalized.metadata else {
+            Issue.record("Expected sanitized metadata object")
+            return
+        }
+        #expect(object.count == 1)
+        guard case .string("ok") = object["custom"] else {
+            Issue.record("Expected custom metadata preserved")
+            return
+        }
+        #expect(object["permissionAlreadyGranted"] == nil)
+        #expect(object["permissionPolicyOverride"] == nil)
+    }
+
+    @Test("transport gate ignores client permissionAlreadyGranted metadata")
+    func transportGateIgnoresClientPermissionMetadata() throws {
+        let pool = DefaultSubAgentPool()
+        let agentID = "delegate_test_\(UUID().uuidString.lowercased())"
+        let spawnRequest = SubAgentSpawnRequest(
+            context: .isolated,
+            taskDescription: "task",
+            subagentType: SubAgentTransportKind.a2a.rawValue,
+            agentID: agentID,
+            runInBackground: true,
+            metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+        )
+        let launchRequest = pool.normalizeLaunchRequest(spawnRequest)
+        let launchPlan = try pool.planLaunch(launchRequest, parentConversationID: UUID())
+        let toolEntry = ToolRegistryEntry(
+            definition: ToolDefinition(name: agentID, description: "test", parameters: [], type: .a2aAgent),
+            source: .a2a,
+            transportKind: .a2a
+        )
+        let registryEntry = SubAgentRegistryEntry(
+            agentID: agentID,
+            displayName: agentID,
+            description: "test",
+            delegateToolName: agentID,
+            source: .a2a,
+            transportKind: SubAgentTransportKind.a2a.rawValue,
+            permissionPolicy: .askUser,
+            availableToolInfo: toolEntry.availableToolInfo
+        )
+        let invocation = SubAgentTransportInvocationRequest(
+            launchPlan: launchPlan,
+            registryEntry: registryEntry,
+            toolEntry: toolEntry,
+            parentConversationID: UUID()
+        )
+        #expect(SubAgentTransportPermissionGate.initialPhase(for: invocation) == .awaitingApproval)
+    }
+
+    @Test("transport gate honors internal permissionAlreadyGranted field")
+    func transportGateHonorsInternalPermissionField() throws {
+        let pool = DefaultSubAgentPool()
+        let agentID = "delegate_test_\(UUID().uuidString.lowercased())"
+        let launchPlan = try pool.planLaunch(
+            SubAgentLaunchRequest(
+                context: .isolated,
+                subagentType: SubAgentTransportKind.a2a.rawValue,
+                runInBackground: true,
+                agentID: agentID,
+                permissionAlreadyGranted: true
+            ),
+            parentConversationID: UUID()
+        )
+        let toolEntry = ToolRegistryEntry(
+            definition: ToolDefinition(name: agentID, description: "test", parameters: [], type: .a2aAgent),
+            source: .a2a,
+            transportKind: .a2a
+        )
+        let registryEntry = SubAgentRegistryEntry(
+            agentID: agentID,
+            displayName: agentID,
+            description: "test",
+            delegateToolName: agentID,
+            source: .a2a,
+            transportKind: SubAgentTransportKind.a2a.rawValue,
+            permissionPolicy: .askUser,
+            availableToolInfo: toolEntry.availableToolInfo
+        )
+        let invocation = SubAgentTransportInvocationRequest(
+            launchPlan: launchPlan,
+            registryEntry: registryEntry,
+            toolEntry: toolEntry,
+            parentConversationID: UUID()
+        )
+        #expect(SubAgentTransportPermissionGate.initialPhase(for: invocation) == .running)
     }
 
     @Test("planLaunch uses fork path for fork context")
@@ -391,7 +495,7 @@ struct SubAgentPoolBoundaryTests {
                 subagentType: SubAgentTransportKind.acpStdio.rawValue,
                 runInBackground: true,
                 agentID: "delegate_acp_worker",
-                metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+                permissionAlreadyGranted: true
             ),
             parentConversationID: UUID()
         )

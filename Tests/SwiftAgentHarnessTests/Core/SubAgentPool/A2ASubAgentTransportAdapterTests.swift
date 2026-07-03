@@ -142,7 +142,7 @@ struct A2ASubAgentTransportAdapterTests {
                 taskDescription: "Run delegated work",
                 subagentType: SubAgentTransportKind.a2a.rawValue,
                 agentID: agentName,
-                metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+                permissionAlreadyGranted: true
             ),
             parentConversationID: parentConversationID
         )

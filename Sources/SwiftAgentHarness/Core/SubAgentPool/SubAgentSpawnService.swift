@@ -1005,7 +1005,7 @@ public actor SubAgentSpawnService {
             subagentType: resolvedTransportKind(for: toolEntry).rawValue,
             runInBackground: false,
             agentID: call.name,
-            metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+            permissionAlreadyGranted: true
         )
         do {
             let orchestrationEntries = await subAgentPool.refreshSubAgentCatalog(conversationID: conversationID) { [orchestratorRuntime, agentRuntime] _ in
@@ -1030,7 +1030,7 @@ public actor SubAgentSpawnService {
             )
             var launchPlan = preparedLaunch.launchPlan
             launchPlan.asyncHandleID = lifecycleID
-            launchPlan.request.metadata = launchRequest.metadata
+            launchPlan.request.permissionAlreadyGranted = launchRequest.permissionAlreadyGranted
             guard let registryEntry = preparedLaunch.selectedRegistryEntry,
                   let selectedToolEntry = preparedLaunch.selectedToolEntry else {
                 return .denied(
