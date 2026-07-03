@@ -80,7 +80,7 @@ struct SchedulingLLM: LLMProtocol {
 
     func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 let parentLogicalRequestID = ModelInvocationTaskContext.logicalRequestID
                 let callID = await coordinator?.beginCall(
                     modelID: modelID,
@@ -88,29 +88,39 @@ struct SchedulingLLM: LLMProtocol {
                     logicalRequestID: parentLogicalRequestID
                 ) ?? UUID()
                 await coordinator?.recordTransition(modelID: modelID, phase: .queued, callID: callID)
-                let acquisition = await scheduler.acquire(
-                    reservation: makeReservation(
-                        messages: messages,
-                        priority: priority,
-                        estimatedTotalTokens: Self.estimateTotalTokens(messages: messages)
-                    )
-                )
-                await coordinator?.recordTransition(modelID: modelID, phase: .dispatching, callID: callID)
-                let upstream = ModelInvocationTaskContext.$logicalRequestID.withValue(parentLogicalRequestID ?? callID) {
-                    ModelInvocationTaskContext.$callID.withValue(callID) {
-                        baseLLM.stream(messages, config: config)
-                    }
-                }
+                var acquisition: ModelCallAcquisition?
                 do {
+                    acquisition = await scheduler.acquire(
+                        reservation: makeReservation(
+                            messages: messages,
+                            priority: priority,
+                            estimatedTotalTokens: Self.estimateTotalTokens(messages: messages)
+                        )
+                    )
+                    try Task.checkCancellation()
+                    await coordinator?.recordTransition(modelID: modelID, phase: .dispatching, callID: callID)
+                    let upstream = ModelInvocationTaskContext.$logicalRequestID.withValue(parentLogicalRequestID ?? callID) {
+                        ModelInvocationTaskContext.$callID.withValue(callID) {
+                            baseLLM.stream(messages, config: config)
+                        }
+                    }
                     for try await result in upstream {
+                        try Task.checkCancellation()
                         continuation.yield(result)
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
-                await scheduler.release(acquisition: acquisition)
+                if let acquisition {
+                    await scheduler.release(acquisition: acquisition)
+                }
                 await coordinator?.endCall(modelID: modelID, callID: callID)
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }

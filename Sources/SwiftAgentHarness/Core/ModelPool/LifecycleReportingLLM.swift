@@ -53,7 +53,7 @@ struct LifecycleReportingLLM: LLMProtocol {
     func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         let upstream = baseLLM.stream(messages, config: config)
         return AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 let streamCallID: UUID
                 if let scoped = ModelInvocationTaskContext.callID {
                     streamCallID = scoped
@@ -67,6 +67,7 @@ struct LifecycleReportingLLM: LLMProtocol {
                 var firstStreamPartial = true
                 do {
                     for try await result in upstream {
+                        try Task.checkCancellation()
                         switch result {
                         case .stream(let partial):
                             if firstStreamPartial {
@@ -82,6 +83,7 @@ struct LifecycleReportingLLM: LLMProtocol {
                             continuation.yield(.complete(final))
                         }
                     }
+                    try Task.checkCancellation()
                     await coordinator.recordTransition(modelID: modelID, phase: .done, callID: streamCallID)
                     continuation.finish()
                 } catch is CancellationError {
@@ -92,6 +94,9 @@ struct LifecycleReportingLLM: LLMProtocol {
                     await coordinator.recordTransition(modelID: modelID, phase: .errored, callID: streamCallID)
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }
