@@ -37,6 +37,10 @@ extension ConversationPersistenceDomain {
         stack.conversationManager.replaceConversationInRegistry(conversation)
     }
 
+    func applyRegistryTranscriptTruncation(_ conversation: ModelConversation) {
+        stack.conversationManager.applyRegistryTranscriptTruncation(conversation)
+    }
+
     public func resetConversationsFromCatalog(availableModels: [Model]) throws {
         try stack.conversationManager.resetConversationsFromCatalog(availableModels: availableModels)
     }

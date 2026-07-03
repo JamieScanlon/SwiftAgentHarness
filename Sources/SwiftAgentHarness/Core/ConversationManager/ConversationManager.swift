@@ -281,6 +281,20 @@ final class ConversationManager {
         conversations.replaceSubrange(index..<index + 1, with: [merged])
     }
 
+    /// Applies an intentional in-memory transcript shortening (revert / rollback).
+    /// Unlike ``replaceConversationInRegistry(_:)``, does not restore a longer existing transcript.
+    func applyRegistryTranscriptTruncation(_ conversation: ModelConversation) {
+        logger?.info("Truncating conversation transcript \(conversation.id)")
+        guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else {
+            logger?.warning("Conversation \(conversation.id) NOT FOUND. Abourting")
+            return
+        }
+        var merged = conversation
+        let existing = conversations[index]
+        merged.controlPlaneRevision = max(existing.controlPlaneRevision, merged.controlPlaneRevision)
+        conversations.replaceSubrange(index..<index + 1, with: [merged])
+    }
+
     func appendPersistedMessageToRegistry(_ message: Message, conversationID: UUID) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         if conversations[index].messages.contains(where: { $0.id == message.id }) { return }

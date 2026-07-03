@@ -112,4 +112,42 @@ import Testing
         #expect(conversation?.messages.contains(where: { $0.id == assistant.id }) == true)
         #expect(conversation?.state == .idle)
     }
+
+    @Test("applyRegistryTranscriptTruncation shortens transcript when replaceConversationInRegistry would preserve longer list")
+    func applyRegistryTranscriptTruncationBypassesMergeGuard() async throws {
+        let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
+        let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let conv = try await domain.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        try await domain.resetConversationsFromCatalog(availableModels: [model])
+
+        let assistant = Message(id: UUID(), role: .assistant, content: "final", timestamp: Date())
+        _ = try await domain.routingSaveMessage(
+            assistant,
+            for: conv.id,
+            resourceManager: nil,
+            logger: nil,
+            expectedPreviousTailHarnessMessageID: nil,
+            transcriptRunID: nil
+        )
+
+        guard var truncated = await domain.modelConversation(id: conv.id) else {
+            Issue.record("conversation missing")
+            return
+        }
+        truncated.messages.removeLast()
+        truncated.state = .idle
+        await domain.applyRegistryTranscriptTruncation(truncated)
+
+        let conversation = await domain.modelConversation(id: conv.id)
+        #expect(conversation?.messages.contains(where: { $0.id == assistant.id }) == false)
+        #expect(conversation?.state == .idle)
+    }
 }

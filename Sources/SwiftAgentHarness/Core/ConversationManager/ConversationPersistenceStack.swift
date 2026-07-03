@@ -426,6 +426,30 @@ final class ConversationPersistenceStack {
         }
     }
 
+    func revertActiveBranchRemovingAssistantMessage(
+        conversationID: UUID,
+        assistantMessageID: UUID
+    ) throws -> [Message] {
+        let harness = conversationManager.harnessSessionPersistence
+        let activeMessages = try ConversationTranscriptLineage.activeMessages(
+            conversationID: conversationID,
+            harness: harness
+        )
+        guard let tail = activeMessages.last,
+              tail.id == assistantMessageID,
+              tail.role == .assistant else {
+            throw ConversationServiceError.invalidRevertTarget
+        }
+        guard activeMessages.count > 1 else {
+            throw ConversationServiceError.invalidRevertTarget
+        }
+        let preserveThroughID = activeMessages[activeMessages.count - 2].id
+        return try revertConversationPreservingPrefixThroughMessage(
+            conversationID: conversationID,
+            messageID: preserveThroughID
+        )
+    }
+
     func applyBackgroundCompactionIfEligible(conversationID: UUID) {
         let latestEventID = eventLog.latestConversationEventID(conversationID: conversationID)
         guard latestEventID > 0 else { return }

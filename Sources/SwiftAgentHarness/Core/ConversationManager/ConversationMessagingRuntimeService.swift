@@ -385,19 +385,26 @@ actor ConversationMessagingRuntimeService {
         conversationID: UUID,
         assistantMessageID: UUID?
     ) async {
-        guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
         guard let assistantMessageID else { return }
-        guard let idx = conversation.messages.lastIndex(where: { $0.id == assistantMessageID && $0.role == .assistant }) else {
-            return
+        do {
+            let prefixMessages = try await persistenceDomain.routingRevertActiveBranchRemovingAssistantMessageAsync(
+                conversationID: conversationID,
+                assistantMessageID: assistantMessageID
+            )
+            guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
+            conversation.messages = prefixMessages
+            conversation.turns = await selection.transformedTurns(
+                messages: prefixMessages,
+                interactionMode: conversation.interactionMode,
+                previousTurns: conversation.turns
+            )
+            await persistenceDomain.applyRegistryTranscriptTruncation(conversation)
+            await syncSessionProjectionFromRegistry(conversationID: conversationID, convo: conversation)
+        } catch {
+            logger?.warning(
+                "[ConversationMessagingRuntimeService] stalled-turn rollback failed for conversation \(conversationID): \(error)"
+            )
         }
-        conversation.messages.remove(at: idx)
-        conversation.turns = await selection.transformedTurns(
-            messages: conversation.messages,
-            interactionMode: conversation.interactionMode,
-            previousTurns: conversation.turns
-        )
-        await persistenceDomain.replaceConversationInRegistry(conversation)
-        await syncSessionProjectionFromRegistry(conversationID: conversationID, convo: conversation)
     }
 
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async {
