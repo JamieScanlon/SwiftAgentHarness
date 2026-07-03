@@ -77,7 +77,7 @@ Live model-pool observation also uses WebSocket topics `pool/health`, `models/re
 |-------|------|--------|
 | `conversationID` | `String?` | Legacy request field (ignored); routing uses path `:id`. |
 | `message` | `String` | User text. |
-| `imageNames` | `[String]` | Filenames previously returned by **`POST /api/upload`** (files must exist in server temp dir or blob store). |
+| `imageNames` | `[String]` | Blob refs from **`POST /api/upload`** (`blobId`, `blob://…`, or 64-char hex). When session blob storage is configured (server deployments), temp-dir filenames are not accepted. Without blob storage (desktop), only validated single-segment filenames under the system temp directory are resolved. |
 | `includeTools` | `Bool?` | Default **true** if omitted (`!= false`). |
 | `includeAgents` | `Bool?` | Default **true** if omitted (`!= false`). |
 | `expectedPreviousTailHarnessMessageID` | `UUID?` | Optional optimistic tail guard when `If-Match` is omitted. |

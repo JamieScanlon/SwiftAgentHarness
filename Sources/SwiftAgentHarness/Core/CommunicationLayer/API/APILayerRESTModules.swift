@@ -436,11 +436,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
     private static func validateEngineArtifactRouteKey(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         let key = raw.removingPercentEncoding ?? raw
-        guard key.count <= 256 else { return nil }
-        guard !key.contains("/"), !key.contains("\\"), !key.contains("..") else { return nil }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        guard key.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        return key
+        return APISafeRelativeFilename.validate(key)
     }
 
     private static func parseConversationID(_ req: Request) -> UUID? {
@@ -2226,9 +2222,14 @@ enum APILayerImageLoader {
                     )
                     continue
                 }
+                logger.warning("Warning: Could not load blob image: \(filename)")
+                continue
             }
 
-            let fileURL = tempDir.appendingPathComponent(filename)
+            guard let fileURL = APISafeRelativeFilename.resolveContainedFileURL(root: tempDir, relativeName: filename) else {
+                logger.warning("Warning: Could not read image file: \(filename)")
+                continue
+            }
             guard FileManager.default.fileExists(atPath: fileURL.path), let data = try? Data(contentsOf: fileURL) else {
                 logger.warning("Warning: Could not read image file: \(filename)")
                 continue
@@ -2544,7 +2545,7 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 throw Abort(.badRequest, reason: "No file data found")
             }
 
-            guard let filename = req.headers.first(name: "X-File-Name"),
+            guard let filenameHeader = req.headers.first(name: "X-File-Name"),
                   let contentType = req.headers.first(name: "Content-Type")
             else {
                 throw Abort(.badRequest, reason: "Missing required headers: X-File-Name and Content-Type")
@@ -2556,14 +2557,14 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 let ref = try store.put(
                     data: data,
                     durability: .ephemeral,
-                    originalName: filename,
+                    originalName: filenameHeader,
                     mimeTypeHint: contentType,
                     trust: "user-direct",
                     ttlSeconds: SessionPersistenceConfiguration.blobDefaultEphemeralTTLSeconds,
                     lane: .inbound
                 )
                 return FileUploadResponse(
-                    filename: filename,
+                    filename: filenameHeader,
                     size: data.count,
                     contentType: contentType,
                     blobId: ref.id,
@@ -2571,9 +2572,15 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 )
             }
 
-            let uniqueFilename = "\(UUID().uuidString)_\(filename)"
+            guard let safeFilename = APISafeRelativeFilename.validate(filenameHeader) else {
+                throw Abort(.badRequest, reason: "Invalid X-File-Name")
+            }
+
+            let uniqueFilename = "\(UUID().uuidString)_\(safeFilename)"
             let tempDir = FileManager.default.temporaryDirectory
-            let fileURL = tempDir.appendingPathComponent(uniqueFilename)
+            guard let fileURL = APISafeRelativeFilename.resolveContainedFileURL(root: tempDir, relativeName: uniqueFilename) else {
+                throw Abort(.badRequest, reason: "Invalid upload filename")
+            }
             try data.write(to: fileURL)
 
             return FileUploadResponse(
