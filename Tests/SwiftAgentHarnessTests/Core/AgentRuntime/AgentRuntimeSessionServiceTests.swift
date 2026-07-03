@@ -121,4 +121,24 @@ struct AgentRuntimeSessionServiceTests {
         #expect(await capture.pushCount() == 1)
         await service.clearOrchestrationStateOutOfBandPush(id: captureID)
     }
+
+    @Test("clearTurnLoopStopRequest(for:) preserves stop requests for other conversations")
+    func clearTurnLoopStopRequestForOneConversationPreservesOthers() async throws {
+        let container = try AgentRuntimeSessionServiceTestSupport.makeContainer()
+        let host = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let service = await host.agentRuntimeSessionService
+        let conversationA = UUID()
+        let conversationB = UUID()
+
+        await service.requestTurnLoopStop(conversationID: conversationB)
+        #expect(await service.turnLoopStopRequested(for: conversationB))
+
+        await service.clearTurnLoopStopRequest(for: conversationA)
+
+        #expect(await service.turnLoopStopRequested(for: conversationB))
+        #expect(await service.turnLoopStopRequested(for: conversationA) == false)
+    }
 }

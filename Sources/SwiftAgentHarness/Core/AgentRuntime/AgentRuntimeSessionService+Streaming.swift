@@ -47,7 +47,7 @@ extension AgentRuntimeSessionService {
         orchestrator: SwiftAgentKitOrchestrator
     ) async {
         let logger = deps.logger
-        clearTurnLoopStopRequest()
+        clearTurnLoopStopRequest(for: sendingConversationID)
         await cancelInFlightStreamingGenerationOnly(for: sendingConversationID)
         var runtimeLifecycle = await currentLifecycleSnapshot(for: sendingConversationID)
         runtimeLifecycle.streamingGenerationSequence += 1
