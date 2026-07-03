@@ -138,7 +138,7 @@ struct HarnessRuntimeSessionReadOnlyConversationTests {
         var didThrow = false
         do {
             let stream = try await fixture.host.sendMessageAndStreamResponse("hello", images: [], conversationID: conversations[0].id)
-            for await _ in stream.partialContent {}
+            _ = await HarnessAsyncTestSupport.drain(stream.partialContent)
         } catch ConversationServiceError.modelUnavailable {
             didThrow = true
         }

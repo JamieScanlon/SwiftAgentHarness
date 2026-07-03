@@ -18,9 +18,7 @@ import Testing
 /// state plumbing without requiring a live summarizer LLM.
 private enum ManualCompactionInterleavingSupport {
     static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeModel(name: String = "interleave:test") -> Model {

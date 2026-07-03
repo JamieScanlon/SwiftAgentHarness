@@ -39,9 +39,7 @@ struct SessionProjectionRuntimeServiceTests {
 
     @Test("applySnapshotIfNotStale drops stale frontier and publishes on content change")
     func applySnapshotFrontierGating() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
         let selection = RecordingSelection()
         let service = SessionProjectionRuntimeService(persistenceDomain: domain, selection: selection)
@@ -81,9 +79,7 @@ struct SessionProjectionRuntimeServiceTests {
 
     @Test("syncFromRegistry updates cache and mirrors selection when selected")
     func syncFromRegistryMirrorsSelection() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
         let selection = RecordingSelection()
         let service = SessionProjectionRuntimeService(persistenceDomain: domain, selection: selection)

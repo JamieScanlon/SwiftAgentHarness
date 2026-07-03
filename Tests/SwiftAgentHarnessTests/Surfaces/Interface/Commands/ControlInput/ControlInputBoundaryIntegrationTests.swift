@@ -7,9 +7,7 @@ import Testing
 @Suite("Control input boundary integration", .serialized)
 struct ControlInputBoundaryIntegrationTests {
     private static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private static func makeModel() -> Model {

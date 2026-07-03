@@ -42,7 +42,7 @@ private actor StreamCountCollector {
     }
 }
 
-@Suite("HarnessRuntimeSession replay processing", .serialized)
+@Suite("HarnessRuntimeSession replay processing", .serialized, .timeLimit(.minutes(2)))
 struct HarnessRuntimeSessionReplayProcessingTests {
     /// Compaction disabled so token-based gating does not skip `transformContext` on short replay transcripts.
     private func replayTransformConfig() -> ConversationTransformConfiguration {
@@ -59,9 +59,7 @@ struct HarnessRuntimeSessionReplayProcessingTests {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel() -> Model {

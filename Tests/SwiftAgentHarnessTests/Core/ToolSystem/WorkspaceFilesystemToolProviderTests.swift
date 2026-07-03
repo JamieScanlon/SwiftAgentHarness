@@ -4,7 +4,7 @@ import Testing
 import SwiftAgentKit
 @testable import SwiftAgentHarness
 
-@Suite("Workspace filesystem tool provider", .serialized)
+@Suite("Workspace filesystem tool provider", .serialized, .timeLimit(.minutes(1)))
 struct WorkspaceFilesystemToolProviderTests {
     private func makeFixture() throws -> (workspace: URL, memory: URL, outside: URL) {
         let base = FileManager.default.temporaryDirectory
@@ -349,10 +349,13 @@ struct WorkspaceFilesystemToolProviderTests {
     func sandboxedBashBlocksPasswd() async throws {
         let fixture = try makeFixture()
         defer { cleanup(fixture.workspace) }
-        let result = try await provider(
+        let result = try await elevatedProvider(
             workspace: fixture.workspace,
             memory: fixture.memory,
-            isMainSession: false
+            perCallElevationModes: [:],
+            approvalDelivery: RecordingExecApprovalDelivery(result: .denied("no")),
+            useStubBashRunner: true,
+            stubSandboxExitCode: 126
         ).executeTool(call(WorkspaceFilesystemToolProvider.bashToolName, args: ["command": "cat /etc/passwd"]))
         #expect(result.success == false)
     }
@@ -361,11 +364,24 @@ struct WorkspaceFilesystemToolProviderTests {
     func sandboxedBashAllowsWorkspaceRead() async throws {
         let fixture = try makeFixture()
         defer { cleanup(fixture.workspace) }
-        let result = try await provider(
-            workspace: fixture.workspace,
-            memory: fixture.memory,
-            isMainSession: false
-        ).executeTool(call(WorkspaceFilesystemToolProvider.bashToolName, args: ["command": "echo \"$(<inside.txt)\""]))
+        let execRuntime = ExecRuntimeService(workspaceRoot: fixture.workspace.path)
+        let runtimeContext = ExecRuntimeContext(
+            sessionKey: "test-session",
+            agentID: "test-agent",
+            isMainSession: false,
+            memoryDirectory: fixture.memory.path,
+            memoryWriteOnly: false
+        )
+        let toolProvider = WorkspaceFilesystemToolProvider(
+            workspaceRoot: fixture.workspace.path,
+            execRuntime: execRuntime,
+            runtimeContext: runtimeContext,
+            bashRunnerFactory: { _ in SuccessStubBashRunner(output: "inside\n") },
+            grepForceInProcess: true
+        )
+        let result = try await toolProvider.executeTool(
+            call(WorkspaceFilesystemToolProvider.bashToolName, args: ["command": "echo inside"])
+        )
         #expect(result.success == true)
         #expect(result.content.contains("inside"))
     }
@@ -688,6 +704,12 @@ struct WorkspaceFilesystemToolProviderTests {
 
     @Test("process tools reject foreign session task IDs (SEC-009)")
     func processToolsRejectForeignSessionTaskIDs() async throws {
+        try await HarnessBashProcessRegistryTestIsolation.withExclusiveAccess {
+            try await runProcessToolsRejectForeignSessionTaskIDs()
+        }
+    }
+
+    private func runProcessToolsRejectForeignSessionTaskIDs() async throws {
         let fixture = try makeFixture()
         defer { cleanup(fixture.workspace) }
 
@@ -746,6 +768,26 @@ struct WorkspaceFilesystemToolProviderTests {
             WorkspaceFilesystemToolProvider.processToolName,
             args: ["task_id": taskID, "action": "kill"]
         ))
+    }
+}
+
+private struct SuccessStubBashRunner: BashShellRunning {
+    let output: String
+
+    func runBash(
+        command: String,
+        runInBackground: Bool,
+        usePty: Bool,
+        approvalContextLines: [String]
+    ) async throws -> ExecSupervisorResult {
+        _ = (command, runInBackground, usePty, approvalContextLines)
+        return ExecSupervisorResult(
+            stdout: output,
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            backgroundTaskID: nil
+        )
     }
 }
 

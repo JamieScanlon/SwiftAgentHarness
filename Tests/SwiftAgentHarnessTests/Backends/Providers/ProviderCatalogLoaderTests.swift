@@ -3,11 +3,15 @@ import Testing
 import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
-@Suite("ProviderCatalogLoader")
+@Suite("ProviderCatalogLoader", .serialized)
 struct ProviderCatalogLoaderTests {
+    private func prepare() {
+        ProviderTestManifestSupport.activateProviderResources()
+    }
+
     @Test("Bundled frontier catalogs decode from module resources")
     func bundledCatalogsDecode() throws {
-        ProviderTestManifestSupport.activateProviderResources()
+        prepare()
         for providerID in ["openai", "anthropic", "openrouter"] {
             let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: providerID)
             #expect(!entries.isEmpty, "Expected non-empty catalog for \(providerID)")
@@ -23,7 +27,7 @@ struct ProviderCatalogLoaderTests {
 
     @Test("OpenAI gpt-4o row carries compat metadata")
     func openAICompat() throws {
-        ProviderTestManifestSupport.activateProviderResources()
+        prepare()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "openai")
         let gpt4o = try #require(entries.first { $0.endpointModelId == "gpt-4o" })
         #expect(gpt4o.compat?.supportsEagerToolInputStreaming == true)
@@ -31,6 +35,7 @@ struct ProviderCatalogLoaderTests {
 
     @Test("Anthropic sonnet row carries thinking compat")
     func anthropicThinkingCompat() throws {
+        prepare()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let sonnet = try #require(entries.first { $0.endpointModelId == "claude-sonnet-4-6" })
         #expect(sonnet.compat?.thinkingFormat == "anthropic-extended-thinking")
@@ -41,6 +46,7 @@ struct ProviderCatalogLoaderTests {
 
     @Test("OpenRouter sonnet row shares canonicalModelKey with Anthropic")
     func openRouterCanonicalKey() throws {
+        prepare()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
         let sonnet = try #require(entries.first { $0.endpointModelId == "anthropic/claude-sonnet-4-6" })
         #expect(sonnet.canonicalModelKey == "claude-sonnet-4-6")
@@ -49,6 +55,7 @@ struct ProviderCatalogLoaderTests {
 
     @Test("toRegistryEntry forwards compat onto ModelRegistryEntry")
     func compatForwardedToRegistry() throws {
+        prepare()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
         let sonnet = try #require(entries.first { $0.endpointModelId == "claude-sonnet-4-6" })
         let endpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint)

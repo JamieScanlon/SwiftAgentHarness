@@ -7,9 +7,7 @@ import Testing
 @Suite("Conversation domain services")
 struct ConversationDomainServicesTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel(name: String = "domain-service-model") -> Model {

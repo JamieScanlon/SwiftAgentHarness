@@ -70,11 +70,7 @@ struct CompletionAnnouncePipelineTests {
 
     @Test("duplicate completion announce is idempotent by handle and toolCall")
     func duplicateCompletionAnnounceSuppressed() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(
-            for: schema,
-            configurations: .init(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = Model(
             id: UUID(),
@@ -105,11 +101,7 @@ struct CompletionAnnouncePipelineTests {
 
     @Test("pending completion announce replays after reset when publisher is attached")
     func replayPendingCompletionAnnouncementAfterReset() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(
-            for: schema,
-            configurations: .init(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = Model(
             id: UUID(),
@@ -150,11 +142,7 @@ struct CompletionAnnouncePipelineTests {
 
     @Test("runtime lifecycle fanout persists derived audit without topic publisher")
     func runtimeLifecycleFanoutPersistsDerivedAuditWithoutTopicPublisher() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(
-            for: schema,
-            configurations: .init(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = Model(
             id: UUID(),
@@ -194,11 +182,7 @@ struct CompletionAnnouncePipelineTests {
 
     @Test("pending completion announce preserves correlation parity across topic trace and derived audit")
     func pendingCompletionAnnounceParityAcrossFanoutSinks() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(
-            for: schema,
-            configurations: .init(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let recorder = CompletionAnnounceEventRecorder()
         await manager.setConversationTopicPublisher(recorder)

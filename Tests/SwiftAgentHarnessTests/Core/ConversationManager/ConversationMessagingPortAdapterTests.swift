@@ -23,9 +23,7 @@ struct ConversationMessagingPortAdapterTests {
 
     @Test("factory-bound adapter forwards update to ConversationMessagingRuntimeService")
     func factoryBoundAdapterForwardsUpdate() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let session = HarnessRuntimeSession(
             container: container,
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)

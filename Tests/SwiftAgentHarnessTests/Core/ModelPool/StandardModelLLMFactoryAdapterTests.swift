@@ -195,6 +195,7 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("profile-specific Anthropic key is preferred")
     func profileSpecificAnthropicKeyPreferred() throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let store = AuthProfileStore(
             environment: [
                 "SAH_ANTHROPIC_API_KEY_PROD_WEST": "profile-key",

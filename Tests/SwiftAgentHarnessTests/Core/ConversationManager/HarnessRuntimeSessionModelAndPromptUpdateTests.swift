@@ -6,9 +6,7 @@ import Testing
 
 private enum Support {
     static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeModel(name: String, protocol p: ModelProtocol = .ollama) -> Model {

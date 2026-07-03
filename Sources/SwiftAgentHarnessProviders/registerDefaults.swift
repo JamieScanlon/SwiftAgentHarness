@@ -18,16 +18,18 @@ public enum SwiftAgentHarnessProvidersResources {
 public func registerDefaults(
     options: DefaultProviderOptions = .init()
 ) {
-    ProviderResourceBundle.setResourceBundle(.module)
-    DefaultProviderAdapterFactories.installAll()
-    if options.installBootstrapHook {
-        ProviderRegistry.installBootstrap { registerDefaults(options: .init(installBootstrapHook: false)) }
+    ProviderRegistry.withExclusiveRegistryAccess {
+        ProviderResourceBundle.setResourceBundle(.module)
+        DefaultProviderAdapterFactories.installAll()
+        if options.installBootstrapHook {
+            ProviderRegistry.installBootstrap { registerDefaults(options: .init(installBootstrapHook: false)) }
+        }
+        try? registerOpenAI()
+        try? registerAnthropic()
+        try? registerOllama()
+        try? registerLMStudio()
+        try? registerOpenRouter()
     }
-    try? registerOpenAI()
-    try? registerAnthropic()
-    try? registerOllama()
-    try? registerLMStudio()
-    try? registerOpenRouter()
 }
 
 /// Convenience for app startup: sets resource bundle, installs bootstrap hook, and registers defaults.

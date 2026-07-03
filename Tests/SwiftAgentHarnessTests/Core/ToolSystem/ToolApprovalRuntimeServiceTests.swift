@@ -39,8 +39,7 @@ struct ToolApprovalRuntimeServiceTests {
 
     @Test("approvalRouteForConversation returns user for root conversation")
     func approvalRouteUserForRoot() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                let container = try HarnessTestModelContainer.makeInMemory()
         let deps = makeDependencies(container: container)
         let services = HarnessRuntimeSessionFactory.makeServices(
             deps: deps,
@@ -55,8 +54,7 @@ struct ToolApprovalRuntimeServiceTests {
 
     @Test("configurationApplyingToolApprovals unions store and caller pre-approvals")
     func configurationApplyingToolApprovalsUnionsPreApprovals() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                let container = try HarnessTestModelContainer.makeInMemory()
         let deps = makeDependencies(container: container)
         let services = HarnessRuntimeSessionFactory.makeServices(
             deps: deps,

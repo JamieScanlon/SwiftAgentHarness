@@ -7,9 +7,7 @@ import Testing
 @Suite("RuntimeStreamingOrchestrationService")
 struct RuntimeStreamingOrchestrationServiceTests {
     private func makeService() async throws -> (RuntimeStreamingOrchestrationService, HarnessRuntimeSession) {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let session = HarnessConversationTestFixtures.makeRuntimeSession(container: container)
         let service = RuntimeStreamingOrchestrationService(
             agentRuntime: await session.agentRuntimeSessionService,

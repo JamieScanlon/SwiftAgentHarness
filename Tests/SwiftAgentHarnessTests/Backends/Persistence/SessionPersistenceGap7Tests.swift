@@ -7,9 +7,7 @@ import Testing
 @Suite("Harness session persistence Gap 7 (state_meta + tasks registry)")
 struct SessionPersistenceGap7Tests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func encodeTask(_ record: SessionScheduledTaskDefinitionRecord) throws -> Data {

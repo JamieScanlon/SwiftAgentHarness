@@ -478,9 +478,7 @@ private func scriptedCompleteStream(
 }
 
 private func section6Container() throws -> ModelContainer {
-    let schema = HarnessPersistenceSchema.latest
-    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    return try ModelContainer(for: schema, configurations: config)
+        return try HarnessTestModelContainer.makeInMemory()
 }
 
 private func section6Model() -> Model {
@@ -649,7 +647,7 @@ private actor DrainResumeGate {
     }
 }
 
-@Suite("Agent Runtime section-6 verification", .serialized)
+@Suite("Agent Runtime section-6 verification", .serialized, .timeLimit(.minutes(2)))
 struct AgentRuntimeSection6ComplianceTests {
     @Test("approval-required tools emit runtime lifecycle audit events")
     func approvalRequiredToolsEmitRuntimeLifecycleAudit() async throws {

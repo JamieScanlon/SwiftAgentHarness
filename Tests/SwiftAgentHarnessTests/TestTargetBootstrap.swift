@@ -5,9 +5,7 @@ import SwiftAgentHarnessProviders
 /// `ProviderRegistry.ensureBootstrapped()` do not need per-suite setup.
 public enum TestTargetBootstrap {
     public static func ensureProvidersRegistered() {
-        ProviderResourceBundle.setResourceBundle(SwiftAgentHarnessProvidersResources.bundle)
-        bootstrap()
-        ProviderRegistry.markBootstrapCompleteForTesting()
+        ProviderTestSupport.registerDefaultsForTesting()
     }
 }
 

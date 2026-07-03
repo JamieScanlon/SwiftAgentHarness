@@ -330,25 +330,21 @@ private struct WebSocketScriptedLLMFactory: ModelLLMFactoring {
 }
 
 fileprivate enum APILayerWebSocketTestSupport {
-    private static let containerInitLock = NSLock()
+    private static let suiteContainer: ModelContainer = {
+        try! HarnessTestModelContainer.makeInMemory()
+    }()
+
+    static func makeContainer() throws -> ModelContainer {
+        suiteContainer
+    }
 
     static let webSocketSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         // Keep hangs bounded when awaiting socket frames in tests.
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 15
+        config.timeoutIntervalForRequest = 5
+        config.timeoutIntervalForResource = 5
         return URLSession(configuration: config)
     }()
-
-    static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        // SwiftData container bootstrapping can be flaky under heavy full-suite parallelism.
-        // Serialize initialization in this integration suite to avoid intermittent setup crashes.
-        containerInitLock.lock()
-        defer { containerInitLock.unlock() }
-        return try ModelContainer(for: schema, configurations: config)
-    }
 
     static func makeTestModel(id: UUID = UUID()) -> Model {
         Model(
@@ -363,7 +359,7 @@ fileprivate enum APILayerWebSocketTestSupport {
 
 }
 
-@Suite("APILayer WebSocket routes", .serialized)
+@Suite("APILayer WebSocket routes", .serialized, .timeLimit(.minutes(2)))
 struct APILayerWebSocketCoverageTests {
     private func splitGatewayServices(runtimeSession: HarnessRuntimeSession) async -> APILayerChatGatewayServices {
         await makeSplitGatewayServices(runtimeSession: runtimeSession)
@@ -371,7 +367,29 @@ struct APILayerWebSocketCoverageTests {
 
     private func stopWebSocketTestServer(api: APILayer, runtimeSession: HarnessRuntimeSession) async {
         await runtimeSession.shutdownOrchestratorAndToolRuntimes()
-        await api.stop()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            final class StopGate: @unchecked Sendable {
+                private var resumed = false
+                private let lock = NSLock()
+
+                func resumeOnce(_ action: () -> Void) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard resumed == false else { return }
+                    resumed = true
+                    action()
+                }
+            }
+
+            let gate = StopGate()
+            Task {
+                await api.stop()
+                gate.resumeOnce { continuation.resume() }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(5)) {
+                gate.resumeOnce { continuation.resume() }
+            }
+        }
     }
 
     private func createConversationID(
@@ -389,15 +407,6 @@ struct APILayerWebSocketCoverageTests {
             modeProfileID: nil,
             cwd: nil
         )
-    }
-
-    private actor ContinuationGate {
-        private var resumed = false
-        func claim() -> Bool {
-            guard resumed == false else { return false }
-            resumed = true
-            return true
-        }
     }
 
     @Test("WS connect stays idle until client subscribes")
@@ -786,6 +795,41 @@ struct APILayerWebSocketCoverageTests {
         }
     }
 
+    private func startWebSocketTestServer(_ api: APILayer) async throws {
+        let startTimeoutError = NSError(
+            domain: "APILayerWebSocketCoverageTests",
+            code: 6,
+            userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for WebSocket test server to start"]
+        )
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            final class StartGate: @unchecked Sendable {
+                private var resumed = false
+                private let lock = NSLock()
+
+                func resumeOnce(_ action: () -> Void) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard resumed == false else { return }
+                    resumed = true
+                    action()
+                }
+            }
+
+            let gate = StartGate()
+            Task {
+                do {
+                    try await api.start()
+                    gate.resumeOnce { continuation.resume() }
+                } catch {
+                    gate.resumeOnce { continuation.resume(throwing: error) }
+                }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(15)) {
+                gate.resumeOnce { continuation.resume(throwing: startTimeoutError) }
+            }
+        }
+    }
+
     private func withRunningWebSocketServer(
         models: [Model],
         _ body: (Int, any APILayerConversationManaging) async throws -> Void
@@ -797,7 +841,7 @@ struct APILayerWebSocketCoverageTests {
         let gateway = await splitGatewayServices(runtimeSession: runtimeSession)
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, gateway.conversation)
@@ -824,7 +868,7 @@ struct APILayerWebSocketCoverageTests {
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
         await api.setConversationEventsWireResources(hub: conversationHub, replayRetention: replayRetention)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, gateway.conversation, conversationHub)
@@ -848,7 +892,7 @@ struct APILayerWebSocketCoverageTests {
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
         await api.setConversationEventsWireResources(hub: conversationHub)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, gateway.conversation, conversationHub)
@@ -892,7 +936,7 @@ struct APILayerWebSocketCoverageTests {
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
         await api.setCommunicationWireResources(layer: communicationLayer, coordinator: coordinator)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, gateway.conversation, coordinator, conversationHub, conversationStateHub, capabilityRegistryHub)
@@ -934,7 +978,7 @@ struct APILayerWebSocketCoverageTests {
         await api.setChatGatewayServices(gateway)
         await api.setModelProvider(modelProvider)
         await api.setCommunicationWireResources(layer: communicationLayer, coordinator: coordinator)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, gateway.conversation, coordinator, conversationHub, conversationStateHub, capabilityRegistryHub)
@@ -971,7 +1015,7 @@ struct APILayerWebSocketCoverageTests {
         await api.setChatGatewayServices(await splitGatewayServices(runtimeSession: runtimeSession))
         await api.setModelProvider(modelProvider)
         await api.setModelStateWireResources(hub: hub, coordinator: coordinator)
-        try await api.start()
+        try await startWebSocketTestServer(api)
         let port = await api.listeningPort
         do {
             try await body(port, coordinator, hub)
@@ -2017,7 +2061,7 @@ struct APILayerWebSocketCoverageTests {
         }
     }
 
-    @Test("WS model state subscribe replays in-window since range")
+    @Test("WS model state subscribe replays in-window since range", .timeLimit(.minutes(1)))
     func websocketModelStateReplayFromSinceRange() async throws {
         let model = APILayerWebSocketTestSupport.makeTestModel()
         try await withRunningWebSocketServerAndModelState(models: [model]) { port, coordinator in
@@ -2032,18 +2076,49 @@ struct APILayerWebSocketCoverageTests {
 
             let callID = await coordinator.beginCall(modelID: model.id)
             await coordinator.recordTransition(modelID: model.id, phase: .streaming, callID: callID)
-            let firstEvent = try await receiveJSON(kind: "event", from: task)
+            let firstEvent = try await receiveJSON(kind: "event", from: task, maxMessages: 4)
             #expect(firstEvent["seq"] as? Int == 2)
 
             try await sendJSON(task, ["kind": "subscribe", "topic": topic, "since": 1])
-            let replay = try await receiveJSON(kind: "event", from: task)
-            #expect(replay["topic"] as? String == topic)
+            let replay = try await receiveNextMatching(
+                from: task,
+                where: { payload in
+                    payload["kind"] as? String == "event" && payload["topic"] as? String == topic
+                },
+                maxMessages: 4
+            )
             #expect(replay["seq"] as? Int == 2)
 
-            let snap = try await receiveJSON(kind: "snapshot", from: task)
+            let snap = try await receiveJSON(kind: "snapshot", from: task, maxMessages: 4)
             #expect(snap["topic"] as? String == topic)
             #expect(snap["seq"] as? Int == 3)
         }
+    }
+
+    private func receiveNextMatching(
+        from task: URLSessionWebSocketTask,
+        where predicate: ([String: Any]) -> Bool,
+        maxMessages: Int = 8
+    ) async throws -> [String: Any] {
+        for _ in 0..<maxMessages {
+            let payload = try await receiveJSON(task)
+            if predicate(payload) {
+                return payload
+            }
+            if payload["type"] as? String == "error" || payload["kind"] as? String == "error" {
+                let message = (payload["message"] as? String) ?? "(no message)"
+                throw NSError(
+                    domain: "APILayerWebSocketCoverageTests",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Unexpected error envelope: \(message)"]
+                )
+            }
+        }
+        throw NSError(
+            domain: "APILayerWebSocketCoverageTests",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Did not receive expected WebSocket payload"]
+        )
     }
 
     @Test("WS model state subscribe falls back to lagging when since is invalid")
@@ -2068,7 +2143,7 @@ struct APILayerWebSocketCoverageTests {
         }
     }
 
-    private func receiveJSON(kind: String, from task: URLSessionWebSocketTask, maxMessages: Int = 16) async throws -> [String: Any] {
+    private func receiveJSON(kind: String, from task: URLSessionWebSocketTask, maxMessages: Int = 8) async throws -> [String: Any] {
         for _ in 0..<maxMessages {
             let payload = try await receiveJSON(task)
             if payload["kind"] as? String == kind {
@@ -2107,7 +2182,7 @@ struct APILayerWebSocketCoverageTests {
     }
 
     private func receiveJSON(_ task: URLSessionWebSocketTask) async throws -> [String: Any] {
-        let message = try await receiveWebSocketMessage(task, timeoutNanos: 3_000_000_000)
+        let message = try await receiveWebSocketMessage(task, timeoutNanos: 1_000_000_000)
         switch message {
         case .string(let text):
             let data = Data(text.utf8)
@@ -2125,32 +2200,35 @@ struct APILayerWebSocketCoverageTests {
         _ task: URLSessionWebSocketTask,
         timeoutNanos: UInt64
     ) async throws -> URLSessionWebSocketTask.Message {
-        let gate = ContinuationGate()
-        let receiveTask = Task {
-            try await task.receive()
-        }
-
+        let timeoutError = NSError(
+            domain: "APILayerWebSocketCoverageTests",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for WebSocket frame"]
+        )
         return try await withCheckedThrowingContinuation { continuation in
-            Task {
-                do {
-                    let message = try await receiveTask.value
-                    guard await gate.claim() else { return }
-                    continuation.resume(returning: message)
-                } catch {
-                    guard await gate.claim() else { return }
-                    continuation.resume(throwing: error)
+            final class ReceiveGate: @unchecked Sendable {
+                private var resumed = false
+                private let lock = NSLock()
+
+                func resumeOnce(_ action: () -> Void) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard resumed == false else { return }
+                    resumed = true
+                    action()
                 }
             }
 
-            Task {
-                try? await Task.sleep(nanoseconds: timeoutNanos)
-                guard await gate.claim() else { return }
-                receiveTask.cancel()
-                continuation.resume(throwing: NSError(
-                    domain: "APILayerWebSocketCoverageTests",
-                    code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for WebSocket frame"]
-                ))
+            let gate = ReceiveGate()
+            task.receive { result in
+                gate.resumeOnce {
+                    continuation.resume(with: result)
+                }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .nanoseconds(Int(timeoutNanos))) {
+                gate.resumeOnce {
+                    continuation.resume(throwing: timeoutError)
+                }
             }
         }
     }

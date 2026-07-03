@@ -7,9 +7,7 @@ import Testing
 struct TerminationRecoveryReminderTests {
     @Test("escalating reminder uses non-user role")
     func escalatingReminderUsesSystemRole() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
         let compactionCoordinator = CompactionConcurrencyCoordinator()
         let deps = ConversationRuntimeDependencies(

@@ -69,9 +69,7 @@ private enum RunLifecycleDurabilityTestSupport {
 
     static func makeContainer() throws -> ModelContainer {
         enableV2Bootstrap()
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeTestModel(id: UUID = UUID()) -> Model {

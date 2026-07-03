@@ -18,10 +18,7 @@ struct SubAgentForkCapabilityTests {
             isDirectory: true
         )
         let local = try LocalHarnessSessionPersistence(root: root)
-        let container = try ModelContainer(
-            for: HarnessPersistenceSchema.latest,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let model = Model(
             protocol: .openAIAPI,
             modelName: "subagent-fork-\(label)",
@@ -218,10 +215,7 @@ struct SubAgentForkCapabilityTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let local = try LocalHarnessSessionPersistence(root: root)
-        let container = try ModelContainer(
-            for: HarnessPersistenceSchema.latest,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try HarnessTestModelContainer.makeInMemory()
         let model = Model(
             protocol: .openAIAPI,
             modelName: "subagent-fork-default-deny",

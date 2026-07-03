@@ -7,9 +7,7 @@ import Testing
 @Suite("Trust policy enforcement")
 struct TrustPolicyEnforcementTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     @Test("gateExecution mode forces tools/agents off for low-trust input")

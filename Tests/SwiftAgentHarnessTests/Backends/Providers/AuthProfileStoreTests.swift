@@ -32,6 +32,36 @@ struct AuthProfileStoreTests {
         #expect(resolved.apiKey == "sk-work")
     }
 
+    @Test("Explicit auth profile label resolves profile-scoped env var")
+    func explicitProfileLabelEnv() throws {
+        prepare()
+        let store = AuthProfileStore(
+            environment: [
+                "SAH_OPENAI_API_KEY_PROD_WEST": "profile-key",
+                "OPENAI_API_KEY": "global-key",
+            ]
+        )
+        let resolved = try store.resolveAPIKey(
+            providerID: "openai",
+            authProfileLabel: "prod-west"
+        )
+        #expect(resolved.apiKey == "profile-key")
+    }
+
+    @Test("Default auth profile resolves team-scoped env var")
+    func defaultProfileTeamScopedEnv() throws {
+        prepare()
+        let store = AuthProfileStore(
+            environment: [
+                "OPENAI_API_KEY_TEAM_A": "team-key",
+                "OPENAI_API_KEY": "global-key",
+            ],
+            defaultAuthProfileLabel: "team-a"
+        )
+        let resolved = try store.resolveAPIKey(providerID: "openai")
+        #expect(resolved.apiKey == "team-key")
+    }
+
     @Test("Config file entry ranks before env in credential pool")
     func fileOverridesEnv() throws {
         prepare()

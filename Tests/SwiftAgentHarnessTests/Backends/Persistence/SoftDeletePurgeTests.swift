@@ -18,9 +18,7 @@ struct SoftDeletePurgeTests {
 
     @Test("purgeSoftDeletedPastRetention hard-deletes stale soft-deleted rows")
     func purgeRemovesExpiredSoftDeletes() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let model = makeModel()
         let chat = HarnessRuntimeSession(container: container, logger: nil)
         let conversationAPI = await makeSplitConversationAdapter(runtimeSession: chat)

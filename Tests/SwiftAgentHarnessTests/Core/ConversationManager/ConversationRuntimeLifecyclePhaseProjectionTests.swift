@@ -100,11 +100,7 @@ struct ConversationRuntimeLifecyclePhaseProjectionTests {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        return try ModelContainer(
-            for: schema,
-            configurations: .init(isStoredInMemoryOnly: true)
-        )
+        try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel() -> Model {

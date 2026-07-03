@@ -45,54 +45,96 @@ private actor SlashMemoryTopicRecorder: ConversationTopicPublishing {
     }
 }
 
-@Suite("Slash command /memory", .serialized)
+@Suite("Slash command /memory", .serialized, .timeLimit(.minutes(1)))
 struct SlashCommandMemoryTests {
-    private func makeMemorySession() async throws -> (HarnessRuntimeSession, UUID, URL, URL) {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mem-slash-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let memoryService = DefaultMemoryService(
-            config: .default,
-            userConfigDir: root.appendingPathComponent("user", isDirectory: true)
-        )
-        let engine = DefaultContextEngine(
-            compactionCoordinator: CompactionConcurrencyCoordinator(),
-            memoryService: memoryService,
-            logger: nil
-        )
-        let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
-        let manager = HarnessRuntimeSession(
-            container: container,
-            contextEngine: engine,
-            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
-        )
-        let model = Model(
-            protocol: .openAIAPI,
-            modelName: "slash:memory",
-            serverURL: URL(string: "http://localhost:1234")!,
-            capabilities: [.completion],
-            modelProtocol: .openAIAPI
-        )
-        _ = try await manager.createConversation(with: model, userSystemPrompt: "sys")
-        let cid = try #require(await manager.currentConversationID)
-        guard var conversation = await manager.testing_modelConversation(conversationID: cid) else {
-            throw NSError(domain: "SlashCommandMemoryTests", code: 1)
+    private actor SharedHarness {
+        static let shared = SharedHarness()
+
+        private var manager: HarnessRuntimeSession?
+        private var memoryService: DefaultMemoryService?
+        private var model: Model?
+        private var cleanupRoot: URL?
+
+        func makeSession() async throws -> (HarnessRuntimeSession, UUID, URL, URL) {
+            let workRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mem-slash-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: workRoot, withIntermediateDirectories: true)
+
+            let manager: HarnessRuntimeSession
+            let memoryService: DefaultMemoryService
+            let model: Model
+            if let cachedManager = self.manager,
+               let cachedMemoryService = self.memoryService,
+               let cachedModel = self.model {
+                manager = cachedManager
+                memoryService = cachedMemoryService
+                model = cachedModel
+            } else {
+                memoryService = DefaultMemoryService(
+                    config: SlashCommandMemoryTests.makeFastMemoryConfig(),
+                    userConfigDir: workRoot.appendingPathComponent("user", isDirectory: true)
+                )
+                let engine = DefaultContextEngine(
+                    compactionCoordinator: CompactionConcurrencyCoordinator(),
+                    memoryService: memoryService,
+                    logger: nil
+                )
+                let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
+                manager = HarnessRuntimeSession(
+                    container: container,
+                    contextEngine: engine,
+                    harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+                )
+                model = Model(
+                    protocol: .openAIAPI,
+                    modelName: "slash:memory",
+                    serverURL: URL(string: "http://localhost:1234")!,
+                    capabilities: [.completion],
+                    modelProtocol: .openAIAPI
+                )
+                self.manager = manager
+                self.memoryService = memoryService
+                self.model = model
+                self.cleanupRoot = workRoot.deletingLastPathComponent()
+            }
+
+            let cid = try await manager.createConversation(
+                with: model,
+                userSystemPrompt: "sys",
+                cwd: workRoot.path
+            )
+            let context = try memoryService.makeSessionContext(conversationID: cid, cwd: workRoot.path)
+            _ = try await memoryService.bootstrapSession(context: context)
+            return (manager, cid, workRoot, context.memoryDirectory)
         }
-        conversation.harnessPersistenceCwd = root.path
-        await manager.persistenceDomain.replaceConversationInRegistry(conversation)
-        let context = try memoryService.makeSessionContext(conversationID: cid, cwd: root.path)
-        _ = try await memoryService.bootstrapSession(context: context)
-        return (manager, cid, root, context.memoryDirectory)
+
+        func cleanup() {
+            if let cleanupRoot {
+                try? FileManager.default.removeItem(at: cleanupRoot)
+            }
+        }
+    }
+
+    private static func makeFastMemoryConfig() -> MemoryConfiguration {
+        var config = MemoryConfiguration.default
+        config.extractionEnabled = false
+        config.activeMemoryEnabled = false
+        config.activeMemoryStandingEnabled = false
+        config.activeMemorySituationalEnabled = false
+        config.preCompactionFlushEnabled = false
+        return config
+    }
+
+    private func makeMemorySession() async throws -> (HarnessRuntimeSession, UUID, URL, URL) {
+        try await SharedHarness.shared.makeSession()
     }
 
     private func collectSurfaceIntents(from response: ChatStreamResponse) async -> [ClientSurfaceIntent] {
-        var intents: [ClientSurfaceIntent] = []
-        for await partial in response.partialContent {
-            if case .surfaceIntent(let intent) = partial {
-                intents.append(intent)
-            }
+        let partials = await HarnessAsyncTestSupport.collectPartialContent(from: response)
+        return partials.compactMap { partial in
+            if case .surfaceIntent(let intent) = partial { return intent }
+            return nil
         }
-        return intents
     }
 
     @Test("/memory rejects path traversal")
