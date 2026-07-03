@@ -83,6 +83,8 @@ struct BackgroundProcessSessionScopeTests {
         await registry.kill(id: id, sessionSlug: sessionA)
     }
 
+    /// FIXME: Flaky — background bash output may not appear within the fixed poll window under CI load.
+    /// Revisit with longer timeout, output-ready signaling, or mock executor before treating failures as regressions.
     @Test("executor scopes poll and kill to runtime sessionKey")
     func executorScopesToSessionKey() async throws {
         let base = FileManager.default.temporaryDirectory

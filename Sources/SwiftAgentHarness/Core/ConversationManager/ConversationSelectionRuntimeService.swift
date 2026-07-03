@@ -48,6 +48,9 @@ actor ConversationSelectionRuntimeService {
         guard let conv = await persistenceDomain.modelConversation(id: conversationID) else {
             throw ConversationServiceError.conversationNotFound
         }
+        guard await isSelectionAccessible(conv) else {
+            throw ConversationServiceError.conversationNotFound
+        }
 
         if shouldMirrorSelectionToGlobalChatState() {
             if let previousID = currentConversationID, previousID != conversationID {
@@ -183,5 +186,40 @@ actor ConversationSelectionRuntimeService {
     private func setCurrentMessages(_ messages: [Message]) {
         currentMessages = messages
         messageStreamContinuation?.yield(messages)
+    }
+
+    private func isSelectionAccessible(_ target: ModelConversation) async -> Bool {
+        let scope = ConversationScope.current
+        let callerConversation: ModelConversation?
+        if let callerID = scope?.selfID {
+            callerConversation = await persistenceDomain.modelConversation(id: callerID)
+        } else {
+            callerConversation = nil
+        }
+        let ownerScope = ToolConversationAccessPolicy.resolveOwnerScope(
+            authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID,
+            callerConversation: callerConversation,
+            registryOwnerAccountID: APISessionContext.authenticatedOwnerAccountID ?? registryOwnerAccountScope()
+        )
+        let callerLineageRoot: UUID?
+        if let callerConversation {
+            callerLineageRoot = await lineageRoot(for: callerConversation)
+        } else {
+            callerLineageRoot = nil
+        }
+        let targetLineageRoot = await lineageRoot(for: target)
+        return ToolConversationAccessPolicy.isConversationAccessible(
+            target: target,
+            callerScope: scope,
+            ownerScope: ownerScope,
+            callerLineageRoot: callerLineageRoot,
+            targetLineageRoot: targetLineageRoot
+        )
+    }
+
+    private func lineageRoot(for conversation: ModelConversation) async -> UUID {
+        await ToolConversationAccessPolicy.lineageRoot(for: conversation) { id in
+            await self.persistenceDomain.modelConversation(id: id)
+        }
     }
 }

@@ -160,6 +160,8 @@ struct LifecycleReportingLLMErroredTests {
         #expect(!phases.contains(.errored))
     }
 
+    /// FIXME: Flaky under full-suite load — cancellation timing can miss `.cancelled` in recorded phases.
+    /// Revisit with deterministic stream/cancellation synchronization before treating failures as regressions.
     @Test("stream: consumer cancellation records .cancelled, not .errored")
     func streamCancelledRecorded() async throws {
         let recorder = PhaseRecorder()
