@@ -2061,6 +2061,13 @@ struct APILayerWebSocketCoverageTests {
         }
     }
 
+    // Full end-to-end integration test: real URLSessionWebSocketTask, Vapor APILayer,
+    // HarnessRuntimeSession, and splitGatewayServices. Can flake under parallel full-suite
+    // runs (hang during server/session setup from shared ModelContainer / runtime contention).
+    // Prefer ModelStateTopicHubTests and WebSocketTopicSubscriptionRouterTests for
+    // deterministic replay semantics.
+    // TODO: Move WebSocket integration tests into a dedicated test target
+    // (e.g. SwiftAgentHarnessIntegrationTests) so CI can run unit vs integration separately.
     @Test("WS model state subscribe replays in-window since range", .timeLimit(.minutes(1)))
     func websocketModelStateReplayFromSinceRange() async throws {
         let model = APILayerWebSocketTestSupport.makeTestModel()
@@ -2121,6 +2128,9 @@ struct APILayerWebSocketCoverageTests {
         )
     }
 
+    // Shares the same heavy WebSocket server fixture as websocketModelStateReplayFromSinceRange;
+    // see flake note there. Lagging fallback is covered by unit tests on ModelStateTopicHub
+    // and WebSocketTopicSubscriptionRouter.
     @Test("WS model state subscribe falls back to lagging when since is invalid")
     func websocketModelStateSinceLagFallback() async throws {
         let model = APILayerWebSocketTestSupport.makeTestModel()

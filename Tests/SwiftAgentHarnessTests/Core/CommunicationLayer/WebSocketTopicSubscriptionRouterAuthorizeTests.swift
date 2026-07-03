@@ -98,18 +98,9 @@ private final class SubscribeRouterConversationDouble: APILayerConversationManag
     var currentConversationID: UUID? { nil }
 }
 
-private final class SubscribeRouterModelManagerDouble: APILayerModelManaging, Sendable {
-    private let models: [Model]
-    init(models: [Model]) {
-        self.models = models
-    }
-
-    func getAvailableModels() async -> [Model] { models }
-}
-
 struct WebSocketTopicSubscriptionRouterAuthorizeTests {
     private func fixtureModel(id: UUID) -> Model {
-        Model(id: id, protocol: .openAIAPI, modelName: "fixture", serverURL: URL(string: "http://localhost")!)
+        WebSocketRouterTestFixtures.model(id: id)
     }
 
     private func fixtureConversation(id: UUID, owner: UUID?, modelID: UUID) -> ModelConversation {

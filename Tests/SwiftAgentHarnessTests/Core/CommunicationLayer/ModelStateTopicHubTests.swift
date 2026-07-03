@@ -195,6 +195,168 @@ struct ModelStateTopicHubTests {
         await hub.unregisterConnection(token)
     }
 
+    @Test func subscribeReplaysMissedEventsWhenSinceMatchesPriorSnapshotSeq() async throws {
+        let hub = ModelStateTopicHub()
+        let modelID = UUID()
+        let topic = ModelStateTopicFormat.topic(modelID: modelID)
+
+        final class LineCollector: @unchecked Sendable {
+            var lines: [String] = []
+        }
+        let collector = LineCollector()
+        let token = await hub.registerConnection { line in
+            collector.lines.append(line.json)
+        }
+
+        try await hub.subscribe(
+            token: token,
+            modelID: modelID,
+            since: nil
+        ) { _ in
+            ModelStatePayload(phase: .connecting, thinking: false)
+        }
+        #expect(collector.lines.count == 1)
+
+        await hub.broadcast(
+            modelID: modelID,
+            payload: ModelStatePayload(phase: .streaming, thinking: true)
+        )
+        #expect(collector.lines.count == 2)
+
+        let beforeResubscribe = collector.lines.count
+        try await hub.subscribe(
+            token: token,
+            modelID: modelID,
+            since: 1
+        ) { _ in
+            ModelStatePayload(phase: .streaming, thinking: true)
+        }
+
+        let newLines = Array(collector.lines.dropFirst(beforeResubscribe))
+        #expect(newLines.count == 2)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let replayData = try #require(newLines.first?.data(using: .utf8))
+        let replay = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: replayData)
+        #expect(replay.kind == .event)
+        #expect(replay.seq == 2)
+        #expect(replay.topic == topic)
+
+        let snapData = try #require(newLines.last?.data(using: .utf8))
+        let snap = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: snapData)
+        #expect(snap.kind == .snapshot)
+        #expect(snap.seq == 3)
+        #expect(snap.topic == topic)
+
+        await hub.unregisterConnection(token)
+    }
+
+    @Test func subscribeInProcessReplaysMissedEventsWhenSinceMatchesPriorSnapshotSeq() async throws {
+        let hub = ModelStateTopicHub()
+        let modelID = UUID()
+        let topic = ModelStateTopicFormat.topic(modelID: modelID)
+
+        let collector = JSONCollector()
+        let token = await hub.registerInProcessSubscriber { json in
+            await collector.append(json)
+        }
+
+        await hub.subscribeInProcess(token: token, modelID: modelID, since: nil) { _ in
+            ModelStatePayload(phase: .connecting, thinking: false)
+        }
+        #expect(await collector.lines.count == 1)
+
+        await hub.broadcast(
+            modelID: modelID,
+            payload: ModelStatePayload(phase: .streaming, thinking: true)
+        )
+        #expect(await collector.lines.count == 2)
+
+        let beforeResubscribe = await collector.lines.count
+        await hub.subscribeInProcess(token: token, modelID: modelID, since: 1) { _ in
+            ModelStatePayload(phase: .streaming, thinking: true)
+        }
+
+        let allLines = await collector.lines
+        let newLines = Array(allLines.dropFirst(beforeResubscribe))
+        #expect(newLines.count == 2)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let replayData = try #require(newLines.first?.data(using: .utf8))
+        let replay = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: replayData)
+        #expect(replay.kind == .event)
+        #expect(replay.seq == 2)
+        #expect(replay.topic == topic)
+
+        let snapData = try #require(newLines.last?.data(using: .utf8))
+        let snap = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: snapData)
+        #expect(snap.kind == .snapshot)
+        #expect(snap.seq == 3)
+        #expect(snap.topic == topic)
+
+        await hub.unregisterInProcessSubscriber(token)
+    }
+
+    @Test func coordinatorPublicationSinkPopulatesReplayForResubscribe() async throws {
+        let hub = ModelStateTopicHub()
+        let modelID = UUID()
+        let topic = ModelStateTopicFormat.topic(modelID: modelID)
+        let coordinator = ModelInvocationCoordinator { modelID, payload in
+            await hub.broadcast(modelID: modelID, payload: payload)
+        }
+
+        final class LineCollector: @unchecked Sendable {
+            var lines: [String] = []
+        }
+        let collector = LineCollector()
+        let token = await hub.registerConnection { line in
+            collector.lines.append(line.json)
+        }
+
+        try await hub.subscribe(
+            token: token,
+            modelID: modelID,
+            since: nil
+        ) { mid in
+            await coordinator.snapshot(for: mid)
+        }
+        #expect(collector.lines.count == 1)
+
+        let callID = await coordinator.beginCall(modelID: modelID)
+        await coordinator.recordTransition(modelID: modelID, phase: .streaming, callID: callID)
+        #expect(collector.lines.count == 2)
+
+        let beforeResubscribe = collector.lines.count
+        try await hub.subscribe(
+            token: token,
+            modelID: modelID,
+            since: 1
+        ) { mid in
+            await coordinator.snapshot(for: mid)
+        }
+
+        let newLines = Array(collector.lines.dropFirst(beforeResubscribe))
+        #expect(newLines.count == 2)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let replayData = try #require(newLines.first?.data(using: .utf8))
+        let replay = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: replayData)
+        #expect(replay.kind == .event)
+        #expect(replay.seq == 2)
+        #expect(replay.topic == topic)
+
+        let snapData = try #require(newLines.last?.data(using: .utf8))
+        let snap = try decoder.decode(CommResourceTopicMessage<ModelStatePayload>.self, from: snapData)
+        #expect(snap.kind == .snapshot)
+        #expect(snap.seq == 3)
+        #expect(snap.topic == topic)
+
+        await hub.unregisterConnection(token)
+    }
+
     @Test func modelCallsTopicInProcessSubscriberReceivesSnapshotAndEvent() async throws {
         let hub = ModelStateTopicHub()
         let collector = JSONCollector()
