@@ -174,9 +174,8 @@ public actor SubAgentSpawnService {
             lifecycleID: lifecycleID,
             priority: .foreground
         )
-        let childAcquisition: SubAgentRunAcquisition
         do {
-            childAcquisition = try await subAgentInvocationLifecycleCoordinator.beginInvocation(
+            _ = try await subAgentInvocationLifecycleCoordinator.beginInvocation(
                 reservation: reservation
             )
         } catch let admission as RuntimeLaneAdmissionError {
@@ -205,9 +204,12 @@ public actor SubAgentSpawnService {
         admitted.updatedAt = Date()
         await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: admitted)
         await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
+        var runLaneHandoffCommitted = false
         defer {
-            Task { [subAgentInvocationLifecycleCoordinator] in
-                await subAgentInvocationLifecycleCoordinator.endInvocation(childAcquisition)
+            if !runLaneHandoffCommitted {
+                Task { [subAgentInvocationLifecycleCoordinator] in
+                    await subAgentInvocationLifecycleCoordinator.endInvocation(lifecycleID: lifecycleID)
+                }
             }
         }
         if let remoteCorrelation {
@@ -242,6 +244,7 @@ public actor SubAgentSpawnService {
                     await self.applySubAgentDelegateEvent(event)
                 }
             }
+            runLaneHandoffCommitted = true
             return parentConversationID
         }
 
@@ -282,6 +285,7 @@ public actor SubAgentSpawnService {
             running.updatedAt = Date()
             await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: running)
             await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
+            runLaneHandoffCommitted = true
             return childID
         case .isolated:
             guard let parent = await deps.persistenceDomain.modelConversation(id: parentConversationID) else {
@@ -351,6 +355,7 @@ public actor SubAgentSpawnService {
             if !launchPlan.request.runInBackground {
                 try? await orchestrator.adoptPersistedNewConversationSelection(newConv)
             }
+            runLaneHandoffCommitted = true
             return newConv.id
         }
     }
@@ -575,7 +580,17 @@ public actor SubAgentSpawnService {
                 approvalRoute: await approvalRouteForConversation(conversationID: parentConversationID),
                 updatedAt: conversation.updatedAt
             )
-            await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: entry)
+            let parentRunID = await deps.persistenceDomain.modelConversation(id: parentConversationID)?.currentRunID
+            let restoredEntry = await reacquireSubAgentLaneSlotIfActive(
+                parentConversationID: parentConversationID,
+                parentRunID: parentRunID,
+                lifecycleID: lifecycleRaw,
+                entry: entry
+            )
+            await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: restoredEntry)
+            if restoredEntry.phase == .failed {
+                await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
+            }
         }
         await publishOrphanedSubAgentNotificationsAfterStartup()
     }
@@ -715,6 +730,42 @@ public actor SubAgentSpawnService {
             )
         }
         subAgentLifecycleState.upsert(parentConversationID: parentConversationID, entry: entry)
+        await releaseSubAgentLaneSlotIfTerminal(entry)
+    }
+
+    private func releaseSubAgentLaneSlotIfTerminal(_ entry: SubAgentLifecycleEntryPayload) async {
+        switch entry.phase {
+        case .done, .failed, .orphaned:
+            await subAgentInvocationLifecycleCoordinator.endInvocation(lifecycleID: entry.lifecycleID)
+        default:
+            break
+        }
+    }
+
+    private func reacquireSubAgentLaneSlotIfActive(
+        parentConversationID: UUID,
+        parentRunID: UUID?,
+        lifecycleID: String,
+        entry: SubAgentLifecycleEntryPayload
+    ) async -> SubAgentLifecycleEntryPayload {
+        let activePhases: Set<SubAgentLifecyclePhase> = [.running, .awaitingApproval, .completing]
+        guard activePhases.contains(entry.phase) else { return entry }
+        do {
+            _ = try await subAgentInvocationLifecycleCoordinator.beginInvocation(
+                reservation: SubAgentRunReservation(
+                    parentConversationID: parentConversationID,
+                    parentRunID: parentRunID,
+                    lifecycleID: lifecycleID
+                )
+            )
+            return entry
+        } catch {
+            var failed = entry
+            failed.phase = .failed
+            failed.error = "lane_admission_failed"
+            failed.updatedAt = Date()
+            return failed
+        }
     }
 
     func publishSubAgentLifecycleIfConfigured(parentConversationID: UUID) async {

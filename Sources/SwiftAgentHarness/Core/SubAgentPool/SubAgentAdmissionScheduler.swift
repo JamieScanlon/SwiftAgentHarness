@@ -44,6 +44,7 @@ actor RuntimeLaneSubAgentRunScheduler: SubAgentRunScheduling {
 
 actor SubAgentInvocationCoordinator: SubAgentInvocationLifecycleTracking {
     private let scheduler: any SubAgentRunScheduling
+    private var acquisitionsByLifecycleID: [String: SubAgentRunAcquisition] = [:]
 
     init(scheduler: any SubAgentRunScheduling) {
         self.scheduler = scheduler
@@ -52,10 +53,17 @@ actor SubAgentInvocationCoordinator: SubAgentInvocationLifecycleTracking {
     func beginInvocation(
         reservation: SubAgentRunReservation
     ) async throws -> SubAgentRunAcquisition {
-        try await scheduler.acquire(reservation: reservation)
+        let acquisition = try await scheduler.acquire(reservation: reservation)
+        acquisitionsByLifecycleID[reservation.lifecycleID] = acquisition
+        return acquisition
     }
 
     func endInvocation(_ acquisition: SubAgentRunAcquisition) async {
+        await endInvocation(lifecycleID: acquisition.reservation.lifecycleID)
+    }
+
+    func endInvocation(lifecycleID: String) async {
+        guard let acquisition = acquisitionsByLifecycleID.removeValue(forKey: lifecycleID) else { return }
         await scheduler.release(acquisition: acquisition)
     }
 

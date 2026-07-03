@@ -600,6 +600,7 @@ protocol SubAgentInvocationLifecycleTracking: SubAgentInvocationCoordinating, Se
         reservation: SubAgentRunReservation
     ) async throws -> SubAgentRunAcquisition
     func endInvocation(_ acquisition: SubAgentRunAcquisition) async
+    func endInvocation(lifecycleID: String) async
     func inFlightCount(parentConversationID: UUID) async -> Int
 }
 
