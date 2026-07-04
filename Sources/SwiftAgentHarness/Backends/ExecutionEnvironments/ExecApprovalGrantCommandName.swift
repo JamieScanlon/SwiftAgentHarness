@@ -118,7 +118,89 @@ enum ExecApprovalGrantCommandName {
     private static func firstGrantableToken(inScript script: String) -> String? {
         let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        guard !containsTopLevelCommandSeparator(in: trimmed) else { return nil }
         return durableGrantCommandName(fromTokenized: tokenize(trimmed))
+    }
+
+    private static func containsTopLevelCommandSeparator(in script: String) -> Bool {
+        var quote: Character?
+        var index = script.startIndex
+
+        while index < script.endIndex {
+            let character = script[index]
+            if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                }
+                index = script.index(after: index)
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+                index = script.index(after: index)
+                continue
+            }
+            if character == "\n" || character == ";" || character == "`" {
+                return true
+            }
+            if character == "|" {
+                return true
+            }
+            if character == "&" {
+                let next = script.index(after: index)
+                if next < script.endIndex, script[next] == "&" {
+                    return true
+                }
+                index = script.index(after: index)
+                continue
+            }
+            if character == "$" {
+                let next = script.index(after: index)
+                guard next < script.endIndex, script[next] == "(" else {
+                    index = script.index(after: index)
+                    continue
+                }
+                let afterOpen = script.index(after: next)
+                if afterOpen < script.endIndex, script[afterOpen] == "(" {
+                    guard let resumeIndex = skipArithmeticExpansion(in: script, from: afterOpen) else {
+                        return true
+                    }
+                    index = resumeIndex
+                    continue
+                }
+                return true
+            }
+            index = script.index(after: index)
+        }
+        return false
+    }
+
+    private static func skipArithmeticExpansion(in script: String, from afterSecondOpen: String.Index) -> String.Index? {
+        var depth = 1
+        var index = afterSecondOpen
+        while index < script.endIndex {
+            let character = script[index]
+            if character == "(" {
+                let next = script.index(after: index)
+                if next < script.endIndex, script[next] == "(" {
+                    depth += 1
+                    index = script.index(after: next)
+                    continue
+                }
+            } else if character == ")" {
+                let next = script.index(after: index)
+                if next < script.endIndex, script[next] == ")" {
+                    depth -= 1
+                    if depth == 0 {
+                        return script.index(after: next)
+                    }
+                    index = script.index(after: next)
+                    continue
+                }
+            }
+            index = script.index(after: index)
+        }
+        return nil
     }
 
     private static func isEnvAssignment(_ token: String) -> Bool {

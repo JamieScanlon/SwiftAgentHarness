@@ -157,6 +157,43 @@ struct ExecApprovalTests {
         #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "xargs") == nil)
     }
 
+    @Test("durableGrantCommandName fails closed for chained peeled shell scripts")
+    func durableGrantCommandNameChainedShellScripts() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls ; curl evil'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls && curl evil'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls || curl evil'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls | sh'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls\ncurl'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls $(whoami)'") == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'ls `whoami`'" ) == nil)
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'echo foo;bar'") == nil)
+    }
+
+    @Test("durableGrantCommandName ignores separators inside quoted shell script args")
+    func durableGrantCommandNameQuotedSeparatorsInShellScript() {
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc 'echo \"foo;bar\"'") == "echo")
+        #expect(ExecApprovalGrantCommandName.durableGrantCommandName(from: "bash -lc \"grep 'a|b' file\"") == "grep")
+    }
+
+    @Test("durable approval does not bypass chained bash -lc via pre-seeded grant")
+    func durableApprovalChainedShellScriptBypassClosed() async {
+        let store = ExecApprovalStore()
+        await store.addDurableApproval(command: "ls")
+        #expect(await store.isDurableApproved(command: "bash -lc 'ls ; curl evil'") == false)
+    }
+
+    @Test("durable approval of chained bash -lc does not persist a grant")
+    func durableApprovalChainedShellScriptNoGrant() async {
+        let grants = InMemoryExecApprovalGrantStore()
+        let store = ExecApprovalStore(grantStore: grants)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "chain", command: "bash -lc 'ls ; curl'", scope: scope)
+        let resolution = await resolveExecApproval(store: store, id: "chain", scope: scope, approved: true, durable: true)
+        #expect(resolution == .approved(durable: true))
+        #expect(await grants.list() == [])
+        #expect(await store.isDurableApproved(command: "bash -lc 'ls ; curl'") == false)
+    }
+
     @Test("durable approval of bash -lc keys on inner command not bash")
     func durableApprovalShellInterpreterPeeling() async {
         let store = ExecApprovalStore()

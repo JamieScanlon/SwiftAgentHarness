@@ -729,6 +729,33 @@ struct WorkspaceFilesystemToolProviderTests {
         #expect(await recorder.requestCount == 2)
     }
 
+    @Test("pre-seeded durable grant does not bypass chained bash -lc commands")
+    func durableGrantDoesNotBypassChainedBashScript() async {
+        let store = ExecApprovalStore()
+        await store.addDurableApproval(command: "ls")
+        let recorder = RecordingExecApprovalDelivery(grantStore: store)
+
+        let chainedRequest = ExecApprovalRequest(
+            id: "chain-1",
+            command: "bash -lc 'ls ; echo chained'",
+            title: "Approve shell command?",
+            description: "bash -lc 'ls ; echo chained'",
+            allowsDurableBypass: true
+        )
+        _ = await recorder.requestApproval(chainedRequest, headless: false)
+        #expect(await recorder.requestCount == 1)
+
+        let simpleRequest = ExecApprovalRequest(
+            id: "simple-1",
+            command: "bash -lc 'ls -la'",
+            title: "Approve shell command?",
+            description: "bash -lc 'ls -la'",
+            allowsDurableBypass: true
+        )
+        _ = await recorder.requestApproval(simpleRequest, headless: false)
+        #expect(await recorder.requestCount == 1)
+    }
+
     @Test("non-126 sandbox failure does not escalate")
     func non126FailureDoesNotEscalate() async throws {
         let fixture = try makeFixture()
