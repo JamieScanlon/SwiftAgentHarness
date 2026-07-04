@@ -2,6 +2,7 @@ import Foundation
 
 actor CompletionAnnounceStateStore {
     private var deliveredCorrelationKeys: Set<String> = []
+    private var inProgressCorrelationKeys: Set<String> = []
     private var retryCountByAnnounceID: [UUID: Int] = [:]
     private var pendingByAnnounceID: [UUID: CompletionAnnouncePayload] = [:]
 
@@ -9,8 +10,19 @@ actor CompletionAnnounceStateStore {
         "\(delegateHandleID)|\(toolCallID)"
     }
 
+    func tryBeginDelivery(delegateHandleID: String, toolCallID: String) -> Bool {
+        let key = correlationKey(delegateHandleID: delegateHandleID, toolCallID: toolCallID)
+        if deliveredCorrelationKeys.contains(key) || inProgressCorrelationKeys.contains(key) {
+            return false
+        }
+        inProgressCorrelationKeys.insert(key)
+        return true
+    }
+
     func markDelivered(_ announce: CompletionAnnouncePayload) {
-        deliveredCorrelationKeys.insert(correlationKey(delegateHandleID: announce.delegateHandleID, toolCallID: announce.toolCallID))
+        let key = correlationKey(delegateHandleID: announce.delegateHandleID, toolCallID: announce.toolCallID)
+        deliveredCorrelationKeys.insert(key)
+        inProgressCorrelationKeys.remove(key)
         pendingByAnnounceID.removeValue(forKey: announce.announceID)
         retryCountByAnnounceID.removeValue(forKey: announce.announceID)
     }
@@ -20,6 +32,9 @@ actor CompletionAnnounceStateStore {
     }
 
     func markPending(_ announce: CompletionAnnouncePayload) {
+        inProgressCorrelationKeys.remove(
+            correlationKey(delegateHandleID: announce.delegateHandleID, toolCallID: announce.toolCallID)
+        )
         pendingByAnnounceID[announce.announceID] = announce
     }
 

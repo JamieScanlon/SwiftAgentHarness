@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
@@ -249,6 +250,90 @@ struct CompletionAnnouncePipelineTests {
         #expect(topicAnnounce.usage?.costUSD == auditAnnounce.usage?.costUSD)
         #expect(traceAnnounce.attributes?["usage.totalTokens"] == "42")
         #expect(traceAnnounce.attributes?["usage.costUSD"] == "0.031500")
+    }
+
+    @Test("concurrent completion announce paths dedupe lifecycle and cost settlement")
+    func concurrentCompletionAnnouncePathsDeduped() async throws {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let ledger = ModelPoolCostLedger(defaultDelegateCompletionUSD: 0.25)
+        let manager = HarnessRuntimeSession(
+            container: container,
+            delegateCostTracker: ledger,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let recorder = CompletionAnnounceEventRecorder()
+        await manager.setConversationTopicPublisher(recorder)
+        let model = Model(
+            id: UUID(),
+            protocol: .openAIAPI,
+            modelName: "announce-concurrent-model",
+            serverURL: URL(string: "http://localhost:1234")!,
+            capabilities: [.completion],
+            modelProtocol: .openAIAPI
+        )
+        try await manager.createConversation(with: model, userSystemPrompt: "announce-concurrent")
+        let conversationID = try #require(await manager.currentConversationID)
+        let delegateHandleID = "handle-concurrent"
+        let toolCallID = "tool-concurrent"
+        let usage = DelegateCompletionUsagePayload(
+            promptTokens: 10,
+            completionTokens: 5,
+            totalTokens: 15,
+            costUSD: 0.0125
+        )
+        let payload = CompletionAnnouncePayload(
+            delegateHandleID: delegateHandleID,
+            toolCallID: toolCallID,
+            conversationID: conversationID,
+            parentConversationID: nil,
+            lifecycleID: delegateHandleID,
+            status: .done,
+            completedAt: Date(),
+            source: "test.concurrent.api",
+            usage: usage
+        )
+        let completion = PendingToolCompletion(
+            handleID: delegateHandleID,
+            toolCallID: toolCallID,
+            result: ToolResult(
+                success: true,
+                content: "done concurrently",
+                toolCallId: toolCallID,
+                error: nil
+            ),
+            completedAt: Date()
+        )
+        let pendingEvent = SubAgentPendingCompletionEvent(
+            conversationID: conversationID,
+            completion: completion,
+            toolMessage: Message(
+                id: UUID(),
+                role: .tool,
+                content: "done concurrently",
+                timestamp: Date(),
+                toolCallId: toolCallID
+            ),
+            launchHandleID: delegateHandleID
+        )
+
+        async let apiIngest: Void = manager.ingestCompletionAnnouncementForAPI(
+            payload,
+            toolMessageContent: "done concurrently"
+        )
+        async let pendingIngest: Void = manager.subAgentCompletionRuntimeService.ingestPendingCompletionEvent(pendingEvent)
+        _ = await (apiIngest, pendingIngest)
+
+        let updated = await makeSplitConversationAdapter(runtimeSession: manager).apiGetConversation(id: conversationID)
+        let toolMessages = updated?.messages.filter { $0.role == .tool && $0.toolCallId == toolCallID } ?? []
+        #expect(toolMessages.count == 1)
+
+        let lifecycleEvents = await recorder.runtimeLifecycleEvents().filter {
+            $0.name == .toolCompletionAnnounced
+                && $0.delegateHandleID == delegateHandleID
+                && $0.toolCallID == toolCallID
+        }
+        #expect(lifecycleEvents.count == 1)
+        #expect(await ledger.projectedCostUSD(conversationID: conversationID) == 0.0125)
     }
 
 }
