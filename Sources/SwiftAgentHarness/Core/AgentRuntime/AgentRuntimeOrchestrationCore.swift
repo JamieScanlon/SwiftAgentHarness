@@ -144,6 +144,10 @@ actor AgentRuntimeOrchestrationCore {
     func testing_poolEntryCount() async -> Int {
         await pool.entryCount()
     }
+
+    func testing_poolRefCount(for conversationID: UUID) async -> Int {
+        await pool.testing_poolRefCount(for: conversationID)
+    }
 }
 
 extension AgentRuntimeOrchestrationCore: AgentRuntimeOrchestratorBinding {

@@ -191,4 +191,8 @@ extension AgentRuntimeSessionService {
     func testing_resetContextTokenSnapshot() async {
         await orchestrationCore.resetTokenSnapshot()
     }
+
+    func testing_poolRefCount(for conversationID: UUID) async -> Int {
+        await orchestrationCore.testing_poolRefCount(for: conversationID)
+    }
 }

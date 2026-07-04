@@ -316,7 +316,7 @@ public actor AgentRuntimeSessionService {
                 messageID: newMessage.id
             )
         } catch {
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
+            await releasePreGenerationStreamingRun(runID: runID, sessionLaneKey: sessionLaneKey)
             throw error
         }
     }
@@ -437,7 +437,7 @@ public actor AgentRuntimeSessionService {
                 runID: revertRunID
             )
         } catch {
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: revertRunID)
+            await releasePreGenerationStreamingRun(runID: revertRunID, sessionLaneKey: sessionLaneKey)
             throw error
         }
     }
@@ -485,50 +485,55 @@ public actor AgentRuntimeSessionService {
             await touchCurrentMessagesProjection(for: conv)
         }
 
-        guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
-            conversation: conv,
-            model: conv.model
-        ) else {
-            throw ConversationServiceError.failedToInitialize
-        }
-        activeRunOrchestratorHandles[splitRunID] = acquisition.handle
-        await orchestratorPort.startOrchestratorStateListeners(for: sendingConversationID)
-        guard let orchestrator = await orchestrationCore.orchestrator(for: sendingConversationID) else {
-            throw ConversationServiceError.failedToInitialize
-        }
+        do {
+            guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
+                conversation: conv,
+                model: conv.model
+            ) else {
+                throw ConversationServiceError.failedToInitialize
+            }
+            activeRunOrchestratorHandles[splitRunID] = acquisition.handle
+            await orchestratorPort.startOrchestratorStateListeners(for: sendingConversationID)
+            guard let orchestrator = await orchestrationCore.orchestrator(for: sendingConversationID) else {
+                throw ConversationServiceError.failedToInitialize
+            }
 
-        let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
+            let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
 
-        let (turnStateStream, turnContinuation) = AsyncStream.makeStream(
-            of: ConversationOrchestrationState.self,
-            bufferingPolicy: .bufferingNewest(64)
-        )
-        setTurnStateContinuation(turnContinuation)
-        if let initial = await buildOrchestrationSnapshot(
-            forStreamingConversation: sendingConversationID,
-            isTerminalSnapshotAfterCompletion: false,
-            forceStreamingPhases: false
-        ) {
-            turnContinuation.yield(initial)
+            let (turnStateStream, turnContinuation) = AsyncStream.makeStream(
+                of: ConversationOrchestrationState.self,
+                bufferingPolicy: .bufferingNewest(64)
+            )
+            setTurnStateContinuation(turnContinuation)
+            if let initial = await buildOrchestrationSnapshot(
+                forStreamingConversation: sendingConversationID,
+                isTerminalSnapshotAfterCompletion: false,
+                forceStreamingPhases: false
+            ) {
+                turnContinuation.yield(initial)
+            }
+
+            let partialContent = await buildRuntimePartialContentStream(
+                orchestrator: orchestrator,
+                conversationID: sendingConversationID,
+                runID: splitRunID
+            )
+            await startStreamingOrchestrationTask(
+                sendingConversationID: sendingConversationID,
+                turnLoopAnchorUserMessageID: anchorNewId,
+                configuration: resolvedConfiguration,
+                orchestrator: orchestrator
+            )
+            return ChatStreamResponse(
+                partialContent: partialContent,
+                orchestrationState: turnStateStream,
+                conversationID: sendingConversationID,
+                runID: splitRunID
+            )
+        } catch {
+            await releasePreGenerationStreamingRun(runID: splitRunID, sessionLaneKey: nil)
+            throw error
         }
-
-        let partialContent = await buildRuntimePartialContentStream(
-            orchestrator: orchestrator,
-            conversationID: sendingConversationID,
-            runID: splitRunID
-        )
-        await startStreamingOrchestrationTask(
-            sendingConversationID: sendingConversationID,
-            turnLoopAnchorUserMessageID: anchorNewId,
-            configuration: resolvedConfiguration,
-            orchestrator: orchestrator
-        )
-        return ChatStreamResponse(
-            partialContent: partialContent,
-            orchestrationState: turnStateStream,
-            conversationID: sendingConversationID,
-            runID: splitRunID
-        )
     }
 
     func cancelGeneration() async {
@@ -600,6 +605,16 @@ public actor AgentRuntimeSessionService {
 
     private func drainChannelSessionLifecycle(conversationID: UUID) async {
         await channelRegistryForLifecycle?.drainSessionLifecycle(conversationID: conversationID)
+    }
+
+    private func releasePreGenerationStreamingRun(
+        runID: UUID,
+        sessionLaneKey: String?
+    ) async {
+        await releaseRunOrchestrator(runID: runID)
+        if let sessionLaneKey {
+            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
+        }
     }
 
     func releaseRunOrchestrator(runID: UUID) async {

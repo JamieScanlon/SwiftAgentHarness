@@ -306,6 +306,14 @@ actor OrchestratorPool {
         return entry.tokenSnapshot.lastContextLimitTokens
     }
 
+    func testing_poolRefCount(for conversationID: UUID) -> Int {
+        guard let entryID = entryID(forConversationID: conversationID),
+              let entry = entriesByID[entryID] else {
+            return 0
+        }
+        return entry.refCount
+    }
+
     func testing_pendingTeardownCount() -> Int {
         pendingTeardownByKey.count
     }

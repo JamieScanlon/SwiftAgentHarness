@@ -532,6 +532,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         await startOrchestratorStateListeners(for: conversationID)
         guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else {
             logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
+            await agentRuntime.releaseRunOrchestrator(runID: runID)
             await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
             return
         }

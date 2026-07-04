@@ -139,4 +139,37 @@ struct AgentRuntimeSessionServiceTests {
         #expect(await service.turnLoopStopRequested(for: conversationB))
         #expect(await service.turnLoopStopRequested(for: conversationA) == false)
     }
+
+    @Test("send releases orchestrator acquisition when transcript tail CAS rejects")
+    func sendTailMismatchReleasesOrchestratorAcquisition() async throws {
+        let fixture = try HarnessConversationTestFixtures.makeLocalPersistenceStack(label: "def024-tail-mismatch")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let host = HarnessRuntimeSession(
+            container: fixture.stack.modelContainer,
+            harnessSessionPersistenceOverride: fixture.local
+        )
+        let model = AgentRuntimeSessionServiceTestSupport.makeModel()
+        try await host.createConversation(with: model, userSystemPrompt: "sys")
+        let conversationID = try #require(await host.currentConversationID)
+        let conversation = try #require(await host.currentConversation())
+        await host.testing_ensureOrchestratorPoolEntry(model: model, conversation: conversation)
+
+        let service = await host.agentRuntimeSessionService
+        #expect(await service.testing_poolRefCount(for: conversationID) == 0)
+
+        var configuration = HarnessRuntimeSession.Configuration()
+        configuration.expectedPreviousTailHarnessMessageID = UUID()
+
+        for _ in 0..<3 {
+            await #expect(throws: ConversationServiceError.self) {
+                try await host.sendMessageAndStreamResponse(
+                    "tail conflict",
+                    images: [],
+                    conversationID: conversationID,
+                    configuration: configuration
+                )
+            }
+            #expect(await service.testing_poolRefCount(for: conversationID) == 0)
+        }
+    }
 }
