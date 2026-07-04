@@ -35,6 +35,7 @@ struct TurnLoop {
         var retriedCompactionThisIteration = false
         var continuationsUsed = 0
         var hasTranscriptDeltaAcrossRun = false
+        var isFirstModelCall = true
         let messageOutputPolicy = MessageOutputPolicyResolver.policy(
             originSurface: configuration.originSurface,
             legacyStreamedTextSurfaces: agentHarness.legacyStreamedTextSurfaces
@@ -67,13 +68,13 @@ struct TurnLoop {
             if toolChoice == .required, runtimePolicy.termination?.policy != .terminalTool {
                 toolChoice = .auto
             }
-            let phase: ContextTransformInvocationPhase = iteration == 1
+            let phase: ContextTransformInvocationPhase = isFirstModelCall
                 ? .initial
                 : .continuation(round: continuationsUsed)
             let compaction: CompactionHint = retriedCompactionThisIteration ? .forceCompaction : .normal
 
             // Fire situational prefetch before assembly so recall overlaps context assembly.
-            if iteration == 1, case .initial = phase, let memoryPort = ports.memory,
+            if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
                 if let query = resolveUserQuery(from: conv.messages, anchorUserMessageID: anchorUserMessageID) {
                     await memoryPort.prefetchRecall(conversationID: conversationID, userQuery: query)
@@ -94,7 +95,7 @@ struct TurnLoop {
                 ports.logger?.error("[TurnLoop] context assembly failed: \(error)")
                 throw error
             }
-            if iteration == 1, case .initial = phase {
+            if isFirstModelCall {
                 if let reminder = configuration.ephemeralSystemReminder {
                     let reminderMessage = HarnessInjectedMessageMetadata.systemMessage(
                         id: UUID(),
@@ -106,7 +107,7 @@ struct TurnLoop {
                     messages = [reminderMessage] + messages
                 }
             }
-            if iteration == 1, case .initial = phase, let memoryPort = ports.memory,
+            if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
                 let userQuery = resolveUserQuery(from: messages, anchorUserMessageID: anchorUserMessageID)
                 if let query = userQuery,
@@ -223,6 +224,10 @@ struct TurnLoop {
                 && !publishedStreamDeltaThisAttempt {
                 retriedCompactionThisIteration = true
                 continue
+            }
+
+            if isFirstModelCall {
+                isFirstModelCall = false
             }
 
             let assistantEnvelope = MessageOutputPostProcessor.apply(
