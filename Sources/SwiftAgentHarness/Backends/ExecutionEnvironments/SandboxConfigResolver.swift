@@ -26,7 +26,6 @@ public enum SandboxConfigResolver {
         isMainSession: Bool
     ) -> SandboxConfig {
         let modeActive: Bool = switch global.mode {
-        case .off: false
         case .nonMain: !isMainSession
         case .all: true
         }

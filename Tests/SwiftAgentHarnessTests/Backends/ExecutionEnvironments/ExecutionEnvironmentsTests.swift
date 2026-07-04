@@ -103,6 +103,29 @@ struct SandboxConfigResolverTests {
         #expect(config.backend == "docker")
     }
 
+    @Test("enabled false forces local backend on all sessions")
+    func enabledFalseForcesLocal() {
+        let global = SandboxGlobalSettings(mode: .all, backend: "docker", enabled: false)
+        let config = SandboxConfigResolver.resolve(
+            global: global,
+            agentID: "agent-1",
+            sessionKey: "sess-1",
+            isMainSession: false
+        )
+        #expect(config.sandboxingActive == false)
+        #expect(config.backend == "local")
+    }
+
+    @Test("mode off is rejected at config decode")
+    func modeOffRejectedAtDecode() {
+        let json = """
+        {"global":{"mode":"off","enabled":true,"backend":"docker","scope":"agent"}}
+        """
+        #expect(throws: (any Error).self) {
+            try SandboxConfigurationLoader.load(from: Data(json.utf8))
+        }
+    }
+
     @Test("scope key resolves per axis")
     func scopeKey() {
         #expect(SandboxConfigResolver.resolveScopeKey(scope: .agent, sessionKey: "s", agentID: "a") == "agent-a")

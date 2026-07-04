@@ -515,7 +515,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         case .emptyCommand:
             return "Command is empty"
         case .sandboxUnavailable:
-            return "Sandbox execution is unavailable"
+            return "Sandbox execution is unavailable (Seatbelt/bwrap tooling missing). Full host exec requires elevated: true on bash with approval policy."
         case .nonZeroExit(let code, let output):
             return "Command failed with exit \(code): \(output)"
         case .pathEscapes(let path):

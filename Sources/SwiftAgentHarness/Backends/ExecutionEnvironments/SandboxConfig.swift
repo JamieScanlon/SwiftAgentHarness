@@ -1,7 +1,6 @@
 import Foundation
 
 public enum SandboxMode: String, Sendable, Codable, Equatable {
-    case off
     case nonMain = "non-main"
     case all
 }
@@ -135,6 +134,8 @@ public struct SandboxConfig: Sendable, Equatable {
     public let mode: SandboxMode
     public let scope: SandboxScope
     public let backend: SandboxBackendID
+    /// When `true`, the configured persistent/remote backend is used; when `false`, resolution falls back to the `local` backend.
+    /// Does not control Seatbelt/bwrap wrapping on the local backend — non-elevated local exec is always wrapped when tooling exists.
     public let sandboxingActive: Bool
     public let assistantBlockingBudgetSeconds: TimeInterval
     public let docker: DockerSandboxSettings

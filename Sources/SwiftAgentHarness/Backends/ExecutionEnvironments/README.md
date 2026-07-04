@@ -21,9 +21,29 @@ Each backend registers on a global registry with:
 
 Resolved by `SandboxConfigResolver`:
 
-- **mode** — `off` / `non-main` / `all`
+- **enabled** — master switch for using the configured persistent/remote backend (default `false`)
+- **mode** — `non-main` / `all` (which sessions activate the configured backend when `enabled: true`)
 - **scope** — `agent` / `session` / `shared`
 - **backend** — `local`, `docker`, `ssh`, `openshell`, `docker-browser`, …
+
+`sandboxingActive` on the resolved `SandboxConfig` means **use the configured persistent/remote backend**. It does **not** mean “skip Seatbelt/bwrap on the local backend.” When `sandboxingActive` is `false`, resolution falls back to the `local` backend; non-elevated exec on that backend is still wrapped when tooling exists.
+
+| Setting | Effect on backend | Effect on local exec wrapping |
+|---|---|---|
+| `enabled: false` (default) | Forces `local` backend (`sandboxingActive=false`) | Still Seatbelt/bwrap when tooling exists |
+| `enabled: true`, `mode: non-main`, main session | Forces `local` backend | Still Seatbelt/bwrap |
+| `enabled: true`, `mode: non-main`, non-main session | Uses configured backend | Backend-specific sandbox |
+| `enabled: true`, `mode: all` | Uses configured backend | Backend-specific sandbox |
+
+### Config migration
+
+`mode: "off"` is no longer supported. Use `"enabled": false` instead (equivalent backend-selection behavior). Decoding a config with `"mode": "off"` fails at load time.
+
+### Host exec without sandbox
+
+- Non-elevated `bash` on the `local` backend is **always** wrapped (macOS Seatbelt / Linux bwrap).
+- **Full host exec** (`/bin/bash -c` without wrapper) is only via `elevated: true` on the bash tool, routed through `ElevatedExecHost` with approval policy.
+- Exit **126** may auto-escalate per sandbox-denial policy (see below).
 
 ## Workspace models
 
