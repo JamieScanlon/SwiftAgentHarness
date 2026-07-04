@@ -135,18 +135,19 @@ extension AgentRuntimeSessionService {
         AgentRuntimeTurnConfiguration(managerConfiguration: manager)
     }
 
-    func beginAgentLoopPartialStream() -> AsyncStream<ChatStreamingPartial> {
+    func beginAgentLoopPartialStream(runID: UUID) -> AsyncStream<ChatStreamingPartial> {
         let (stream, continuation) = AsyncStream.makeStream(
             of: ChatStreamingPartial.self,
             bufferingPolicy: .unbounded
         )
-        agentLoopPartialContinuation = continuation
+        agentLoopPartialContinuationsByRunID.removeValue(forKey: runID)?.finish()
+        agentLoopPartialContinuationsByRunID[runID] = continuation
         return stream
     }
 
-    func finishAgentLoopPartialStream() {
-        agentLoopPartialContinuation?.finish()
-        agentLoopPartialContinuation = nil
+    func finishAgentLoopPartialStream(runID: UUID?) {
+        guard let runID else { return }
+        agentLoopPartialContinuationsByRunID.removeValue(forKey: runID)?.finish()
     }
 
     func publishAgentLoopDelta(
@@ -154,7 +155,9 @@ extension AgentRuntimeSessionService {
         conversationID: UUID,
         runID: UUID?
     ) async {
-        agentLoopPartialContinuation?.yield(partial)
+        if let runID {
+            agentLoopPartialContinuationsByRunID[runID]?.yield(partial)
+        }
         if let payload = Self.agentLoopConversationTopicPayload(for: partial, runID: runID) {
             await publishConversationTopicIfBound(conversationID: conversationID, payload: payload)
         }
@@ -173,7 +176,10 @@ extension AgentRuntimeSessionService {
         conversationID: UUID,
         runID: UUID?
     ) -> AsyncStream<ChatStreamingPartial> {
-        let base = beginAgentLoopPartialStream()
+        guard let runID else {
+            return AsyncStream { $0.finish() }
+        }
+        let base = beginAgentLoopPartialStream(runID: runID)
         return AsyncStream { continuation in
             Task {
                 for await partial in base {

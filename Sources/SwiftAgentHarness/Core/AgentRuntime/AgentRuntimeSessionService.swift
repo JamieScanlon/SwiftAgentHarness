@@ -23,7 +23,7 @@ public actor AgentRuntimeSessionService {
     private var turnLoopStopRequestedConversationIDs: Set<UUID> = []
     private var activeTurnConfigurationsByRunID: [UUID: (conversationID: UUID, configuration: AgentRuntimeTurnConfiguration)] = [:]
     private var activeRunOrchestratorHandles: [UUID: OrchestratorHandle] = [:]
-    var agentLoopPartialContinuation: AsyncStream<ChatStreamingPartial>.Continuation?
+    var agentLoopPartialContinuationsByRunID: [UUID: AsyncStream<ChatStreamingPartial>.Continuation] = [:]
     private(set) var testing_clearBindingCallCount = 0
 
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService?
