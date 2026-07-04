@@ -161,6 +161,7 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
             activeCallIDsByLogicalRequest[logicalRequestID]?.remove(callID)
             if activeCallIDsByLogicalRequest[logicalRequestID]?.isEmpty == true {
                 activeCallIDsByLogicalRequest[logicalRequestID] = nil
+                pruneLogicalRequestMetadataIfUnreferenced(logicalRequestID: logicalRequestID)
             }
         }
         streamingAccumulated[modelID] = nil
@@ -484,10 +485,82 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
         var rows = recentCallsByModel[modelID] ?? []
         rows.removeAll { $0 == callID }
         rows.append(callID)
+        var evicted: [UUID] = []
         if rows.count > maxRecentCallsPerModel {
-            rows.removeFirst(rows.count - maxRecentCallsPerModel)
+            let dropCount = rows.count - maxRecentCallsPerModel
+            evicted = Array(rows.prefix(dropCount))
+            rows.removeFirst(dropCount)
         }
         recentCallsByModel[modelID] = rows
+        for id in evicted {
+            pruneCallMetadataIfEvicted(callID: id)
+        }
+    }
+
+    private func isCallActive(callID: UUID) -> Bool {
+        guard let modelID = modelIDByCallID[callID] else { return false }
+        return activeCallIDsByModel[modelID]?.contains(callID) == true
+    }
+
+    private func isCallRetained(callID: UUID) -> Bool {
+        if isCallActive(callID: callID) { return true }
+        return recentCallsByModel.values.contains { $0.contains(callID) }
+    }
+
+    private func pruneCallMetadataIfEvicted(callID: UUID) {
+        guard !isCallRetained(callID: callID) else { return }
+        let modelID = modelIDByCallID[callID]
+        let conversationID = conversationIDByCallID[callID]
+        let logicalRequestID = logicalRequestIDByCallID[callID]
+
+        modelIDByCallID.removeValue(forKey: callID)
+        conversationIDByCallID.removeValue(forKey: callID)
+        logicalRequestIDByCallID.removeValue(forKey: callID)
+        rootCallIDByCallID.removeValue(forKey: callID)
+        callAttemptIndexByCallID.removeValue(forKey: callID)
+        callAttemptRecordsByCallID.removeValue(forKey: callID)
+        callStartedAtByCallID.removeValue(forKey: callID)
+        callUpdatedAtByCallID.removeValue(forKey: callID)
+        callEndedAtByCallID.removeValue(forKey: callID)
+        callPhaseByCallID.removeValue(forKey: callID)
+        pendingErrorsByCallID.removeValue(forKey: callID)
+        pendingCompletionTokensByCallID.removeValue(forKey: callID)
+
+        if let modelID {
+            if announcedCallID[modelID] == callID {
+                announcedCallID[modelID] = nil
+            }
+            if latestCallIDByModel[modelID] == callID {
+                latestCallIDByModel[modelID] = latestActiveCallID(for: modelID)
+            }
+        }
+        if let conversationID, latestCallIDByConversation[conversationID] == callID {
+            latestCallIDByConversation[conversationID] = latestActiveCallID(forConversationID: conversationID)
+        }
+        if let logicalRequestID {
+            pruneLogicalRequestMetadataIfUnreferenced(logicalRequestID: logicalRequestID)
+        }
+    }
+
+    private func hasRetainedCalls(forLogicalRequestID logicalRequestID: UUID) -> Bool {
+        logicalRequestIDByCallID.contains { callID, chainID in
+            chainID == logicalRequestID && isCallRetained(callID: callID)
+        }
+    }
+
+    private func pruneLogicalRequestMetadataIfUnreferenced(logicalRequestID: UUID) {
+        guard activeCallIDsByLogicalRequest[logicalRequestID] == nil else { return }
+        guard !hasRetainedCalls(forLogicalRequestID: logicalRequestID) else { return }
+        pruneLogicalRequestMetadata(logicalRequestID: logicalRequestID)
+    }
+
+    private func pruneLogicalRequestMetadata(logicalRequestID: UUID) {
+        nextAttemptIndexByLogicalRequest.removeValue(forKey: logicalRequestID)
+        rootCallIDByLogicalRequest.removeValue(forKey: logicalRequestID)
+    }
+
+    internal func hasRetainedCallMetadataForTesting(callID: UUID) -> Bool {
+        modelIDByCallID[callID] != nil
     }
 
     private func updateStreamingReasoningOnly(modelID: UUID, partial: LLMResponse) {

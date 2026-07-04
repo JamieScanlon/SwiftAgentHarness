@@ -313,4 +313,71 @@ struct ModelInvocationCoordinatorTests {
         let afterText = await coordinator.snapshot(for: modelID)
         #expect(afterText.thinking == false)
     }
+
+    @Test("evicted ended calls drop per-call metadata")
+    func evictedEndedCallsDropMetadata() async throws {
+        let coordinator = ModelInvocationCoordinator { _, _ in }
+        let modelID = UUID()
+        let firstCallID = await coordinator.beginCall(modelID: modelID)
+        await coordinator.recordTransition(modelID: modelID, phase: .done, callID: firstCallID)
+        await coordinator.endCall(modelID: modelID, callID: firstCallID)
+
+        for _ in 0..<20 {
+            let callID = await coordinator.beginCall(modelID: modelID)
+            await coordinator.recordTransition(modelID: modelID, phase: .done, callID: callID)
+            await coordinator.endCall(modelID: modelID, callID: callID)
+        }
+
+        #expect(await coordinator.hasRetainedCallMetadataForTesting(callID: firstCallID) == false)
+        let snapshot = await coordinator.callsSnapshot(for: modelID)
+        #expect(snapshot.recent.count == 20)
+        #expect(snapshot.recent.contains(where: { $0.callID == firstCallID }) == false)
+    }
+
+    @Test("active call metadata retained when evicted from recent window")
+    func activeCallProtectedFromEvictionPrune() async throws {
+        let coordinator = ModelInvocationCoordinator { _, _ in }
+        let modelID = UUID()
+        let activeCallID = await coordinator.beginCall(modelID: modelID)
+        await coordinator.recordTransition(modelID: modelID, phase: .streaming, callID: activeCallID)
+
+        for _ in 0..<20 {
+            let callID = await coordinator.beginCall(modelID: modelID)
+            await coordinator.recordTransition(modelID: modelID, phase: .done, callID: callID)
+            await coordinator.endCall(modelID: modelID, callID: callID)
+        }
+
+        #expect(await coordinator.hasRetainedCallMetadataForTesting(callID: activeCallID) == true)
+        let snapshot = await coordinator.callsSnapshot(for: modelID)
+        let active = try #require(snapshot.active.first(where: { $0.callID == activeCallID }))
+        #expect(active.phase == .streaming)
+        #expect(active.startedAt <= Date())
+    }
+
+    @Test("logical-request maps pruned after chain completes")
+    func logicalRequestMapsPrunedAfterChainCompletes() async throws {
+        let coordinator = ModelInvocationCoordinator { _, _ in }
+        let modelID = UUID()
+        let logicalRequestID = UUID()
+
+        let callA = await coordinator.beginCall(modelID: modelID, conversationID: nil, logicalRequestID: logicalRequestID)
+        await coordinator.recordTransition(modelID: modelID, phase: .errored, callID: callA)
+        await coordinator.endCall(modelID: modelID, callID: callA)
+
+        let callB = await coordinator.beginCall(modelID: modelID, conversationID: nil, logicalRequestID: logicalRequestID)
+        await coordinator.recordTransition(modelID: modelID, phase: .done, callID: callB)
+        await coordinator.endCall(modelID: modelID, callID: callB)
+
+        for _ in 0..<20 {
+            let callID = await coordinator.beginCall(modelID: modelID)
+            await coordinator.recordTransition(modelID: modelID, phase: .done, callID: callID)
+            await coordinator.endCall(modelID: modelID, callID: callID)
+        }
+
+        let callC = await coordinator.beginCall(modelID: modelID, conversationID: nil, logicalRequestID: logicalRequestID)
+        let snapshot = await coordinator.callsSnapshot(for: modelID)
+        let active = try #require(snapshot.active.first(where: { $0.callID == callC }))
+        #expect(active.attemptIndex == 1)
+        #expect(active.rootCallID == callC)
+    }
 }
