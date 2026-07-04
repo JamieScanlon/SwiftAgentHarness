@@ -3735,6 +3735,48 @@ struct APILayerRESTCoverageTests {
         }
     }
 
+    @Test("PATCH /api/conversations/:id returns 409 model_or_prompt_change_run_in_progress when run is active")
+    func conversationPatchReturnsRunConflictWhenModelChangeRunActive() async throws {
+        let model = APILayerRESTTestSupport.makeTestModel()
+        let alternateModel = APILayerRESTTestSupport.makeTestModel()
+        let conversationID = UUID()
+        let conversation = ModelConversation(
+            id: conversationID,
+            model: model,
+            systemPrompt: "sys",
+            interactionMode: .chat,
+            modeProfileID: InteractionMode.chat.rawValue
+        )
+        let activeRunID = UUID()
+        let conversationStub = ModelPromptPatchConflictConversationStub(
+            conversation: conversation,
+            activeRunID: activeRunID
+        )
+        let runtimeStub = ModePatchConflictRuntimeStub()
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversationStub,
+                runtime: runtimeStub,
+                modelProvider: StubModelProvider(models: [model, alternateModel])
+            )
+            let updateJSON = #"{"expectedRevision":1,"modelRef":"\#(alternateModel.id.uuidString)"}"#
+            try await app.testing().test(.PATCH, "/api/conversations/\(conversationID.uuidString)", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.headers.replaceOrAdd(name: .ifMatch, value: "*")
+                req.body = .init(string: updateJSON)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .conflict)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(body?["code"] as? String == ConversationRunConflictBody.modelOrPromptChangeRunInProgressCode)
+                #expect(body?["conversationID"] as? String == conversationID.uuidString)
+                #expect(body?["activeRunID"] as? String == activeRunID.uuidString)
+            })
+        }
+    }
+
     @Test("POST /api/approvals/:id resolves on the unified decision vocabulary")
     func unifiedApprovalResolveAllowAlways() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()
@@ -4067,6 +4109,68 @@ private final class ModePatchConflictConversationStub: APILayerConversationManag
         _ = patch
         _ = resolvedModel
         throw ConversationServiceError.conversationModeChangeRunInProgress(
+            conversationID: conversationID,
+            activeRunID: activeRunID
+        )
+    }
+}
+
+private final class ModelPromptPatchConflictConversationStub: APILayerConversationManaging, Sendable {
+    private let baseConversation: ModelConversation
+    private let activeRunID: UUID
+
+    init(conversation: ModelConversation, activeRunID: UUID) {
+        self.baseConversation = conversation
+        self.activeRunID = activeRunID
+    }
+
+    func apiListConversationInfo() async -> [ModelConversation] {
+        [baseConversation]
+    }
+
+    func apiListConversationMetadata(visibility: ConversationCatalogVisibilityFilter) async -> [ConversationMetadata] {
+        []
+    }
+
+    func apiUpdateConversationModelAndUserPrompt(conversationID: UUID, model: Model?, userSystemPrompt: String?) async throws {
+        _ = (conversationID, model, userSystemPrompt)
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiUpdateConversationToolOverrides(conversationID: UUID, routingPolicyTools: [String]) async throws {
+        _ = (conversationID, routingPolicyTools)
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiUpdateConversationSkillOverrides(conversationID: UUID, routingPolicySkills: [String]) async throws {
+        _ = (conversationID, routingPolicySkills)
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiUpdateConversationThinkingConfig(conversationID: UUID, thinkingConfig: ThinkingConfig?) async throws {
+        _ = (conversationID, thinkingConfig)
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiReadPlanMarkdown(conversationID: UUID) async throws -> String {
+        _ = conversationID
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiDeleteConversation(conversationID: UUID, hard: Bool) async throws {
+        _ = (conversationID, hard)
+        throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiGetConversation(id: UUID) async -> ModelConversation? {
+        guard id == baseConversation.id else { return nil }
+        return baseConversation
+    }
+
+    func apiApplyConversationRESTPatch(conversationID: UUID, patch: ConversationPatch, resolvedModel: Model?) async throws -> UInt64 {
+        _ = patch
+        _ = resolvedModel
+        throw ConversationServiceError.conversationModelOrPromptChangeRunInProgress(
             conversationID: conversationID,
             activeRunID: activeRunID
         )

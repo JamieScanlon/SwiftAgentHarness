@@ -126,7 +126,8 @@ extension AgentRuntimeSessionService {
     func testing_setActiveStreamingRun(conversationID: UUID?, runID: UUID?) async {
         if let conversationID {
             await updateLifecycle(for: conversationID) { lifecycle in
-                lifecycle.activeStreamingConversationID = conversationID
+                lifecycle.generationTask?.cancel()
+                lifecycle.activeStreamingConversationID = runID == nil ? nil : conversationID
                 lifecycle.currentStreamingRunID = runID
                 lifecycle.generationTask = runID == nil ? nil : Task {
                     try? await Task.sleep(nanoseconds: .max)
@@ -135,6 +136,7 @@ extension AgentRuntimeSessionService {
             return
         }
         await updateLifecycle { lifecycle in
+            lifecycle.generationTask?.cancel()
             lifecycle.activeStreamingConversationID = conversationID
             lifecycle.currentStreamingRunID = runID
             lifecycle.generationTask = runID == nil ? nil : Task {
