@@ -225,8 +225,18 @@ public actor ModeRegistryService {
             label: label,
             profileDescription: profileDescription,
             symbol: symbol,
-            tools: Self.mergeToolsSlice(parent: base.tools, overlay: raw.tools),
-            skills: Self.mergeSkillsSlice(parent: base.skills, overlay: raw.skills),
+            tools: Self.mergeToolsSlice(
+                parent: base.tools,
+                overlay: raw.tools,
+                profileID: raw.id,
+                diagnostics: &diagnostics
+            ),
+            skills: Self.mergeSkillsSlice(
+                parent: base.skills,
+                overlay: raw.skills,
+                profileID: raw.id,
+                diagnostics: &diagnostics
+            ),
             context: Self.mergeContextSlice(parent: base.context, overlay: raw.context),
             runtime: Self.mergeRuntimeSlice(
                 parent: base.runtime,
@@ -245,11 +255,21 @@ public actor ModeRegistryService {
         )
     }
 
-    private static func mergeToolsSlice(parent: ModeProfileToolsSlice, overlay: JSON?) -> ModeProfileToolsSlice {
+    private static func mergeToolsSlice(
+        parent: ModeProfileToolsSlice,
+        overlay: JSON?,
+        profileID: String,
+        diagnostics: inout [String]
+    ) -> ModeProfileToolsSlice {
         guard let overlay, let o = overlay.objectFields else { return parent }
         var allow = parent.allow
         if o.keys.contains("allow") {
-            allow = o.stringArray(for: "allow")
+            allow = ModeProfileJSONParsing.normalizedProfileAllowList(
+                raw: o["allow"],
+                profileID: profileID,
+                fieldPath: "tools.allow",
+                diagnostics: &diagnostics
+            )
         }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
@@ -263,11 +283,21 @@ public actor ModeRegistryService {
         return ModeProfileToolsSlice(allow: allow, deny: deny, approvalPolicy: approval)
     }
 
-    private static func mergeSkillsSlice(parent: ModeProfileSkillsSlice, overlay: JSON?) -> ModeProfileSkillsSlice {
+    private static func mergeSkillsSlice(
+        parent: ModeProfileSkillsSlice,
+        overlay: JSON?,
+        profileID: String,
+        diagnostics: inout [String]
+    ) -> ModeProfileSkillsSlice {
         guard let overlay, let o = overlay.objectFields else { return parent }
         var allow = parent.allow
         if o.keys.contains("allow") {
-            allow = o.stringArray(for: "allow")
+            allow = ModeProfileJSONParsing.normalizedProfileAllowList(
+                raw: o["allow"],
+                profileID: profileID,
+                fieldPath: "skills.allow",
+                diagnostics: &diagnostics
+            )
         }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
