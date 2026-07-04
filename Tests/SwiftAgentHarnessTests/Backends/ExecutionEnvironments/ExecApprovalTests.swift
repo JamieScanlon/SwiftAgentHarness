@@ -3,15 +3,44 @@ import Logging
 import Testing
 @testable import SwiftAgentHarness
 
+private func execApprovalTestScope(
+    conversationID: UUID = UUID(),
+    ownerAccountID: UUID? = nil
+) -> ExecApprovalScope {
+    ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerAccountID)
+}
+
+private func resolveExecApproval(
+    store: ExecApprovalStore,
+    id: String,
+    scope: ExecApprovalScope,
+    approved: Bool,
+    durable: Bool = false,
+    reason: String? = nil,
+    strictTenancy: Bool = false,
+    ownerScope: UUID? = nil
+) async -> ExecApprovalResolution? {
+    await store.resolve(
+        id: id,
+        scope: scope,
+        strictTenancy: strictTenancy,
+        ownerScope: ownerScope,
+        approved: approved,
+        durable: durable,
+        reason: reason
+    )
+}
+
 @Suite("Exec approval store and delivery")
 struct ExecApprovalTests {
     @Test("resolve wakes waiters with approved resolution")
     func resolveWakesWaiters() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "abc", command: "rm -rf /")
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "abc", command: "rm -rf /", scope: scope)
         async let waited = store.waitForResolution(id: "abc", timeoutSeconds: 5)
         try? await Task.sleep(nanoseconds: 5_000_000)
-        let resolution = await store.resolve(id: "abc", approved: true)
+        let resolution = await resolveExecApproval(store: store, id: "abc", scope: scope, approved: true)
         #expect(resolution == .approved(durable: false))
         #expect(await waited == .approved(durable: false))
     }
@@ -19,14 +48,65 @@ struct ExecApprovalTests {
     @Test("resolve returns nil for unknown id")
     func resolveUnknownID() async {
         let store = ExecApprovalStore()
-        #expect(await store.resolve(id: "missing", approved: true) == nil)
+        let scope = execApprovalTestScope()
+        #expect(await resolveExecApproval(store: store, id: "missing", scope: scope, approved: true) == nil)
+    }
+
+    @Test("resolve returns nil for cross-conversation scope")
+    func resolveRejectsCrossConversationScope() async {
+        let store = ExecApprovalStore()
+        let ownerA = UUID()
+        let convA = UUID()
+        let convB = UUID()
+        let scopeA = execApprovalTestScope(conversationID: convA, ownerAccountID: ownerA)
+        await store.registerPending(id: "cross-1", command: "git push", scope: scopeA)
+        let wrongConversation = execApprovalTestScope(conversationID: convB, ownerAccountID: ownerA)
+        #expect(
+            await resolveExecApproval(
+                store: store,
+                id: "cross-1",
+                scope: wrongConversation,
+                approved: true
+            ) == nil
+        )
+    }
+
+    @Test("resolve returns nil for cross-owner scope under strict tenancy")
+    func resolveRejectsCrossOwnerScopeUnderStrictTenancy() async {
+        let store = ExecApprovalStore()
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let conv = UUID()
+        let scopeA = execApprovalTestScope(conversationID: conv, ownerAccountID: ownerA)
+        await store.registerPending(id: "tenant-1", command: "git push", scope: scopeA)
+        #expect(
+            await resolveExecApproval(
+                store: store,
+                id: "tenant-1",
+                scope: scopeA,
+                approved: true,
+                strictTenancy: true,
+                ownerScope: ownerB
+            ) == nil
+        )
+        #expect(
+            await resolveExecApproval(
+                store: store,
+                id: "tenant-1",
+                scope: scopeA,
+                approved: true,
+                strictTenancy: true,
+                ownerScope: ownerA
+            ) == .approved(durable: false)
+        )
     }
 
     @Test("durable approval pre-approves commands by command name")
     func durableApproval() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "abc", command: "git push")
-        _ = await store.resolve(id: "abc", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "abc", command: "git push", scope: scope)
+        _ = await resolveExecApproval(store: store, id: "abc", scope: scope, approved: true, durable: true)
         #expect(await store.isDurableApproved(command: "git push"))
         // Same command name with different args is now approved.
         #expect(await store.isDurableApproved(command: "git status --short"))
@@ -80,8 +160,9 @@ struct ExecApprovalTests {
     @Test("durable approval of bash -lc keys on inner command not bash")
     func durableApprovalShellInterpreterPeeling() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "shell-1", command: "bash -lc 'ls -la'")
-        _ = await store.resolve(id: "shell-1", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "shell-1", command: "bash -lc 'ls -la'", scope: scope)
+        _ = await resolveExecApproval(store: store, id: "shell-1", scope: scope, approved: true, durable: true)
         #expect(await store.isDurableApproved(command: "ls -l"))
         #expect(await store.isDurableApproved(command: "bash -lc 'rm -rf /'") == false)
         #expect(await store.listDurableGrants() == ["ls"])
@@ -90,8 +171,9 @@ struct ExecApprovalTests {
     @Test("durable approval of bash -lc git grants git cross-argument access")
     func durableApprovalShellInterpreterGitCrossArg() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "shell-git", command: "bash -c \"git push origin main\"")
-        _ = await store.resolve(id: "shell-git", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "shell-git", command: "bash -c \"git push origin main\"", scope: scope)
+        _ = await resolveExecApproval(store: store, id: "shell-git", scope: scope, approved: true, durable: true)
         #expect(await store.isDurableApproved(command: "git status --short"))
         #expect(await store.isDurableApproved(command: "bash -lc 'git pull'"))
     }
@@ -100,8 +182,9 @@ struct ExecApprovalTests {
     func durableApprovalBareBashNoGrant() async {
         let grants = InMemoryExecApprovalGrantStore()
         let store = ExecApprovalStore(grantStore: grants)
-        await store.registerPending(id: "bare-bash", command: "bash")
-        let resolution = await store.resolve(id: "bare-bash", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "bare-bash", command: "bash", scope: scope)
+        let resolution = await resolveExecApproval(store: store, id: "bare-bash", scope: scope, approved: true, durable: true)
         #expect(resolution == .approved(durable: true))
         #expect(await grants.list() == [])
         #expect(await store.isDurableApproved(command: "bash -lc 'ls'") == false)
@@ -110,8 +193,9 @@ struct ExecApprovalTests {
     @Test("elevated allow-always does not persist durable grant")
     func elevatedAllowAlwaysDoesNotPersistGrant() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "elevated-git", command: "git status", allowsDurableBypass: false)
-        let resolution = await store.resolve(id: "elevated-git", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "elevated-git", command: "git status", scope: scope, allowsDurableBypass: false)
+        let resolution = await resolveExecApproval(store: store, id: "elevated-git", scope: scope, approved: true, durable: true)
         #expect(resolution == .approved(durable: true))
         #expect(await store.listDurableGrants() == [])
         #expect(await store.isDurableApproved(command: "git push") == false)
@@ -121,7 +205,8 @@ struct ExecApprovalTests {
     func deliverySkipsDurableLookupWhenBypassDisallowed() async {
         let grants = InMemoryExecApprovalGrantStore(commandNames: ["curl"])
         let store = ExecApprovalStore(grantStore: grants)
-        let delivery = DefaultExecApprovalDelivery(store: store, waitTimeoutSeconds: 5)
+        let scope = execApprovalTestScope()
+        let delivery = DefaultExecApprovalDelivery(store: store, approvalScope: scope, waitTimeoutSeconds: 5)
         let request = ExecApprovalRequest(
             id: "req-no-bypass",
             command: "curl https://example.com",
@@ -131,7 +216,7 @@ struct ExecApprovalTests {
         )
         async let result = delivery.requestApproval(request, headless: false)
         try? await Task.sleep(nanoseconds: 5_000_000)
-        let resolved = await store.resolve(id: "req-no-bypass", approved: true)
+        let resolved = await resolveExecApproval(store: store, id: "req-no-bypass", scope: scope, approved: true)
         #expect(resolved == .approved(durable: false))
         #expect(await result == .approved)
     }
@@ -154,8 +239,9 @@ struct ExecApprovalTests {
     func resolveDurablePersistsToInjectedStore() async {
         let grants = InMemoryExecApprovalGrantStore()
         let store = ExecApprovalStore(grantStore: grants)
-        await store.registerPending(id: "abc", command: "git push origin main")
-        _ = await store.resolve(id: "abc", approved: true, durable: true)
+        let scope = execApprovalTestScope()
+        await store.registerPending(id: "abc", command: "git push origin main", scope: scope)
+        _ = await resolveExecApproval(store: store, id: "abc", scope: scope, approved: true, durable: true)
         #expect(await grants.isGranted(commandName: "git"))
         #expect(await grants.list() == ["git"])
         #expect(await store.isDurableApproved(command: "git log"))
@@ -208,7 +294,8 @@ struct ExecApprovalTests {
     func preSeededGrantStorePreApproves() async {
         let grants = InMemoryExecApprovalGrantStore(commandNames: ["curl"])
         let store = ExecApprovalStore(grantStore: grants)
-        let delivery = DefaultExecApprovalDelivery(store: store, waitTimeoutSeconds: 5)
+        let scope = execApprovalTestScope()
+        let delivery = DefaultExecApprovalDelivery(store: store, approvalScope: scope, waitTimeoutSeconds: 5)
         let request = ExecApprovalRequest(
             id: "req-seed",
             command: "curl https://example.com",
@@ -222,7 +309,8 @@ struct ExecApprovalTests {
     @Test("default delivery waits for resolution")
     func defaultDeliveryWaitsForResolution() async {
         let store = ExecApprovalStore()
-        let delivery = DefaultExecApprovalDelivery(store: store, waitTimeoutSeconds: 5)
+        let scope = execApprovalTestScope()
+        let delivery = DefaultExecApprovalDelivery(store: store, approvalScope: scope, waitTimeoutSeconds: 5)
         let request = ExecApprovalRequest(
             id: "req-1",
             command: "curl example.com",
@@ -231,7 +319,7 @@ struct ExecApprovalTests {
         )
         async let result = delivery.requestApproval(request, headless: false)
         try? await Task.sleep(nanoseconds: 5_000_000)
-        let resolved = await store.resolve(id: "req-1", approved: true)
+        let resolved = await resolveExecApproval(store: store, id: "req-1", scope: scope, approved: true)
         #expect(resolved == .approved(durable: false))
         #expect(await result == .approved)
     }
@@ -239,7 +327,8 @@ struct ExecApprovalTests {
     @Test("default delivery waits indefinitely by default and resolves on approval")
     func defaultDeliveryIndefiniteWaitsForResolution() async {
         let store = ExecApprovalStore()
-        let delivery = DefaultExecApprovalDelivery(store: store)
+        let scope = execApprovalTestScope()
+        let delivery = DefaultExecApprovalDelivery(store: store, approvalScope: scope)
         let request = ExecApprovalRequest(
             id: "req-indef",
             command: "curl example.com",
@@ -249,16 +338,18 @@ struct ExecApprovalTests {
         async let result = delivery.requestApproval(request, headless: false)
         // Wait well past any legacy finite timeout to prove it does not self-deny.
         try? await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await store.resolve(id: "req-indef", approved: true) == .approved(durable: false))
+        #expect(await resolveExecApproval(store: store, id: "req-indef", scope: scope, approved: true) == .approved(durable: false))
         #expect(await result == .approved)
     }
 
     @Test("cancelling an indefinite request denies as cancelled and fires onCleared")
     func defaultDeliveryCancelClears() async {
         let store = ExecApprovalStore()
+        let scope = execApprovalTestScope()
         let cleared = ClearedRecorder()
         let delivery = DefaultExecApprovalDelivery(
             store: store,
+            approvalScope: scope,
             onCleared: { id in await cleared.record(id) }
         )
         let request = ExecApprovalRequest(
@@ -278,7 +369,8 @@ struct ExecApprovalTests {
     @Test("headless request denies immediately without registering")
     func headlessDeniesImmediately() async {
         let store = ExecApprovalStore()
-        let delivery = DefaultExecApprovalDelivery(store: store)
+        let scope = execApprovalTestScope()
+        let delivery = DefaultExecApprovalDelivery(store: store, approvalScope: scope)
         let request = ExecApprovalRequest(
             id: "req-headless",
             command: "curl example.com",
@@ -312,6 +404,7 @@ struct ExecApprovalTests {
         )
         let delivery = PluginChannelExecApprovalDelivery(
             store: ExecApprovalStore(),
+            approvalScope: execApprovalTestScope(),
             route: route,
             waitTimeoutSeconds: 0.02
         )
@@ -331,6 +424,7 @@ struct ExecApprovalTests {
     @Test("channel delivery posts approval card to mock listener")
     func channelDeliveryPostsCard() async throws {
         let store = ExecApprovalStore()
+        let scope = execApprovalTestScope()
         let listener = MockChannelListener(
             id: .discord,
             config: ChannelListenerConfig(
@@ -347,7 +441,7 @@ struct ExecApprovalTests {
             outbound: outbound,
             target: ChannelDeliveryTarget(chatId: "chat-1", threadId: "thread-1", replyToMessageId: nil)
         )
-        let delivery = PluginChannelExecApprovalDelivery(store: store, route: route, waitTimeoutSeconds: 0.05)
+        let delivery = PluginChannelExecApprovalDelivery(store: store, approvalScope: scope, route: route, waitTimeoutSeconds: 0.05)
         let request = ExecApprovalRequest(
             id: "card-1",
             command: "npm test",
@@ -356,7 +450,7 @@ struct ExecApprovalTests {
         )
         async let approval = delivery.requestApproval(request, headless: false)
         try await Task.sleep(nanoseconds: 20_000_000)
-        _ = await store.resolve(id: "card-1", approved: true)
+        _ = await resolveExecApproval(store: store, id: "card-1", scope: scope, approved: true)
         let result = await approval
         #expect(result == .approved)
         let messages = listener.sentMessages
@@ -385,7 +479,11 @@ struct ExecApprovalTests {
             outbound: outbound,
             target: ChannelDeliveryTarget(chatId: "c1", threadId: nil, replyToMessageId: nil)
         )
-        let delivery = PluginChannelExecApprovalDelivery(store: ExecApprovalStore(), route: route)
+        let delivery = PluginChannelExecApprovalDelivery(
+            store: ExecApprovalStore(),
+            approvalScope: execApprovalTestScope(),
+            route: route
+        )
         await delivery.sendFollowup(approvalID: "x", approved: true)
         #expect(listener.sentMessages.count == 1)
         #expect(listener.sentMessages[0].text.contains("approved"))

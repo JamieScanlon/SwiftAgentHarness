@@ -30,12 +30,24 @@ struct ApprovalSlashRegistryTests {
 
 @Suite("Exec approval inbound resolver")
 struct ExecApprovalInboundTests {
+    private func inboundScope(conversationID: UUID = UUID(), ownerAccountID: UUID? = nil) -> ExecApprovalScope {
+        ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerAccountID)
+    }
+
     @Test("allow-always button grants a durable approval")
     func allowAlwaysGrantsDurable() async {
         let grants = InMemoryExecApprovalGrantStore()
         let store = ExecApprovalStore(grantStore: grants)
-        await store.registerPending(id: "i1", command: "git push origin main")
-        let resolution = await ExecApprovalInbound.resolve(approvalID: "i1", actionID: "allowAlways", store: store)
+        let scope = inboundScope()
+        await store.registerPending(id: "i1", command: "git push origin main", scope: scope)
+        let resolution = await ExecApprovalInbound.resolve(
+            approvalID: "i1",
+            actionID: "allowAlways",
+            scope: scope,
+            strictTenancy: false,
+            ownerScope: nil,
+            store: store
+        )
         #expect(resolution == .approved(durable: true))
         #expect(await grants.isGranted(commandName: "git"))
     }
@@ -44,8 +56,16 @@ struct ExecApprovalInboundTests {
     func allowOnceApproves() async {
         let grants = InMemoryExecApprovalGrantStore()
         let store = ExecApprovalStore(grantStore: grants)
-        await store.registerPending(id: "i2", command: "ls -la")
-        let resolution = await ExecApprovalInbound.resolve(approvalID: "i2", actionID: "allowOnce", store: store)
+        let scope = inboundScope()
+        await store.registerPending(id: "i2", command: "ls -la", scope: scope)
+        let resolution = await ExecApprovalInbound.resolve(
+            approvalID: "i2",
+            actionID: "allowOnce",
+            scope: scope,
+            strictTenancy: false,
+            ownerScope: nil,
+            store: store
+        )
         #expect(resolution == .approved(durable: false))
         #expect(await grants.list().isEmpty)
     }
@@ -53,16 +73,33 @@ struct ExecApprovalInboundTests {
     @Test("deny button denies with reason")
     func denyButton() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "i3", command: "rm -rf /")
-        let resolution = await ExecApprovalInbound.resolve(approvalID: "i3", actionID: "deny", store: store, reason: "nope")
+        let scope = inboundScope()
+        await store.registerPending(id: "i3", command: "rm -rf /", scope: scope)
+        let resolution = await ExecApprovalInbound.resolve(
+            approvalID: "i3",
+            actionID: "deny",
+            scope: scope,
+            strictTenancy: false,
+            ownerScope: nil,
+            store: store,
+            reason: "nope"
+        )
         #expect(resolution == .denied("nope"))
     }
 
     @Test("unknown action token resolves to nil")
     func unknownToken() async {
         let store = ExecApprovalStore()
-        await store.registerPending(id: "i4", command: "echo hi")
-        let resolution = await ExecApprovalInbound.resolve(approvalID: "i4", actionID: "wat", store: store)
+        let scope = inboundScope()
+        await store.registerPending(id: "i4", command: "echo hi", scope: scope)
+        let resolution = await ExecApprovalInbound.resolve(
+            approvalID: "i4",
+            actionID: "wat",
+            scope: scope,
+            strictTenancy: false,
+            ownerScope: nil,
+            store: store
+        )
         #expect(resolution == nil)
     }
 }

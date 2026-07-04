@@ -5,6 +5,17 @@ public enum ExecApprovalResolution: Sendable, Equatable {
     case denied(String)
 }
 
+/// Owning conversation and tenant for a pending exec approval (DEF-125).
+public struct ExecApprovalScope: Sendable, Equatable {
+    public let conversationID: UUID
+    public let ownerAccountID: UUID?
+
+    public init(conversationID: UUID, ownerAccountID: UUID?) {
+        self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
+    }
+}
+
 /// Thin exec-approval façade over the core-owned `ApprovalCoordinator`. Owns only
 /// the exec-specific concerns (command text + durable grant store); the pending
 /// registry, dedupe, waiter resume, and timeout live in the coordinator.
@@ -13,6 +24,7 @@ public actor ExecApprovalStore {
 
     private let coordinator: ApprovalCoordinator
     private var commands: [String: String] = [:]
+    private var scopesByID: [String: ExecApprovalScope] = [:]
     private var allowsDurableBypassByID: [String: Bool] = [:]
     private var grantStore: any ExecApprovalGrantStore
 
@@ -33,10 +45,12 @@ public actor ExecApprovalStore {
     public func registerPending(
         id: String,
         command: String,
+        scope: ExecApprovalScope,
         allowsDurableBypass: Bool = true,
         presentation: ApprovalPresentation? = nil
     ) async {
         commands[id] = command
+        scopesByID[id] = scope
         allowsDurableBypassByID[id] = allowsDurableBypass
         // Exec uses a caller-supplied wait timeout, so the registration timeout is a
         // large placeholder; the deny default only applies if a tool-style wait is used.
@@ -47,6 +61,10 @@ public actor ExecApprovalStore {
             timeoutResolution: .deny,
             timeoutSource: "exec.timeout"
         )
+    }
+
+    public func pendingScope(id: String) -> ExecApprovalScope? {
+        scopesByID[id]
     }
 
     public func isDurableApproved(command: String) async -> Bool {
@@ -83,12 +101,25 @@ public actor ExecApprovalStore {
     @discardableResult
     public func resolve(
         id: String,
+        scope: ExecApprovalScope,
+        strictTenancy: Bool,
+        ownerScope: UUID?,
         approved: Bool,
         durable: Bool = false,
         reason: String? = nil
     ) async -> ExecApprovalResolution? {
         guard await coordinator.isPending(id: id) else { return nil }
+        guard let pendingScope = scopesByID[id],
+              Self.scopeMatches(
+                  pending: pendingScope,
+                  resolver: scope,
+                  ownerScope: ownerScope,
+                  strictTenancy: strictTenancy
+              ) else {
+            return nil
+        }
         let command = commands.removeValue(forKey: id)
+        scopesByID.removeValue(forKey: id)
         let allowsDurableBypass = allowsDurableBypassByID.removeValue(forKey: id) ?? true
         if approved, durable, allowsDurableBypass, let command {
             await addDurableApproval(command: command)
@@ -108,6 +139,20 @@ public actor ExecApprovalStore {
             return nil
         }
         return Self.execResolution(from: outcome)
+    }
+
+    static func scopeMatches(
+        pending: ExecApprovalScope,
+        resolver: ExecApprovalScope,
+        ownerScope: UUID?,
+        strictTenancy: Bool
+    ) -> Bool {
+        guard pending.conversationID == resolver.conversationID else { return false }
+        return ToolConversationAccessPolicy.isOwnerAccessible(
+            targetOwner: pending.ownerAccountID,
+            ownerScope: ownerScope,
+            strictTenancy: strictTenancy
+        )
     }
 
     private static func execResolution(from outcome: ApprovalOutcome) -> ExecApprovalResolution {

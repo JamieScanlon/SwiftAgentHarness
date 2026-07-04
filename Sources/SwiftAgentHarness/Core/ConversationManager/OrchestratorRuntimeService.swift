@@ -584,7 +584,14 @@ public actor OrchestratorRuntimeService {
                     payload: .surfaceIntentJSONUTF8(utf8)
                 )
             }
+            let execApprovalScope: ExecApprovalScope? = activeConversation.map {
+                ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
+            }
             let approvalDelivery = await ExecApprovalDeliveryFactory.make(
+                scope: execApprovalScope ?? ExecApprovalScope(
+                    conversationID: UUID(uuidString: sessionKey) ?? UUID(),
+                    ownerAccountID: nil
+                ),
                 channelRegistry: channelRegistry,
                 metadata: activeConversation?.metadata,
                 onPending: execApprovalPending,

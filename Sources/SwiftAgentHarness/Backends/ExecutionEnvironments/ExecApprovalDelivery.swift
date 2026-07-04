@@ -51,15 +51,18 @@ struct ExecApprovalPluginRoute: Sendable {
 
 struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
     private let store: ExecApprovalStore
+    private let approvalScope: ExecApprovalScope
     private let route: ExecApprovalPluginRoute?
     private let waitTimeoutSeconds: TimeInterval
 
     init(
         store: ExecApprovalStore = .shared,
+        approvalScope: ExecApprovalScope,
         route: ExecApprovalPluginRoute?,
         waitTimeoutSeconds: TimeInterval = 300
     ) {
         self.store = store
+        self.approvalScope = approvalScope
         self.route = route
         self.waitTimeoutSeconds = waitTimeoutSeconds
     }
@@ -75,6 +78,7 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
         await store.registerPending(
             id: request.id,
             command: request.command,
+            scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
             presentation: request.presentation
         )
@@ -113,6 +117,7 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
 
 enum ExecApprovalDeliveryFactory {
     static func make(
+        scope: ExecApprovalScope,
         channelRegistry: (any ChannelPluginLooking)?,
         metadata: JSON?,
         onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil,
@@ -127,7 +132,11 @@ enum ExecApprovalDeliveryFactory {
               let plugin = await channelRegistry.plugin(for: channel),
               let approval = plugin.approvalCapability
         else {
-            return DefaultExecApprovalDelivery(onPending: onPending, onCleared: onCleared)
+            return DefaultExecApprovalDelivery(
+                approvalScope: scope,
+                onPending: onPending,
+                onCleared: onCleared
+            )
         }
         let route = ExecApprovalPluginRoute(
             approval: approval,
@@ -138,23 +147,26 @@ enum ExecApprovalDeliveryFactory {
                 replyToMessageId: trigger.sourceMetadata["platformMessageId"]
             )
         )
-        return PluginChannelExecApprovalDelivery(route: route)
+        return PluginChannelExecApprovalDelivery(approvalScope: scope, route: route)
     }
 }
 
 public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
     private let store: ExecApprovalStore
+    private let approvalScope: ExecApprovalScope
     private let waitTimeoutSeconds: TimeInterval?
     private let onPending: (@Sendable (ExecApprovalRequest) async -> Void)?
     private let onCleared: (@Sendable (String) async -> Void)?
 
     public init(
         store: ExecApprovalStore = .shared,
+        approvalScope: ExecApprovalScope,
         waitTimeoutSeconds: TimeInterval? = nil,
         onPending: (@Sendable (ExecApprovalRequest) async -> Void)? = nil,
         onCleared: (@Sendable (String) async -> Void)? = nil
     ) {
         self.store = store
+        self.approvalScope = approvalScope
         self.waitTimeoutSeconds = waitTimeoutSeconds
         self.onPending = onPending
         self.onCleared = onCleared
@@ -171,6 +183,7 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
         await store.registerPending(
             id: request.id,
             command: request.command,
+            scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
             presentation: request.presentation
         )

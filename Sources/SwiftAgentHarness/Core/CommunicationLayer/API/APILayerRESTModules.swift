@@ -2665,24 +2665,25 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 return Response(status: .badRequest, body: .init(data: data))
             }
             let store = ExecApprovalStore.shared
-            let resolution: ExecApprovalResolution?
-            if body.approved {
-                resolution = await store.resolve(id: id, approved: true, durable: body.durable ?? false)
-            } else {
-                resolution = await store.resolve(
-                    id: id,
-                    approved: false,
-                    reason: body.reason ?? "denied via api.rest"
-                )
-            }
-            guard resolution != nil else {
+            switch await Self.resolveExecApprovalViaREST(
+                id: id,
+                dependencies: dependencies,
+                store: store,
+                approved: body.approved,
+                durable: body.durable ?? false,
+                reason: body.reason ?? "denied via api.rest"
+            ) {
+            case .forbidden(let response):
+                return response
+            case .notFound:
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",
                     "message": "Exec approval not found",
                 ])
                 return Response(status: .notFound, body: .init(data: data))
+            case .resolved:
+                return Response(status: .ok)
             }
-            return Response(status: .ok)
         }
 
         // Unified resolve endpoint (spec: one POST /approvals/:id on the shared
@@ -2717,23 +2718,75 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 return Response(status: .badRequest, body: .init(data: data))
             }
             let store = ExecApprovalStore.shared
-            let resolution: ExecApprovalResolution?
+            let approved: Bool
+            let durable: Bool
             switch decision {
             case .allowOnce:
-                resolution = await store.resolve(id: id, approved: true, durable: false)
+                approved = true
+                durable = false
             case .allowAlways:
-                resolution = await store.resolve(id: id, approved: true, durable: true)
+                approved = true
+                durable = true
             case .deny, .timeout, .cancelled:
-                resolution = await store.resolve(id: id, approved: false, reason: body.reason ?? "denied via api.rest")
+                approved = false
+                durable = false
             }
-            guard resolution != nil else {
+            switch await Self.resolveExecApprovalViaREST(
+                id: id,
+                dependencies: dependencies,
+                store: store,
+                approved: approved,
+                durable: durable,
+                reason: body.reason ?? "denied via api.rest"
+            ) {
+            case .forbidden(let response):
+                return response
+            case .notFound:
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",
                     "message": "Approval not found",
                 ])
                 return Response(status: .notFound, body: .init(data: data))
+            case .resolved:
+                return Response(status: .ok)
             }
-            return Response(status: .ok)
         }
+    }
+
+    private enum ExecApprovalRESTResolveOutcome {
+        case resolved(ExecApprovalResolution)
+        case notFound
+        case forbidden(Response)
+    }
+
+    private static func resolveExecApprovalViaREST(
+        id: String,
+        dependencies: APILayerRouteDependencies,
+        store: ExecApprovalStore,
+        approved: Bool,
+        durable: Bool,
+        reason: String?
+    ) async -> ExecApprovalRESTResolveOutcome {
+        guard let pendingScope = await store.pendingScope(id: id) else {
+            return .notFound
+        }
+        if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(
+            conversationID: pendingScope.conversationID
+        ) {
+            return .forbidden(forbidden)
+        }
+        let strictTenancy = dependencies.tenancyPolicy.requireAuthenticatedOwnerOnMutations
+        guard let resolution = await store.resolve(
+            id: id,
+            scope: pendingScope,
+            strictTenancy: strictTenancy,
+            ownerScope: APISessionContext.authenticatedOwnerAccountID,
+            approved: approved,
+            durable: durable,
+            reason: reason
+        ) else {
+            return .notFound
+        }
+        return .resolved(resolution)
     }
 }

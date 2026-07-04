@@ -210,6 +210,7 @@ public enum HarnessRuntimeSessionFactory {
         )
         let slashCommandDispatchService = SlashCommandDispatchService(
             deps: deps,
+            tenancyPolicy: tenancyPolicy,
             topics: topics,
             messaging: messaging,
             selection: selection,

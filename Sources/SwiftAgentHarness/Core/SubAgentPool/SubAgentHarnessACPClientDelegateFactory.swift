@@ -32,6 +32,10 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
         }
         let sessionKey = conversation.id.uuidString
         let approvalDelivery = await ExecApprovalDeliveryFactory.make(
+            scope: ExecApprovalScope(
+                conversationID: conversation.id,
+                ownerAccountID: conversation.ownerAccountID
+            ),
             channelRegistry: resolveChannelRegistry(),
             metadata: conversation.metadata
         )

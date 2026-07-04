@@ -75,8 +75,16 @@ struct PermissionRuleStoreTests {
         let rules = InMemoryPermissionRuleStore()
         let grantStore = PermissionRuleExecApprovalGrantStore(store: rules)
         let store = ExecApprovalStore(grantStore: grantStore)
-        await store.registerPending(id: "p1", command: "git push origin main")
-        _ = await store.resolve(id: "p1", approved: true, durable: true)
+        let scope = ExecApprovalScope(conversationID: UUID(), ownerAccountID: nil)
+        await store.registerPending(id: "p1", command: "git push origin main", scope: scope)
+        _ = await store.resolve(
+            id: "p1",
+            scope: scope,
+            strictTenancy: false,
+            ownerScope: nil,
+            approved: true,
+            durable: true
+        )
         #expect(await rules.isGranted(.commandName("git")))
         #expect(await store.isDurableApproved(command: "git status"))
     }

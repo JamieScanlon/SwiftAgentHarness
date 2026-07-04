@@ -43,7 +43,9 @@ public struct ExecRuntimeService: Sendable {
         workspaceRoot: String,
         agentWorkspaceDir: String? = nil,
         globalSettings: SandboxGlobalSettings = SandboxGlobalSettings(),
-        approvalDelivery: any ExecApprovalDelivering = DefaultExecApprovalDelivery(),
+        approvalDelivery: any ExecApprovalDelivering = DefaultExecApprovalDelivery(
+            approvalScope: ExecApprovalScope(conversationID: UUID(), ownerAccountID: nil)
+        ),
         logger: Logger? = nil
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)

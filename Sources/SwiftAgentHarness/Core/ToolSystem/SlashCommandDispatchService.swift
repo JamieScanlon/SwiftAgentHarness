@@ -3,6 +3,7 @@ import SwiftAgentKit
 
 actor SlashCommandDispatchService {
     let deps: ConversationRuntimeDependencies
+    let tenancyPolicy: TenancyPolicySettings
     let topics: ConversationTopicPublicationPort
     let messaging: ConversationMessagingPort
     let selection: ConversationSelectionAccessing
@@ -20,6 +21,7 @@ actor SlashCommandDispatchService {
 
     init(
         deps: ConversationRuntimeDependencies,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         topics: ConversationTopicPublicationPort,
         messaging: ConversationMessagingPort,
         selection: ConversationSelectionAccessing,
@@ -32,6 +34,7 @@ actor SlashCommandDispatchService {
         subAgentPool: any SubAgentPooling
     ) {
         self.deps = deps
+        self.tenancyPolicy = tenancyPolicy
         self.topics = topics
         self.messaging = messaging
         self.selection = selection

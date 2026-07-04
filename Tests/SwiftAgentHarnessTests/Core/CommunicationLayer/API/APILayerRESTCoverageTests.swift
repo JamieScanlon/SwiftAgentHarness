@@ -3743,7 +3743,12 @@ struct APILayerRESTCoverageTests {
         let grants = InMemoryExecApprovalGrantStore()
         await ExecApprovalStore.shared.configure(grantStore: grants)
         defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
-        await ExecApprovalStore.shared.registerPending(id: "unified-1", command: "git push origin main")
+        let conversationID = UUID()
+        await ExecApprovalStore.shared.registerPending(
+            id: "unified-1",
+            command: "git push origin main",
+            scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: nil)
+        )
 
         try await withApp { app in
             await api.configureRoutesForTesting(
@@ -3762,6 +3767,72 @@ struct APILayerRESTCoverageTests {
                 #expect(res.status == .ok)
             }
             #expect(await ExecApprovalStore.shared.isDurableApproved(command: "git status"))
+        }
+    }
+
+    @Test("POST /api/approvals/:id returns 403 for cross-tenant resolve under strict tenancy")
+    func unifiedApprovalResolveCrossTenantForbidden() async throws {
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let conversationID = UUID()
+        let model = APILayerRESTTestSupport.makeTestModel()
+        let conversationRow = ModelConversation(
+            id: conversationID,
+            model: model,
+            messages: [],
+            createdAt: Date(),
+            updatedAt: Date(),
+            topic: "exec-approval-tenancy",
+            description: nil,
+            interactionMode: .chat,
+            metadata: nil,
+            ownerAccountID: ownerA,
+            lineageKind: .root,
+            origin: .user
+        )
+        let conversation = ProtocolOnlyConversationGatewayStub(
+            conversationsByID: [conversationID: conversationRow]
+        )
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let modelProvider = StubModelProvider(models: [model])
+        let api = APILayer(port: 0)
+        await APILayerRESTTestSupport.configureStrictTenancyAuth(on: api)
+        let authB = try await APILayerRESTTestSupport.bearerAuthorization(ownerAccountID: ownerB)
+        await ExecApprovalStore.shared.registerPending(
+            id: "cross-tenant-1",
+            command: "git push origin main",
+            scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerA)
+        )
+        defer {
+            Task {
+                _ = await ExecApprovalStore.shared.resolve(
+                    id: "cross-tenant-1",
+                    scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerA),
+                    strictTenancy: true,
+                    ownerScope: ownerA,
+                    approved: false,
+                    reason: "test cleanup"
+                )
+            }
+        }
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+            try await app.testing().test(
+                .POST,
+                "/api/approvals/cross-tenant-1",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .authorization, value: authB)
+                    try req.content.encode(["decision": "allowAlways"])
+                }
+            ) { res async throws in
+                #expect(res.status == .forbidden)
+            }
         }
     }
 
