@@ -321,12 +321,19 @@ extension AgentRuntimeSessionService {
                 )
             },
             dispatchFn: { [self] call, conversationID, runID, orchestrator, snapshot, configuration, iteration, modelID, runtimePolicy, lifecycleEmitter in
+                let conversation = await self.runtimeConversation(id: conversationID)
                 let initial = await AgentLoopToolDispatch.dispatch(
                     call: call,
                     conversationID: conversationID,
                     runID: runID,
                     orchestrator: orchestrator,
                     snapshot: snapshot,
+                    configuration: configuration,
+                    conversation: conversation,
+                    gateway: DefaultToolSystemGateway(),
+                    parentLookup: { [deps = self.deps] id in
+                        await deps.persistenceDomain.modelConversation(id: id)
+                    },
                     spawnService: self.subAgentSpawnServiceForRuntime()
                 )
                 guard case .approvalRequired(let toolName, let toolCallID) = initial else {
@@ -442,6 +449,12 @@ extension AgentRuntimeSessionService {
                         runID: runID,
                         orchestrator: orchestrator,
                         snapshot: refreshedSnapshot,
+                        configuration: approvalConfig,
+                        conversation: conversation,
+                        gateway: DefaultToolSystemGateway(),
+                        parentLookup: { [deps = self.deps] id in
+                            await deps.persistenceDomain.modelConversation(id: id)
+                        },
                         spawnService: self.subAgentSpawnServiceForRuntime()
                     )
                 case .denied:

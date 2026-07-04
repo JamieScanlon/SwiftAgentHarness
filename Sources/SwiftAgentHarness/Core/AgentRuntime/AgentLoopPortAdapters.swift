@@ -264,6 +264,11 @@ enum AgentLoopToolDispatch {
         runID: UUID?,
         orchestrator: SwiftAgentKitOrchestrator,
         snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(enableTools: true, enableAgents: true),
+        conversation: ModelConversation? = nil,
+        gateway: (any ToolSystemGatewaying)? = nil,
+        parentLookup: (@Sendable (UUID) async -> ModelConversation?)? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         spawnService: SubAgentSpawnService? = nil
     ) async -> ToolDispatchOutcome {
         if let spawnService,
@@ -282,7 +287,12 @@ enum AgentLoopToolDispatch {
             conversationID: conversationID,
             runID: runID,
             orchestrator: orchestrator,
-            snapshot: snapshot
+            snapshot: snapshot,
+            configuration: configuration,
+            conversation: conversation,
+            gateway: gateway,
+            parentLookup: parentLookup,
+            tenancyPolicy: tenancyPolicy
         )
     }
 
@@ -291,7 +301,12 @@ enum AgentLoopToolDispatch {
         conversationID: UUID,
         runID: UUID?,
         orchestrator: SwiftAgentKitOrchestrator,
-        snapshot: RuntimeToolTurnPolicySnapshot
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(enableTools: true, enableAgents: true),
+        conversation: ModelConversation? = nil,
+        gateway: (any ToolSystemGatewaying)? = nil,
+        parentLookup: (@Sendable (UUID) async -> ModelConversation?)? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) async -> ToolDispatchOutcome {
         guard snapshot.effectiveEntries.contains(where: { $0.name == call.name }) else {
             return .denied(
@@ -314,6 +329,21 @@ enum AgentLoopToolDispatch {
                     )
                 )
             }
+        }
+        if !configuration.preApprovedToolNames.contains(call.name),
+           let gateway,
+           let conversation,
+           let parentLookup,
+           let entry = snapshot.effectiveEntries.first(where: { $0.name == call.name }),
+           await gateway.evaluateCallApproval(
+               entry: entry,
+               call: call,
+               conversation: conversation,
+               configuration: configuration,
+               parentLookup: parentLookup,
+               tenancyPolicy: tenancyPolicy
+           ) {
+            return .approvalRequired(toolName: call.name, toolCallID: call.id)
         }
         let request = ToolInvocationRequest(
             toolName: call.name,

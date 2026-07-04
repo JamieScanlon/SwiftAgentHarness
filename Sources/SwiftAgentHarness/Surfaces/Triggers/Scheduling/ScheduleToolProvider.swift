@@ -3,14 +3,14 @@ import Foundation
 import SwiftAgentKit
 
 public struct ScheduleToolProvider: ToolProvider {
-    private let scheduler: TriggerSchedulerService
+    private let dataService: ScheduledTaskToolDataService
     private let resolveHostTrigger: @Sendable () async -> HarnessTrigger?
 
-    public init(
-        scheduler: TriggerSchedulerService,
+    init(
+        dataService: ScheduledTaskToolDataService,
         resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil }
     ) {
-        self.scheduler = scheduler
+        self.dataService = dataService
         self.resolveHostTrigger = resolveHostTrigger
     }
 
@@ -20,7 +20,7 @@ public struct ScheduleToolProvider: ToolProvider {
         [
             ToolDefinition(
                 name: "schedule_create",
-                description: "Create a scheduled task (at, every, or cron).",
+                description: "Create a scheduled task (at, every, or cron). Defaults to the caller conversation when conversationID is omitted.",
                 parameters: [
                     .init(name: "scheduleKind", description: "at | every | cron", type: "string", required: true),
                     .init(name: "at", description: "ISO8601 for at", type: "string", required: false),
@@ -29,7 +29,7 @@ public struct ScheduleToolProvider: ToolProvider {
                     .init(name: "payloadKind", description: "systemEvent | agentTurn", type: "string", required: true),
                     .init(name: "payloadText", description: "Prompt or event text", type: "string", required: true),
                     .init(name: "recurring", description: "Whether task repeats", type: "boolean", required: true),
-                    .init(name: "conversationID", description: "Optional threaded conversation UUID", type: "string", required: false),
+                    .init(name: "conversationID", description: "Optional threaded conversation UUID (defaults to caller)", type: "string", required: false),
                     .init(name: "rootId", description: "Optional workflow root trigger id", type: "string", required: false),
                     .init(name: "parentTriggerId", description: "Optional parent trigger id", type: "string", required: false),
                     .init(name: "correlationId", description: "Optional workflow correlation id", type: "string", required: false),
@@ -38,7 +38,7 @@ public struct ScheduleToolProvider: ToolProvider {
             ),
             ToolDefinition(
                 name: "schedule_list",
-                description: "List scheduled tasks.",
+                description: "List scheduled tasks accessible from the caller conversation.",
                 parameters: [],
                 type: .function
             ),
@@ -73,6 +73,8 @@ public struct ScheduleToolProvider: ToolProvider {
                 return err(toolCall, "Unknown tool")
             }
             return ok(toolCall, content)
+        } catch ScheduledTaskAccessError.notFound {
+            return err(toolCall, "not_found")
         } catch {
             return err(toolCall, String(describing: error))
         }
@@ -110,7 +112,7 @@ public struct ScheduleToolProvider: ToolProvider {
             conversationID: extractString(from: toolCall.arguments, key: "conversationID"),
             correlation: correlation
         )
-        let saved = try await scheduler.createTask(task)
+        let saved = try await dataService.createTask(task)
         return "created id=\(saved.id)"
     }
 
@@ -133,7 +135,7 @@ public struct ScheduleToolProvider: ToolProvider {
     }
 
     private func list() async throws -> String {
-        let tasks = try await scheduler.listTasks()
+        let tasks = try await dataService.listAccessibleTasks()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(tasks)
@@ -142,13 +144,13 @@ public struct ScheduleToolProvider: ToolProvider {
 
     private func delete(_ toolCall: ToolCall) async throws -> String {
         guard let id = extractString(from: toolCall.arguments, key: "id") else { return "id required" }
-        let ok = try await scheduler.deleteTask(id: id)
+        let ok = try await dataService.deleteTask(id: id)
         return ok ? "deleted" : "not_found"
     }
 
     private func fireNow(_ toolCall: ToolCall) async throws -> String {
         guard let id = extractString(from: toolCall.arguments, key: "id") else { return "id required" }
-        let result = try await scheduler.fireNow(id: id)
+        let result = try await dataService.fireNow(id: id)
         return "decision=\(result.decision.rawValue) session=\(result.sessionID?.uuidString ?? "nil")"
     }
 

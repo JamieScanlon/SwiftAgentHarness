@@ -77,6 +77,27 @@ public struct TriggersRuntimeBundle: Sendable {
 }
 
 public enum TriggersRuntimeWiring {
+    public struct ScheduleToolPorts: Sendable {
+        public var catalogPort: ScheduleToolCatalogPort
+        public var tenancyPolicy: TenancyPolicySettings
+
+        public init(
+            catalogPort: ScheduleToolCatalogPort,
+            tenancyPolicy: TenancyPolicySettings = .disabled
+        ) {
+            self.catalogPort = catalogPort
+            self.tenancyPolicy = tenancyPolicy
+        }
+
+        init(
+            catalog: any ConversationCatalogServicing,
+            tenancyPolicy: TenancyPolicySettings = .disabled
+        ) {
+            self.catalogPort = ScheduleToolCatalogPort(catalog: catalog)
+            self.tenancyPolicy = tenancyPolicy
+        }
+    }
+
     public struct DelegatedPorts: Sendable {
         public var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
         public var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
@@ -133,6 +154,7 @@ public enum TriggersRuntimeWiring {
     public static func resolve(
         configuration: Configuration,
         runtime: any APILayerChatRuntimeManaging,
+        scheduleToolPorts: ScheduleToolPorts,
         dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
@@ -144,6 +166,7 @@ public enum TriggersRuntimeWiring {
         resolve(
             configuration: configuration,
             runtime: runtime,
+            scheduleToolPorts: scheduleToolPorts,
             dedupePeek: dedupePeek,
             dedupeCheckAndSet: dedupeCheckAndSet,
             createConversation: createConversation,
@@ -158,6 +181,7 @@ public enum TriggersRuntimeWiring {
     static func resolve(
         configuration: Configuration,
         runtime: any APILayerChatRuntimeManaging,
+        scheduleToolPorts: ScheduleToolPorts,
         dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
@@ -184,7 +208,20 @@ public enum TriggersRuntimeWiring {
             resolveConversationByTitle: resolveConversationByTitle,
             stampDelegatedHost: delegatedPorts.stampDelegatedHost
         )
-        let sessionRouter = TriggerSessionRouter(sessionIndex: sessionIndex)
+        let catalogPort = scheduleToolPorts.catalogPort
+        let tenancyPolicy = scheduleToolPorts.tenancyPolicy
+        let threadedTargetValidator: @Sendable (UUID, HarnessTrigger) async -> Bool = { conversationID, trigger in
+            await TriggerThreadedTargetValidator.validate(
+                conversationID: conversationID,
+                trigger: trigger,
+                catalogPort: catalogPort,
+                tenancyPolicy: tenancyPolicy
+            )
+        }
+        let sessionRouter = TriggerSessionRouter(
+            sessionIndex: sessionIndex,
+            threadedTargetValidator: threadedTargetValidator
+        )
         let promptBuilder = TriggerPromptBuilder()
         let runtimeAdapter = HarnessTriggerRuntimeAdapter(runtime: runtime)
         let runRegistry = TriggerDelegatedRunRegistry()
@@ -268,8 +305,13 @@ public enum TriggersRuntimeWiring {
             idempotency: idempotency,
             eventsDirectory: configuration.fileEventQueueEnabled ? resolvedEventsDirectory : nil
         )
-        let scheduleTools = ScheduleToolProvider(
+        let scheduleDataService = ScheduledTaskToolDataService(
             scheduler: scheduler,
+            catalogPort: scheduleToolPorts.catalogPort,
+            tenancyPolicy: scheduleToolPorts.tenancyPolicy
+        )
+        let scheduleTools = ScheduleToolProvider(
+            dataService: scheduleDataService,
             resolveHostTrigger: resolveHostTrigger
         )
         let fileEventQueue = FileEventQueueService(

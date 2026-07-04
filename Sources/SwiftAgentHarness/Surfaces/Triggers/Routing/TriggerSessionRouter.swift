@@ -39,9 +39,14 @@ struct TriggerSessionRoute: Sendable, Equatable {
 
 struct TriggerSessionRouter: Sendable {
     private let sessionIndex: TriggerSessionIndex
+    private let threadedTargetValidator: @Sendable (UUID, HarnessTrigger) async -> Bool
 
-    init(sessionIndex: TriggerSessionIndex) {
+    init(
+        sessionIndex: TriggerSessionIndex,
+        threadedTargetValidator: @escaping @Sendable (UUID, HarnessTrigger) async -> Bool = { _, _ in true }
+    ) {
         self.sessionIndex = sessionIndex
+        self.threadedTargetValidator = threadedTargetValidator
     }
 
     func route(_ trigger: HarnessTrigger) async throws -> TriggerSessionRoute {
@@ -66,6 +71,9 @@ struct TriggerSessionRouter: Sendable {
             return TriggerSessionRoute(sessionKey: sessionKey, conversationID: conversationID, routingMode: .isolated)
         case .threaded:
             if let raw = trigger.sourceMetadata["conversationID"], let id = UUID(uuidString: raw) {
+                guard await threadedTargetValidator(id, trigger) else {
+                    return TriggerSessionRoute(sessionKey: sessionKey, conversationID: nil, routingMode: .threaded)
+                }
                 return TriggerSessionRoute(sessionKey: sessionKey, conversationID: id, routingMode: .threaded)
             }
             let conversationID = try await sessionIndex.resolveOrCreateTriggerHost(

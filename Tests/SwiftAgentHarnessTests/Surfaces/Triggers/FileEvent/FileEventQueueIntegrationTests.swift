@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Logging
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
@@ -141,7 +142,12 @@ struct FileEventQueueIntegrationTests {
                 staticRoutes: [],
                 dynamicStore: WebhookDynamicRouteStore(fileURL: dataDir.appendingPathComponent("subs.json"))
             ),
-            scheduleTools: ScheduleToolProvider(scheduler: scheduler),
+            scheduleTools: ScheduleToolProvider(
+                dataService: ScheduledTaskToolDataService(
+                    scheduler: scheduler,
+                    catalog: FileEventStubCatalog()
+                )
+            ),
             fileEventQueue: fileEventQueue,
             replay: TriggerReplayService(dispatch: dispatch, eventsDirectory: eventsDir),
             channelRegistry: channelRegistry,
@@ -197,4 +203,27 @@ struct FileEventQueueIntegrationTests {
 actor AlwaysPassIdempotency: TriggerDedupeChecking {
     func dedupePeek(key: String) async throws -> Bool { false }
     func dedupeCheckAndSet(key: String, ttlSeconds: Int) async throws -> Bool { true }
+}
+
+private final class FileEventStubCatalog: ConversationCatalogServicing, @unchecked Sendable {
+    func listConversationInfo() async -> [ModelConversation] { [] }
+    func listConversationMetadata(visibility: ConversationCatalogVisibilityFilter) async -> [ConversationMetadata] { [] }
+    func getConversation(id: UUID) async -> ModelConversation? { nil }
+    func getConversationWithDerived(id: UUID) async -> ConversationReadWithDerivedResponse? { nil }
+    func projectConversation(conversationID: UUID, request: ConversationProjectRequest) async throws -> ConversationProjectResponse {
+        throw ConversationServiceError.conversationNotFound
+    }
+    func listConversations(query: ConversationListQuery) async -> PagedConversationsResponse {
+        PagedConversationsResponse(items: [], totalCount: 0, nextOffset: nil)
+    }
+    func searchConversations(query: ConversationSearchRequest) async -> ConversationSearchResponse {
+        ConversationSearchResponse(hits: [], totalHitCount: 0)
+    }
+    func listMessagesThrowing(conversationID: UUID) async throws -> [Message] { [] }
+    func latestTranscriptSequence(conversationID: UUID) async -> Int? { nil }
+    func readTranscriptEntries(conversationID: UUID, request: SessionTranscriptReadRequest) async throws -> [SessionTranscriptEntry] { [] }
+    func conversationEventsBackfill(conversationID: UUID, since: Int?) async throws -> ConversationEventsBackfillResponse {
+        throw ConversationServiceError.conversationNotFound
+    }
+    func registryOwnerAccountID() async -> UUID? { nil }
 }

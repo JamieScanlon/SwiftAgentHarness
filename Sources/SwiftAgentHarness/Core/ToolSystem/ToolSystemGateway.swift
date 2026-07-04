@@ -131,6 +131,28 @@ protocol ToolSystemGatewaying: Sendable {
         toolName: String,
         effectiveEntries: [ToolRegistryEntry]
     ) -> Bool
+
+    func evaluateCallApproval(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        parentLookup: @Sendable (UUID) async -> ModelConversation?,
+        tenancyPolicy: TenancyPolicySettings
+    ) async -> Bool
+}
+
+extension ToolSystemGatewaying {
+    func evaluateCallApproval(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        parentLookup: @Sendable (UUID) async -> ModelConversation?,
+        tenancyPolicy: TenancyPolicySettings
+    ) async -> Bool {
+        false
+    }
 }
 
 struct DefaultToolSystemGateway: ToolSystemGatewaying {
@@ -399,6 +421,23 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entry.haltsLoop
                 && entry.name.caseInsensitiveCompare(toolName) == .orderedSame
         }
+    }
+
+    func evaluateCallApproval(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        parentLookup: @Sendable (UUID) async -> ModelConversation?,
+        tenancyPolicy: TenancyPolicySettings
+    ) async -> Bool {
+        guard entry.name == "schedule_create" else { return false }
+        return await ScheduleCreateApprovalPolicy.requiresApproval(
+            arguments: call.arguments,
+            callerConversationID: conversation.id,
+            parentLookup: parentLookup,
+            tenancyPolicy: tenancyPolicy
+        )
     }
 
     private static func earlyDenyFacts(
