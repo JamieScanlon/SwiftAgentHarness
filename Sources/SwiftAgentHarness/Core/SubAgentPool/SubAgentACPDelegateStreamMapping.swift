@@ -2,8 +2,10 @@ import Foundation
 import SwiftAgentKit
 import SwiftAgentKitACP
 
-enum SubAgentACPDelegateStreamMapping {
-    static func map(
+struct SubAgentACPDelegateStreamMapper {
+    private var accumulatedUsage: DelegateCompletionUsagePayload?
+
+    mutating func map(
         event: ACPDelegateStreamEvent,
         session: RemoteTransportSession
     ) -> SubAgentDelegateEvent? {
@@ -24,13 +26,19 @@ enum SubAgentACPDelegateStreamMapping {
             mapped.phase = .dispatching
             return mapped
         case .messageChunk, .userMessageChunk, .thoughtChunk, .availableCommandsUpdate, .plan,
-             .toolCall, .toolCallUpdate, .usageUpdate, .sessionInfoUpdate, .currentModeUpdate,
+             .toolCall, .toolCallUpdate, .sessionInfoUpdate, .currentModeUpdate,
              .configOptionUpdate:
+            return base
+        case let .usageUpdate(used, size, cost):
+            if let update = SubAgentDelegateCompletionUsageMapping.from(used: used, size: size, cost: cost) {
+                accumulatedUsage = SubAgentDelegateCompletionUsageMapping.merging(accumulatedUsage, with: update)
+            }
             return base
         case let .completed(content, _, sessionID):
             var mapped = base
             mapped.phase = .done
             mapped.completionSource = content
+            mapped.completionUsage = accumulatedUsage
             _ = sessionID
             return mapped
         case let .failed(error, sessionID):
@@ -41,7 +49,9 @@ enum SubAgentACPDelegateStreamMapping {
             return mapped
         }
     }
+}
 
+enum SubAgentACPDelegateStreamMapping {
     static func instructions(from request: SubAgentLaunchPlan) -> String {
         SubAgentA2ADelegateStreamMapping.instructions(from: request)
     }

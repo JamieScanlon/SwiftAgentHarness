@@ -430,6 +430,7 @@ public actor SubAgentSpawnService {
         let existing = subAgentLifecycleState
             .entries(parentConversationID: event.parentConversationID)
             .first(where: { $0.lifecycleID == event.lifecycleID })
+        let transportContext = subAgentLifecycleState.transportContext(lifecycleID: event.lifecycleID)
         let translated = subAgentDelegateEventTranslator.translate(event: event, existingEntry: existing)
         await upsertSubAgentLifecycleEntry(
             parentConversationID: event.parentConversationID,
@@ -442,6 +443,45 @@ public actor SubAgentSpawnService {
                 ?? translated.lifecycleEntry.defaultTrustLevel
             await topics.publishRuntimeLifecycleEvent(runtimeLifecycleEvent)
         }
+        await maybeIngestRemoteTerminalCompletion(
+            event: event,
+            lifecycleEntry: translated.lifecycleEntry,
+            transportContext: transportContext
+        )
+    }
+
+    private func maybeIngestRemoteTerminalCompletion(
+        event: SubAgentDelegateEvent,
+        lifecycleEntry: SubAgentLifecycleEntryPayload,
+        transportContext: SubAgentLifecycleState.TransportContext?
+    ) async {
+        guard event.phase == .done || event.phase == .failed else { return }
+        guard event.completionAnnounceID == nil else { return }
+        guard let transportContext, transportContext.transportKind != .inProcess else { return }
+
+        let delegateHandleID = event.asyncHandleID ?? event.lifecycleID
+        let toolCallID = event.toolCallID ?? delegateHandleID
+        let conversationID = event.childConversationID ?? event.parentConversationID
+        let parentConversationID: UUID?
+        if event.childConversationID != nil {
+            parentConversationID = event.parentConversationID
+        } else {
+            parentConversationID = await deps.persistenceDomain.modelConversation(id: conversationID)?.parentConversationID
+        }
+
+        let announce = CompletionAnnouncePayload(
+            delegateHandleID: delegateHandleID,
+            toolCallID: toolCallID,
+            conversationID: conversationID,
+            parentConversationID: parentConversationID,
+            lifecycleID: event.lifecycleID,
+            status: event.phase == .done ? .done : .failed,
+            completedAt: event.updatedAt,
+            source: "subAgentPool.remoteDelegate",
+            usage: lifecycleEntry.completionUsage,
+            error: event.error
+        )
+        await completionService.ingestCompletionAnnouncementForAPI(announce, toolMessageContent: nil)
     }
 
     func applySubAgentTransportPermissionResolutionIfNeeded(

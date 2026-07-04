@@ -372,8 +372,9 @@ struct ACPStdioSubAgentTransportAdapter: SubAgentTransportAdapting {
                     completionHandleID: request.launchPlan.asyncHandleID
                 )
             }
+            var streamMapper = SubAgentACPDelegateStreamMapper()
             for await event in events {
-                guard let mapped = SubAgentACPDelegateStreamMapping.map(event: event, session: sessionTemplate) else {
+                guard let mapped = streamMapper.map(event: event, session: sessionTemplate) else {
                     continue
                 }
                 await sessionStore.emit(mapped, lifecycleID: lifecycleID)

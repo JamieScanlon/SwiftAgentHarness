@@ -47,6 +47,7 @@ enum SubAgentA2ADelegateStreamMapping {
             var mapped = base
             mapped.phase = .done
             mapped.completionSource = completion.content
+            mapped.completionUsage = SubAgentDelegateCompletionUsageMapping.from(llmMetadata: completion.metadata)
             return mapped
         case let .failed(failure):
             var mapped = base

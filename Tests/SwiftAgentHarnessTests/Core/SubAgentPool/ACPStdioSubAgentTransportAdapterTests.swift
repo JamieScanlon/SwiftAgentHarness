@@ -7,9 +7,8 @@ import Testing
 
 @Suite("ACP sub-agent delegate stream mapping")
 struct SubAgentACPDelegateStreamMappingTests {
-    @Test("completed maps to done with completion source")
-    func completedMapsToDone() {
-        let session = RemoteTransportSession(
+    private func session() -> RemoteTransportSession {
+        RemoteTransportSession(
             correlation: SubAgentTransportInvocationCorrelation(
                 lifecycleID: "lifecycle-1",
                 transportKind: .acpStdio,
@@ -22,32 +21,52 @@ struct SubAgentACPDelegateStreamMappingTests {
             permissionPolicy: SubAgentPermissionPolicy.askUser.rawValue,
             status: .running
         )
-        let mapped = SubAgentACPDelegateStreamMapping.map(
+    }
+
+    @Test("completed maps to done with completion source")
+    func completedMapsToDone() {
+        var mapper = SubAgentACPDelegateStreamMapper()
+        let mapped = mapper.map(
             event: .completed(content: "done text", stopReason: .endTurn, sessionID: "session-1"),
-            session: session
+            session: session()
         )
         #expect(mapped?.phase == .done)
         #expect(mapped?.completionSource == "done text")
     }
 
+    @Test("usageUpdate followed by completed attaches completion usage")
+    func usageUpdateFollowedByCompletedAttachesUsage() {
+        var mapper = SubAgentACPDelegateStreamMapper()
+        _ = mapper.map(
+            event: .usageUpdate(used: 120, size: 4096, cost: ACPUsageCost(amount: 0.02, currency: "USD")),
+            session: session()
+        )
+        let mapped = mapper.map(
+            event: .completed(content: "done text", stopReason: .endTurn, sessionID: "session-1"),
+            session: session()
+        )
+        #expect(mapped?.completionUsage?.totalTokens == 120)
+        #expect(mapped?.completionUsage?.costUSD == 0.02)
+    }
+
     @Test("failed maps to failed phase")
     func failedMapsToFailed() {
-        let session = RemoteTransportSession(
-            correlation: SubAgentTransportInvocationCorrelation(
-                lifecycleID: "lifecycle-1",
-                transportKind: .acpStdio,
-                sessionHandleID: "agent-1",
-                completionHandleID: nil
-            ),
-            parentConversationID: UUID(),
-            delegateToolName: "delegate_acp",
-            defaultTrustLevel: SubAgentTrustLevel.unknownParty.rawValue,
-            permissionPolicy: SubAgentPermissionPolicy.askUser.rawValue,
-            status: .running
-        )
-        let mapped = SubAgentACPDelegateStreamMapping.map(
+        var mapper = SubAgentACPDelegateStreamMapper()
+        let mapped = mapper.map(
             event: .failed(error: "boom", sessionID: nil),
-            session: session
+            session: RemoteTransportSession(
+                correlation: SubAgentTransportInvocationCorrelation(
+                    lifecycleID: "lifecycle-1",
+                    transportKind: .acpStdio,
+                    sessionHandleID: "agent-1",
+                    completionHandleID: nil
+                ),
+                parentConversationID: UUID(),
+                delegateToolName: "delegate_acp",
+                defaultTrustLevel: SubAgentTrustLevel.unknownParty.rawValue,
+                permissionPolicy: SubAgentPermissionPolicy.askUser.rawValue,
+                status: .running
+            )
         )
         #expect(mapped?.phase == .failed)
         #expect(mapped?.error == "boom")
