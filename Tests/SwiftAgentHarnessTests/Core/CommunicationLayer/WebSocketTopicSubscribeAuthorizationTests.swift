@@ -14,14 +14,24 @@ struct WebSocketTopicSubscribeAuthorizationTests {
     }
 
     @Test func deniedWhenConversationNil() {
-        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(conversation: nil, registryScope: nil)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: nil,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: nil
+        )
         #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
     }
 
     @Test func allowedWhenNoRegistryScope() {
         let cid = UUID()
         let conv = fixtureConversation(id: cid, owner: UUID())
-        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(conversation: conv, registryScope: nil)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: nil
+        )
         #expect(denied == nil)
     }
 
@@ -29,7 +39,12 @@ struct WebSocketTopicSubscribeAuthorizationTests {
         let cid = UUID()
         let scope = UUID()
         let conv = fixtureConversation(id: cid, owner: UUID())
-        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(conversation: conv, registryScope: scope)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: scope
+        )
         #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
     }
 
@@ -37,7 +52,12 @@ struct WebSocketTopicSubscribeAuthorizationTests {
         let cid = UUID()
         let scope = UUID()
         let conv = fixtureConversation(id: cid, owner: nil)
-        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(conversation: conv, registryScope: scope)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: scope
+        )
         #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
     }
 
@@ -45,7 +65,73 @@ struct WebSocketTopicSubscribeAuthorizationTests {
         let cid = UUID()
         let scope = UUID()
         let conv = fixtureConversation(id: cid, owner: scope)
-        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(conversation: conv, registryScope: scope)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: scope
+        )
+        #expect(denied == nil)
+    }
+
+    @Test func deniedWhenStrictTenancyWithoutAuthenticatedOwner() {
+        let cid = UUID()
+        let conv = fixtureConversation(id: cid, owner: UUID())
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: true,
+            authenticatedOwnerAccountID: nil,
+            registryScope: nil
+        )
+        #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
+    }
+
+    @Test func allowedWhenStrictTenancyOwnerMatches() {
+        let cid = UUID()
+        let owner = UUID()
+        let conv = fixtureConversation(id: cid, owner: owner)
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: true,
+            authenticatedOwnerAccountID: owner,
+            registryScope: nil
+        )
+        #expect(denied == nil)
+    }
+
+    @Test func deniedWhenStrictTenancyOwnerMismatch() {
+        let cid = UUID()
+        let conv = fixtureConversation(id: cid, owner: UUID())
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReason(
+            conversation: conv,
+            strictTenancy: true,
+            authenticatedOwnerAccountID: UUID(),
+            registryScope: nil
+        )
+        #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
+    }
+
+    @Test func deniedForConversationsRegistryWhenStrictTenancyWithoutOwner() {
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReasonForConversationsRegistrySubscribe(
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true),
+            authenticatedOwnerAccountID: nil
+        )
+        #expect(denied == WebSocketTopicSubscribeAuthorization.deniedMessage)
+    }
+
+    @Test func allowedForConversationsRegistryWhenStrictTenancyWithOwner() {
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReasonForConversationsRegistrySubscribe(
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true),
+            authenticatedOwnerAccountID: UUID()
+        )
+        #expect(denied == nil)
+    }
+
+    @Test func allowedForConversationsRegistryWhenTenancyDisabledWithoutOwner() {
+        let denied = WebSocketTopicSubscribeAuthorization.deniedReasonForConversationsRegistrySubscribe(
+            tenancyPolicy: .disabled,
+            authenticatedOwnerAccountID: nil
+        )
         #expect(denied == nil)
     }
 

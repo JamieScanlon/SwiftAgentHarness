@@ -25,6 +25,7 @@ enum WebSocketTopicSubscriptionRouter {
         inboundDedupeRespond: (@Sendable (Bool) async throws -> Void)? = nil,
         serverTraceSubscribePolicy: ServerTraceSubscribePolicy = .open,
         conversationEventsReplayRetention: TranscriptTailRetentionPolicy = .fromEnvironmentOrDefault(),
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         message: CommClientControlMessage,
         registration: WebSocketTopicWireRegistration
     ) async -> String? {
@@ -83,7 +84,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: conversationID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -162,7 +164,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: conversationID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -221,7 +224,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: parsed.conversationID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -255,7 +259,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: parsed.conversationID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -289,7 +294,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: conversationID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -352,7 +358,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: registryCID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -383,7 +390,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: registryCID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -414,7 +422,8 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 if let denied = await WebSocketTopicSubscribeAuthorization.deniedReasonForConversationObservation(
                     conversationID: registryCID,
-                    session: conversationSession
+                    session: conversationSession,
+                    tenancyPolicy: tenancyPolicy
                 ) {
                     return denied
                 }
@@ -439,6 +448,12 @@ enum WebSocketTopicSubscriptionRouter {
                 }
                 guard let conversationSession else {
                     return "Chat manager is not configured"
+                }
+                if let denied = WebSocketTopicSubscribeAuthorization.deniedReasonForConversationsRegistrySubscribe(
+                    tenancyPolicy: tenancyPolicy,
+                    authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID
+                ) {
+                    return denied
                 }
                 do {
                     try await conversationsRegistryHub.subscribeConversationsRegistry(token: token, since: message.since) {

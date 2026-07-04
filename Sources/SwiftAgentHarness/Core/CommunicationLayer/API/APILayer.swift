@@ -1126,6 +1126,7 @@ public actor APILayer {
         let wireConversation = chatGateway.conversation
         let wireRuntime = chatGateway.runtime
         let wireBudgetReporting: any BudgetReporting = budgetReporting
+        let wireTenancyPolicy = tenancyPolicySettings
         let wireAfterOrchestrationStateChanged: @Sendable (UUID, ConversationOrchestrationState) async -> Void = { [weak self] id, orchestration in
             await self?.refreshConversationStateOnWire(
                 conversationID: id,
@@ -1145,6 +1146,15 @@ public actor APILayer {
                 from: req.headers,
                 validator: wireAccessTokenValidator
             )
+            if wireTenancyPolicy.requireAuthenticatedOwnerOnMutations, wsAuthenticatedOwner == nil {
+                logger.warning(
+                    "WS upgrade rejected requestID=\(wsRequestID): authenticated owner required (valid Authorization Bearer token on WebSocket handshake)"
+                )
+                Task {
+                    try? await ws.close(code: .policyViolation)
+                }
+                return
+            }
             let topicRegistration = WebSocketTopicWireRegistration()
             let outboundSchemaViolationTracker = WebSocketOutboundSchemaViolationTracker(
                 configuration: wireOutboundSchemaEnforcementConfiguration
@@ -1344,6 +1354,7 @@ public actor APILayer {
                             },
                             serverTraceSubscribePolicy: wireServerTraceSubscribePolicy,
                             conversationEventsReplayRetention: wireConversationEventsReplayRetention ?? .fromEnvironmentOrDefault(),
+                            tenancyPolicy: wireTenancyPolicy,
                             message: comm,
                             registration: topicRegistration
                         ) {
