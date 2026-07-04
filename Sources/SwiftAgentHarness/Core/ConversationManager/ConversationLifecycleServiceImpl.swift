@@ -42,6 +42,7 @@ actor ConversationLifecycleServiceImpl: ConversationLifecycleServicing {
     }
 
     func deleteConversation(conversationID: UUID, hard: Bool) async throws {
+        await installedRunControl.cancelGeneration(for: conversationID)
         await conversationReplay.stopConversationReplay(conversationID: conversationID)
         if !hard {
             try? await selection.reselectAfterDelete(deletedConversationID: conversationID)
