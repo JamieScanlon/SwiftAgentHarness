@@ -92,6 +92,11 @@ struct SubAgentTransportCapabilities: Sendable, Equatable {
     var useClasses: [String]
 }
 
+enum SubAgentRecursionLimits {
+    /// Fail-closed ceiling when no registry, mode-profile, or transport cap resolves.
+    static let absoluteMaxDepthFallback = 3
+}
+
 struct SubAgentTransportInvocationRequest: Sendable {
     var launchPlan: SubAgentLaunchPlan
     var registryEntry: SubAgentRegistryEntry
