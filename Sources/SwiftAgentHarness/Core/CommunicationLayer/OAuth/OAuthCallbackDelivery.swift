@@ -15,6 +15,7 @@ import SwiftAgentKit
 public final class OAuthCallbackDelivery: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<OAuthCallbackServer.CallbackResult, Error>?
+    private var waitGeneration: UInt64 = 0
     private let logger: Logger
 
     public init(logger: Logger? = nil) {
@@ -26,6 +27,9 @@ public final class OAuthCallbackDelivery: @unchecked Sendable {
         lock.lock()
         let cont = continuation
         continuation = nil
+        if cont != nil {
+            waitGeneration &+= 1
+        }
         lock.unlock()
         if let cont = cont {
             cont.resume(returning: result)
@@ -66,11 +70,13 @@ extension OAuthCallbackDelivery {
     fileprivate func storeContinuation(_ cont: CheckedContinuation<OAuthCallbackServer.CallbackResult, Error>, timeout: TimeInterval) {
         lock.lock()
         if continuation == nil {
+            waitGeneration &+= 1
+            let generation = waitGeneration
             continuation = cont
             lock.unlock()
             Task {
                 try? await Task.sleep(for: .seconds(timeout))
-                resumeWithTimeoutIfNeeded()
+                resumeWithTimeoutIfNeeded(generation: generation)
             }
         } else {
             lock.unlock()
@@ -78,13 +84,15 @@ extension OAuthCallbackDelivery {
         }
     }
 
-    fileprivate func resumeWithTimeoutIfNeeded() {
+    fileprivate func resumeWithTimeoutIfNeeded(generation: UInt64) {
         lock.lock()
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-        if let cont = cont {
-            cont.resume(throwing: OAuthError.networkError("OAuth callback timeout"))
+        guard generation == waitGeneration, let cont = continuation else {
+            lock.unlock()
+            return
         }
+        continuation = nil
+        waitGeneration &+= 1
+        lock.unlock()
+        cont.resume(throwing: OAuthError.networkError("OAuth callback timeout"))
     }
 }

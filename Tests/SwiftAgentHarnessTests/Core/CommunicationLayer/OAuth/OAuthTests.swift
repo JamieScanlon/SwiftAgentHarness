@@ -113,6 +113,44 @@ struct OAuthCallbackDeliveryTests {
         // No crash; deliver is no-op when no one is waiting
     }
 
+    @Test("Stale timeout from completed flow does not timeout successor")
+    func staleTimeoutFromCompletedFlowDoesNotTimeoutSuccessor() async throws {
+        let delivery = OAuthCallbackDelivery()
+        let successResult = OAuthCallbackServer.CallbackResult(
+            authorizationCode: "code",
+            state: "state",
+            error: nil,
+            errorDescription: nil
+        )
+
+        let flowA = Task {
+            try await delivery.receiver.waitForCallback(timeout: 0.5)
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        delivery.deliver(result: successResult)
+        _ = try await flowA.value
+
+        let flowB = Task {
+            try await delivery.receiver.waitForCallback(timeout: 2.0)
+        }
+        try await Task.sleep(for: .milliseconds(600))
+        delivery.deliver(result: successResult)
+        let flowBResult = try await flowB.value
+        #expect(flowBResult.isSuccess == true)
+        #expect(flowBResult.authorizationCode == "code")
+    }
+
+    @Test("Wait for callback times out when no delivery")
+    func waitForCallbackTimesOutWhenNoDelivery() async throws {
+        let delivery = OAuthCallbackDelivery()
+        do {
+            _ = try await delivery.receiver.waitForCallback(timeout: 0.15)
+            #expect(Bool(false), "Expected timeout error")
+        } catch {
+            #expect(String(describing: error).contains("timeout"))
+        }
+    }
+
     @Test("Second concurrent waiter throws already in progress")
     func secondWaiterGetsError() async throws {
         let delivery = OAuthCallbackDelivery()
