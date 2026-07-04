@@ -831,8 +831,8 @@ struct AgentRuntimeSection6ComplianceTests {
         #expect(!messages2.contains(where: { $0.content.contains("assistant-one") }))
     }
 
-    @Test("cancelled run persists marker and avoids partial assistant transcript residue")
-    func cancelDurabilityNoPartialAssistantResidue() async throws {
+    @Test("cancelled run persists interrupted partial assistant and cancellation marker")
+    func cancelledRunPersistsInterruptedPartialAssistant() async throws {
         let container = try section6Container()
         let model = section6Model()
         let manager = HarnessRuntimeSession(
@@ -876,17 +876,21 @@ struct AgentRuntimeSection6ComplianceTests {
         #expect(cancelled.cancellationReason?.contains("task_cancelled") == true)
 
         let messages = try await manager.listCurrentMessages()
-        #expect(!messages.contains(where: { $0.role == MessageRole.assistant }))
-
-        let lifecycle = await publisher.runtimeLifecycleEvents(for: conversationID)
-        let terminalLifecycle = lifecycle.last(where: { $0.name == RuntimeLifecycleEventName.turnCancelled })
-        #expect(terminalLifecycle != nil)
-        #expect(terminalLifecycle?.terminalReason?.category == .externalCancellation)
+        let partialAssistant = try #require(
+            messages.first(where: { $0.role == MessageRole.assistant })
+        )
+        #expect(partialAssistant.content.contains("partial-a"))
+        #expect(!partialAssistant.content.contains("assistant-final-should-not-persist"))
 
         let states = await drainedTask
         let finalState = states.last
         #expect(finalState?.harness?.terminationCategory == ConversationRunTerminalCategory.externalCancellation.rawValue)
         #expect(finalState?.harness?.terminationDetail == "task_cancelled")
+
+        let lifecycle = await publisher.runtimeLifecycleEvents(for: conversationID)
+        let terminalLifecycle = lifecycle.last(where: { $0.name == RuntimeLifecycleEventName.turnCancelled })
+        #expect(terminalLifecycle != nil)
+        #expect(terminalLifecycle?.terminalReason?.category == .externalCancellation)
     }
 
     @Test("runtime terminal lifecycle, runs projection, and harness termination stay in parity")

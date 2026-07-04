@@ -200,6 +200,12 @@ struct TurnLoop {
                 if !sawStreamComplete {
                     let userStopRequested = await ports.conversation.stopRequested(conversationID: conversationID)
                     if Task.isCancelled || userStopRequested {
+                        await persistInterruptedPartialAssistantIfNeeded(
+                            acc: acc,
+                            messageOutputPolicy: messageOutputPolicy,
+                            conversationID: conversationID,
+                            runID: runID
+                        )
                         await ports.conversation.appendRunCancelledMarker(
                             conversationID: conversationID,
                             runID: runID,
@@ -210,9 +216,21 @@ struct TurnLoop {
                             detail: Task.isCancelled ? "task_cancelled" : "user_stop_requested"
                         )
                     }
+                    await persistInterruptedPartialAssistantIfNeeded(
+                        acc: acc,
+                        messageOutputPolicy: messageOutputPolicy,
+                        conversationID: conversationID,
+                        runID: runID
+                    )
                     throw LLMError.timeout
                 }
             } catch is CancellationError {
+                await persistInterruptedPartialAssistantIfNeeded(
+                    acc: acc,
+                    messageOutputPolicy: messageOutputPolicy,
+                    conversationID: conversationID,
+                    runID: runID
+                )
                 await ports.conversation.appendRunCancelledMarker(
                     conversationID: conversationID,
                     runID: runID,
@@ -513,6 +531,44 @@ struct TurnLoop {
             category: .boundedStop,
             boundedReason: .maxAgentIterations
         )
+    }
+
+    private static let interruptedFinishReason = "interrupted"
+
+    private func hasPersistablePartial(_ envelope: HarnessMessageEnvelope) -> Bool {
+        let assistant = envelope.message
+        if !assistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !assistant.toolCalls.isEmpty || !assistant.images.isEmpty {
+            return true
+        }
+        return !envelope.contentBlocks.isEmpty
+    }
+
+    private func persistInterruptedPartialAssistantIfNeeded(
+        acc: AssistantMessageAccumulator,
+        messageOutputPolicy: MessageOutputPolicy,
+        conversationID: UUID,
+        runID: UUID?
+    ) async {
+        let assistantEnvelope = MessageOutputPostProcessor.apply(
+            envelope: acc.finalize(),
+            policy: messageOutputPolicy
+        )
+        guard hasPersistablePartial(assistantEnvelope) else { return }
+        HarnessMessageEnvelopeStore.store(assistantEnvelope)
+        let assistant = assistantEnvelope.message
+        do {
+            try await ports.conversation.append(assistant, conversationID: conversationID, runID: runID)
+            await ports.conversation.stampAssistantFinishReason(
+                messageID: assistant.id,
+                conversationID: conversationID,
+                finishReason: Self.interruptedFinishReason
+            )
+        } catch {
+            ports.logger?.warning("[TurnLoop] interrupted partial assistant persist failed: \(error)")
+        }
     }
 
     private func stampTerminalAssistantFinishReasonIfNeeded(
