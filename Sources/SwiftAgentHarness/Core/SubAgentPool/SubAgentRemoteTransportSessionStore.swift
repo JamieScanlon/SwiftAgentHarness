@@ -30,9 +30,19 @@ struct RemoteTransportSession: Sendable {
 actor SubAgentRemoteTransportSessionStore {
     static let shared = SubAgentRemoteTransportSessionStore()
 
+    private let sessionEvictionGraceNanoseconds: UInt64
     private var sessionsByLifecycleID: [String: RemoteTransportSession] = [:]
     private var bufferedEventsByLifecycleID: [String: [SubAgentDelegateEvent]] = [:]
     private var continuationsByLifecycleID: [String: AsyncStream<SubAgentDelegateEvent>.Continuation] = [:]
+    private var pendingEvictionTasks: [String: Task<Void, Never>] = [:]
+
+    init(sessionEvictionGraceNanoseconds: UInt64 = 5_000_000_000) {
+        self.sessionEvictionGraceNanoseconds = sessionEvictionGraceNanoseconds
+    }
+
+    func testing_retainedLifecycleCount() -> Int {
+        sessionsByLifecycleID.count
+    }
 
     func register(session: RemoteTransportSession, initialEvent: SubAgentDelegateEvent) -> [SubAgentDelegateEvent] {
         sessionsByLifecycleID[session.correlation.lifecycleID] = session
@@ -119,17 +129,25 @@ actor SubAgentRemoteTransportSessionStore {
         }
         return AsyncStream { continuation in
             Task {
-                self.attachContinuation(continuation, lifecycleID: lifecycleID)
+                await self.attachContinuation(continuation, lifecycleID: lifecycleID)
             }
         }
     }
 
     func emit(_ event: SubAgentDelegateEvent, lifecycleID: String) {
+        guard sessionsByLifecycleID[lifecycleID] != nil else { return }
         if let continuation = continuationsByLifecycleID[lifecycleID] {
             continuation.yield(event)
+            if isTerminalPhase(event.phase) {
+                finishStream(lifecycleID: lifecycleID)
+                scheduleSessionEviction(lifecycleID: lifecycleID)
+            }
             return
         }
         bufferedEventsByLifecycleID[lifecycleID, default: []].append(event)
+        if isTerminalPhase(event.phase) {
+            scheduleSessionEviction(lifecycleID: lifecycleID)
+        }
     }
 
     func cancel(_ request: SubAgentTransportCancellationRequest) -> SubAgentTransportCancellationResult {
@@ -269,6 +287,39 @@ actor SubAgentRemoteTransportSessionStore {
         for event in buffered {
             continuation.yield(event)
         }
+        if let last = buffered.last, isTerminalPhase(last.phase) {
+            finishStream(lifecycleID: lifecycleID)
+        }
+    }
+
+    private func isTerminalPhase(_ phase: SubAgentDelegateEventPhase) -> Bool {
+        switch phase {
+        case .done, .failed, .orphaned:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func finishStream(lifecycleID: String) {
+        continuationsByLifecycleID.removeValue(forKey: lifecycleID)?.finish()
+    }
+
+    private func scheduleSessionEviction(lifecycleID: String) {
+        pendingEvictionTasks[lifecycleID]?.cancel()
+        let grace = sessionEvictionGraceNanoseconds
+        pendingEvictionTasks[lifecycleID] = Task {
+            try? await Task.sleep(nanoseconds: grace)
+            guard !Task.isCancelled else { return }
+            await self.evictSession(lifecycleID: lifecycleID)
+        }
+    }
+
+    private func evictSession(lifecycleID: String) {
+        pendingEvictionTasks.removeValue(forKey: lifecycleID)?.cancel()
+        continuationsByLifecycleID.removeValue(forKey: lifecycleID)?.finish()
+        bufferedEventsByLifecycleID.removeValue(forKey: lifecycleID)
+        sessionsByLifecycleID.removeValue(forKey: lifecycleID)
     }
 
     private func failedEvent(

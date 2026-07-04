@@ -162,13 +162,11 @@ struct A2ASubAgentTransportAdapterTests {
                 parentConversationID: parentConversationID
             )
         )
-        var terminal: SubAgentDelegateEvent?
+        var events: [SubAgentDelegateEvent] = []
         for await event in stream {
-            if event.phase == .done || event.phase == .failed {
-                terminal = event
-                break
-            }
+            events.append(event)
         }
+        let terminal = events.last { $0.phase == .done || $0.phase == .failed }
         #expect(terminal?.phase == .done)
         #expect(terminal?.completionUsage == nil)
     }
