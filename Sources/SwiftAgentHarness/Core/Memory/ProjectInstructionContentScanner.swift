@@ -55,6 +55,18 @@ enum MemoryContentScanner {
         }
         return .success(())
     }
+
+    static func validateWriteIfMemoryTarget(
+        path: String,
+        memoryDirectory: URL?,
+        content: String
+    ) -> Result<Void, MemoryWriteScanError> {
+        guard let memoryDirectory,
+              AgentMemoryPathResolver.isPathInsideMemoryDirectory(path, memoryDirectory: memoryDirectory) else {
+            return .success(())
+        }
+        return validateWrite(content)
+    }
 }
 
 enum MemoryWriteScanError: Error, Equatable {

@@ -214,8 +214,12 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             let bridge = try await execRuntime.fsBridge(context: runtimeContext)
             let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let content = extractString(from: toolCall.arguments, key: "content") ?? ""
-            try MemoryContentScanner.validateWrite(content).get()
             let path = try resolveToolPath(raw: raw, requireExists: false)
+            try MemoryContentScanner.validateWriteIfMemoryTarget(
+                path: path,
+                memoryDirectory: memoryDirectoryURL(),
+                content: content
+            ).get()
             try await bridge.writeFile(path: raw, content: Data(content.utf8))
             await notifyMemoryWrite(path)
             return ok(toolCall, "Wrote \(path)")
@@ -237,7 +241,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 return err(toolCall, "old_string not found")
             }
             content = content.replacingOccurrences(of: oldString, with: newString)
-            try MemoryContentScanner.validateWrite(content).get()
+            try MemoryContentScanner.validateWriteIfMemoryTarget(
+                path: path,
+                memoryDirectory: memoryDirectoryURL(),
+                content: content
+            ).get()
             try await bridge.writeFile(path: raw, content: Data(content.utf8))
             await notifyMemoryWrite(path)
             return ok(toolCall, "Edited \(path)")

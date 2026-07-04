@@ -51,14 +51,18 @@ struct HarnessACPClientDelegate: ACPClientDelegate {
 
     func writeTextFile(_ request: ACPWriteTextFileRequest) async throws -> ACPWriteTextFileResponse {
         try await requireTool(WorkspaceFilesystemToolProvider.writeFileToolName)
-        try MemoryContentScanner.validateWrite(request.content).get()
         let bridge = try await context.execRuntime.fsBridge(context: context.runtimeContext)
-        _ = try PathPolicy.resolveWritablePath(
+        let path = try PathPolicy.resolveWritablePath(
             raw: request.path,
             workspaceRoot: context.workspaceRoot,
             memoryDirectory: context.runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) },
             memoryWriteOnly: context.runtimeContext.memoryWriteOnly
         )
+        try MemoryContentScanner.validateWriteIfMemoryTarget(
+            path: path,
+            memoryDirectory: context.runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) },
+            content: request.content
+        ).get()
         try await bridge.writeFile(path: request.path, content: Data(request.content.utf8))
         return ACPWriteTextFileResponse()
     }
