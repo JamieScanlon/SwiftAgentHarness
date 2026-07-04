@@ -26,4 +26,13 @@ enum SSHSandboxArgv {
     static func rsyncTransport(control: SSHControlMaster, settings: SSHSandboxSettings) -> String {
         base(control: control, settings: settings).joined(separator: " ")
     }
+
+    static func connectivityProbe(control: SSHControlMaster, settings: SSHSandboxSettings) -> [String] {
+        base(control: control, settings: settings) + [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            destination(settings),
+            "echo", "ok",
+        ]
+    }
 }

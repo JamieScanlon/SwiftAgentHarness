@@ -3,6 +3,7 @@ import Foundation
 
 public struct SSHControlMaster: Sendable {
     public let socketPath: String
+    public let knownHostsPath: String
     public let target: String
     public let port: Int
 
@@ -16,12 +17,20 @@ public struct SSHControlMaster: Sendable {
             attributes: [.posixPermissions: 0o700]
         )
         socketPath = sshDir.appendingPathComponent("sah-control-\(digest.prefix(16)).sock").path
+        knownHostsPath = sshDir.appendingPathComponent("sah-known-hosts").path
         target = triple
         port = settings.port
     }
 
     public var baseArgs: [String] {
-        ["ssh", "-S", socketPath, "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-p", String(port)]
+        [
+            "ssh", "-S", socketPath,
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=600",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UserKnownHostsFile=\(knownHostsPath)",
+            "-p", String(port),
+        ]
     }
 }
 

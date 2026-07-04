@@ -59,7 +59,7 @@ Resolved by `SandboxConfigResolver`:
 |---|---|---|
 | `local` | host-canonical | macOS Seatbelt / Linux bwrap |
 | `docker` | host-canonical | bind-mount workspace |
-| `ssh` | remote-canonical | seed-once remote root |
+| `ssh` | remote-canonical | seed-once remote root; first connect records host keys to `~/.ssh/sah-known-hosts` (`StrictHostKeyChecking=accept-new`; changed keys rejected) |
 | `openshell` | mirror | `openshell` CLI; mirror bind-mount at sandbox create; sync-before/sync-after via `WorkspaceMirrorSync` |
 | `docker-browser` | host-canonical | separate Chromium container |
 

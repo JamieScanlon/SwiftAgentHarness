@@ -41,6 +41,54 @@ struct SSHSandboxBackendTests {
         #expect(!control.socketPath.contains("/tmp/sah-ssh-"))
     }
 
+    @Test("base args enforce headless-safe host key policy")
+    func baseArgsHostKeyPolicy() {
+        #expect(control.baseArgs.contains("StrictHostKeyChecking=accept-new"))
+        #expect(control.baseArgs.contains(where: { $0.hasPrefix("UserKnownHostsFile=") }))
+        let knownHostsOption = control.baseArgs.first(where: { $0.hasPrefix("UserKnownHostsFile=") })
+        #expect(knownHostsOption?.contains("/.ssh/sah-known-hosts") == true)
+    }
+
+    @Test("known hosts file shares .ssh directory with control socket")
+    func knownHostsSharesSSHDirectory() {
+        let socketDir = URL(fileURLWithPath: control.socketPath).deletingLastPathComponent().path
+        let knownHostsDir = URL(fileURLWithPath: control.knownHostsPath).deletingLastPathComponent().path
+        #expect(socketDir == knownHostsDir)
+        #expect(control.knownHostsPath.hasSuffix("/sah-known-hosts"))
+    }
+
+    @Test("exec argv includes host key policy")
+    func execArgvIncludesHostKeyPolicy() {
+        let argv = SSHSandboxArgv.exec(
+            control: control,
+            settings: settings,
+            remoteCommand: "cd /remote && echo hi"
+        )
+        #expect(argv.contains("StrictHostKeyChecking=accept-new"))
+        #expect(argv.contains(where: { $0.hasPrefix("UserKnownHostsFile=") }))
+    }
+
+    @Test("rsync transport includes host key policy")
+    func rsyncTransportIncludesHostKeyPolicy() {
+        let transport = SSHSandboxArgv.rsyncTransport(control: control, settings: settings)
+        #expect(transport.contains("StrictHostKeyChecking=accept-new"))
+        #expect(transport.contains("UserKnownHostsFile="))
+        #expect(transport.contains("sah-known-hosts"))
+    }
+
+    @Test("connectivity probe uses shared host key policy and identity")
+    func connectivityProbeArgv() throws {
+        let argv = SSHSandboxArgv.connectivityProbe(control: control, settings: settings)
+        #expect(argv.contains("StrictHostKeyChecking=accept-new"))
+        #expect(argv.contains("BatchMode=yes"))
+        #expect(argv.contains("ConnectTimeout=5"))
+        #expect(argv.contains("/tmp/id_rsa"))
+        let host = SSHSandboxArgv.destination(settings)
+        let hostIdx = try #require(argv.firstIndex(of: host))
+        let batchIdx = try #require(argv.firstIndex(of: "BatchMode=yes"))
+        #expect(batchIdx < hostIdx)
+    }
+
     @Test("-tt precedes host when usePty")
     func ttPrecedesHostWhenUsePty() throws {
         let argv = SSHSandboxArgv.exec(
