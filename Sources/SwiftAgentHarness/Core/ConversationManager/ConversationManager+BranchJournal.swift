@@ -268,6 +268,9 @@ extension ConversationManager {
         func remapMessageID(_ id: UUID) -> UUID {
             messageStorageIdMap[id] ?? id
         }
+        func remapEventID(_ id: Int) -> Int {
+            oldEventToNew[id] ?? id
+        }
 
         switch event.kind {
         case ConversationEventKind.messageAppended.rawValue:
@@ -315,7 +318,7 @@ extension ConversationManager {
                     coveredMessageIDs: payload.coveredMessageIDs.map(remapMessageID),
                     syntheticMessages: remappedSynth,
                     configFingerprint: payload.configFingerprint,
-                    basedOnEventID: payload.basedOnEventID,
+                    basedOnEventID: remapEventID(payload.basedOnEventID),
                     basedOnTailMessageID: payload.basedOnTailMessageID.map(remapMessageID),
                     strategyRawValue: payload.strategyRawValue,
                     cachePolicyFingerprint: payload.cachePolicyFingerprint,
@@ -328,7 +331,7 @@ extension ConversationManager {
             }
             wire = MemoryInjectionSnapshotCheckpointWire(
                 schemaVersion: wire.schemaVersion,
-                basedOnEventID: wire.basedOnEventID,
+                basedOnEventID: remapEventID(wire.basedOnEventID),
                 injectionFingerprint: wire.injectionFingerprint,
                 snapshotJSON: wire.snapshotJSON,
                 scopeMessageIDs: wire.scopeMessageIDs.map(remapMessageID),
@@ -344,7 +347,7 @@ extension ConversationManager {
             }
             wire = ToolResultTrimCheckpointWire(
                 schemaVersion: wire.schemaVersion,
-                basedOnEventID: wire.basedOnEventID,
+                basedOnEventID: remapEventID(wire.basedOnEventID),
                 coveredMessageIDs: wire.coveredMessageIDs.map(remapMessageID),
                 trimmedToolCallIds: wire.trimmedToolCallIds,
                 configFingerprint: wire.configFingerprint,
@@ -357,9 +360,20 @@ extension ConversationManager {
             }
             wire = AttachmentProjectionCheckpointWire(
                 schemaVersion: wire.schemaVersion,
-                basedOnEventID: wire.basedOnEventID,
+                basedOnEventID: remapEventID(wire.basedOnEventID),
                 projectionFingerprint: wire.projectionFingerprint,
                 decisions: wire.decisions,
+                createdAt: wire.createdAt
+            )
+            return ConversationEventCodec.encode(wire)
+        case ConversationEventKind.systemPromptAssemblyCheckpoint.rawValue:
+            guard var wire = ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: payloadJSON) else {
+                return payloadJSON
+            }
+            wire = SystemPromptAssemblyCheckpointWire(
+                schemaVersion: wire.schemaVersion,
+                basedOnEventID: remapEventID(wire.basedOnEventID),
+                assemblyFingerprint: wire.assemblyFingerprint,
                 createdAt: wire.createdAt
             )
             return ConversationEventCodec.encode(wire)
