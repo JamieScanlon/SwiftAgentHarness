@@ -528,16 +528,32 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     modelContextLimitTokens: modelLimit
                 )
                 let injectedCount = input.compactionInjectedPrefixMessages?.count ?? 0
-                let compactedMiddleRaw = ContextCompactionCheckpointSupport.compactedPortionInOutput(
+                let layoutSlice = ContextCompactionCheckpointSupport.compactedPortionInOutput(
                     output.messages,
                     headCount: injectedCount + before.head.count,
                     tailCount: before.tail.count
                 )
+                let compactedMiddleRaw: [Message] = {
+                    if layoutSlice.isEmpty,
+                       let persisted = output.compactionPersistedMiddle,
+                       !persisted.isEmpty {
+                        return persisted
+                    }
+                    return layoutSlice
+                }()
                 let compactedMiddle = ContextCompactionCheckpointSupport.durableCompactedMiddleForPersistence(
                     compactedMiddle: compactedMiddleRaw,
                     messageProvenance: output.messageProvenance
                 )
-                if compactedMiddle.isEmpty {
+                let durableCompactedMiddle: [Message] = {
+                    if compactedMiddle.isEmpty,
+                       let persisted = output.compactionPersistedMiddle,
+                       !persisted.isEmpty {
+                        return persisted
+                    }
+                    return compactedMiddle
+                }()
+                if durableCompactedMiddle.isEmpty {
                     logger?.warning(
                         "[ContextEngine] compaction diagnostic=\(kind) but middle slice empty conversation=\(request.conversation.id)"
                     )
@@ -557,17 +573,18 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                         config: request.compactionConfig
                     ) {
                         let passesSizeGuards = ContextCompactionCheckpointSupport.compactionCheckpointPersistencePassesSizeGuards(
-                            compactedMiddle: compactedMiddle,
+                            compactedMiddle: durableCompactedMiddle,
                             config: request.compactionConfig,
                             previousSummaryText: input.compactionPreviousSummaryText,
                             kind: kind
                         )
                         if passesSizeGuards {
-                            let summaryBody = compactedMiddle.first?.content
+                            let summaryBody = durableCompactedMiddle.first?.content
                             persistence = ContextCompactionCheckpointPersistenceSpec(
                                 conversationID: request.conversation.id,
                                 rawMiddleMessageIDs: before.middle.map(\Message.id),
-                                compactedMiddleMessages: compactedMiddle,
+                                compactedMiddleMessages: durableCompactedMiddle,
+                                coveredRawMiddle: before.middle,
                                 kind: kind,
                                 config: request.compactionConfig,
                                 strategyRawValue: input.compactionStrategy.rawValue,

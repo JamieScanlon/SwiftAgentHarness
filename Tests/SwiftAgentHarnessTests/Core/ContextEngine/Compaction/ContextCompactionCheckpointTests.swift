@@ -1112,6 +1112,54 @@ struct ContextCompactionCheckpointTests {
         #expect(prunedDTOs[0].toolCalls?.first?.id == "tc-99")
     }
 
+    @Test("summarizedSyntheticDTOsForPersistence fans out single summary across covered raw middle")
+    func summarizedSyntheticFanOutForPersistence() {
+        let id1 = UUID(), id2 = UUID()
+        let rawMiddle = [
+            Message(id: id1, role: .user, content: "a", timestamp: Date(), toolCalls: []),
+            Message(id: id2, role: .assistant, content: "b", timestamp: Date(), toolCalls: []),
+        ]
+        let summary = Message(
+            id: UUID(),
+            role: .assistant,
+            content: "## Active Task\nsummary body",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        let dtos = ContextCompactionCheckpointSupport.summarizedSyntheticDTOsForPersistence(
+            summaryMessages: [summary],
+            coveredRawMiddle: rawMiddle,
+            kind: .summarized
+        )
+        #expect(dtos.count == 2)
+        #expect(dtos[0].content == summary.content)
+        #expect(dtos[0].role == MessageRole.user.rawValue)
+        #expect(dtos[1].role == MessageRole.assistant.rawValue)
+
+        let config = makeConfig()
+        let fp = ContextCompactionCheckpointSupport.configFingerprint(config)
+        let payload = ContextCompactionCheckpointPayload(
+            schemaVersion: ContextCompactionCheckpointPayload.currentSchemaVersion,
+            kind: .summarized,
+            coveredMessageIDs: [id1, id2],
+            syntheticMessages: dtos,
+            configFingerprint: fp,
+            basedOnEventID: 1,
+            createdAt: Date()
+        )
+        let (effective, incremental) = ContextCompactionCheckpointSupport.effectiveMiddle(
+            rawMiddle: rawMiddle + [
+                Message(id: UUID(), role: .user, content: "c", timestamp: Date(), toolCalls: []),
+            ],
+            checkpoint: payload
+        )
+        #expect(incremental == true)
+        #expect(effective.count == 3)
+        #expect(effective[0].content == summary.content)
+        #expect(effective[1].content == summary.content)
+        #expect(effective[2].content == "c")
+    }
+
     @Test("rawMiddle is empty when transcript is not compressible")
     func rawMiddleIsEmptyWhenTranscriptIsNotCompressible() {
         let sys = UUID(), u1 = UUID(), a1 = UUID(), u2 = UUID(), a2 = UUID(), u3 = UUID()

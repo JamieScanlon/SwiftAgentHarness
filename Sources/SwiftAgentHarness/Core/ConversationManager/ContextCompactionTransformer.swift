@@ -692,12 +692,16 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         }
         var effectiveTail = tail
         var summaryMessages = summarizedMiddle
+        var compactionPersistedMiddle: [Message]?
         if let summaryBody = summarizedMiddle.first?.content {
             let assembled = ContextCompactionSummaryMessageAssembler.assemble(
                 summaryBody: summaryBody,
                 tail: tail
             )
             summaryMessages = assembled.messages
+            if let persistenceSummary = assembled.persistenceSummary {
+                compactionPersistedMiddle = [persistenceSummary]
+            }
             if let mergedTail = assembled.mergedTail {
                 effectiveTail = mergedTail
                 summaryMessages = []
@@ -733,7 +737,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         return ContextTransformOutput(
             messages: compacted,
             diagnostics: Self.summarizedDiagnostic,
-            messageProvenance: provenance
+            messageProvenance: provenance,
+            compactionPersistedMiddle: compactionPersistedMiddle
         )
     }
 

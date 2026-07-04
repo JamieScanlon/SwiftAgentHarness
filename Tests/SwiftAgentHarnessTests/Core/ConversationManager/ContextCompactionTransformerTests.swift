@@ -657,6 +657,12 @@ struct ContextCompactionTransformerTests {
         #expect(tailMessages.first?.content.contains("REFERENCE ONLY") == true)
         #expect(tailMessages.first?.content.contains("## Active Task\nfinish task") == true)
         #expect(tailMessages.first?.content.contains("partial reply") == true)
+        let persisted = try #require(output.compactionPersistedMiddle)
+        #expect(persisted.count == 1)
+        #expect(persisted[0].role == .assistant)
+        #expect(persisted[0].content.contains("REFERENCE ONLY"))
+        #expect(persisted[0].content.contains("## Active Task\nfinish task"))
+        #expect(persisted[0].content.contains("partial reply") == false)
     }
 
     // MARK: - Hygiene and cache policy

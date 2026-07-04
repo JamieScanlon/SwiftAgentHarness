@@ -308,6 +308,20 @@ public struct ContextTransformOutput: Sendable {
     let messages: [Message]
     let diagnostics: String?
     let messageProvenance: [ContextTransformMessageProvenance]?
+    /// Standalone summary for checkpoint persistence when layout omits a middle slice (e.g. merge into tail).
+    let compactionPersistedMiddle: [Message]?
+
+    init(
+        messages: [Message],
+        diagnostics: String?,
+        messageProvenance: [ContextTransformMessageProvenance]?,
+        compactionPersistedMiddle: [Message]? = nil
+    ) {
+        self.messages = messages
+        self.diagnostics = diagnostics
+        self.messageProvenance = messageProvenance
+        self.compactionPersistedMiddle = compactionPersistedMiddle
+    }
 }
 
 public struct TurnSummaryTransformInput: Sendable {

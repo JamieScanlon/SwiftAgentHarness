@@ -1527,6 +1527,7 @@ struct APILayerRESTCoverageTests {
             conversationID: convID,
             rawMiddleMessageIDs: [rawMiddleID],
             compactedMiddleMessages: [Message(id: UUID(), role: .assistant, content: "compact", timestamp: Date(), toolCalls: [])],
+            coveredRawMiddle: rawMiddle,
             kind: .summarized,
             config: compactionConfig,
             strategyRawValue: nil,

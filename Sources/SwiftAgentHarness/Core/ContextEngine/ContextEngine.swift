@@ -398,6 +398,8 @@ public struct ContextCompactionCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let rawMiddleMessageIDs: [UUID]
     let compactedMiddleMessages: [Message]
+    /// Raw middle messages at compaction time; used to fan out summarized synthetics for checkpoint reuse.
+    let coveredRawMiddle: [Message]
     let kind: ContextCompactionCheckpointKind
     let config: ContextCompactionConfiguration
     let strategyRawValue: String?

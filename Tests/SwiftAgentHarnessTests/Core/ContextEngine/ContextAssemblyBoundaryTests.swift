@@ -90,6 +90,7 @@ struct ContextAssemblyBoundaryTests {
                 conversationID: conversationID,
                 rawMiddleMessageIDs: [mid],
                 compactedMiddleMessages: [compacted],
+                coveredRawMiddle: [Message(id: mid, role: .user, content: "m", timestamp: Date(), toolCalls: [])],
                 kind: .summarized,
                 config: cfg,
                 strategyRawValue: nil,

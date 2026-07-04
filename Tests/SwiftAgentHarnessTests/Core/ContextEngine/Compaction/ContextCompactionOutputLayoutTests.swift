@@ -174,6 +174,62 @@ struct ContextCompactionOutputLayoutTests {
         #expect(durable.first?.content.contains("## Active Task") == true)
         #expect(durable.allSatisfy { $0.id != reinjected.first?.transformedMessageID })
     }
+
+    @Test("merged assistant-first tail with reinjection uses compactionPersistedMiddle for durable slice")
+    func mergedTailReinjectionUsesPersistedMiddleForCheckpoint() async throws {
+        let summary = Message(
+            id: UUID(),
+            role: .assistant,
+            content: "## Active Task\nfinish",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        var cfg = layoutTestConfig(reinjectionEnabled: true)
+        cfg.compactionToolResultPruneNames = []
+        cfg.tailMinMessageCount = 2
+        let transformer = ContextCompactionTransformer(config: cfg, summarizer: StubLayoutSummarizer(output: [summary]))
+        let transcript: [Message] = [
+            Message(id: UUID(), role: .system, content: "s", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u1 plan.md", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .assistant, content: String(repeating: "m", count: 8_000), timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .assistant, content: "partial reply", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u3 latest", timestamp: Date(), toolCalls: []),
+        ]
+        let output = try await transformer.transformContext(
+            ContextTransformInput(
+                messages: transcript,
+                conversation: makeLayoutConversationMetadata(),
+                phase: .initial,
+                effectiveContextLimitTokens: 2_500,
+                compactionCheckpointKind: nil,
+                compactionModelContextLimitTokens: 2_500,
+                compactionSplitBaseMessages: transcript
+            )
+        )
+        #expect(output.diagnostics == ContextCompactionTransformer.summarizedDiagnostic)
+        let before = ContextCompactionCheckpointSupport.splitForCompaction(
+            transcript,
+            config: cfg,
+            modelContextLimitTokens: 2_500
+        )
+        #expect(before.tail.first?.role == .assistant)
+        let slice = ContextCompactionCheckpointSupport.compactedPortionInOutput(
+            output.messages,
+            headCount: before.head.count,
+            tailCount: before.tail.count
+        )
+        let durableFromSlice = ContextCompactionCheckpointSupport.durableCompactedMiddleForPersistence(
+            compactedMiddle: slice,
+            messageProvenance: output.messageProvenance
+        )
+        #expect(durableFromSlice.isEmpty)
+        let persisted = try #require(output.compactionPersistedMiddle)
+        let durable = durableFromSlice.isEmpty ? persisted : durableFromSlice
+        #expect(durable.count == 1)
+        #expect(durable[0].content.contains("## Active Task") == true)
+        #expect(durable[0].content.contains("partial reply") == false)
+    }
 }
 
 private struct StubLayoutSummarizer: ContextCompactionSummarizing {

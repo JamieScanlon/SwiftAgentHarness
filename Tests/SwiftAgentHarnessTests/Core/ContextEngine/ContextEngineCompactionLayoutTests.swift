@@ -205,6 +205,74 @@ struct ContextEngineCompactionLayoutTests {
         #expect(result.checkpointPersistence == nil)
         #expect(result.compactionLowSavings == true)
     }
+
+    @Test("assemble produces checkpoint when summary merges into assistant-first tail")
+    func assembleCheckpointWhenSummaryMergedIntoAssistantTail() async throws {
+        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        let conv = layoutTestConversation()
+        let thread = layoutAssistantFirstTailThread()
+        var compactionConfig = ContextCompactionConfiguration.default
+        compactionConfig.middleMinCharactersForCompactionLLM = 0
+        compactionConfig.compactionMinPromptTokenSavingsFraction = 0
+        compactionConfig.tailMinMessageCount = 2
+        let before = ContextCompactionCheckpointSupport.splitForCompaction(
+            thread,
+            config: compactionConfig,
+            modelContextLimitTokens: 2_500
+        )
+        #expect(before.tail.first?.role == .assistant)
+        let persistenceSummary = Message(
+            id: UUID(),
+            role: .assistant,
+            content: """
+\(ContextCompactionSummaryMessageAssembler.referenceOnlyPrefix)## Active Task\ncompacted summary
+""",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        var mergedTail = before.tail
+        let first = mergedTail[0]
+        mergedTail[0] = Message(
+            id: first.id,
+            role: first.role,
+            content: persistenceSummary.content + "\n\n" + first.content,
+            timestamp: first.timestamp,
+            toolCalls: first.toolCalls,
+            toolCallId: first.toolCallId
+        )
+        let outputMessages = before.head + mergedTail
+        let provenanceTail = mergedTail
+        let request = layoutAssembleRequest(
+            messages: thread,
+            conversation: conv,
+            compactionConfig: compactionConfig
+        )
+        let result = await engine.assemble(request: request) { _ in
+            ContextTransformOutput(
+                messages: outputMessages,
+                diagnostics: ContextCompactionTransformer.summarizedDiagnostic,
+                messageProvenance: provenanceTail.map { message in
+                    ContextTransformMessageProvenance(
+                        transformedMessageID: message.id,
+                        origin: .original,
+                        sourceMessageIDs: [message.id]
+                    )
+                },
+                compactionPersistedMiddle: [persistenceSummary]
+            )
+        }
+        let spec = try #require(result.checkpointPersistence)
+        #expect(spec.rawMiddleMessageIDs == before.middle.map(\.id))
+        #expect(spec.compactedMiddleMessages.count == 1)
+        #expect(spec.compactedMiddleMessages.first?.content.contains("## Active Task") == true)
+        #expect(spec.coveredRawMiddle.map(\.id) == before.middle.map(\.id))
+        let slice = ContextCompactionCheckpointSupport.compactedPortionInOutput(
+            result.messages,
+            headCount: before.head.count,
+            tailCount: before.tail.count
+        )
+        #expect(slice.isEmpty)
+    }
 }
 
 private func layoutTestConversation() -> ModelConversation {
@@ -248,6 +316,23 @@ private func layoutCompressibleThread() -> [Message] {
     }
     messages.append(Message(id: UUID(), role: .user, content: "latest", timestamp: Date(), toolCalls: []))
     return messages
+}
+
+private func layoutAssistantFirstTailThread() -> [Message] {
+    [
+        Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
+        Message(id: UUID(), role: .user, content: "u1", timestamp: Date(), toolCalls: []),
+        Message(
+            id: UUID(),
+            role: .assistant,
+            content: String(repeating: "m", count: 8_000),
+            timestamp: Date(),
+            toolCalls: []
+        ),
+        Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
+        Message(id: UUID(), role: .assistant, content: "partial reply", timestamp: Date(), toolCalls: []),
+        Message(id: UUID(), role: .user, content: "u3 latest", timestamp: Date(), toolCalls: []),
+    ]
 }
 
 private func layoutAssembleRequest(

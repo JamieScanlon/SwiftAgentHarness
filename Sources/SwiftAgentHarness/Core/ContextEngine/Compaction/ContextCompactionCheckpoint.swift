@@ -491,6 +491,29 @@ enum ContextCompactionCheckpointSupport {
         }
     }
 
+    /// Fans out a single summarized summary across covered raw middle messages so checkpoint reuse
+    /// satisfies `syntheticMessages.count == coveredMessageIDs.count`.
+    static func summarizedSyntheticDTOsForPersistence(
+        summaryMessages: [Message],
+        coveredRawMiddle: [Message],
+        kind: ContextCompactionCheckpointKind
+    ) -> [ContextCompactionMessageDTO] {
+        guard kind == .summarized,
+              summaryMessages.count < coveredRawMiddle.count,
+              let summary = summaryMessages.first
+        else {
+            return syntheticMessagesForPersistence(from: summaryMessages, kind: kind)
+        }
+        let body = summary.content
+        return coveredRawMiddle.map { raw in
+            ContextCompactionMessageDTO(
+                id: UUID(),
+                role: raw.role.rawValue,
+                content: body
+            )
+        }
+    }
+
     /// Gates before invoking the compaction LLM (does not apply when transform is disabled or phase non-initial — caller checks those).
     static func shouldRunCompactionLLM(
         rawMiddle: [Message],

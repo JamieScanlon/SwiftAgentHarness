@@ -194,6 +194,7 @@ struct ConversationDomainServicesTests {
             conversationID: conversationID,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config
         )
