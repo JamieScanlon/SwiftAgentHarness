@@ -9,7 +9,7 @@ import Darwin
 #endif
 
 #if os(macOS) || os(Linux)
-@Suite("ShellProcessRunner supervised process group", .serialized)
+@Suite("ShellProcessRunner supervised process group")
 struct ShellProcessRunnerSupervisedTests {
     private func tempPIDPath() -> String {
         FileManager.default.temporaryDirectory

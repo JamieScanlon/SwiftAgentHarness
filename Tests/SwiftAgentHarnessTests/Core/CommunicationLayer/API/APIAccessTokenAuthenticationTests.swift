@@ -95,7 +95,7 @@ struct APIAccessTokenAuthenticationTests {
         }
     }
 
-    @Test("APILayer start fails closed when strict tenancy has no validator")
+    @Test("Startup validation fails closed when strict tenancy has no validator")
     func startFailsClosedWithoutValidator() async throws {
         let api = APILayer(port: 0)
         await api.setModelProvider(AuthTestModelProvider())
@@ -107,9 +107,8 @@ struct APIAccessTokenAuthenticationTests {
         )
         await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
         await #expect(throws: APIError.authenticationNotConfigured) {
-            try await api.start()
+            try await api.validateStartupPreconditions()
         }
-        await api.stop()
     }
 
     @Test("ServerConfig factory builds validator and tenancy settings")

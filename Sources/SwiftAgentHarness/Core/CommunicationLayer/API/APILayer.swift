@@ -911,14 +911,21 @@ public actor APILayer {
      * - Throws: APIError if the server components aren't properly initialized
      *           or if the server fails to start.
      */
-    public func start() async throws {
-        // Verify that required components are initialized
-        guard let chatGateway = chatGateway, let modelManager = modelManager else {
+    /// Validates wiring required before ``start()`` without binding a listen socket.
+    func validateStartupPreconditions() throws {
+        guard chatGateway != nil, modelManager != nil else {
             throw APIError.componentsNotInitialized
         }
         if tenancyPolicySettings.requireAuthenticatedOwnerOnMutations,
            apiAccessTokenValidator == nil {
             throw APIError.authenticationNotConfigured
+        }
+    }
+
+    public func start() async throws {
+        try validateStartupPreconditions()
+        guard let chatGateway = chatGateway, let modelManager = modelManager else {
+            throw APIError.componentsNotInitialized
         }
         
         // Create a new Vapor application with a sanitized environment to avoid CLI parsing

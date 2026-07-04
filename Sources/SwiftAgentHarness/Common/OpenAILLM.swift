@@ -31,6 +31,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     private let authProbeTransport: AuthProbeTransport?
     private let supportsEagerToolInputStreaming: Bool
     private let authProbePermissiveForEmptyToken: Bool
+    private let streamSource: any OpenAIChatStreamSourcing
     /// "Never timeout" represented as a very large finite interval.
     private static let effectivelyNoTimeoutInterval: TimeInterval = 60 * 60 * 24 * 365 * 10
     
@@ -44,7 +45,8 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         logger: Logger? = nil,
         authProbeTransport: AuthProbeTransport? = nil,
         supportsEagerToolInputStreaming: Bool = false,
-        authProbePermissiveForEmptyToken: Bool = false
+        authProbePermissiveForEmptyToken: Bool = false,
+        streamSource: (any OpenAIChatStreamSourcing)? = nil
     ) {
         let parsedURL = URL(string: baseURL)!
         self.model = model
@@ -76,7 +78,9 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             parsingOptions: []
         )
         
-        self.openAI = OpenAI(configuration: config)
+        let client = OpenAI(configuration: config)
+        self.openAI = client
+        self.streamSource = streamSource ?? LiveOpenAIChatStreamSource(client: client)
     }
     
     func getModelName() -> String {
@@ -175,7 +179,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     var usage: ChatResult.CompletionUsage?
                     var finishReason: String?
                     
-                    for try await result in openAI.chatsStream(query: query) {
+                    for try await result in streamSource.chatStream(query: query) {
                         if let u = result.usage {
                             usage = u
                         }
@@ -627,6 +631,23 @@ extension ToolDefinition {
             parameters: params,
             strict: false
         )
+    }
+}
+
+/// Test seam for ``OpenAILLM/stream(_:config:)`` without opening real sockets.
+protocol OpenAIChatStreamSourcing: Sendable {
+    func chatStream(query: ChatQuery) -> AsyncThrowingStream<ChatStreamResult, Error>
+}
+
+private final class LiveOpenAIChatStreamSource: @unchecked Sendable, OpenAIChatStreamSourcing {
+    private let client: OpenAI
+
+    init(client: OpenAI) {
+        self.client = client
+    }
+
+    func chatStream(query: ChatQuery) -> AsyncThrowingStream<ChatStreamResult, Error> {
+        client.chatsStream(query: query)
     }
 }
 

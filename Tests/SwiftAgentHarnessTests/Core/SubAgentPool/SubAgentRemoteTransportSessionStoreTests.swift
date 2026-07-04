@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("SubAgentRemoteTransportSessionStore lifecycle")
+@Suite("SubAgentRemoteTransportSessionStore lifecycle", .serialized)
 struct SubAgentRemoteTransportSessionStoreTests {
     private let testGraceNanoseconds: UInt64 = 50_000_000
 
