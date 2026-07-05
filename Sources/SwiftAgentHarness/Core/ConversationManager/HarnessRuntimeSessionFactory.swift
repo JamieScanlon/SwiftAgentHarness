@@ -206,7 +206,8 @@ public enum HarnessRuntimeSessionFactory {
         orchestratorRuntimeService.installTopicPublication(topics)
         let toolApprovalRuntimeService = ToolApprovalRuntimeService(
             deps: deps,
-            topics: topics
+            topics: topics,
+            tenancyPolicy: tenancyPolicy
         )
         let slashCommandDispatchService = SlashCommandDispatchService(
             deps: deps,

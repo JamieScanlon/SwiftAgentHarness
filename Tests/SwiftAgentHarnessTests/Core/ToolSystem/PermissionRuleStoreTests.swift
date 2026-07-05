@@ -6,8 +6,10 @@ import Testing
 struct PermissionRuleStoreTests {
     @Test("scopes encode/decode by kind and value")
     func scopeRoundTrips() throws {
+        let owner = UUID()
         let scopes: [PermissionRuleScope] = [
             .toolName("write_file"),
+            .ownerToolName(ownerAccountID: owner, toolName: "edit_file"),
             .commandName("git"),
             .exactCommand("git push origin main"),
             .directory("/repo"),
@@ -26,13 +28,49 @@ struct PermissionRuleStoreTests {
         #expect(await store.isGranted(.exactCommand("git status")) == false)
     }
 
-    @Test("grantedToolNames extracts only tool-name scopes")
-    func grantedToolNames() async {
+    @Test("grantedToolNames extracts legacy tool-name scopes when owner is nil")
+    func grantedToolNamesLegacy() async {
         let store = InMemoryPermissionRuleStore()
         await store.add(.toolName("write_file"))
         await store.add(.toolName("edit_file"))
         await store.add(.commandName("git"))
-        #expect(await store.grantedToolNames() == ["edit_file", "write_file"])
+        #expect(await store.grantedToolNames(ownerAccountID: nil, strictTenancy: false) == ["edit_file", "write_file"])
+    }
+
+    @Test("grantedToolNames returns only matching owner-scoped grants")
+    func grantedToolNamesOwnerScoped() async {
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let store = InMemoryPermissionRuleStore()
+        await store.add(.ownerToolName(ownerAccountID: ownerA, toolName: "write_file"))
+        await store.add(.ownerToolName(ownerAccountID: ownerB, toolName: "edit_file"))
+        await store.add(.toolName("legacy_tool"))
+
+        #expect(await store.grantedToolNames(ownerAccountID: ownerA, strictTenancy: true) == ["write_file"])
+        #expect(await store.grantedToolNames(ownerAccountID: ownerB, strictTenancy: true) == ["edit_file"])
+        #expect(await store.grantedToolNames(ownerAccountID: ownerA, strictTenancy: false) == ["write_file"])
+        #expect(await store.grantedToolNames(ownerAccountID: ownerB, strictTenancy: false) == ["edit_file"])
+    }
+
+    @Test("strict tenancy ignores legacy global tool-name grants")
+    func strictTenancyIgnoresLegacyToolName() async {
+        let owner = UUID()
+        let store = InMemoryPermissionRuleStore()
+        await store.add(.toolName("legacy_tool"))
+        await store.add(.ownerToolName(ownerAccountID: owner, toolName: "scoped_tool"))
+
+        #expect(await store.grantedToolNames(ownerAccountID: owner, strictTenancy: true) == ["scoped_tool"])
+        #expect(await store.grantedToolNames(ownerAccountID: nil, strictTenancy: true).isEmpty)
+    }
+
+    @Test("addToolGrant and removeToolGrant use owner scope when owner is known")
+    func addRemoveToolGrantOwnerScoped() async {
+        let owner = UUID()
+        let store = InMemoryPermissionRuleStore()
+        await store.addToolGrant(toolName: "write_file", ownerAccountID: owner, strictTenancy: true)
+        #expect(await store.isGranted(.ownerToolName(ownerAccountID: owner, toolName: "write_file")))
+        await store.removeToolGrant(toolName: "write_file", ownerAccountID: owner, strictTenancy: true)
+        #expect(await store.isGranted(.ownerToolName(ownerAccountID: owner, toolName: "write_file")) == false)
     }
 
     @Test("file-backed store persists rules across instances")

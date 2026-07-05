@@ -5,6 +5,8 @@ import Foundation
 /// specific tool, a command name, an exact command line, or a directory.
 public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
     case toolName(String)
+    /// Owner-scoped durable tool grant (DEF-122 / SEC-011).
+    case ownerToolName(ownerAccountID: UUID, toolName: String)
     case commandName(String)
     case exactCommand(String)
     case directory(String)
@@ -12,10 +14,13 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case kind
         case value
+        case ownerAccountID
+        case toolName
     }
 
     private enum Kind: String, Codable {
         case toolName
+        case ownerToolName
         case commandName
         case exactCommand
         case directory
@@ -25,32 +30,54 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
         switch self {
         case .toolName(let value), .commandName(let value), .exactCommand(let value), .directory(let value):
             return value
+        case .ownerToolName(let ownerAccountID, let toolName):
+            return "\(ownerAccountID.uuidString)|\(toolName)"
         }
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try container.decode(Kind.self, forKey: .kind)
-        let value = try container.decode(String.self, forKey: .value)
         switch kind {
-        case .toolName: self = .toolName(value)
-        case .commandName: self = .commandName(value)
-        case .exactCommand: self = .exactCommand(value)
-        case .directory: self = .directory(value)
+        case .toolName:
+            let value = try container.decode(String.self, forKey: .value)
+            self = .toolName(value)
+        case .ownerToolName:
+            let ownerAccountID = try container.decode(UUID.self, forKey: .ownerAccountID)
+            let toolName = try container.decode(String.self, forKey: .toolName)
+            self = .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+        case .commandName:
+            let value = try container.decode(String.self, forKey: .value)
+            self = .commandName(value)
+        case .exactCommand:
+            let value = try container.decode(String.self, forKey: .value)
+            self = .exactCommand(value)
+        case .directory:
+            let value = try container.decode(String.self, forKey: .value)
+            self = .directory(value)
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        let kind: Kind
         switch self {
-        case .toolName: kind = .toolName
-        case .commandName: kind = .commandName
-        case .exactCommand: kind = .exactCommand
-        case .directory: kind = .directory
+        case .toolName(let value):
+            try container.encode(Kind.toolName, forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .ownerToolName(let ownerAccountID, let toolName):
+            try container.encode(Kind.ownerToolName, forKey: .kind)
+            try container.encode(ownerAccountID, forKey: .ownerAccountID)
+            try container.encode(toolName, forKey: .toolName)
+        case .commandName(let value):
+            try container.encode(Kind.commandName, forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .exactCommand(let value):
+            try container.encode(Kind.exactCommand, forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .directory(let value):
+            try container.encode(Kind.directory, forKey: .kind)
+            try container.encode(value, forKey: .value)
         }
-        try container.encode(kind, forKey: .kind)
-        try container.encode(value, forKey: .value)
     }
 }
 
@@ -63,14 +90,62 @@ public protocol PermissionRuleStore: Sendable {
 }
 
 extension PermissionRuleStore {
-    /// Tool-name grants currently in the store, for merging into the run's
-    /// pre-approved tool set.
-    public func grantedToolNames() async -> Set<String> {
+    /// Resolves the persisted scope for a durable tool grant.
+    static func toolGrantScope(
+        toolName: String,
+        ownerAccountID: UUID?,
+        strictTenancy: Bool
+    ) -> PermissionRuleScope? {
+        if strictTenancy {
+            guard let ownerAccountID else { return nil }
+            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+        }
+        if let ownerAccountID {
+            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+        }
+        return .toolName(toolName)
+    }
+
+    /// Owner-scoped tool-name grants for merging into the run's pre-approved tool set.
+    public func grantedToolNames(ownerAccountID: UUID?, strictTenancy: Bool) async -> Set<String> {
         let scopes = await list()
         return Set(scopes.compactMap { scope -> String? in
-            if case .toolName(let name) = scope { return name }
-            return nil
+            switch scope {
+            case .toolName(let name):
+                if strictTenancy { return nil }
+                if ownerAccountID != nil { return nil }
+                return name
+            case .ownerToolName(let owner, let name):
+                if strictTenancy {
+                    guard let ownerAccountID, owner == ownerAccountID else { return nil }
+                    return name
+                }
+                if let ownerAccountID {
+                    return owner == ownerAccountID ? name : nil
+                }
+                return nil
+            case .commandName, .exactCommand, .directory:
+                return nil
+            }
         })
+    }
+
+    public func addToolGrant(toolName: String, ownerAccountID: UUID?, strictTenancy: Bool) async {
+        guard let scope = Self.toolGrantScope(
+            toolName: toolName,
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        ) else { return }
+        await add(scope)
+    }
+
+    public func removeToolGrant(toolName: String, ownerAccountID: UUID?, strictTenancy: Bool) async {
+        guard let scope = Self.toolGrantScope(
+            toolName: toolName,
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        ) else { return }
+        await remove(scope)
     }
 }
 
