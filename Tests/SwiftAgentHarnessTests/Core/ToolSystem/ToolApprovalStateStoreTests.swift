@@ -154,6 +154,68 @@ struct ToolApprovalStateStoreTests {
         Issue.record("Expected denied-cancelled resolution after cancellation")
     }
 
+    @Test("consumeTimedOutApprovals scoped to conversation run leaves other conversations pending")
+    func consumeTimedOutApprovalsScopedByConversationRun() async {
+        let store = ToolApprovalStateStore()
+        let conversationA = UUID()
+        let runA = UUID()
+        let conversationB = UUID()
+        let runB = UUID()
+        let past = Date().addingTimeInterval(-10)
+        _ = await store.registerPendingApproval(
+            conversationID: conversationA,
+            runID: runA,
+            toolName: "tool_a",
+            requestedAt: past,
+            spec: makeSpec(timeoutMs: 1000)
+        )
+        _ = await store.registerPendingApproval(
+            conversationID: conversationB,
+            runID: runB,
+            toolName: "tool_b",
+            requestedAt: past,
+            spec: makeSpec(timeoutMs: 1000)
+        )
+
+        let expiredA = await store.consumeTimedOutApprovals(
+            conversationID: conversationA,
+            runID: runA
+        )
+        #expect(expiredA.count == 1)
+        #expect(expiredA.first?.toolName == "tool_a")
+        #expect(expiredA.first?.conversationID == conversationA)
+        #expect(expiredA.first?.runID == runA)
+
+        let resolutionA = await store.resolution(
+            conversationID: conversationA,
+            runID: runA,
+            toolName: "tool_a"
+        )
+        #expect(resolutionA?.status == .denied)
+        #expect(resolutionA?.kind == .timeoutDefault)
+
+        let resolutionB = await store.resolution(
+            conversationID: conversationB,
+            runID: runB,
+            toolName: "tool_b"
+        )
+        #expect(resolutionB?.status == .pending)
+
+        let expiredB = await store.consumeTimedOutApprovals(
+            conversationID: conversationB,
+            runID: runB
+        )
+        #expect(expiredB.count == 1)
+        #expect(expiredB.first?.toolName == "tool_b")
+        let resolvedB = await store.resolution(
+            conversationID: conversationB,
+            runID: runB,
+            toolName: "tool_b"
+        )
+        #expect(resolvedB?.status == .denied)
+        #expect(resolvedB?.kind == .timeoutDefault)
+    }
+
     @Test("finite timeout still auto-denies after the configured window")
     func finiteTimeoutAutoDenies() async throws {
         let store = ToolApprovalStateStore()

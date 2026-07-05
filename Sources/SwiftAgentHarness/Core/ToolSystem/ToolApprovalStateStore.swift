@@ -233,8 +233,18 @@ actor ToolApprovalStateStore {
         return true
     }
 
-    func consumeTimedOutApprovals(now: Date = Date()) async -> [ToolApprovalTimedOutResolution] {
-        let expired = await coordinator.consumeExpired(now: now)
+    func consumeTimedOutApprovals(
+        conversationID: UUID,
+        runID: UUID?,
+        now: Date = Date()
+    ) async -> [ToolApprovalTimedOutResolution] {
+        let matchingIDs = Set(
+            keyByID.compactMap { id, key -> String? in
+                guard key.conversationID == conversationID, key.runID == runID else { return nil }
+                return id
+            }
+        )
+        let expired = await coordinator.consumeExpired(matchingIDs: matchingIDs, now: now)
         var out: [ToolApprovalTimedOutResolution] = []
         for entry in expired {
             guard let key = keyByID[entry.id], let spec = specs[key] else { continue }

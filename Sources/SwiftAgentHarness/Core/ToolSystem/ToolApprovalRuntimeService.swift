@@ -186,8 +186,11 @@ actor ToolApprovalRuntimeService {
         modelID: UUID?,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async {
-        let expired = await stateStore.consumeTimedOutApprovals()
-        for entry in expired where entry.conversationID == conversationID && entry.runID == runID {
+        let expired = await stateStore.consumeTimedOutApprovals(
+            conversationID: conversationID,
+            runID: runID
+        )
+        for entry in expired {
             await applyToolApprovalResolution(
                 conversationID: entry.conversationID,
                 runID: entry.runID,

@@ -233,9 +233,11 @@ public actor ApprovalCoordinator {
 
     /// Resolves any pending approvals whose timeout has elapsed, returning them so the
     /// runtime can emit lifecycle events. Idempotent with the per-wait timeout.
+    /// When `matchingIDs` is non-nil, only expired pendings whose id is in the set are consumed.
     @discardableResult
-    public func consumeExpired(now: Date = Date()) -> [ExpiredApproval] {
+    public func consumeExpired(matchingIDs: Set<String>? = nil, now: Date = Date()) -> [ExpiredApproval] {
         let expiredIDs = pending.compactMap { id, request -> String? in
+            if let matchingIDs, !matchingIDs.contains(id) { return nil }
             guard let expiresAt = request.expiresAt else { return nil }
             return expiresAt <= now ? id : nil
         }
