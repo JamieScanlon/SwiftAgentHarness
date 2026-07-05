@@ -266,12 +266,28 @@ extension HarnessRuntimeSession {
     internal func testing_runSlashCommandIfNeeded(
         _ text: String,
         conversationID: UUID,
-        skipQueue: Bool = true
+        skipQueue: Bool = true,
+        isOwner: Bool? = nil
     ) async throws -> ChatStreamResponse? {
-        try await slashCommandDispatchService.runSlashCommandIfNeeded(
+        let resolvedIsOwner: Bool
+        if let isOwner {
+            resolvedIsOwner = isOwner
+        } else {
+            resolvedIsOwner = await slashCommandDispatchService.resolvedSlashDispatchIsOwner(conversationID: conversationID)
+        }
+        return try await slashCommandDispatchService.runSlashCommandIfNeeded(
             text,
             conversationID: conversationID,
-            skipQueue: skipQueue
+            skipQueue: skipQueue,
+            isOwner: resolvedIsOwner
         )
+    }
+
+    internal func testing_runSlashCommandIfNeededViaDispatchingProtocol(
+        _ text: String,
+        conversationID: UUID
+    ) async throws -> ChatStreamResponse? {
+        let slashCommand: any SlashCommandRuntimeDispatching = slashCommandDispatchService
+        return try await slashCommand.runSlashCommandIfNeeded(text, conversationID: conversationID)
     }
 }

@@ -83,7 +83,13 @@ actor SlashCommandDispatchService {
                 pendingSlashCommandsByConversationID[conversationID] = q
             }
             do {
-                _ = try await runSlashCommandIfNeeded(raw, conversationID: conversationID, skipQueue: true)
+                let isOwner = await resolvedSlashDispatchIsOwner(conversationID: conversationID)
+                _ = try await runSlashCommandIfNeeded(
+                    raw,
+                    conversationID: conversationID,
+                    skipQueue: true,
+                    isOwner: isOwner
+                )
             } catch {
                 deps.logger?.warning(
                     "[SlashCommandDispatchService] Draining queued slash command failed: \(String(describing: error))"
@@ -123,7 +129,7 @@ actor SlashCommandDispatchService {
             let dispatch = dispatcher.dispatchBuiltin(
                 parsed: parsed,
                 runtimeConfig: slashCommandRuntimeConfiguration,
-                isOwner: true
+                isOwner: isOwner
             )
             switch dispatch {
             case .passthrough, .unknown, .disabled:

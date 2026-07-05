@@ -112,6 +112,10 @@ extension SlashCommandDispatchService {
         )
     }
 
+    func resolvedSlashDispatchIsOwner(conversationID: UUID) async -> Bool {
+        await makeControlInputAuthorization(conversationID: conversationID, trustClass: nil).isOwner
+    }
+
     private func persistDirectives(
         _ directives: [AppliedDirective],
         conversationID: UUID,
