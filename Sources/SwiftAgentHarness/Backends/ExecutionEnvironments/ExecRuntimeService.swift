@@ -200,6 +200,31 @@ public struct ExecRuntimeService: Sendable {
         }
     }
 
+    /// Runs the elevated exec approval gate and returns a stub result without spawning host shell.
+    func runElevatedShellStub(
+        command: String,
+        context: ExecRuntimeContext,
+        stdout: String,
+        approvalContextLines: [String] = []
+    ) async throws -> ExecSupervisorResult {
+        if context.elevated.isActive {
+            if ElevatedExecHost.requiresExecApproval(mode: context.elevated.mode) {
+                try await requestExecApproval(
+                    command: command,
+                    context: context,
+                    approvalContextLines: approvalContextLines
+                )
+            }
+        }
+        return ExecSupervisorResult(
+            stdout: stdout,
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            backgroundTaskID: nil
+        )
+    }
+
     public func runShellCommand(
         params: SandboxBackendCommandParams,
         context: ExecRuntimeContext

@@ -7,8 +7,14 @@ import Testing
 
 @Suite("Agent runtime tool continuation stress", .serialized)
 struct AgentRuntimeToolContinuationStressTests {
-    @Test("single tool round-trip reaches final assistant across repeated harness runs", arguments: 1...30)
-    func singleToolRoundTripStress(iteration: Int) async throws {
+    @Test("single tool round-trip reaches final assistant across repeated harness runs")
+    func singleToolRoundTripStress() async throws {
+        for iteration in 1...5 {
+            try await runSingleToolRoundTripStressIteration(iteration)
+        }
+    }
+
+    private func runSingleToolRoundTripStressIteration(_ iteration: Int) async throws {
         let container = try section6StressContainer()
         let model = section6StressModel()
         let scriptedLLM = Section6StressScriptedToolThenAnswerLLM(

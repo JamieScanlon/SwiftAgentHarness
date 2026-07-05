@@ -902,16 +902,24 @@ private struct StubBashRunner: BashShellRunning {
         usePty: Bool,
         approvalContextLines: [String]
     ) async throws -> ExecSupervisorResult {
+        _ = (runInBackground, usePty)
         if !runtimeContext.elevated.isActive {
             throw SandboxBackendError.nonZeroExit(sandboxExitCode, "")
         }
-        return try await execRuntime.runShell(
+        return try await execRuntime.runElevatedShellStub(
             command: command,
             context: runtimeContext,
-            runInBackground: runInBackground,
-            usePty: usePty,
+            stdout: Self.stubStdout(for: command),
             approvalContextLines: approvalContextLines
         )
+    }
+
+    private static func stubStdout(for command: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("echo ") {
+            return String(trimmed.dropFirst(5))
+        }
+        return trimmed
     }
 }
 

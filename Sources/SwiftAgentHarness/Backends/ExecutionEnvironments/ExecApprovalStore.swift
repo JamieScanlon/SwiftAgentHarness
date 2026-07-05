@@ -42,6 +42,15 @@ public actor ExecApprovalStore {
         self.grantStore = grantStore
     }
 
+    /// Resets pending exec approvals and grant state. Test-only isolation seam for `shared`.
+    public func resetForTesting() async {
+        commands.removeAll()
+        scopesByID.removeAll()
+        allowsDurableBypassByID.removeAll()
+        grantStore = InMemoryExecApprovalGrantStore()
+        await coordinator.resetForTesting()
+    }
+
     public func registerPending(
         id: String,
         command: String,

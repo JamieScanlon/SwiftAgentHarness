@@ -8,7 +8,7 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("AgentRuntime cancel partial")
+@Suite("AgentRuntime cancel partial", .serialized)
 struct AgentRuntimeCancelPartialTests {
     @Test("cancelled run persists interrupted partial assistant and cancellation marker")
     func cancelledRunPersistsInterruptedPartialAssistant() async throws {
@@ -21,8 +21,8 @@ struct AgentRuntimeCancelPartialTests {
                     modelName: "cancel-llm",
                     chunks: ["partial-a", "partial-b"],
                     finalContent: "assistant-final-should-not-persist",
-                    chunkDelayNanos: 500_000_000,
-                    finalDelayNanos: 500_000_000
+                    chunkDelayNanos: 150_000_000,
+                    finalDelayNanos: 150_000_000
                 )
             ),
             harnessSessionPersistenceOverride: InMemoryHarnessSessionPersistence()
@@ -34,7 +34,18 @@ struct AgentRuntimeCancelPartialTests {
 
         let response = try await manager.sendMessageAndStreamResponse("cancel me", images: [], conversationID: conversationID)
         async let drainedTask = drainChatStreamOrchestration(response)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        async let partialArrived: Void = {
+            for await partial in response.partialContent {
+                if case .text(let chunk) = partial, chunk.contains("partial-a") {
+                    return
+                }
+            }
+        }()
+        await waitUntil(timeoutMS: 5_000) {
+            let lifecycle = await manager.agentRuntimeSessionService.lifecycleSnapshot(for: conversationID)
+            return lifecycle.generationTask != nil || lifecycle.isContentStreamingActive
+        }
+        try await partialArrived
         let runID = try #require(response.runID)
         try await manager.cancelActiveRunForAPI(conversationID: conversationID, runID: runID)
 
@@ -54,6 +65,12 @@ struct AgentRuntimeCancelPartialTests {
         #expect(cancelled.outcome == .cancelled)
         #expect(cancelled.cancellationReason?.contains("task_cancelled") == true)
 
+        await waitUntil(timeoutMS: 10_000) {
+            let messages = (try? await manager.listCurrentMessages()) ?? []
+            return messages.contains {
+                $0.role == MessageRole.assistant && $0.content.contains("partial-a")
+            }
+        }
         let messages = try await manager.listCurrentMessages()
         let partialAssistant = try #require(
             messages.first(where: { $0.role == MessageRole.assistant })

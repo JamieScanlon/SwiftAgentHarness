@@ -99,7 +99,9 @@ struct SubAgentRemoteTransportSessionStoreTests {
         )
         for await _ in stream {}
 
-        try? await Task.sleep(nanoseconds: testGraceNanoseconds + 25_000_000)
+        await waitUntil(timeoutMS: 500) {
+            await store.testing_retainedLifecycleCount() == 0
+        }
         #expect(await store.testing_retainedLifecycleCount() == 0)
     }
 
@@ -157,7 +159,9 @@ struct SubAgentRemoteTransportSessionStoreTests {
         }
         #expect(terminal == .failed)
 
-        try? await Task.sleep(nanoseconds: testGraceNanoseconds + 25_000_000)
+        await waitUntil(timeoutMS: 500) {
+            await store.testing_retainedLifecycleCount() == 0
+        }
         #expect(await store.testing_retainedLifecycleCount() == 0)
     }
 

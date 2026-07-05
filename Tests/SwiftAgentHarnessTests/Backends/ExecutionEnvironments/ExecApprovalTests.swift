@@ -498,6 +498,23 @@ struct ExecApprovalTests {
         #expect(messages[0].approvalCard?.command == "npm test")
     }
 
+    @Test("resetForTesting clears pending approvals and durable grants on shared store")
+    func resetForTestingClearsSharedState() async {
+        await ExecApprovalStoreTestSupport.isolated {
+            let scope = execApprovalTestScope()
+            await ExecApprovalStore.shared.registerPending(
+                id: "reset-test",
+                command: "git status",
+                scope: scope
+            )
+            await ExecApprovalStore.shared.configure(
+                grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git"])
+            )
+            #expect(await ExecApprovalStore.shared.listDurableGrants() == ["git"])
+        }
+        #expect(await ExecApprovalStore.shared.listDurableGrants().isEmpty)
+    }
+
     @Test("sendFollowup posts result to channel")
     func sendFollowupPostsResult() async {
         let listener = MockChannelListener(

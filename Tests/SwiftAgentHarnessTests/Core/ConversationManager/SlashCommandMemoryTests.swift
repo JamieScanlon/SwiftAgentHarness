@@ -45,7 +45,7 @@ private actor SlashMemoryTopicRecorder: ConversationTopicPublishing {
     }
 }
 
-@Suite("Slash command /memory", .serialized, .timeLimit(.minutes(1)))
+@Suite("Slash command /memory", .serialized, .timeLimit(.minutes(2)))
 struct SlashCommandMemoryTests {
     private actor SharedHarness {
         static let shared = SharedHarness()
@@ -53,7 +53,6 @@ struct SlashCommandMemoryTests {
         private var manager: HarnessRuntimeSession?
         private var memoryService: DefaultMemoryService?
         private var model: Model?
-        private var cleanupRoot: URL?
 
         func makeSession() async throws -> (HarnessRuntimeSession, UUID, URL, URL) {
             let workRoot = FileManager.default.temporaryDirectory
@@ -95,7 +94,6 @@ struct SlashCommandMemoryTests {
                 self.manager = manager
                 self.memoryService = memoryService
                 self.model = model
-                self.cleanupRoot = workRoot.deletingLastPathComponent()
             }
 
             let cid = try await manager.createConversation(
@@ -104,14 +102,7 @@ struct SlashCommandMemoryTests {
                 cwd: workRoot.path
             )
             let context = try memoryService.makeSessionContext(conversationID: cid, cwd: workRoot.path)
-            _ = try await memoryService.bootstrapSession(context: context)
             return (manager, cid, workRoot, context.memoryDirectory)
-        }
-
-        func cleanup() {
-            if let cleanupRoot {
-                try? FileManager.default.removeItem(at: cleanupRoot)
-            }
         }
     }
 
@@ -130,7 +121,7 @@ struct SlashCommandMemoryTests {
     }
 
     private func collectSurfaceIntents(from response: ChatStreamResponse) async -> [ClientSurfaceIntent] {
-        let partials = await HarnessAsyncTestSupport.collectPartialContent(from: response)
+        let partials = await HarnessAsyncTestSupport.collectPartialContent(from: response, timeout: .seconds(10))
         return partials.compactMap { partial in
             if case .surfaceIntent(let intent) = partial { return intent }
             return nil

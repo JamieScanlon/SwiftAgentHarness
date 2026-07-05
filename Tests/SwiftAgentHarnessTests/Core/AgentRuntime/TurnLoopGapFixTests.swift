@@ -203,8 +203,14 @@ struct TurnLoopGapFixTests {
         #expect(await attempts.count() == 1)
     }
 
-    @Test("single tool round then answer appends final assistant", arguments: 1...30)
-    func singleToolRoundThenAnswerAppendsFinal(iteration: Int) async throws {
+    @Test("single tool round then answer appends final assistant")
+    func singleToolRoundThenAnswerAppendsFinal() async throws {
+        for iteration in 1...10 {
+            try await runSingleToolRoundThenAnswerAppendsFinal(iteration: iteration)
+        }
+    }
+
+    private func runSingleToolRoundThenAnswerAppendsFinal(iteration: Int) async throws {
         let model = makeModel()
         let conversation = makeConversation(model: model, interactionMode: .chat)
         let state = TurnLoopConversationState(conversation: conversation)

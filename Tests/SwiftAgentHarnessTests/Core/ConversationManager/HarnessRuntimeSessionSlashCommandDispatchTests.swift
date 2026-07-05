@@ -240,60 +240,47 @@ struct HarnessRuntimeSessionSlashCommandDispatchTests {
 
     @Test("/approve rejects cross-conversation exec approval resolve")
     func approveRejectsCrossConversationScope() async throws {
-        let container = try HarnessRuntimeSessionSlashDispatchSupport.makeContainer()
-        let manager = HarnessRuntimeSession(
-            container: container,
-            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
-        )
-        let model = HarnessRuntimeSessionSlashDispatchSupport.makeModel(name: "slash:approve-scope")
-        try await manager.createConversation(with: model, userSystemPrompt: "sys-a")
-        let convA = try #require(await manager.currentConversationID)
-        let convARow = try #require(await manager.modelConversation(id: convA))
-
-        try await manager.createConversation(with: model, userSystemPrompt: "sys-b")
-        let convB = try #require(await manager.currentConversationID)
-
-        await ExecApprovalStore.shared.registerPending(
-            id: "slash-cross-1",
-            command: "git push",
-            scope: ExecApprovalScope(
-                conversationID: convA,
-                ownerAccountID: convARow.ownerAccountID
+        try await ExecApprovalStoreTestSupport.isolated {
+            let container = try HarnessRuntimeSessionSlashDispatchSupport.makeContainer()
+            let manager = HarnessRuntimeSession(
+                container: container,
+                harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
             )
-        )
-        defer {
-            Task {
-                _ = await ExecApprovalStore.shared.resolve(
-                    id: "slash-cross-1",
-                    scope: ExecApprovalScope(
-                        conversationID: convA,
-                        ownerAccountID: convARow.ownerAccountID
-                    ),
-                    strictTenancy: false,
-                    ownerScope: nil,
-                    approved: false,
-                    reason: "test cleanup"
+            let model = HarnessRuntimeSessionSlashDispatchSupport.makeModel(name: "slash:approve-scope")
+            try await manager.createConversation(with: model, userSystemPrompt: "sys-a")
+            let convA = try #require(await manager.currentConversationID)
+            let convARow = try #require(await manager.modelConversation(id: convA))
+
+            try await manager.createConversation(with: model, userSystemPrompt: "sys-b")
+            let convB = try #require(await manager.currentConversationID)
+
+            await ExecApprovalStore.shared.registerPending(
+                id: "slash-cross-1",
+                command: "git push",
+                scope: ExecApprovalScope(
+                    conversationID: convA,
+                    ownerAccountID: convARow.ownerAccountID
                 )
-            }
+            )
+
+            _ = try await manager.testing_runSlashCommandIfNeeded(
+                "/approve slash-cross-1",
+                conversationID: convB
+            )
+            var messages = try await manager.listMessages(conversationID: convB)
+            #expect(messages.contains { message in
+                message.role == .assistant
+                    && message.content.contains("No pending exec approval found for id slash-cross-1")
+            })
+
+            _ = try await manager.testing_runSlashCommandIfNeeded(
+                "/approve slash-cross-1",
+                conversationID: convA
+            )
+            messages = try await manager.listMessages(conversationID: convA)
+            #expect(messages.contains { message in
+                message.role == .assistant && message.content.contains("Exec approval slash-cross-1 granted")
+            })
         }
-
-        _ = try await manager.testing_runSlashCommandIfNeeded(
-            "/approve slash-cross-1",
-            conversationID: convB
-        )
-        var messages = try await manager.listMessages(conversationID: convB)
-        #expect(messages.contains { message in
-            message.role == .assistant
-                && message.content.contains("No pending exec approval found for id slash-cross-1")
-        })
-
-        _ = try await manager.testing_runSlashCommandIfNeeded(
-            "/approve slash-cross-1",
-            conversationID: convA
-        )
-        messages = try await manager.listMessages(conversationID: convA)
-        #expect(messages.contains { message in
-            message.role == .assistant && message.content.contains("Exec approval slash-cross-1 granted")
-        })
     }
 }

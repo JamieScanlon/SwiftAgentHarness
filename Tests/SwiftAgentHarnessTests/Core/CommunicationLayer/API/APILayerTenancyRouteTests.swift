@@ -6,7 +6,7 @@ import Vapor
 import VaporTesting
 @testable import SwiftAgentHarness
 
-@Suite("APILayer tenancy routes", .serialized)
+@Suite("APILayer tenancy routes")
 struct APILayerTenancyRouteTests {
     @Test("PATCH /api/conversations/:id returns 428 without If-Match when strict mode enabled")
     func conversationPatchStrictModeRequiresIfMatch() async throws {
@@ -440,102 +440,93 @@ struct APILayerTenancyRouteTests {
 
     @Test("POST /api/approvals/:id resolves on the unified decision vocabulary")
     func unifiedApprovalResolveAllowAlways() async throws {
-        let conversation = ProtocolOnlyConversationGatewayStub()
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [])
-        let api = APILayer(port: 0)
-        let grants = InMemoryExecApprovalGrantStore()
-        await ExecApprovalStore.shared.configure(grantStore: grants)
-        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
-        let conversationID = UUID()
-        await ExecApprovalStore.shared.registerPending(
-            id: "unified-1",
-            command: "git push origin main",
-            scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: nil)
-        )
-
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
+        try await ExecApprovalStoreTestSupport.isolated {
+            let conversation = ProtocolOnlyConversationGatewayStub()
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [])
+            let api = APILayer(port: 0)
+            let grants = InMemoryExecApprovalGrantStore()
+            await ExecApprovalStore.shared.configure(grantStore: grants)
+            let conversationID = UUID()
+            await ExecApprovalStore.shared.registerPending(
+                id: "unified-1",
+                command: "git push origin main",
+                scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: nil)
             )
-            try await app.testing().test(
-                .POST,
-                "/api/approvals/unified-1",
-                beforeRequest: { req in
-                    try req.content.encode(["decision": "allowAlways"])
+
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(
+                    .POST,
+                    "/api/approvals/unified-1",
+                    beforeRequest: { req in
+                        try req.content.encode(["decision": "allowAlways"])
+                    }
+                ) { res async throws in
+                    #expect(res.status == .ok)
                 }
-            ) { res async throws in
-                #expect(res.status == .ok)
+                #expect(await ExecApprovalStore.shared.isDurableApproved(command: "git status"))
             }
-            #expect(await ExecApprovalStore.shared.isDurableApproved(command: "git status"))
         }
     }
 
     @Test("POST /api/approvals/:id returns 403 for cross-tenant resolve under strict tenancy")
     func unifiedApprovalResolveCrossTenantForbidden() async throws {
-        let ownerA = UUID()
-        let ownerB = UUID()
-        let conversationID = UUID()
-        let model = APILayerRESTRouteTestSupport.makeTestModel()
-        let conversationRow = ModelConversation(
-            id: conversationID,
-            model: model,
-            messages: [],
-            createdAt: Date(),
-            updatedAt: Date(),
-            topic: "exec-approval-tenancy",
-            description: nil,
-            interactionMode: .chat,
-            metadata: nil,
-            ownerAccountID: ownerA,
-            lineageKind: .root,
-            origin: .user
-        )
-        let conversation = ProtocolOnlyConversationGatewayStub(
-            conversationsByID: [conversationID: conversationRow]
-        )
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [model])
-        let api = APILayer(port: 0)
-        await APILayerRESTRouteTestSupport.configureStrictTenancyAuth(on: api)
-        let authB = try await APILayerRESTRouteTestSupport.bearerAuthorization(ownerAccountID: ownerB)
-        await ExecApprovalStore.shared.registerPending(
-            id: "cross-tenant-1",
-            command: "git push origin main",
-            scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerA)
-        )
-        defer {
-            Task {
-                _ = await ExecApprovalStore.shared.resolve(
-                    id: "cross-tenant-1",
-                    scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerA),
-                    strictTenancy: true,
-                    ownerScope: ownerA,
-                    approved: false,
-                    reason: "test cleanup"
-                )
-            }
-        }
-
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
+        try await ExecApprovalStoreTestSupport.isolated {
+            let ownerA = UUID()
+            let ownerB = UUID()
+            let conversationID = UUID()
+            let model = APILayerRESTRouteTestSupport.makeTestModel()
+            let conversationRow = ModelConversation(
+                id: conversationID,
+                model: model,
+                messages: [],
+                createdAt: Date(),
+                updatedAt: Date(),
+                topic: "exec-approval-tenancy",
+                description: nil,
+                interactionMode: .chat,
+                metadata: nil,
+                ownerAccountID: ownerA,
+                lineageKind: .root,
+                origin: .user
             )
-            try await app.testing().test(
-                .POST,
-                "/api/approvals/cross-tenant-1",
-                beforeRequest: { req in
-                    req.headers.replaceOrAdd(name: .authorization, value: authB)
-                    try req.content.encode(["decision": "allowAlways"])
+            let conversation = ProtocolOnlyConversationGatewayStub(
+                conversationsByID: [conversationID: conversationRow]
+            )
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [model])
+            let api = APILayer(port: 0)
+            await APILayerRESTRouteTestSupport.configureStrictTenancyAuth(on: api)
+            let authB = try await APILayerRESTRouteTestSupport.bearerAuthorization(ownerAccountID: ownerB)
+            await ExecApprovalStore.shared.registerPending(
+                id: "cross-tenant-1",
+                command: "git push origin main",
+                scope: ExecApprovalScope(conversationID: conversationID, ownerAccountID: ownerA)
+            )
+
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(
+                    .POST,
+                    "/api/approvals/cross-tenant-1",
+                    beforeRequest: { req in
+                        req.headers.replaceOrAdd(name: .authorization, value: authB)
+                        try req.content.encode(["decision": "allowAlways"])
+                    }
+                ) { res async throws in
+                    #expect(res.status == .forbidden)
                 }
-            ) { res async throws in
-                #expect(res.status == .forbidden)
             }
         }
     }
@@ -568,101 +559,105 @@ struct APILayerTenancyRouteTests {
 
     @Test("GET /api/exec-approvals/grants returns sorted command names")
     func execApprovalGrantsList() async throws {
-        let conversation = ProtocolOnlyConversationGatewayStub()
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [])
-        let api = APILayer(port: 0)
-        await ExecApprovalStore.shared.configure(
-            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["grep", "git"])
-        )
-        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
-
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
+        try await ExecApprovalStoreTestSupport.isolated {
+            let conversation = ProtocolOnlyConversationGatewayStub()
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [])
+            let api = APILayer(port: 0)
+            await ExecApprovalStore.shared.configure(
+                grantStore: InMemoryExecApprovalGrantStore(commandNames: ["grep", "git"])
             )
-            try await app.testing().test(.GET, "/api/exec-approvals/grants") { res async throws in
-                #expect(res.status == .ok)
-                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
-                #expect(body?["commandNames"] as? [String] == ["git", "grep"])
+
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(.GET, "/api/exec-approvals/grants") { res async throws in
+                    #expect(res.status == .ok)
+                    let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    #expect(body?["commandNames"] as? [String] == ["git", "grep"])
+                }
             }
         }
     }
 
     @Test("DELETE /api/exec-approvals/grants/:commandName removes an existing grant")
     func execApprovalGrantsRevoke() async throws {
-        let conversation = ProtocolOnlyConversationGatewayStub()
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [])
-        let api = APILayer(port: 0)
-        await ExecApprovalStore.shared.configure(
-            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git", "npm"])
-        )
-        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
-
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
+        try await ExecApprovalStoreTestSupport.isolated {
+            let conversation = ProtocolOnlyConversationGatewayStub()
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [])
+            let api = APILayer(port: 0)
+            await ExecApprovalStore.shared.configure(
+                grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git", "npm"])
             )
-            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git") { res async throws in
-                #expect(res.status == .ok)
+
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git") { res async throws in
+                    #expect(res.status == .ok)
+                }
+                #expect(await ExecApprovalStore.shared.listDurableGrants() == ["npm"])
             }
-            #expect(await ExecApprovalStore.shared.listDurableGrants() == ["npm"])
         }
     }
 
     @Test("DELETE /api/exec-approvals/grants/:commandName accepts percent-encoded names")
     func execApprovalGrantsRevokePercentEncoded() async throws {
-        let conversation = ProtocolOnlyConversationGatewayStub()
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [])
-        let api = APILayer(port: 0)
-        await ExecApprovalStore.shared.configure(
-            grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git status"])
-        )
-        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
-
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
+        try await ExecApprovalStoreTestSupport.isolated {
+            let conversation = ProtocolOnlyConversationGatewayStub()
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [])
+            let api = APILayer(port: 0)
+            await ExecApprovalStore.shared.configure(
+                grantStore: InMemoryExecApprovalGrantStore(commandNames: ["git status"])
             )
-            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git%20status") { res async throws in
-                #expect(res.status == .ok)
+
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(.DELETE, "/api/exec-approvals/grants/git%20status") { res async throws in
+                    #expect(res.status == .ok)
+                }
+                #expect(await ExecApprovalStore.shared.listDurableGrants() == [])
             }
-            #expect(await ExecApprovalStore.shared.listDurableGrants() == [])
         }
     }
 
     @Test("DELETE /api/exec-approvals/grants/:commandName returns 404 for unknown grant")
     func execApprovalGrantsRevokeNotFound() async throws {
-        let conversation = ProtocolOnlyConversationGatewayStub()
-        let runtime = ProtocolOnlyRuntimeGatewayStub()
-        let modelProvider = APILayerRESTStubModelProvider(models: [])
-        let api = APILayer(port: 0)
-        await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore())
-        defer { Task { await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore()) } }
+        try await ExecApprovalStoreTestSupport.isolated {
+            let conversation = ProtocolOnlyConversationGatewayStub()
+            let runtime = ProtocolOnlyRuntimeGatewayStub()
+            let modelProvider = APILayerRESTStubModelProvider(models: [])
+            let api = APILayer(port: 0)
+            await ExecApprovalStore.shared.configure(grantStore: InMemoryExecApprovalGrantStore())
 
-        try await withApp { app in
-            await api.configureRoutesForTesting(
-                app: app,
-                conversation: conversation,
-                runtime: runtime,
-                modelProvider: modelProvider
-            )
-            try await app.testing().test(.DELETE, "/api/exec-approvals/grants/missing") { res async throws in
-                #expect(res.status == .notFound)
-                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
-                #expect(body?["type"] as? String == "error")
-                #expect(body?["message"] as? String == "Exec approval grant not found")
+            try await withApp { app in
+                await api.configureRoutesForTesting(
+                    app: app,
+                    conversation: conversation,
+                    runtime: runtime,
+                    modelProvider: modelProvider
+                )
+                try await app.testing().test(.DELETE, "/api/exec-approvals/grants/missing") { res async throws in
+                    #expect(res.status == .notFound)
+                    let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    #expect(body?["type"] as? String == "error")
+                    #expect(body?["message"] as? String == "Exec approval grant not found")
+                }
             }
         }
     }

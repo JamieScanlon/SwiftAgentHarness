@@ -31,7 +31,7 @@ struct PromptConfigBundleResourceOverrideTests {
     /// and flaking unrelated suites. Include valid `options`, `settings`, and `agentHarness` blocks.
     private func config(_ value: String) -> Data {
         Data("""
-        {"\(Self.marker)":"\(value)","options":{"includeAgentSkills":false,"includeCurrentDateTime":true},"settings":{},"agentHarness":{"strictAgentHarnessPrompts":true}}
+        {"\(Self.marker)":"\(value)","options":{"includeAgentSkills":false,"includeCurrentDateTime":true},"settings":{},"agentHarness":{"strictAgentHarnessPrompts":true},"modeProfiles":{"profiles":[{"id":"chat","interactionMode":"chat","assemblyKind":"chat"}]}}
         """.utf8)
     }
 

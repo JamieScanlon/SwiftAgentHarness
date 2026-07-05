@@ -309,4 +309,15 @@ public actor ApprovalCoordinator {
             continuation.resume(throwing: WaitError.pendingRequestNotFound)
         }
     }
+
+    /// Clears all pending/resume state. Used by tests to isolate `ExecApprovalStore.shared`.
+    func resetForTesting() {
+        for id in waiters.keys {
+            dropWaiters(for: id)
+        }
+        pending.removeAll()
+        resolutions.removeAll()
+        waiters.removeAll()
+        rerouteNotices.removeAll()
+    }
 }
