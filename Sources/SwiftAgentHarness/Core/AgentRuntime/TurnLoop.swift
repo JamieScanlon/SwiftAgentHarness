@@ -825,8 +825,21 @@ struct TurnLoop {
         switch outcome {
         case .completed(let message), .pendingHandle(let message), .denied(let message):
             try? await ports.conversation.append(message, conversationID: conversationID, runID: runID)
-        case .approvalRequired:
-            break
+        case .approvalRequired(let toolName, let outcomeToolCallID):
+            await ports.tools.handleDispatchApprovalRequired(
+                toolName: toolName,
+                toolCallID: outcomeToolCallID ?? toolCallID,
+                snapshot: snapshot,
+                conversationID: conversationID,
+                runID: runID,
+                iteration: iteration,
+                modelID: modelID,
+                lifecycleEmitter: lifecycleEmitter
+            )
+            let pendingResult = AgentLoopToolDispatch.approvalPendingToolResultMessage(
+                toolCallId: outcomeToolCallID ?? toolCallID
+            )
+            try? await ports.conversation.append(pendingResult, conversationID: conversationID, runID: runID)
         }
         ports.logger?.info(
             "[TurnLoop] behavioral recovery injected think tool call conversationID=\(conversationID.uuidString) runID=\(runID?.uuidString ?? "nil") iteration=\(iteration)"
