@@ -40,6 +40,11 @@ actor MemoryWriteTracker: MemoryWriteObserving {
         auxiliaryWritesByConversation[conversationID] = []
     }
 
+    func removeConversation(conversationID: UUID) {
+        mainAgentWritesByConversation.removeValue(forKey: conversationID)
+        auxiliaryWritesByConversation.removeValue(forKey: conversationID)
+    }
+
     private func insert(path: String, into store: inout [UUID: Set<String>], conversationID: UUID) {
         var set = store[conversationID] ?? []
         set.insert((path as NSString).standardizingPath)

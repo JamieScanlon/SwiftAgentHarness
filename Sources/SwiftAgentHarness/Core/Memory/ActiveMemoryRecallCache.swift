@@ -45,11 +45,19 @@ actor ActiveMemoryRecallCache {
 
     func invalidate(conversationID: UUID, lane: RecallLane?) {
         if let lane {
+            cancelInFlight(matching: { $0.conversationID == conversationID && $0.lane == lane })
             entries = entries.filter { $0.key.conversationID != conversationID || $0.key.lane != lane }
             inFlight = inFlight.filter { $0.key.conversationID != conversationID || $0.key.lane != lane }
         } else {
+            cancelInFlight(matching: { $0.conversationID == conversationID })
             entries = entries.filter { $0.key.conversationID != conversationID }
             inFlight = inFlight.filter { $0.key.conversationID != conversationID }
+        }
+    }
+
+    private func cancelInFlight(matching predicate: (Key) -> Bool) {
+        for (key, task) in inFlight where predicate(key) {
+            task.cancel()
         }
     }
 }

@@ -134,6 +134,7 @@ protocol MemoryServicing: Sendable {
     func drainPendingWork(timeoutMs: Int) async
     func shutdown() async
     func invalidateSnapshot(conversationID: UUID) async
+    func endSession(conversationID: UUID) async
     func currentSnapshotGeneration(conversationID: UUID) async -> Int
 }
 

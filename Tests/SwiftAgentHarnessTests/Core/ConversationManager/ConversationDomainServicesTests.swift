@@ -70,6 +70,30 @@ struct ConversationDomainServicesTests {
         #expect(deleted == nil)
     }
 
+    @Test("lifecycle deleteConversation tears down memory session state")
+    func lifecycleDeleteTearsDownMemorySession() async throws {
+        let manager = HarnessRuntimeSession(container: try makeContainer())
+        let lifecycle = await manager.conversationDomainServices.lifecycle
+        try await manager.createConversation(with: makeModel(), userSystemPrompt: "sys")
+        let conversationID = try #require(await manager.currentConversationID)
+
+        let defaultEngine = try #require(await manager.contextEngine as? DefaultContextEngine)
+        let memoryService = try #require(defaultEngine.memoryService)
+        let workDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lifecycle-mem-teardown-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workDir) }
+
+        let context = try memoryService.makeSessionContext(conversationID: conversationID, cwd: workDir.path)
+        _ = try await memoryService.bootstrapSession(context: context)
+        #expect(await memoryService.currentSnapshotGeneration(conversationID: conversationID) > 0)
+
+        try await lifecycle.deleteConversation(conversationID: conversationID, hard: true)
+
+        #expect(await memoryService.currentSnapshotGeneration(conversationID: conversationID) == 0)
+        #expect(await memoryService.sessionContext(for: conversationID) == nil)
+    }
+
     @Test("lifecycle deleteConversation cancels in-flight generation for soft delete")
     func lifecycleDeleteCancelsGenerationSoftDelete() async throws {
         try await assertDeleteConversationCancelsInFlightGeneration(hard: false)

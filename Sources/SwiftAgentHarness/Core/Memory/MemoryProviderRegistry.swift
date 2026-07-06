@@ -30,6 +30,11 @@ actor MemoryProviderRegistry {
         await builtin.shutdown()
         if let external { await external.shutdown() }
     }
+
+    func endSessionAll(messages: [String]) async {
+        await builtin.onSessionEnd(messages: messages)
+        if let external { await external.onSessionEnd(messages: messages) }
+    }
 }
 
 struct BuiltinFileMemoryProvider: MemoryProviding {
