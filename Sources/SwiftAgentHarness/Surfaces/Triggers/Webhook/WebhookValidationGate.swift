@@ -73,6 +73,6 @@ struct WebhookValidationGate: Sendable {
 
 private extension Dictionary where Key == String {
     func mapKeys(_ transform: (Key) -> Key) -> [Key: Value] {
-        Dictionary(uniqueKeysWithValues: map { (transform($0.key), $0.value) })
+        Dictionary(map { (transform($0.key), $0.value) }, uniquingKeysWith: { _, new in new })
     }
 }

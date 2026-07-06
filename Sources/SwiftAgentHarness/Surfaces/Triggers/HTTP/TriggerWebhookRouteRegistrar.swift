@@ -44,12 +44,9 @@ public struct TriggerWebhookRouteRegistrar: Sendable {
             }
             var headers: [String: String] = [:]
             for (key, value) in req.headers {
-                headers[key] = value
+                headers[key.lowercased()] = value
             }
-            let deliveryID = headers["X-GitHub-Delivery"]
-                ?? headers["x-github-delivery"]
-                ?? headers["X-Request-ID"]
-                ?? headers["x-request-id"]
+            let deliveryID = headers["x-github-delivery"] ?? headers["x-request-id"]
             let ingress = WebhookIngressRequest(
                 routeName: name,
                 body: body,

@@ -44,6 +44,56 @@ struct WebhookValidationGateTests {
         }
     }
 
+    @Test("case variant duplicate headers do not trap")
+    func caseVariantDuplicateHeadersDoNotTrap() async {
+        let route = WebhookRoute(name: "r", secret: "s", signatureScheme: .genericHMAC)
+        let store = WebhookRouteStore(staticRoutes: [route], dynamicStore: tempDynamicStore())
+        let gate = WebhookValidationGate(
+            routeStore: store,
+            idempotency: TriggerIdempotencyGate(dedupe: AlwaysAdmitDedupe()),
+            rateLimit: TriggerRateLimitGate(maxPerWindow: 100)
+        )
+        await #expect(throws: WebhookValidationFailure.invalidSignature) {
+            _ = try await gate.validate(
+                WebhookIngressRequest(
+                    routeName: "r",
+                    body: Data("x".utf8),
+                    headers: [
+                        "X-Webhook-Signature": "bad",
+                        "x-webhook-signature": "also-bad",
+                    ],
+                    deliveryID: "d-case-dup"
+                )
+            )
+        }
+    }
+
+    @Test("case variant duplicate headers with valid signature succeed")
+    func caseVariantDuplicateHeadersWithValidSignatureSucceed() async throws {
+        let secret = "test-secret"
+        let body = Data("{\"ok\":true}".utf8)
+        let sig = hmacHex(data: body, secret: secret)
+        let route = WebhookRoute(name: "github", secret: secret, signatureScheme: .genericHMAC)
+        let store = WebhookRouteStore(staticRoutes: [route], dynamicStore: tempDynamicStore())
+        let gate = WebhookValidationGate(
+            routeStore: store,
+            idempotency: TriggerIdempotencyGate(dedupe: AlwaysAdmitDedupe()),
+            rateLimit: TriggerRateLimitGate(maxPerWindow: 100)
+        )
+        let result = try await gate.validate(
+            WebhookIngressRequest(
+                routeName: "github",
+                body: body,
+                headers: [
+                    "X-Webhook-Signature": sig,
+                    "x-webhook-signature": sig,
+                ],
+                deliveryID: "d-both-valid"
+            )
+        )
+        #expect(result.route.name == "github")
+    }
+
     @Test("fallback dedupe key uses stable SHA-256 digest")
     func stableFallbackDedupeKey() async throws {
         let secret = "test-secret"

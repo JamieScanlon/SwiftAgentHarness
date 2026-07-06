@@ -25,6 +25,11 @@ enum WorkspaceGrepRunner {
             return .failure(.invalidRegex(error.localizedDescription))
         }
         if !forceInProcess && LocalExecArgv.isSandboxAvailable {
+            #if os(macOS)
+            if let grepError = await grepEREValidationFailure(pattern: pattern) {
+                return .failure(.invalidRegex(grepError))
+            }
+            #endif
             switch await runSandboxBacked(
                 pattern: pattern,
                 searchRoot: searchRoot,
@@ -99,6 +104,11 @@ enum WorkspaceGrepRunner {
                 searchRoot: searchRoot
             )
         } catch let error as WorkspaceGrepError {
+            #if os(macOS)
+            if case .timedOut = error, let grepError = await grepEREValidationFailure(pattern: pattern) {
+                return .failure(.invalidRegex(grepError))
+            }
+            #endif
             return .failure(error)
         } catch let error as SandboxBackendError {
             switch error {
@@ -223,6 +233,36 @@ enum WorkspaceGrepRunner {
     private static func trimTrailingNewline(_ value: String) -> String {
         value.hasSuffix("\n") ? String(value.dropLast()) : value
     }
+
+    #if os(macOS)
+    private static let grepEREProbeSeconds: TimeInterval = 2
+
+    private static func grepEREValidationFailure(pattern: String) async -> String? {
+        do {
+            let result: (exitCode: Int32, stderr: String) = try await withWallClockTimeout(seconds: grepEREProbeSeconds) {
+                try await Task.detached(priority: .utility) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+                    process.arguments = ["-E", "-e", pattern, "/dev/null"]
+                    let stderrPipe = Pipe()
+                    process.standardOutput = Pipe()
+                    process.standardError = stderrPipe
+                    try process.run()
+                    process.waitUntilExit()
+                    let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errText = String(data: errData, encoding: .utf8) ?? ""
+                    return (process.terminationStatus, errText)
+                }.value
+            }
+            if result.exitCode == 2 || looksLikeGrepRegexError(result.stderr) {
+                return sandboxRegexError(from: result.stderr)
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+    #endif
 
     private static func withWallClockTimeout<T: Sendable>(
         seconds: TimeInterval,
