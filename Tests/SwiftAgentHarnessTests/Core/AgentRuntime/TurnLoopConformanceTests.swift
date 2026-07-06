@@ -140,6 +140,65 @@ struct TurnLoopConformanceTests {
         #expect(terminal.detail == "required_tool_choice_unsatisfiable")
     }
 
+    @Test("non-positive maxIterations clamps to one loop iteration without trapping")
+    func nonPositiveMaxIterationsClampsToOneIteration() async throws {
+        let conversationID = UUID()
+        let model = makeModel()
+        let modeProfileID = "turn-loop-clamp-zero-iterations"
+        let zeroIterationProfile = ResolvedModeProfile(
+            id: modeProfileID,
+            interactionMode: .chat,
+            assemblyKind: .chat,
+            allowsProactiveCompactionTriggers: false,
+            appliesAgentBuildOrchestratorHarness: false,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            runtime: ModeProfileRuntimeSlice(maxIterations: 0)
+        )
+        let state = TurnLoopConversationState(
+            conversation: ModelConversation(
+                id: conversationID,
+                model: model,
+                messages: [Message(id: UUID(), role: .user, content: "go", timestamp: Date(), toolCalls: [])],
+                turns: [],
+                interactionMode: .chat,
+                modeProfileID: modeProfileID
+            )
+        )
+        let lifecycle = TurnLoopLifecycleRecorder()
+        let ports = TurnLoopTestPorts.make(
+            state: state,
+            streamFactory: {
+                AsyncThrowingStream { continuation in
+                    continuation.yield(.complete(LLMResponse(content: "done", toolCalls: [])))
+                    continuation.finish()
+                }
+            },
+            modeRegistry: ModeRegistryTestSupport.makePort(
+                seedingBuiltIns: false,
+                additionalProfiles: [zeroIterationProfile]
+            )
+        )
+        let loop = TurnLoop(ports: ports)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: StubTurnLoopLLM(),
+            config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+        )
+        let terminal = try await loop.run(
+            conversationID: conversationID,
+            runID: UUID(),
+            anchorUserMessageID: await state.anchorUserMessageID(),
+            configuration: AgentRuntimeTurnConfiguration(),
+            orchestrator: orchestrator,
+            lifecycleEmitter: AgentRuntimeLifecycleEmitter { _, payload in
+                await lifecycle.record(name: payload.name)
+            }
+        )
+        let iterationStarts = await lifecycle.eventOrder().filter { $0 == .loopIterationStarted }.count
+        #expect(iterationStarts == 1)
+        #expect(terminal.category == ConversationRunTerminalCategory.naturalStop)
+    }
+
     @Test("bare-message natural stop stamps terminal finishReason on bare assistant")
     func bareMessageNaturalStopStampsFinishReason() async throws {
         let conversationID = UUID()

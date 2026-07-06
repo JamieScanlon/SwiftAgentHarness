@@ -679,7 +679,10 @@ struct TurnLoop {
             modeRegistry: ports.modeRegistry,
             logger: ports.logger
         )
-        return profile.runtime.maxIterations ?? Self.defaultTurnLoopMaxIterations
+        guard let configured = profile.runtime.maxIterations else {
+            return Self.defaultTurnLoopMaxIterations
+        }
+        return max(1, configured)
     }
 
     private static let defaultTurnLoopMaxIterations = Int.max

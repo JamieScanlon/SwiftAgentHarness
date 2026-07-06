@@ -190,6 +190,14 @@ struct ModeRegistryModesTemplateTests {
         #expect(try await registry.resolve(modeId: "uncapped-plan").runtime.maxIterations == nil)
     }
 
+    @Test("ModeProfileRuntimeSlice init clamps non-positive maxIterations")
+    func runtimeSliceInitClampsNonPositiveMaxIterations() {
+        #expect(ModeProfileRuntimeSlice(maxIterations: nil).maxIterations == nil)
+        #expect(ModeProfileRuntimeSlice(maxIterations: 0).maxIterations == 1)
+        #expect(ModeProfileRuntimeSlice(maxIterations: -5).maxIterations == 1)
+        #expect(ModeProfileRuntimeSlice(maxIterations: 8).maxIterations == 8)
+    }
+
     @Test("config maxIterations below 1 clamp to 1")
     func configMaxIterationsBelowOneClamps() async throws {
         let config = ModeProfileConfiguration(
