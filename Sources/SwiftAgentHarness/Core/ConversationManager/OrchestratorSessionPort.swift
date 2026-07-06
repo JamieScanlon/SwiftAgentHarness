@@ -112,6 +112,11 @@ final class OrchestratorSessionPortAdapter: OrchestratorSessionPort, Sendable {
         return await orchestratorService.defaultSessionModePolicyContext()
     }
 
+    func persistActivatedSkillsFromLoader(conversationID: UUID) async {
+        guard let orchestratorService = backing.orchestratorService else { return }
+        await orchestratorService.persistActivatedSkillsFromLoader(conversationID: conversationID)
+    }
+
     func persistActivatedSkillsFromLoaderToCurrentConversation() async {
         guard let orchestratorService = backing.orchestratorService else { return }
         await orchestratorService.persistActivatedSkillsFromLoaderToCurrentConversation()

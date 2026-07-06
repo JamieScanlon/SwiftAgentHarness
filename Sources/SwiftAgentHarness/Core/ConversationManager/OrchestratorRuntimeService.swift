@@ -498,7 +498,11 @@ public actor OrchestratorRuntimeService {
                     && (routingConv.map { ModeProfileSkillsSlice.isSkillAllowedByRoutingPolicy(name: skillName, conversation: $0) } ?? true)
             }
             let persisting = PersistingActivatedSkillsToolProvider(inner: gated) {
-                await self.installedSessionCollaborator.persistActivatedSkillsFromLoaderToCurrentConversation()
+                if let conversationID = activeConversation?.id {
+                    await self.installedSessionCollaborator.persistActivatedSkillsFromLoader(conversationID: conversationID)
+                } else {
+                    await self.installedSessionCollaborator.persistActivatedSkillsFromLoaderToCurrentConversation()
+                }
             }
             providers.append(persisting)
         }
@@ -976,7 +980,7 @@ public actor OrchestratorRuntimeService {
         preDispatchEvaluator: ToolSystemLivePreDispatchPolicyEvaluator
     ) async -> BuiltOrchestrator? {
         let activeConversationID = activeConversation?.id
-        let skillLoader = await skillActivation.currentSkillLoader()
+        let skillLoader = await skillActivation.skillLoader(for: activeConversationID)
         let systemPrompt: SystemPrompt
         do {
             let conv = activeConversation

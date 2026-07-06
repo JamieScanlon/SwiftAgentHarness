@@ -127,6 +127,10 @@ public actor OrchestratorSessionRuntimeService {
         await invalidateOrchestrator(for: nil)
     }
 
+    func persistActivatedSkillsFromLoader(conversationID: UUID) async {
+        await skillActivation.persistActivatedSkillsFromLoader(conversationID: conversationID)
+    }
+
     func persistActivatedSkillsFromLoaderToCurrentConversation() async {
         guard let cid = await selection.currentConversationID() else { return }
         await skillActivation.persistActivatedSkillsFromLoader(conversationID: cid)
@@ -196,7 +200,7 @@ public actor OrchestratorSessionRuntimeService {
     }
 
     func generateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String {
-        let skillLoader = await skillActivation.currentSkillLoader()
+        let skillLoader = await skillActivation.skillLoader(for: conversationID)
         let conv: ModelConversation?
         if let conversationID {
             conv = await persistenceDomain.modelConversation(id: conversationID)

@@ -139,7 +139,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
             throw ConversationServiceError.conversationNotFound
         }
         guard SystemPrompt.loadIncludeAgentSkillsFromConfig() else { return [] }
-        guard let skillLoader = await skillActivation.currentSkillLoader() else { return [] }
+        guard let skillLoader = await skillActivation.skillLoader(for: conversationID) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await modePolicyContext(for: conversation)
         let eligible = all.filter {
@@ -154,7 +154,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
 
     func listAvailableSkillsForAPI() async throws -> [AvailableSkillInfo] {
         guard SystemPrompt.loadIncludeAgentSkillsFromConfig() else { return [] }
-        guard let skillLoader = await skillActivation.currentSkillLoader() else { return [] }
+        guard let skillLoader = await skillActivation.skillLoader(for: nil) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await defaultSessionModePolicyContext()
         let eligible = all.filter {
