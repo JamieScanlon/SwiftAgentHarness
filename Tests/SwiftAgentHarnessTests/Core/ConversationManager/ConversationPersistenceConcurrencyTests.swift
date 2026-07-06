@@ -150,4 +150,96 @@ import Testing
         #expect(conversation?.messages.contains(where: { $0.id == assistant.id }) == false)
         #expect(conversation?.state == .idle)
     }
+
+    @Test("replaceConversationInRegistry unions equal-count divergent tails")
+    func replaceConversationUnionsDivergentEqualCountTails() async throws {
+        let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
+        let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let conv = try await domain.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        try await domain.resetConversationsFromCatalog(availableModels: [model])
+
+        let user = Message(id: UUID(), role: .user, content: "hello", timestamp: Date())
+        _ = try await domain.routingSaveMessage(
+            user,
+            for: conv.id,
+            resourceManager: nil,
+            logger: nil,
+            expectedPreviousTailHarnessMessageID: nil,
+            transcriptRunID: nil
+        )
+
+        guard let base = await domain.modelConversation(id: conv.id) else {
+            Issue.record("conversation missing")
+            return
+        }
+        let staleBase = base.messages
+
+        let msgC = Message(id: UUID(), role: .assistant, content: "C", timestamp: Date().addingTimeInterval(1))
+        var withC = base
+        withC.messages = staleBase + [msgC]
+        await domain.replaceConversationInRegistry(withC)
+
+        let msgD = Message(id: UUID(), role: .assistant, content: "D", timestamp: Date().addingTimeInterval(2))
+        var withD = base
+        withD.messages = staleBase + [msgD]
+        await domain.replaceConversationInRegistry(withD)
+
+        let conversation = await domain.modelConversation(id: conv.id)
+        #expect(conversation?.messages.contains(where: { $0.id == msgC.id }) == true)
+        #expect(conversation?.messages.contains(where: { $0.id == msgD.id }) == true)
+    }
+
+    @Test("replaceConversationInRegistry keeps incoming-only message when existing is longer")
+    func replaceConversationKeepsIncomingOnlyWhenExistingIsLonger() async throws {
+        let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
+        let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let conv = try await domain.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        try await domain.resetConversationsFromCatalog(availableModels: [model])
+
+        let user1 = Message(id: UUID(), role: .user, content: "one", timestamp: Date())
+        let user2 = Message(id: UUID(), role: .user, content: "two", timestamp: Date().addingTimeInterval(1))
+        let user3 = Message(id: UUID(), role: .user, content: "three", timestamp: Date().addingTimeInterval(2))
+        for message in [user1, user2, user3] {
+            _ = try await domain.routingSaveMessage(
+                message,
+                for: conv.id,
+                resourceManager: nil,
+                logger: nil,
+                expectedPreviousTailHarnessMessageID: nil,
+                transcriptRunID: nil
+            )
+        }
+
+        guard let full = await domain.modelConversation(id: conv.id) else {
+            Issue.record("conversation missing")
+            return
+        }
+        #expect(full.messages.count >= 4)
+
+        let stalePrefix = Array(full.messages.prefix(2))
+        let newTail = Message(id: UUID(), role: .assistant, content: "new", timestamp: Date().addingTimeInterval(10))
+        var staleWithNew = full
+        staleWithNew.messages = stalePrefix + [newTail]
+        await domain.replaceConversationInRegistry(staleWithNew)
+
+        let conversation = await domain.modelConversation(id: conv.id)
+        #expect(conversation?.messages.contains(where: { $0.id == newTail.id }) == true)
+        #expect(conversation?.messages.contains(where: { $0.id == user3.id }) == true)
+    }
 }

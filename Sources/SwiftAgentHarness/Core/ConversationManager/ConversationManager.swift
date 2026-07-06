@@ -274,8 +274,18 @@ final class ConversationManager {
         }
         var merged = conversation
         let existing = conversations[index]
-        if existing.messages.count > merged.messages.count {
-            merged.messages = existing.messages
+        let priorMessageCount = merged.messages.count
+        merged.messages = RegistryTranscriptMerge.union(
+            existing: existing.messages,
+            incoming: merged.messages
+        )
+        if merged.interactionMode == .agent,
+           merged.messages.count != priorMessageCount {
+            merged.turns = conversationTurns(messages: merged.messages)
+        }
+        if merged.messages.count > priorMessageCount,
+           let lastTimestamp = merged.messages.last?.timestamp {
+            merged.updatedAt = max(existing.updatedAt, merged.updatedAt, lastTimestamp)
         }
         merged.controlPlaneRevision = max(existing.controlPlaneRevision, merged.controlPlaneRevision)
         conversations.replaceSubrange(index..<index + 1, with: [merged])
