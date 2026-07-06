@@ -36,7 +36,8 @@ enum ToolConversationAccessPolicy {
         for conversation: ModelConversation,
         parentLookup: (UUID) -> ModelConversation?
     ) -> UUID {
-        if let metadataRoot = subAgentRootConversationID(from: conversation.metadata) {
+        if conversation.lineageKind == .subAgent,
+           let metadataRoot = subAgentRootConversationID(from: conversation.metadata) {
             return metadataRoot
         }
         var current = conversation
@@ -51,7 +52,8 @@ enum ToolConversationAccessPolicy {
         for conversation: ModelConversation,
         parentLookup: @Sendable (UUID) async -> ModelConversation?
     ) async -> UUID {
-        if let metadataRoot = subAgentRootConversationID(from: conversation.metadata) {
+        if conversation.lineageKind == .subAgent,
+           let metadataRoot = subAgentRootConversationID(from: conversation.metadata) {
             return metadataRoot
         }
         var current = conversation

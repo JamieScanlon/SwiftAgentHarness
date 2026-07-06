@@ -603,11 +603,16 @@ final class ConversationManager {
         origin: ConversationOrigin = .user
     ) throws -> ModelConversation {
         let requestedCwd = Self.normalizedCwd(cwd)
+        let sanitizedMetadata = Self.sanitizedClientConversationMetadata(
+            metadata,
+            lineageKind: lineageKind,
+            origin: origin
+        )
         let (conversationID, catalogTopic) = try allocateBackendConversationIDIfNeeded(
             selectedModel: selectedModel,
             topic: topic,
             description: description,
-            metadata: metadata,
+            metadata: sanitizedMetadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
             cwd: requestedCwd,
@@ -628,7 +633,7 @@ final class ConversationManager {
             description: description,
             interactionMode: mode,
             modeProfileID: modeProfileID,
-            metadata: metadata,
+            metadata: sanitizedMetadata,
             ownerAccountID: ownerAccountID,
             lineageKind: lineageKind,
             origin: origin
@@ -906,7 +911,8 @@ final class ConversationManager {
         metadata: JSON? = nil,
         interactionMode: InteractionMode? = nil,
         modeProfileID: String? = nil,
-        skipControlPlaneRevisionBump: Bool = false
+        skipControlPlaneRevisionBump: Bool = false,
+        allowHarnessMetadataKeys: Bool = false
     ) throws -> Bool {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else {
             throw ConversationServiceError.conversationNotFound
@@ -920,9 +926,17 @@ final class ConversationManager {
         updatedConversation.topic = (normalizedTopic?.isEmpty == false) ? normalizedTopic : nil
         updatedConversation.description = (normalizedDescription?.isEmpty == false) ? normalizedDescription : nil
         if let incoming = metadata {
+            let mergedIncoming: JSON = if allowHarnessMetadataKeys {
+                incoming
+            } else {
+                ConversationHarnessMetadataKeys.mergingPreservingHarnessKeys(
+                    existing: conversations[index].metadata,
+                    incoming: incoming
+                )
+            }
             updatedConversation.metadata = ConversationMetadataActivatedSkills.mergingPreservingActivatedSkillNames(
                 existing: conversations[index].metadata,
-                incoming: incoming
+                incoming: mergedIncoming
             )
         } else {
             updatedConversation.metadata = nil
@@ -955,6 +969,17 @@ final class ConversationManager {
             try bumpControlPlaneRevision(conversationID: conversationID)
         }
         return modeChanged
+    }
+
+    private static func sanitizedClientConversationMetadata(
+        _ metadata: JSON?,
+        lineageKind: ConversationLineageKind,
+        origin: ConversationOrigin
+    ) -> JSON? {
+        if lineageKind == .subAgent, origin == .system {
+            return metadata
+        }
+        return ConversationHarnessMetadataKeys.strippingClientControlledKeys(from: metadata)
     }
 
     func stampTriggerHostConversation(

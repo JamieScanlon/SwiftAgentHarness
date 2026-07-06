@@ -856,7 +856,8 @@ public actor SubAgentSpawnService {
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
-            skipControlPlaneRevisionBump: false
+            skipControlPlaneRevisionBump: false,
+            allowHarnessMetadataKeys: true
         )
         if let userSystemPrompt = launchPlan.request.userSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
            !userSystemPrompt.isEmpty {
