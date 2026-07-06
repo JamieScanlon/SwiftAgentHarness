@@ -31,7 +31,7 @@ public struct TUIControlInputBridge {
 
     private static func authorization(for submission: ComposerSubmission) -> ControlInputAuthorization {
         ControlInputAuthorization(
-            trustClass: MessageInputTrustCodec.safePolicyClass(raw: submission.provenance.inputTrustRaw)
+            trustClass: submission.resolvedInputTrustClassForControlInput()
         )
     }
 

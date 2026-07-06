@@ -131,7 +131,7 @@ public actor AgentRuntimeSessionService {
     }
 
     private func configurationApplyingInteractiveDefaults(_ configuration: Configuration) -> Configuration {
-        let runtimeConfiguration = MessageOutputTurnConfiguration.applyingInteractiveDefaultsWhenMissing(
+        let runtimeConfiguration = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(
             to: AgentRuntimeTurnConfiguration(managerConfiguration: configuration)
         )
         return Configuration(runtimeConfiguration: runtimeConfiguration)

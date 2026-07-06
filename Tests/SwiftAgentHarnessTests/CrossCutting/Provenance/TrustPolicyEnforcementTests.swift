@@ -29,6 +29,34 @@ struct TrustPolicyEnforcementTests {
         #expect(applied.resolvedInputTrustClass == .lowTrust)
     }
 
+    @Test("gateExecution keeps tools enabled for TUI direct entry with omitted trust marker")
+    func gateExecutionAllowsTUIOmittedTrust() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            trustPolicyConfiguration: TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .lowTrust)
+        )
+        let stamped = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(
+            to: AgentRuntimeTurnConfiguration(
+                enableTools: true,
+                enableAgents: true,
+                originSurface: InteractiveSurfaceID.tui
+            )
+        )
+        let applied = await runtimeSession.configurationApplyingTrustPolicy(
+            .init(
+                enableTools: stamped.enableTools,
+                enableAgents: stamped.enableAgents,
+                inputTrustRaw: stamped.inputTrustRaw,
+                resolvedInputTrustClass: stamped.resolvedInputTrustClass,
+                originSurface: stamped.originSurface
+            )
+        )
+        #expect(applied.enableTools == true)
+        #expect(applied.enableAgents == true)
+        #expect(applied.resolvedInputTrustClass == .trusted)
+    }
+
     @Test("gateExecution keeps tools enabled for user-direct trigger origin trust")
     func gateExecutionAllowsUserDirectTriggerTrust() async throws {
         let container = try makeContainer()

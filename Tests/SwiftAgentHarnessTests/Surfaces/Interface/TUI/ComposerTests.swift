@@ -64,10 +64,31 @@ struct TUIControlInputBridgeTests {
         }
     }
 
+    @Test("TUI surface with omitted trust classifies privileged slash commands")
+    func classifyTUIOmittedTrustCommand() {
+        let bridge = TUIControlInputBridge()
+        let submission = ComposerSubmission(
+            text: "/help",
+            provenance: ComposerProvenance(originSurface: InteractiveSurfaceID.tui)
+        )
+        let result = bridge.classify(submission)
+        if case .command = result {
+            #expect(Bool(true))
+        } else {
+            Issue.record("Expected command classification for TUI surface with omitted trust")
+        }
+    }
+
     @Test("Untrusted composer submission falls through privileged slash commands")
     func classifyUntrustedCommandFallThrough() {
         let bridge = TUIControlInputBridge()
-        let submission = ComposerSubmission(text: "/help")
+        let submission = ComposerSubmission(
+            text: "/help",
+            provenance: ComposerProvenance(
+                originSurface: InteractiveSurfaceID.rest,
+                inputTrustRaw: MessageInputTrust.automation.rawValue
+            )
+        )
         let result = bridge.classify(submission)
         guard case let .plainText(text) = result else {
             Issue.record("Expected plain-text fall-through")

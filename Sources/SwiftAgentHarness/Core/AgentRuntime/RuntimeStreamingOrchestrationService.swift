@@ -52,11 +52,13 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         )
         let configuration: AgentRuntimeTurnConfiguration
         if let originSurface, !originSurface.isEmpty {
-            configuration = MessageOutputTurnConfiguration.forInteractiveSend(
-                base: base,
-                originSurface: originSurface,
-                originSenderID: originSenderID ?? "*",
-                harness: harness
+            configuration = MessageOutputTurnConfiguration.applyingDirectUserEntryTrustWhenEligible(
+                to: MessageOutputTurnConfiguration.forInteractiveSend(
+                    base: base,
+                    originSurface: originSurface,
+                    originSenderID: originSenderID ?? "*",
+                    harness: harness
+                )
             )
         } else {
             configuration = MessageOutputTurnConfiguration.forCLISend(

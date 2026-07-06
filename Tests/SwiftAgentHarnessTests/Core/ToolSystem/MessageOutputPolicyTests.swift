@@ -156,6 +156,45 @@ struct MessageOutputTurnConfigurationTests {
         #expect(merged.originSurface == InteractiveSurfaceID.cli)
         #expect(merged.ephemeralSystemReminder?.contains("Output contract:") == true)
     }
+
+    @Test("Interactive send defaults stamp omitted trust on explicit TUI surface")
+    func interactiveSendDefaultsStampsExplicitTUI() {
+        let explicit = AgentRuntimeTurnConfiguration(originSurface: InteractiveSurfaceID.tui)
+        let merged = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(to: explicit)
+        #expect(merged.originSurface == InteractiveSurfaceID.tui)
+        #expect(merged.inputTrustRaw == MessageInputTrust.directUserEntry.rawValue)
+        #expect(merged.resolvedInputTrustClass == .trusted)
+    }
+
+    @Test("Interactive send defaults stamp omitted trust on explicit CLI surface")
+    func interactiveSendDefaultsStampsExplicitCLI() {
+        let explicit = AgentRuntimeTurnConfiguration(originSurface: InteractiveSurfaceID.cli)
+        let merged = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(to: explicit)
+        #expect(merged.originSurface == InteractiveSurfaceID.cli)
+        #expect(merged.inputTrustRaw == MessageInputTrust.directUserEntry.rawValue)
+        #expect(merged.resolvedInputTrustClass == .trusted)
+    }
+
+    @Test("Interactive send defaults do not upgrade explicit automation trust on TUI")
+    func interactiveSendDefaultsPreservesExplicitAutomationTrust() {
+        let explicit = AgentRuntimeTurnConfiguration(
+            inputTrustRaw: MessageInputTrust.automation.rawValue,
+            originSurface: InteractiveSurfaceID.tui
+        )
+        let merged = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(to: explicit)
+        #expect(merged.inputTrustRaw == MessageInputTrust.automation.rawValue)
+        #expect(merged.resolvedInputTrustClass == nil)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: merged.inputTrustRaw) == .lowTrust)
+    }
+
+    @Test("Interactive send defaults do not stamp REST surface")
+    func interactiveSendDefaultsLeavesRESTUntrusted() {
+        let explicit = AgentRuntimeTurnConfiguration(originSurface: InteractiveSurfaceID.rest)
+        let merged = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(to: explicit)
+        #expect(merged.originSurface == InteractiveSurfaceID.rest)
+        #expect(merged.inputTrustRaw == nil)
+        #expect(merged.resolvedInputTrustClass == nil)
+    }
 }
 
 @Suite("MessageOutputSystemPromptGuidance")

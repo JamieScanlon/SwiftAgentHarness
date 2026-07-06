@@ -109,9 +109,33 @@ enum MessageOutputTurnConfiguration {
             harness: harness
         ))
     }
+
+    /// Applies interactive surface defaults and first-party trust stamping for runtime sends.
+    static func applyingInteractiveSendDefaults(
+        to configuration: AgentRuntimeTurnConfiguration,
+        defaultSurface: String = InteractiveSurfaceID.cli,
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+    ) -> AgentRuntimeTurnConfiguration {
+        applyingDirectUserEntryTrustWhenEligible(to: applyingInteractiveDefaultsWhenMissing(
+            to: configuration,
+            defaultSurface: defaultSurface,
+            harness: harness
+        ))
+    }
 }
 
 extension ComposerSubmission {
+    /// Resolves trust for control-input authorization using the same first-party stamping rules as runtime sends.
+    public func resolvedInputTrustClassForControlInput() -> TrustPolicyClass {
+        var configuration = AgentRuntimeTurnConfiguration(
+            inputTrustRaw: MessageInputTrustCodec.sanitizedInputTrustRaw(provenance.inputTrustRaw),
+            originSurface: provenance.originSurface
+        )
+        configuration = MessageOutputTurnConfiguration.applyingDirectUserEntryTrustWhenEligible(to: configuration)
+        return configuration.resolvedInputTrustClass
+            ?? MessageInputTrustCodec.safePolicyClass(raw: configuration.inputTrustRaw)
+    }
+
     /// Builds a runtime turn configuration with TUI provenance and optional message-tool output guidance.
     public func runtimeTurnConfiguration(
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
