@@ -262,6 +262,7 @@ private actor FakeStreamingChatStore {
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -581,6 +582,7 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -593,6 +595,7 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID

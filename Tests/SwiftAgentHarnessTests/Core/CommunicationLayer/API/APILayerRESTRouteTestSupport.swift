@@ -198,6 +198,7 @@ final class ModePatchConflictRuntimeStub: APILayerChatRuntimeManaging, Sendable 
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String?,
         originSenderID: String?

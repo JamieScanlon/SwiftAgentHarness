@@ -10,12 +10,14 @@ struct TriggerDispatchServiceTests {
         var lastText: String?
         var lastSystemReminder: String?
         var lastTrust: String?
+        var lastResolvedTrustClass: TrustPolicyClass?
 
         func dispatchTriggerMessage(
             conversationID: UUID,
             text: String,
             systemReminder: String?,
             inputTrustRaw: String?,
+            resolvedInputTrustClass: TrustPolicyClass?,
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
@@ -25,6 +27,7 @@ struct TriggerDispatchServiceTests {
             lastText = text
             lastSystemReminder = systemReminder
             lastTrust = inputTrustRaw
+            lastResolvedTrustClass = resolvedInputTrustClass
         }
     }
 
@@ -53,6 +56,7 @@ struct TriggerDispatchServiceTests {
         #expect(runtime.lastText?.contains("[trigger-context]") != true)
         #expect(runtime.lastSystemReminder?.contains("[trigger-context]") == true)
         #expect(runtime.lastTrust == CommEnvelopeOriginTrust.userDeferred.rawValue)
+        #expect(runtime.lastResolvedTrustClass == .lowTrust)
     }
 
     private func makeDispatch(runtime: StubRuntime, createConversation: @escaping @Sendable (String?) async throws -> UUID) -> TriggerDispatchService {

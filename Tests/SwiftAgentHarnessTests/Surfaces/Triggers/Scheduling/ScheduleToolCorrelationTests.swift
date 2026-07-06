@@ -189,6 +189,7 @@ private final class ScheduleToolCaptureRuntime: TriggerRuntimeDispatching, @unch
         text: String,
         systemReminder: String?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,

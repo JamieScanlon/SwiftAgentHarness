@@ -15,6 +15,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         text: String,
         systemReminder: String?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
@@ -28,6 +29,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: nil,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID

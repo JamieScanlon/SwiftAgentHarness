@@ -344,6 +344,7 @@ final class ChatRuntimeService: APILayerChatRuntimeManaging, Sendable {
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -356,6 +357,7 @@ final class ChatRuntimeService: APILayerChatRuntimeManaging, Sendable {
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID

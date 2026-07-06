@@ -36,6 +36,7 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -46,6 +47,7 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             ephemeralSystemReminder: systemReminder
         )
         let configuration: AgentRuntimeTurnConfiguration

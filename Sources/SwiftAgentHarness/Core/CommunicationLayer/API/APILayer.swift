@@ -246,6 +246,7 @@ public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         systemReminder: String?,
         originSurface: String?,
         originSenderID: String?

@@ -51,6 +51,9 @@ public enum MessageInputTrustCodec {
             // Omitted trust remains trusted for backward compatibility.
             return .trusted
         }
+        if let originTrustClass = CommEnvelopeTrustTag.executionPolicyClass(forOriginTrustRaw: sanitized) {
+            return originTrustClass
+        }
         guard let typed = MessageInputTrust(rawValue: sanitized) else {
             return unknownFallback
         }

@@ -267,6 +267,7 @@ private final class ScheduleTenancyCaptureRuntime: TriggerRuntimeDispatching, @u
         text: String,
         systemReminder: String?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,

@@ -13,6 +13,7 @@ struct TriggerReplayServiceTests {
             text: String,
             systemReminder: String?,
             inputTrustRaw: String?,
+            resolvedInputTrustClass: TrustPolicyClass?,
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,

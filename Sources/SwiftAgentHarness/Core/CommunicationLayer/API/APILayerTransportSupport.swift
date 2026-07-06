@@ -224,6 +224,7 @@ extension APILayer {
             enableAgents: configuration.enableAgents,
             expectedPreviousTailHarnessMessageID: configuration.expectedPreviousTailHarnessMessageID,
             inputTrustRaw: configuration.inputTrustRaw,
+            resolvedInputTrustClass: configuration.resolvedInputTrustClass,
             systemReminder: configuration.ephemeralSystemReminder,
             originSurface: configuration.originSurface,
             originSenderID: configuration.originSenderID

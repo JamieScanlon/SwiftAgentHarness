@@ -5,6 +5,15 @@ enum TriggerTrustCodec {
         trust.rawValue
     }
 
+    static func executionPolicyClass(for trust: CommEnvelopeOriginTrust) -> TrustPolicyClass {
+        switch envelopeTag(for: trust).trustClass {
+        case .trusted:
+            return .trusted
+        case .restricted:
+            return .lowTrust
+        }
+    }
+
     static func envelopeTag(for trust: CommEnvelopeOriginTrust) -> CommEnvelopeTrustTag {
         CommEnvelopeTrustTag.fromSubAgentTrustRaw(trust.rawValue)
     }
