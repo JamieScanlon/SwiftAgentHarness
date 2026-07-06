@@ -130,9 +130,12 @@ public struct ExecRuntimeService: Sendable {
                     approvalContextLines: approvalContextLines
                 )
             }
+            let config = resolvedConfig(context: context)
             return try await ElevatedExecHost.run(
                 context: context.elevated,
-                params: SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot),
+                params: SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot, usePty: usePty),
+                sessionSlug: context.sessionKey,
+                budgetSeconds: config.assistantBlockingBudgetSeconds,
                 execApprovalGranted: true
             )
         }

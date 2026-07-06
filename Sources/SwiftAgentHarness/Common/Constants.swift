@@ -275,5 +275,11 @@ public struct Constants {
             ),
             hardcodedCost: defaultCatalogCost
         ),
+        "lmstudio-community/Qwen3.5-397B-A17B-MLX-8bit": ModelConfig(
+            uuid: UUID(uuidString: "2e22b0a6-8431-4b02-a804-d2c83250a443")!,
+            modelProtocol: .lmStudio,
+            hardcodedCapabilities: [.vision, .tools],
+            hardcodedCost: defaultCatalogCost
+        ),
     ]
 }
