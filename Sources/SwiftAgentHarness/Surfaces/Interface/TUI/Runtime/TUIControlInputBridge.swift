@@ -24,8 +24,15 @@ public struct TUIControlInputBridge {
         )
     }
 
-    public func classify(_ submission: ComposerSubmission, authorization: ControlInputAuthorization = ControlInputAuthorization()) -> ControlInputClassification {
-        classifier.classify(input: submission.text, authorization: authorization)
+    public func classify(_ submission: ComposerSubmission, authorization: ControlInputAuthorization? = nil) -> ControlInputClassification {
+        let resolvedAuthorization = authorization ?? Self.authorization(for: submission)
+        return classifier.classify(input: submission.text, authorization: resolvedAuthorization)
+    }
+
+    private static func authorization(for submission: ComposerSubmission) -> ControlInputAuthorization {
+        ControlInputAuthorization(
+            trustClass: MessageInputTrustCodec.safePolicyClass(raw: submission.provenance.inputTrustRaw)
+        )
     }
 
     public func turnConfigurationPatch(from classification: ControlInputClassification) -> ControlInputTurnConfigurationPatch? {

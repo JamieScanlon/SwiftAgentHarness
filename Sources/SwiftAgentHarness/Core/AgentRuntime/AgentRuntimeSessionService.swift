@@ -210,12 +210,12 @@ public actor AgentRuntimeSessionService {
         }
 
         var effectiveText = text
-        var effectiveConfiguration = configuration
+        var effectiveConfiguration = configurationApplyingInteractiveDefaults(configuration)
 
         switch try await processControlInputBoundary(
             text: text,
             conversationID: conversation.id,
-            configuration: configuration
+            configuration: effectiveConfiguration
         ) {
         case .shortCircuit(let response):
             return response
@@ -229,8 +229,6 @@ public actor AgentRuntimeSessionService {
         case .passthrough:
             break
         }
-
-        effectiveConfiguration = configurationApplyingInteractiveDefaults(effectiveConfiguration)
 
         let runID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: conversation.id)

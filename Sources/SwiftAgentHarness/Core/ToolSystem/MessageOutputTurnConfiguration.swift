@@ -24,6 +24,23 @@ enum MessageOutputTurnConfiguration {
         return configuration
     }
 
+    /// Stamps first-party interactive surfaces with direct-user-entry trust when input trust is omitted.
+    static func applyingDirectUserEntryTrustWhenEligible(
+        to configuration: AgentRuntimeTurnConfiguration
+    ) -> AgentRuntimeTurnConfiguration {
+        var out = configuration
+        guard MessageInputTrustCodec.sanitizedInputTrustRaw(out.inputTrustRaw) == nil else {
+            return out
+        }
+        guard let surface = out.originSurface,
+              surface == InteractiveSurfaceID.tui || surface == InteractiveSurfaceID.cli else {
+            return out
+        }
+        out.inputTrustRaw = MessageInputTrust.directUserEntry.rawValue
+        out.resolvedInputTrustClass = .trusted
+        return out
+    }
+
     /// REST append-message defaults.
     static func forRESTSend(
         enableTools: Bool,
@@ -54,12 +71,12 @@ enum MessageOutputTurnConfiguration {
         originSenderID: String? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
     ) -> AgentRuntimeTurnConfiguration {
-        forInteractiveSend(
+        applyingDirectUserEntryTrustWhenEligible(to: forInteractiveSend(
             base: base,
             originSurface: InteractiveSurfaceID.tui,
             originSenderID: originSenderID,
             harness: harness
-        )
+        ))
     }
 
     /// CLI / internal harness sends without explicit surface provenance.
@@ -68,12 +85,12 @@ enum MessageOutputTurnConfiguration {
         originSenderID: String? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
     ) -> AgentRuntimeTurnConfiguration {
-        forInteractiveSend(
+        applyingDirectUserEntryTrustWhenEligible(to: forInteractiveSend(
             base: base,
             originSurface: InteractiveSurfaceID.cli,
             originSenderID: originSenderID ?? "*",
             harness: harness
-        )
+        ))
     }
 
     /// Applies interactive surface provenance and output-verb guidance when `originSurface` is unset.
@@ -85,12 +102,12 @@ enum MessageOutputTurnConfiguration {
         guard configuration.originSurface == nil || configuration.originSurface?.isEmpty == true else {
             return configuration
         }
-        return forInteractiveSend(
+        return applyingDirectUserEntryTrustWhenEligible(to: forInteractiveSend(
             base: configuration,
             originSurface: defaultSurface,
             originSenderID: configuration.originSenderID ?? "*",
             harness: harness
-        )
+        ))
     }
 }
 
@@ -100,10 +117,17 @@ extension ComposerSubmission {
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
     ) -> AgentRuntimeTurnConfiguration {
-        MessageOutputTurnConfiguration.forInteractiveSend(
-            base: base,
+        var baseWithProvenance = base
+        baseWithProvenance.inputTrustRaw = MessageInputTrustCodec.sanitizedInputTrustRaw(provenance.inputTrustRaw)
+        if baseWithProvenance.resolvedInputTrustClass == nil {
+            baseWithProvenance.resolvedInputTrustClass = MessageInputTrustCodec.safePolicyClass(
+                raw: baseWithProvenance.inputTrustRaw
+            )
+        }
+        return MessageOutputTurnConfiguration.applyingDirectUserEntryTrustWhenEligible(to: MessageOutputTurnConfiguration.forInteractiveSend(
+            base: baseWithProvenance,
             originSurface: provenance.originSurface,
             harness: harness
-        )
+        ))
     }
 }

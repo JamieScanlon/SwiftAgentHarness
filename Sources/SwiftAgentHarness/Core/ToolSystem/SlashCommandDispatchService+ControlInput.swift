@@ -101,13 +101,15 @@ extension SlashCommandDispatchService {
         let conversation = await deps.persistenceDomain.modelConversation(id: conversationID)
         let authenticatedOwner = APISessionContext.authenticatedOwnerAccountID
         let isOwner: Bool = {
-            guard let ownerAccountID = conversation?.ownerAccountID else { return true }
-            guard let authenticatedOwner else { return true }
+            guard let ownerAccountID = conversation?.ownerAccountID else {
+                return authenticatedOwner == nil
+            }
+            guard let authenticatedOwner else { return false }
             return ownerAccountID == authenticatedOwner
         }()
         return ControlInputAuthorization(
             isOwner: isOwner,
-            trustClass: trustClass ?? .trusted,
+            trustClass: trustClass ?? .lowTrust,
             allowlistAllows: isOwner
         )
     }

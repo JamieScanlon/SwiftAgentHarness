@@ -48,8 +48,7 @@ public enum MessageInputTrustCodec {
     ) -> TrustPolicyClass {
         let sanitized = sanitizedInputTrustRaw(raw)
         guard let sanitized else {
-            // Omitted trust remains trusted for backward compatibility.
-            return .trusted
+            return unknownFallback
         }
         if let originTrustClass = CommEnvelopeTrustTag.executionPolicyClass(forOriginTrustRaw: sanitized) {
             return originTrustClass
@@ -86,8 +85,7 @@ public enum AttachmentInputTrustCodec {
     ) -> TrustPolicyClass {
         let sanitized = sanitizedInputTrustRaw(raw)
         guard let sanitized else {
-            // Omitted trust remains trusted for backward compatibility.
-            return .trusted
+            return unknownFallback
         }
         guard let typed = AttachmentInputTrust(rawValue: sanitized) else {
             return unknownFallback

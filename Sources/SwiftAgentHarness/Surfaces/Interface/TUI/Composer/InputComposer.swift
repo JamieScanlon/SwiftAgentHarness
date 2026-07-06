@@ -74,7 +74,10 @@ public final class InputComposerComponent: TUIComponent, Focusable {
         invalidate()
     }
 
-    public func makeSubmission(originSurface: String = "tui", inputTrustRaw: String? = nil) -> ComposerSubmission {
+    public func makeSubmission(
+        originSurface: String = "tui",
+        inputTrustRaw: String? = MessageInputTrust.directUserEntry.rawValue
+    ) -> ComposerSubmission {
         ComposerSubmission(
             text: text,
             provenance: ComposerProvenance(

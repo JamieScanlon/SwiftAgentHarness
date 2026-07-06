@@ -117,8 +117,7 @@ public struct CommEnvelopeTrustTag: Codable, Sendable, Equatable {
         case MessageInputTrust.automation.rawValue, MessageInputTrust.scripted.rawValue:
             return CommEnvelopeTrustTag(trustClass: .restricted, originTrust: .userDeferred)
         case .none:
-            // Maintain existing omitted-input behavior while still tagging provenance.
-            return CommEnvelopeTrustTag(trustClass: .trusted, originTrust: .userDirect)
+            return .unknownRestricted
         case .some:
             return .unknownRestricted
         }

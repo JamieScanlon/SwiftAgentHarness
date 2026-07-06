@@ -49,13 +49,31 @@ struct TUIControlInputBridgeTests {
     @Test("Classifies slash commands from composer submission")
     func classifyCommand() {
         let bridge = TUIControlInputBridge()
-        let submission = ComposerSubmission(text: "/help")
+        let submission = ComposerSubmission(
+            text: "/help",
+            provenance: ComposerProvenance(
+                originSurface: InteractiveSurfaceID.tui,
+                inputTrustRaw: MessageInputTrust.directUserEntry.rawValue
+            )
+        )
         let result = bridge.classify(submission)
         if case .command = result {
             #expect(Bool(true))
         } else {
             Issue.record("Expected command classification")
         }
+    }
+
+    @Test("Untrusted composer submission falls through privileged slash commands")
+    func classifyUntrustedCommandFallThrough() {
+        let bridge = TUIControlInputBridge()
+        let submission = ComposerSubmission(text: "/help")
+        let result = bridge.classify(submission)
+        guard case let .plainText(text) = result else {
+            Issue.record("Expected plain-text fall-through")
+            return
+        }
+        #expect(text == "/help")
     }
 
     @Test("Builds runtime turn configuration with TUI provenance")

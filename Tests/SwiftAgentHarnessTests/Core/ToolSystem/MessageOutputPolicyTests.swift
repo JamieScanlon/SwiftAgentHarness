@@ -99,7 +99,14 @@ struct MessageOutputTurnConfigurationTests {
         #expect(configuration.ephemeralSystemReminder?.contains("Output contract:") == true)
     }
 
-    @Test("ComposerSubmission builds TUI runtime configuration")
+    @Test("CLI send stamps direct user entry trust")
+    func cliSendTrustStamp() {
+        let configuration = MessageOutputTurnConfiguration.forCLISend()
+        #expect(configuration.inputTrustRaw == MessageInputTrust.directUserEntry.rawValue)
+        #expect(configuration.resolvedInputTrustClass == .trusted)
+    }
+
+    @Test("ComposerSubmission builds TUI runtime configuration with trusted input")
     func composerSubmissionConfiguration() {
         let submission = ComposerSubmission(
             text: "hi",
@@ -107,7 +114,22 @@ struct MessageOutputTurnConfigurationTests {
         )
         let configuration = submission.runtimeTurnConfiguration()
         #expect(configuration.originSurface == InteractiveSurfaceID.tui)
+        #expect(configuration.inputTrustRaw == MessageInputTrust.directUserEntry.rawValue)
+        #expect(configuration.resolvedInputTrustClass == .trusted)
         #expect(configuration.ephemeralSystemReminder?.contains("message") == true)
+    }
+
+    @Test("REST send does not auto-stamp trusted input")
+    func restSendDoesNotAutoStampTrust() {
+        let configuration = MessageOutputTurnConfiguration.forRESTSend(
+            enableTools: true,
+            enableAgents: true,
+            expectedPreviousTailHarnessMessageID: nil,
+            inputTrustRaw: nil,
+            resolvedInputTrustClass: nil
+        )
+        #expect(configuration.inputTrustRaw == nil)
+        #expect(configuration.resolvedInputTrustClass == nil)
     }
 
     @Test("CLI send sets originSurface and guidance by default")

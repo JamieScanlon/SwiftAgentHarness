@@ -3,6 +3,10 @@ import Testing
 
 struct CommEnvelopeTrustTagTests {
     @Test func messageInputTrustMapping() {
+        let omitted = CommEnvelopeTrustTag.fromMessageInputTrustRaw(nil)
+        #expect(omitted.trustClass == .restricted)
+        #expect(omitted.originTrust == .unknownParty)
+
         let direct = CommEnvelopeTrustTag.fromMessageInputTrustRaw("direct_user_entry")
         #expect(direct.trustClass == .trusted)
         #expect(direct.originTrust == .userDirect)
