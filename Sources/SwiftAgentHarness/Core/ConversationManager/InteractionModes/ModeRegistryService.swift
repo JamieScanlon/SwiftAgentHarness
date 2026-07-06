@@ -2,6 +2,12 @@ import EasyJSON
 import Foundation
 import Logging
 
+/// Source classification for project-local mode profile directories.
+public enum ModeProfileProjectConfigSource: Sendable {
+    /// Operator-controlled directory; security-sensitive slices are stripped before merge.
+    case operatorDirectory
+}
+
 /// Harness-shaped registry: built-in ids match persisted ``InteractionMode/rawValue`` strings.
 public actor ModeRegistryService {
     /// Canonical built-in cap for collaboration planning turns.
@@ -10,32 +16,58 @@ public actor ModeRegistryService {
     private var profiles: [String: ResolvedModeProfile] = [:]
     private var diagnostics: [String] = []
     private let projectConfigDirectory: URL?
+    private let projectConfigSource: ModeProfileProjectConfigSource?
     private var onDidMutate: (@Sendable () -> Void)?
 
     public init(
         seedingBuiltIns: Bool = true,
         modeProfileConfiguration: ModeProfileConfiguration? = nil,
         projectConfigDirectory: URL? = nil,
+        projectConfigSource: ModeProfileProjectConfigSource? = nil,
         additionalProfiles: [ResolvedModeProfile] = []
     ) {
         self.projectConfigDirectory = projectConfigDirectory
+        self.projectConfigSource = projectConfigSource
         if seedingBuiltIns {
             ModeProfileBuiltInCatalog.seed(into: &profiles)
         }
         let loaded = modeProfileConfiguration ?? ModeProfileConfiguration.loadFromPromptConfigBundle()
         diagnostics.append(contentsOf: loaded.diagnostics)
         Self.mergeConfigurationProfiles(loaded.profiles, into: &profiles, diagnostics: &diagnostics)
-        if let projectConfigDirectory {
-            let projectLoaded = ModeProfileConfiguration.loadFromDirectory(projectConfigDirectory)
-            diagnostics.append(contentsOf: projectLoaded.diagnostics)
-            Self.mergeConfigurationProfiles(projectLoaded.profiles, into: &profiles, diagnostics: &diagnostics)
-        }
+        Self.loadAndMergeProjectProfiles(
+            from: projectConfigDirectory,
+            source: projectConfigSource,
+            into: &profiles,
+            diagnostics: &diagnostics
+        )
         for profile in additionalProfiles {
             if profiles[profile.id] == nil {
                 profiles[profile.id] = profile
             }
         }
         Self.validateMachineSubAgentProfiles(in: profiles, diagnostics: &diagnostics)
+    }
+
+    /// Production registry wired to an operator-controlled project config directory.
+    public static func makeForHost(
+        cwd: String = FileManager.default.currentDirectoryPath,
+        fileManager: FileManager = .default,
+        logger: Logger? = nil,
+        seedingBuiltIns: Bool = true,
+        modeProfileConfiguration: ModeProfileConfiguration? = nil,
+        additionalProfiles: [ResolvedModeProfile] = []
+    ) -> ModeRegistryService {
+        let resolution = ModeProfileProjectConfigDirectoryResolver.resolve(cwd: cwd, fileManager: fileManager)
+        if !resolution.diagnostics.isEmpty {
+            logger?.warning("Mode profile project config: \(resolution.diagnostics.joined(separator: "; "))")
+        }
+        return ModeRegistryService(
+            seedingBuiltIns: seedingBuiltIns,
+            modeProfileConfiguration: modeProfileConfiguration,
+            projectConfigDirectory: resolution.directory,
+            projectConfigSource: resolution.directory == nil ? nil : .operatorDirectory,
+            additionalProfiles: additionalProfiles
+        )
     }
 
     public func missingMachineSubAgentProfileIDs() -> [String] {
@@ -60,10 +92,13 @@ public actor ModeRegistryService {
     /// Returns `false` when no project config directory is configured.
     @discardableResult
     func reloadProjectConfig() -> Bool {
-        guard let projectConfigDirectory else { return false }
-        let loaded = ModeProfileConfiguration.loadFromDirectory(projectConfigDirectory)
-        diagnostics.append(contentsOf: loaded.diagnostics)
-        Self.mergeConfigurationProfiles(loaded.profiles, into: &profiles, diagnostics: &diagnostics)
+        guard projectConfigDirectory != nil, projectConfigSource != nil else { return false }
+        Self.loadAndMergeProjectProfiles(
+            from: projectConfigDirectory,
+            source: projectConfigSource,
+            into: &profiles,
+            diagnostics: &diagnostics
+        )
         notifyMutations()
         return true
     }
@@ -129,6 +164,22 @@ public actor ModeRegistryService {
                 diagnostics.append("required machine sub-agent mode profile missing: \(id)")
             }
         }
+    }
+
+    private static func loadAndMergeProjectProfiles(
+        from projectConfigDirectory: URL?,
+        source: ModeProfileProjectConfigSource?,
+        into storage: inout [String: ResolvedModeProfile],
+        diagnostics: inout [String]
+    ) {
+        guard let projectConfigDirectory, let source else { return }
+        let loaded = ModeProfileConfiguration.loadFromDirectory(projectConfigDirectory)
+        diagnostics.append(contentsOf: loaded.diagnostics)
+        let profiles: [ModeProfileConfiguration.RawProfile] = switch source {
+        case .operatorDirectory:
+            ModeProfileProjectOverlayPolicy.sanitizeAll(loaded.profiles, diagnostics: &diagnostics)
+        }
+        Self.mergeConfigurationProfiles(profiles, into: &storage, diagnostics: &diagnostics)
     }
 
     private static func mergeConfigurationProfiles(
