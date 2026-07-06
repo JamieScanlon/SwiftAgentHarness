@@ -42,13 +42,27 @@ enum WorkspaceGrepRunner {
     }
 
     static func sandboxPipelineResult(exitCode: Int32, output: String) -> Result<String, WorkspaceGrepError> {
-        if exitCode == 2 || output.lowercased().contains("invalid") {
+        if exitCode == 2 || looksLikeGrepRegexError(output) {
             return .failure(.invalidRegex(sandboxRegexError(from: output)))
         }
-        if exitCode == 1 || exitCode == 141 {
+        if exitCode == 0 || exitCode == 1 || exitCode == 141 {
             return .success(trimTrailingNewline(output))
         }
         return .failure(.executionFailed("grep pipeline exited with status \(exitCode)"))
+    }
+
+    private static func looksLikeGrepRegexError(_ output: String) -> Bool {
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("grep:") else { continue }
+            let lower = trimmed.lowercased()
+            if lower.contains("invalid")
+                || lower.contains("repetition-operator")
+                || lower.contains("backreference") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func runSandboxBacked(
@@ -66,23 +80,36 @@ enum WorkspaceGrepRunner {
         let decodeFlag = "base64 -d"
         #endif
         let command = """
-        pat=$(printf '%s' '\(encoded)' | \(decodeFlag)) && grep -rHn -E -e "$pat" --binary-files=without-match \(searchArg) | LC_ALL=C sort | head -n \(maxMatchingLines)
+        set -o pipefail
+        pat=$(printf '%s' '\(encoded)' | \(decodeFlag))
+        grep -E -e "$pat" /dev/null
+        ec=$?
+        if [ $ec -eq 2 ]; then exit 2; fi
+        grep -rHn -E -e "$pat" --binary-files=without-match \(searchArg) | LC_ALL=C sort | head -n \(maxMatchingLines)
         """
         do {
             let result = try await withWallClockTimeout(seconds: maxWallClockSeconds) {
                 try await execRuntime.runShell(command: command, context: runtimeContext)
             }
-            return .success(trimTrailingNewline(result.stdout))
+            return await classifySandboxExecResult(
+                exitCode: result.exitCode,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                pattern: pattern,
+                searchRoot: searchRoot
+            )
         } catch let error as WorkspaceGrepError {
             return .failure(error)
         } catch let error as SandboxBackendError {
             switch error {
             case .nonZeroExit(let code, let output):
-                let pipeline = sandboxPipelineResult(exitCode: code, output: output)
-                if case .failure(.executionFailed) = pipeline {
-                    return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
-                }
-                return pipeline
+                return await classifySandboxExecResult(
+                    exitCode: code,
+                    stdout: output,
+                    stderr: "",
+                    pattern: pattern,
+                    searchRoot: searchRoot
+                )
             case .emptyCommand, .sandboxUnavailable:
                 return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
             default:
@@ -91,6 +118,20 @@ enum WorkspaceGrepRunner {
         } catch {
             return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
         }
+    }
+
+    private static func classifySandboxExecResult(
+        exitCode: Int32,
+        stdout: String,
+        stderr: String,
+        pattern: String,
+        searchRoot: String
+    ) async -> Result<String, WorkspaceGrepError> {
+        let pipeline = sandboxPipelineResult(exitCode: exitCode, output: stdout + stderr)
+        if case .failure(.executionFailed) = pipeline {
+            return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
+        }
+        return pipeline
     }
 
     private static func sandboxRegexError(from output: String) -> String {
