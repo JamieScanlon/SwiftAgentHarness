@@ -15,21 +15,28 @@ public struct AgentRuntimeCoordinator: AgentRuntimeExecuting {
             let loop = TurnLoop(ports: ports) { partial, conversationID, runID in
                 await runtime.publishAgentLoopDelta(partial, conversationID: conversationID, runID: runID)
             }
-            let terminalReason = try await loop.run(
-                conversationID: context.conversationID,
-                runID: context.runID,
-                anchorUserMessageID: context.turnLoopAnchorUserMessageID,
-                configuration: context.configuration,
-                orchestrator: context.orchestrator,
-                lifecycleEmitter: lifecycleEmitter
-            )
+            var terminalReason: ConversationRunTerminalReason?
+            var runError: Error?
+            do {
+                terminalReason = try await loop.run(
+                    conversationID: context.conversationID,
+                    runID: context.runID,
+                    anchorUserMessageID: context.turnLoopAnchorUserMessageID,
+                    configuration: context.configuration,
+                    orchestrator: context.orchestrator,
+                    lifecycleEmitter: lifecycleEmitter
+                )
+            } catch {
+                runError = error
+            }
             await runtime.afterTurnContextEngineLifecycle(
                 conversationID: context.conversationID,
                 runID: context.runID,
                 terminalReason: terminalReason,
                 anchorUserMessageID: context.turnLoopAnchorUserMessageID
             )
-            return terminalReason
+            if let runError { throw runError }
+            return terminalReason!
         }
     }
 

@@ -97,7 +97,7 @@ Runtime entry is now explicit:
 - **`AgentRuntimeRunContext`** carries per-invocation state (`conversationID`, `runID`, runtime turn configuration, orchestrator handle). `runtimeLifecyclePublish` is compatibility-only and not used by the default stream-primary execution path.
 - **`AgentRuntimeRunResult`** returns terminal outcome plus classified error-policy metadata.
 - **`AgentRuntimeTurnExecution`** bridges runtime and transport: runtime emits one lifecycle stream while preserving one final result contract.
-- **`AgentRuntimeCoordinator`** is the runtime entrypoint and delegates loop execution to `TurnLoop` via `AgentLoopPorts` on **`AgentRuntimeSessionService`** (not the session actor).
+- **`AgentRuntimeCoordinator`** is the runtime entrypoint and delegates loop execution to `TurnLoop` via `AgentLoopPorts` on **`AgentRuntimeSessionService`** (not the session actor). After-turn context-engine lifecycle (`afterTurnContextEngineLifecycle`) runs on **all** turn exits, including throws; `terminalReason` is `nil` when the loop did not reach a terminal return.
 - Tool/approval runtime callbacks now route through dedicated policy helper seams (`ConversationToolModePolicyServicing` + runtime approval helper) instead of embedding approval-store logic directly in loop code paths.
 
 **`HarnessRuntimeSession`** remains the session actor and owns UI/session lifecycle fields, while runtime execution internals live in runtime-owned seams (`AgentRuntimeSessionService`, `TurnLoop`, `RuntimeTurnTerminalHandler`, `RuntimeTurnStreamTransportAdapter`) and interact with session state via injected typed port protocols (`ConversationMessagingPort`, `OrchestratorSessionPort`, etc.).
