@@ -89,7 +89,7 @@ public enum CommEnvelopeTrustClass: String, Codable, Sendable, Equatable {
 }
 
 /// Provenance class for outbound harness envelopes.
-public enum CommEnvelopeOriginTrust: String, Codable, Sendable, Equatable {
+public enum CommEnvelopeOriginTrust: String, Codable, Sendable, Equatable, CaseIterable {
     case system
     case userDirect = "user-direct"
     case userDeferred = "user-deferred"
@@ -117,8 +117,7 @@ public struct CommEnvelopeTrustTag: Codable, Sendable, Equatable {
         case MessageInputTrust.automation.rawValue, MessageInputTrust.scripted.rawValue:
             return CommEnvelopeTrustTag(trustClass: .restricted, originTrust: .userDeferred)
         case .none:
-            // Maintain existing omitted-input behavior while still tagging provenance.
-            return CommEnvelopeTrustTag(trustClass: .trusted, originTrust: .userDirect)
+            return .unknownRestricted
         case .some:
             return .unknownRestricted
         }
@@ -139,6 +138,20 @@ public struct CommEnvelopeTrustTag: Codable, Sendable, Equatable {
             return CommEnvelopeTrustTag(trustClass: .restricted, originTrust: .unknownParty)
         default:
             return .unknownRestricted
+        }
+    }
+
+    /// Maps a recognized comm-envelope origin trust raw to execution policy class; returns `nil` for non-envelope vocab.
+    public static func executionPolicyClass(forOriginTrustRaw raw: String?) -> TrustPolicyClass? {
+        guard let sanitized = MessageInputTrustCodec.sanitizedInputTrustRaw(raw) else { return nil }
+        let normalized = sanitized.lowercased()
+        let recognized = CommEnvelopeOriginTrust.allCases.contains { $0.rawValue == normalized }
+        guard recognized else { return nil }
+        switch fromSubAgentTrustRaw(sanitized).trustClass {
+        case .trusted:
+            return .trusted
+        case .restricted:
+            return .lowTrust
         }
     }
 

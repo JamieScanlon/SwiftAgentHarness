@@ -12,6 +12,8 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
     private let systemPrompt: SystemPrompt
     private let logger: Logger?
     private let streamSource: any AnthropicStreamSourcing
+    private let supportsEagerToolInputStreaming: Bool
+    private let authProbePermissiveForEmptyToken: Bool
 
     init(
         apiURL: URL,
@@ -21,7 +23,9 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         requestFeatures: ModelRequestFeatures = .unknown,
         systemPrompt: SystemPrompt,
         logger: Logger? = nil,
-        streamSource: any AnthropicStreamSourcing = DefaultAnthropicStreamSource()
+        streamSource: any AnthropicStreamSourcing = DefaultAnthropicStreamSource(),
+        supportsEagerToolInputStreaming: Bool = true,
+        authProbePermissiveForEmptyToken: Bool = false
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -31,6 +35,8 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         self.systemPrompt = systemPrompt
         self.logger = logger
         self.streamSource = streamSource
+        self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
+        self.authProbePermissiveForEmptyToken = authProbePermissiveForEmptyToken
     }
 
     nonisolated func getModelName() -> String { model }
@@ -39,8 +45,12 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
 
     func validateAuth() async -> Bool {
         let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if token.isEmpty || token == "dummy_key" || token == "dummy-key" {
+        if authProbePermissiveForEmptyToken,
+           token.isEmpty || token == "dummy_key" || token == "dummy-key" {
             return true
+        }
+        if token.isEmpty {
+            return false
         }
         var request = URLRequest(url: apiURL)
         request.httpMethod = "GET"
@@ -74,8 +84,11 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             return AsyncThrowingStream { $0.finish(throwing: LLMError.unsupportedCapability(.completion)) }
         }
         return AsyncThrowingStream { continuation in
-            let emitter = StreamCompletionEmitter(continuation: continuation)
             Task {
+                var emitter = NormalizedStreamEmitter(
+                    continuation: continuation,
+                    supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
+                )
                 do {
                     let body = try await self.buildRequestBody(messages: messages, config: config, stream: true)
                     let events = self.streamSource.messageStream(
@@ -95,46 +108,63 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         switch event {
                         case .contentDelta(let text):
                             fullContent += text
-                            let chunk = NormalizedEventMapper.streamChunk(
-                                for: .contentDelta(text),
+                            emitter.yield(.textDelta(text), availableTools: config.availableTools)
+                        case .thinkingBlockStarted(let signature):
+                            emitter.yield(.thinkingDelta("", signature: signature), availableTools: config.availableTools)
+                        case .thinkingDelta(let text, let signature):
+                            emitter.yield(.thinkingDelta(text, signature: signature), availableTools: config.availableTools)
+                        case .toolCallStarted(let id, let name, let contentIndex):
+                            emitter.yield(
+                                .toolCallStarted(id: id, name: name, contentIndex: contentIndex),
                                 availableTools: config.availableTools
                             )
-                            emitter.yieldStream(chunk)
-                        case .thinkingDelta(let text):
-                            let chunk = NormalizedEventMapper.streamChunk(
-                                for: .reasoningDelta(text),
-                                availableTools: config.availableTools
-                            )
-                            emitter.yieldStream(chunk)
                         case .toolInputDelta(let id, let name, let fragment):
-                            let chunk = NormalizedEventMapper.streamChunk(
-                                for: .toolCallDelta(id: id, name: name, argumentsFragment: fragment),
+                            emitter.yield(
+                                .toolCallDelta(id: id, name: name, argumentsFragment: fragment),
                                 availableTools: config.availableTools
                             )
-                            emitter.yieldStream(chunk)
                             accumulator.ingestNameAndArgs(id: id, name: name, argumentsFragment: fragment)
                         case .messageDelta(let u):
-                            if let u { usage = u }
+                            if let u {
+                                usage = u
+                                emitter.yield(
+                                    .usage(NormalizedUsage(
+                                        inputTokens: u.inputTokens,
+                                        outputTokens: u.outputTokens
+                                    )),
+                                    availableTools: config.availableTools
+                                )
+                            }
                         case .error(let message):
-                            emitter.finishFailed(with: AnthropicErrorMapping.apiError(message: message))
+                            let llmError = AnthropicErrorMapping.apiError(message: message)
+                            emitter.yield(
+                                .error(NormalizedStreamError(
+                                    classification: DefaultProviderFailoverClassifier.classify(llmError),
+                                    message: message
+                                )),
+                                availableTools: config.availableTools
+                            )
                             return
                         case .messageStop:
                             break
                         }
                     }
                     let toolCalls = accumulator.finalize()
+                    let stopReason: NormalizedStopReason = toolCalls.isEmpty ? .end : .toolUse
+                    emitter.yield(.stop(stopReason), availableTools: config.availableTools)
                     let metadata = LLMTokenMetadataBuilder.build(
                         inputTokens: usage?.inputTokens,
                         outputTokens: usage?.outputTokens,
                         remainingContextTokens: nil,
-                        totalTokens: nil
+                        totalTokens: nil,
+                        finishReason: stopReason.finishReasonRawValue
                     )
-                    let complete = LLMResponse(
+                    emitter.finishSuccess(
                         content: fullContent,
                         toolCalls: toolCalls,
+                        availableTools: config.availableTools,
                         metadata: metadata
                     )
-                    emitter.finishSuccess(with: complete)
                 } catch is CancellationError {
                     emitter.finishCancelled()
                 } catch let error as LLMError {
@@ -333,7 +363,9 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
 
 enum AnthropicStreamEvent: Sendable {
     case contentDelta(String)
-    case thinkingDelta(String)
+    case thinkingDelta(String, signature: String?)
+    case thinkingBlockStarted(signature: String?)
+    case toolCallStarted(id: String?, name: String?, contentIndex: Int?)
     case toolInputDelta(id: String?, name: String?, fragment: String)
     case messageDelta(AnthropicUsage?)
     case messageStop
@@ -428,6 +460,20 @@ enum AnthropicSSEParser {
         else { return [] }
         let type = object["type"] as? String ?? eventName ?? ""
         switch type {
+        case "content_block_start":
+            if let block = object["content_block"] as? [String: Any] {
+                let blockType = block["type"] as? String ?? ""
+                if blockType == "tool_use" {
+                    let id = block["id"] as? String
+                    let name = block["name"] as? String
+                    let index = object["index"] as? Int
+                    return [.toolCallStarted(id: id, name: name, contentIndex: index)]
+                }
+                if blockType == "thinking" {
+                    let signature = block["signature"] as? String
+                    return [.thinkingBlockStarted(signature: signature)]
+                }
+            }
         case "content_block_delta":
             guard let delta = object["delta"] as? [String: Any],
                   let deltaType = delta["type"] as? String
@@ -436,7 +482,10 @@ enum AnthropicSSEParser {
             case "text_delta":
                 if let text = delta["text"] as? String { return [.contentDelta(text)] }
             case "thinking_delta":
-                if let thinking = delta["thinking"] as? String { return [.thinkingDelta(thinking)] }
+                if let thinking = delta["thinking"] as? String {
+                    let signature = delta["signature"] as? String
+                    return [.thinkingDelta(thinking, signature: signature)]
+                }
             case "input_json_delta":
                 if let fragment = delta["partial_json"] as? String {
                     return [.toolInputDelta(id: nil, name: nil, fragment: fragment)]

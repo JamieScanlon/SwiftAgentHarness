@@ -28,6 +28,7 @@ struct WebhookIngressAdapterTests {
             text: String,
             systemReminder: String?,
             inputTrustRaw: String?,
+            resolvedInputTrustClass: TrustPolicyClass?,
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
@@ -124,6 +125,7 @@ struct WebhookIngressAdapterTests {
                 channelRegistry: ChannelListenerRegistry.load(
                     dataDirectory: FileManager.default.temporaryDirectory,
                     ingress: ChannelIngressAdapter(dispatch: dispatch),
+                    dedupe: ReplayHarnessDedupe(),
                     logger: Logger(label: "test"),
                     enabled: false,
                     configURL: nil

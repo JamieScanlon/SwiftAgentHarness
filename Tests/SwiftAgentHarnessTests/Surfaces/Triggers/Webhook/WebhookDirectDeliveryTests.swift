@@ -5,10 +5,33 @@ import Testing
 
 @Suite("WebhookDirectDelivery")
 struct WebhookDirectDeliveryTests {
-    actor StubRegistry: ChannelListenerLooking {
-        let listener: (any ChannelListener)?
-        init(listener: (any ChannelListener)?) { self.listener = listener }
-        func listener(for channel: ChannelId) async -> (any ChannelListener)? { listener }
+    actor StubRegistry: ChannelPluginLooking {
+        let plugin: ChannelPlugin?
+
+        init(listener: RecordingChannelListener?) {
+            guard let listener else {
+                self.plugin = nil
+                return
+            }
+            let outbound = DefaultChannelOutboundAdapter(listener: listener, chunkLimit: 4000)
+            self.plugin = ChannelPlugin(
+                id: listener.id,
+                meta: ChannelPluginMeta(platformIdentity: listener.platformIdentity, transportKind: .mock),
+                capabilities: .mock,
+                config: listener.config,
+                listener: listener,
+                outbound: outbound,
+                threading: DefaultChannelThreadingAdapter(),
+                sessionGrammar: ChannelSessionGrammar(),
+                security: DefaultChannelSecurityAdapter(config: listener.config),
+                heartbeat: nil,
+                approvalCapability: ChannelApprovalCapabilityAdapter(outbound: outbound),
+                messageToolDescriptor: nil,
+                streamingCapabilities: .socialChannel
+            )
+        }
+
+        func plugin(for channel: ChannelId) async -> ChannelPlugin? { plugin }
     }
 
     final class RecordingChannelListener: ChannelListener, @unchecked Sendable {

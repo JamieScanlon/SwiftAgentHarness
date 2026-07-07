@@ -60,6 +60,13 @@ struct TriggerReplayService: Sendable {
     static func freshReplayID(_ trigger: HarnessTrigger) -> HarnessTrigger {
         var updated = trigger
         updated.id = "replay:\(UUID().uuidString):\(trigger.id)"
+        let parentCorrelation = trigger.effectiveCorrelation()
+        updated.correlation = TriggerCorrelation(
+            rootId: parentCorrelation.rootId,
+            parentTriggerId: trigger.id,
+            correlationId: parentCorrelation.correlationId,
+            followUpKind: "replay"
+        )
         return updated
     }
 }

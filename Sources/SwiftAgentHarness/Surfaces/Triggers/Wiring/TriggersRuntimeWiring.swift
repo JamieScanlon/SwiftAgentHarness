@@ -15,6 +15,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         text: String,
         systemReminder: String?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
@@ -28,6 +29,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: nil,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID
@@ -70,12 +72,34 @@ public struct TriggersRuntimeBundle: Sendable {
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
+    public let channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator
     let outputRouter: TriggerSymmetricOutputRouter
     public let delegatedCompletionHandoff: TriggerDelegatedCompletionHandoff
     let runRegistry: TriggerDelegatedRunRegistry
 }
 
 public enum TriggersRuntimeWiring {
+    public struct ScheduleToolPorts: Sendable {
+        public var catalogPort: ScheduleToolCatalogPort
+        public var tenancyPolicy: TenancyPolicySettings
+
+        public init(
+            catalogPort: ScheduleToolCatalogPort,
+            tenancyPolicy: TenancyPolicySettings = .disabled
+        ) {
+            self.catalogPort = catalogPort
+            self.tenancyPolicy = tenancyPolicy
+        }
+
+        init(
+            catalog: any ConversationCatalogServicing,
+            tenancyPolicy: TenancyPolicySettings = .disabled
+        ) {
+            self.catalogPort = ScheduleToolCatalogPort(catalog: catalog)
+            self.tenancyPolicy = tenancyPolicy
+        }
+    }
+
     public struct DelegatedPorts: Sendable {
         public var spawnSubAgent: @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID
         public var sendMessageAndRun: @Sendable (UUID, String) async throws -> Void
@@ -104,6 +128,7 @@ public enum TriggersRuntimeWiring {
         public var fileEventQueueEnabled: Bool = true
         public var channelsConfigURL: URL? = nil
         public var channelListenersEnabled: Bool = false
+        public var conversationEventsHub: ConversationEventsTopicHub? = nil
         public var staticWebhookRoutes: [WebhookRoute] = []
         public var schedulerIdentity: String = "sah-trigger-scheduler"
 
@@ -113,6 +138,7 @@ public enum TriggersRuntimeWiring {
             fileEventQueueEnabled: Bool = true,
             channelsConfigURL: URL? = nil,
             channelListenersEnabled: Bool = false,
+            conversationEventsHub: ConversationEventsTopicHub? = nil,
             staticWebhookRoutes: [WebhookRoute] = [],
             schedulerIdentity: String = "sah-trigger-scheduler"
         ) {
@@ -121,6 +147,7 @@ public enum TriggersRuntimeWiring {
             self.fileEventQueueEnabled = fileEventQueueEnabled
             self.channelsConfigURL = channelsConfigURL
             self.channelListenersEnabled = channelListenersEnabled
+            self.conversationEventsHub = conversationEventsHub
             self.staticWebhookRoutes = staticWebhookRoutes
             self.schedulerIdentity = schedulerIdentity
         }
@@ -129,21 +156,25 @@ public enum TriggersRuntimeWiring {
     public static func resolve(
         configuration: Configuration,
         runtime: any APILayerChatRuntimeManaging,
+        scheduleToolPorts: ScheduleToolPorts,
         dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
         resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
+        resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil },
         delegatedPorts: DelegatedPorts,
         logger: Logger
     ) -> TriggersRuntimeBundle {
         resolve(
             configuration: configuration,
             runtime: runtime,
+            scheduleToolPorts: scheduleToolPorts,
             dedupePeek: dedupePeek,
             dedupeCheckAndSet: dedupeCheckAndSet,
             createConversation: createConversation,
             resolveConversationByTitle: resolveConversationByTitle,
             taskRuns: .disabled,
+            resolveHostTrigger: resolveHostTrigger,
             delegatedPorts: delegatedPorts,
             logger: logger
         )
@@ -152,11 +183,13 @@ public enum TriggersRuntimeWiring {
     static func resolve(
         configuration: Configuration,
         runtime: any APILayerChatRuntimeManaging,
+        scheduleToolPorts: ScheduleToolPorts,
         dedupePeek: @escaping @Sendable (String) async throws -> Bool = { _ in false },
         dedupeCheckAndSet: @escaping @Sendable (String, Int) async throws -> Bool,
         createConversation: @escaping @Sendable (String?) async throws -> UUID,
         resolveConversationByTitle: @escaping @Sendable (String) async throws -> UUID? = { _ in nil },
         taskRuns: TriggerTaskRunPorts = .disabled,
+        resolveHostTrigger: @escaping @Sendable () async -> HarnessTrigger? = { nil },
         delegatedPorts: DelegatedPorts,
         logger: Logger
     ) -> TriggersRuntimeBundle {
@@ -177,7 +210,20 @@ public enum TriggersRuntimeWiring {
             resolveConversationByTitle: resolveConversationByTitle,
             stampDelegatedHost: delegatedPorts.stampDelegatedHost
         )
-        let sessionRouter = TriggerSessionRouter(sessionIndex: sessionIndex)
+        let catalogPort = scheduleToolPorts.catalogPort
+        let tenancyPolicy = scheduleToolPorts.tenancyPolicy
+        let threadedTargetValidator: @Sendable (UUID, HarnessTrigger) async -> Bool = { conversationID, trigger in
+            await TriggerThreadedTargetValidator.validate(
+                conversationID: conversationID,
+                trigger: trigger,
+                catalogPort: catalogPort,
+                tenancyPolicy: tenancyPolicy
+            )
+        }
+        let sessionRouter = TriggerSessionRouter(
+            sessionIndex: sessionIndex,
+            threadedTargetValidator: threadedTargetValidator
+        )
         let promptBuilder = TriggerPromptBuilder()
         let runtimeAdapter = HarnessTriggerRuntimeAdapter(runtime: runtime)
         let runRegistry = TriggerDelegatedRunRegistry()
@@ -191,13 +237,19 @@ public enum TriggersRuntimeWiring {
             runRegistry: runRegistry,
             logger: logger
         )
+        let channelSessionLifecycleCoordinator = ChannelSessionLifecycleCoordinator()
+        let channelRunStreamingHolder = configuration.conversationEventsHub == nil
+            ? nil
+            : ChannelRunStreamingServiceHolder()
         let dispatch = TriggerDispatchService(
             activationPolicy: activationPolicy,
             sessionRouter: sessionRouter,
             promptBuilder: promptBuilder,
             runtime: runtimeAdapter,
             delegatedDispatch: delegatedDispatch,
-            snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory)
+            snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory),
+            channelRunStreaming: channelRunStreamingHolder,
+            lifecycleCoordinator: channelSessionLifecycleCoordinator
         )
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
@@ -221,10 +273,24 @@ public enum TriggersRuntimeWiring {
         let channelRegistry = ChannelListenerRegistry.load(
             dataDirectory: configuration.dataDirectory,
             ingress: channelIngress,
+            dedupe: dedupe,
+            lifecycleCoordinator: channelSessionLifecycleCoordinator,
+            channelRunStreaming: channelRunStreamingHolder,
             logger: logger,
             enabled: configuration.channelListenersEnabled,
             configURL: configuration.channelsConfigURL
         )
+        if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
+            channelRunStreamingHolder.install(
+                ChannelRunStreamingService(
+                    hub: hub,
+                    pluginLookup: { channel in
+                        await channelRegistry.plugin(for: channel)
+                    },
+                    lifecycleCoordinator: channelSessionLifecycleCoordinator
+                )
+            )
+        }
         let webhookValidation = WebhookValidationGate(
             routeStore: routeStore,
             idempotency: idempotency,
@@ -241,7 +307,15 @@ public enum TriggersRuntimeWiring {
             idempotency: idempotency,
             eventsDirectory: configuration.fileEventQueueEnabled ? resolvedEventsDirectory : nil
         )
-        let scheduleTools = ScheduleToolProvider(scheduler: scheduler)
+        let scheduleDataService = ScheduledTaskToolDataService(
+            scheduler: scheduler,
+            catalogPort: scheduleToolPorts.catalogPort,
+            tenancyPolicy: scheduleToolPorts.tenancyPolicy
+        )
+        let scheduleTools = ScheduleToolProvider(
+            dataService: scheduleDataService,
+            resolveHostTrigger: resolveHostTrigger
+        )
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: resolvedEventsDirectory,
             dispatch: dispatch,
@@ -271,6 +345,7 @@ public enum TriggersRuntimeWiring {
             fileEventQueue: fileEventQueue,
             replay: replay,
             channelRegistry: channelRegistry,
+            channelSessionLifecycleCoordinator: channelSessionLifecycleCoordinator,
             outputRouter: outputRouter,
             delegatedCompletionHandoff: delegatedCompletionHandoff,
             runRegistry: runRegistry

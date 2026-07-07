@@ -171,6 +171,19 @@ public struct ConversationTransformMetadata: Sendable {
     }
 }
 
+/// An active skill resolved for post-compaction re-injection: its name and full instruction body.
+/// Resolved upstream (e.g. by ``DefaultContextEngine`` via the configured ``SkillLoader``) so the
+/// synchronous re-injection collector can budget and truncate it without filesystem or actor access.
+public struct ReinjectableSkill: Sendable, Equatable {
+    public let name: String
+    public let content: String
+
+    public init(name: String, content: String) {
+        self.name = name
+        self.content = content
+    }
+}
+
 public struct ContextTransformInput: Sendable {
     let messages: [Message]
     let conversation: ConversationTransformMetadata
@@ -224,6 +237,8 @@ public struct ContextTransformInput: Sendable {
     let compactionSplitBaseMessages: [Message]?
     /// Harness-injected system messages prepended to split head in transformer output.
     let compactionInjectedPrefixMessages: [Message]?
+    /// Active skills (name + content) resolved upstream for budgeted post-compaction re-injection.
+    let compactionReinjectableSkills: [ReinjectableSkill]
 
     init(
         messages: [Message],
@@ -247,7 +262,8 @@ public struct ContextTransformInput: Sendable {
         compactionPreviousSummaryText: String? = nil,
         compactionSessionMemoryNote: String? = nil,
         compactionSplitBaseMessages: [Message]? = nil,
-        compactionInjectedPrefixMessages: [Message]? = nil
+        compactionInjectedPrefixMessages: [Message]? = nil,
+        compactionReinjectableSkills: [ReinjectableSkill] = []
     ) {
         self.messages = messages
         self.conversation = conversation
@@ -271,6 +287,7 @@ public struct ContextTransformInput: Sendable {
         self.compactionSessionMemoryNote = compactionSessionMemoryNote
         self.compactionSplitBaseMessages = compactionSplitBaseMessages
         self.compactionInjectedPrefixMessages = compactionInjectedPrefixMessages
+        self.compactionReinjectableSkills = compactionReinjectableSkills
     }
 }
 
@@ -291,17 +308,20 @@ public struct ContextTransformOutput: Sendable {
     let messages: [Message]
     let diagnostics: String?
     let messageProvenance: [ContextTransformMessageProvenance]?
-}
+    /// Standalone summary for checkpoint persistence when layout omits a middle slice (e.g. merge into tail).
+    let compactionPersistedMiddle: [Message]?
 
-public struct ToolResultTransformInput: Sendable {
-    let toolCall: ToolCall
-    let result: ToolResult
-    let conversation: ConversationTransformMetadata
-}
-
-public struct ToolResultTransformOutput: Sendable {
-    let result: ToolResult
-    let diagnostics: String?
+    init(
+        messages: [Message],
+        diagnostics: String?,
+        messageProvenance: [ContextTransformMessageProvenance]?,
+        compactionPersistedMiddle: [Message]? = nil
+    ) {
+        self.messages = messages
+        self.diagnostics = diagnostics
+        self.messageProvenance = messageProvenance
+        self.compactionPersistedMiddle = compactionPersistedMiddle
+    }
 }
 
 public struct TurnSummaryTransformInput: Sendable {
@@ -318,7 +338,6 @@ public struct TurnSummaryTransformOutput: Sendable {
 
 public protocol ConversationTransforming: Sendable {
     func transformContext(_ input: ContextTransformInput) async throws -> ContextTransformOutput
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput
 }
 
@@ -337,10 +356,6 @@ public struct NoOpConversationTransformer: ConversationTransforming {
                 )
             }
         )
-    }
-
-    public func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
     }
 
     public func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {

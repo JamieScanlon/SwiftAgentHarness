@@ -68,6 +68,8 @@ public struct ServerConfig {
     public var modelPoolFailoverMaxRetriesOverride: Int? = nil
     public var modelPoolFailoverBaseDelayOverride: TimeInterval? = nil
     public var modelPoolFailoverMaxDelayOverride: TimeInterval? = nil
+    /// Override provider preference order for multi-binding merge (first = primary).
+    public var modelPoolProviderPreferenceOrderOverride: [ProviderID]? = nil
     /// Poll interval for dynamic capability discovery refresh (`tools/registry` etc.).
     public var dynamicCapabilityDiscoveryPollSeconds: UInt64 = 15
     /// Optional HMAC secret for signed `conversation/{id}/events` resume tokens on WebSocket subscribe. When unset, clients cannot use `resumeToken`.
@@ -83,7 +85,14 @@ public struct ServerConfig {
     /// Maximum TTL (seconds) accepted for inbound dedupe; larger client values are clamped.
     public var websocketInboundDedupeMaxTtlSeconds: Int = 3600
 
-    /// When true, mutating `/api` routes require ``X-SAH-Authenticated-Owner`` and conversation rows must match that UUID.
+    /// HS256 secret for verifying inbound ``Authorization: Bearer`` harness access JWTs. Required when ``requireAuthenticatedTenantOnAPI`` is true.
+    public var apiAccessTokenHS256Secret: String? = nil
+    /// Optional JWT `iss` claim enforcement for harness access tokens.
+    public var apiAccessTokenIssuer: String? = nil
+    /// Optional JWT `aud` claim enforcement for harness access tokens.
+    public var apiAccessTokenAudience: String? = nil
+
+    /// When true, mutating `/api` routes require a validated Bearer JWT owner and conversation rows must match that UUID.
     public var requireAuthenticatedTenantOnAPI: Bool = false
     /// Owner account UUIDs permitted to subscribe to `trace/server` when operator enforcement is active.
     public var serverTraceOperatorOwnerIDs: Set<UUID> = []
@@ -133,6 +142,7 @@ public struct ServerConfig {
         modelPoolFailoverMaxRetriesOverride: Int? = nil,
         modelPoolFailoverBaseDelayOverride: TimeInterval? = nil,
         modelPoolFailoverMaxDelayOverride: TimeInterval? = nil,
+        modelPoolProviderPreferenceOrderOverride: [ProviderID]? = nil,
         dynamicCapabilityDiscoveryPollSeconds: UInt64 = 15,
         websocketResumeTokenHMACSecret: String? = nil,
         topicReplayCapacities: TopicReplayCapacityConfiguration = .default,
@@ -140,6 +150,9 @@ public struct ServerConfig {
         websocketOutboundSchemaEnforcementConfiguration: WebSocketOutboundSchemaEnforcementConfiguration = .default,
         websocketInboundDedupeDefaultTtlSeconds: Int = 600,
         websocketInboundDedupeMaxTtlSeconds: Int = 3600,
+        apiAccessTokenHS256Secret: String? = nil,
+        apiAccessTokenIssuer: String? = nil,
+        apiAccessTokenAudience: String? = nil,
         requireAuthenticatedTenantOnAPI: Bool = false,
         serverTraceOperatorOwnerIDs: Set<UUID> = [],
         enforceOperatorForServerTraceSubscribe: Bool = true,
@@ -183,6 +196,7 @@ public struct ServerConfig {
         self.modelPoolFailoverMaxRetriesOverride = modelPoolFailoverMaxRetriesOverride.map { max(0, $0) }
         self.modelPoolFailoverBaseDelayOverride = modelPoolFailoverBaseDelayOverride.map { max(0, $0) }
         self.modelPoolFailoverMaxDelayOverride = modelPoolFailoverMaxDelayOverride.map { max(0, $0) }
+        self.modelPoolProviderPreferenceOrderOverride = modelPoolProviderPreferenceOrderOverride
         self.dynamicCapabilityDiscoveryPollSeconds = max(1, dynamicCapabilityDiscoveryPollSeconds)
         self.websocketResumeTokenHMACSecret = websocketResumeTokenHMACSecret
         self.topicReplayCapacities = topicReplayCapacities
@@ -190,6 +204,9 @@ public struct ServerConfig {
         self.websocketOutboundSchemaEnforcementConfiguration = websocketOutboundSchemaEnforcementConfiguration
         self.websocketInboundDedupeDefaultTtlSeconds = max(60, websocketInboundDedupeDefaultTtlSeconds)
         self.websocketInboundDedupeMaxTtlSeconds = max(self.websocketInboundDedupeDefaultTtlSeconds, websocketInboundDedupeMaxTtlSeconds)
+        self.apiAccessTokenHS256Secret = apiAccessTokenHS256Secret
+        self.apiAccessTokenIssuer = apiAccessTokenIssuer
+        self.apiAccessTokenAudience = apiAccessTokenAudience
         self.requireAuthenticatedTenantOnAPI = requireAuthenticatedTenantOnAPI
         self.serverTraceOperatorOwnerIDs = serverTraceOperatorOwnerIDs
         self.enforceOperatorForServerTraceSubscribe = enforceOperatorForServerTraceSubscribe
@@ -203,6 +220,33 @@ public struct ServerConfig {
         return ServerTraceSubscribePolicy(
             enforceOperatorAllowlist: enforce,
             operatorOwnerIDs: serverTraceOperatorOwnerIDs
+        )
+    }
+
+    /// Tenancy policy derived from ``requireAuthenticatedTenantOnAPI``.
+    public func tenancyPolicySettings() -> TenancyPolicySettings {
+        TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: requireAuthenticatedTenantOnAPI)
+    }
+
+    /// Builds the JWT access-token validator when ``apiAccessTokenHS256Secret`` is non-empty.
+    public func makeAPIAccessTokenValidator() -> JWTAPIAccessTokenValidator? {
+        guard let secret = apiAccessTokenHS256Secret, !secret.isEmpty else { return nil }
+        return JWTAPIAccessTokenValidator(
+            settings: APIAccessTokenAuthenticationSettings(
+                hs256Secret: secret,
+                issuer: apiAccessTokenIssuer,
+                audience: apiAccessTokenAudience
+            )
+        )
+    }
+
+    /// Access-token auth settings when a secret is configured.
+    public func apiAccessTokenAuthenticationSettings() -> APIAccessTokenAuthenticationSettings? {
+        guard let secret = apiAccessTokenHS256Secret, !secret.isEmpty else { return nil }
+        return APIAccessTokenAuthenticationSettings(
+            hs256Secret: secret,
+            issuer: apiAccessTokenIssuer,
+            audience: apiAccessTokenAudience
         )
     }
 }

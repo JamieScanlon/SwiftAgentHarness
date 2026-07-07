@@ -47,6 +47,7 @@ enum ContextCheckpointWriter {
                 conversationID: spec.conversationID,
                 rawMiddleMessageIDs: spec.rawMiddleMessageIDs,
                 compactedMiddleMessages: spec.compactedMiddleMessages,
+                coveredRawMiddle: spec.coveredRawMiddle,
                 kind: spec.kind,
                 config: spec.config,
                 strategyRawValue: spec.strategyRawValue,

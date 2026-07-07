@@ -27,7 +27,7 @@ public struct DockerSandboxBackendHandle: SandboxBackendHandle {
     private let configHash: String
 
     init(params: CreateSandboxBackendParams) {
-        self.containerName = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.containerName = "sah-sandbox-\(params.scopeKey)"
         self.settings = params.config.docker
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
         self.configHash = SandboxConfigHash.compute(config: params.config)
@@ -42,16 +42,20 @@ public struct DockerSandboxBackendHandle: SandboxBackendHandle {
         let trimmed = params.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         try await ensureContainer()
-        let argv = params.usePty
-            ? ["docker", "exec", "-it", "-w", params.workdir ?? workdir, containerName, "/bin/bash", "-c", trimmed]
-            : ["docker", "exec", "-w", params.workdir ?? workdir, containerName, "/bin/bash", "-c", trimmed]
-        return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
+        let argv = try DockerSandboxShellCommand.execArgv(
+            containerName: containerName,
+            workdir: params.workdir ?? workdir,
+            command: trimmed,
+            env: params.env,
+            usePty: params.usePty
+        )
+        return SandboxBackendExecSpec(argv: argv, cwd: nil, usePty: params.usePty)
     }
 
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         try await ensureContainer()
-        let argv = DockerSandboxShellCommand.argv(containerName: containerName, workdir: workdir, params: params)
-        let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
+        let argv = try DockerSandboxShellCommand.argv(containerName: containerName, workdir: workdir, params: params)
+        let result = try await ShellProcessRunner.run(argv: argv, stdin: params.stdin)
         return SandboxBackendCommandResult(stdout: result.stdout, stderr: result.stderr, code: result.exitCode)
     }
 
@@ -106,8 +110,7 @@ public struct DockerFsBridge: SandboxFsBridge {
         )
         let rel = try PathPolicy.toRelativeWorkspacePath(root: context.workspaceRoot, candidate: resolved)
         let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.stat(rel: rel))
-        let size = Int64(String(data: result.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0") ?? 0
-        return SandboxFsStat(isDirectory: false, size: size, exists: result.code == 0)
+        return SandboxFsStat.parse(from: result)
     }
 
     public func readFile(path: String) async throws -> Data {
@@ -160,7 +163,7 @@ public struct DockerSandboxBackendManager: SandboxBackendManager {
     public init() {}
 
     public func describeRuntime(params: SandboxBackendDescribeRuntimeParams) async throws -> SandboxBackendRuntimeInfo {
-        let name = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-sandbox-\(params.scopeKey)"
         let running = try await DockerSandboxInspect.isRunning(containerName: name)
         let currentHash = SandboxConfigHash.compute(config: params.config)
         let labelHash = running ? try await DockerSandboxInspect.configHash(containerName: name) : nil
@@ -169,7 +172,7 @@ public struct DockerSandboxBackendManager: SandboxBackendManager {
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
-        let name = "sah-sandbox-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-sandbox-\(params.scopeKey)"
         _ = try await ShellProcessRunner.run(argv: ["docker", "rm", "-f", name])
     }
 }

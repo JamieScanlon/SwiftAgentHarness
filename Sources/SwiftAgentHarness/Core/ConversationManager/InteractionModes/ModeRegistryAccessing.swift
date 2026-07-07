@@ -102,12 +102,14 @@ enum ModeRegistryTestSupport {
         seedingBuiltIns: Bool = true,
         modeProfileConfiguration: ModeProfileConfiguration? = nil,
         projectConfigDirectory: URL? = nil,
+        projectConfigSource: ModeProfileProjectConfigSource? = nil,
         additionalProfiles: [ResolvedModeProfile] = []
     ) -> ModeRegistryService {
         ModeRegistryService(
             seedingBuiltIns: seedingBuiltIns,
             modeProfileConfiguration: modeProfileConfiguration,
             projectConfigDirectory: projectConfigDirectory,
+            projectConfigSource: projectConfigSource,
             additionalProfiles: additionalProfiles
         )
     }
@@ -116,6 +118,7 @@ enum ModeRegistryTestSupport {
         seedingBuiltIns: Bool = true,
         modeProfileConfiguration: ModeProfileConfiguration? = nil,
         projectConfigDirectory: URL? = nil,
+        projectConfigSource: ModeProfileProjectConfigSource? = nil,
         additionalProfiles: [ResolvedModeProfile] = []
     ) -> ModeRegistryPortAdapter {
         ModeRegistryPortAdapter(
@@ -123,6 +126,7 @@ enum ModeRegistryTestSupport {
                 seedingBuiltIns: seedingBuiltIns,
                 modeProfileConfiguration: modeProfileConfiguration,
                 projectConfigDirectory: projectConfigDirectory,
+                projectConfigSource: projectConfigSource,
                 additionalProfiles: additionalProfiles
             )
         )

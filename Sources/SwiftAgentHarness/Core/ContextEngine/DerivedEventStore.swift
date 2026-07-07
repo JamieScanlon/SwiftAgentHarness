@@ -9,6 +9,7 @@ protocol DerivedEventStore: Sendable {
         conversationID: UUID,
         rawMiddleMessageIDs: [UUID],
         compactedMiddleMessages: [Message],
+        coveredRawMiddle: [Message],
         kind: ContextCompactionCheckpointKind,
         config: ContextCompactionConfiguration,
         strategyRawValue: String?,

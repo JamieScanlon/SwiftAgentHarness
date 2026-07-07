@@ -1,6 +1,16 @@
 import Foundation
 import SwiftAgentKit
 
+/// Replacement-content strategy used when a tool result is dropped during pre-compaction hygiene.
+///
+/// - `blankMarker`: rung 1 — replace with the content-free `clearedToolResultContentPlaceholder`.
+/// - `oneLineSummary`: rung 2 — replace with a deterministic 1-line summary built from the call's
+///   intent and the result-only signal (see `DeterministicToolResultSummary`).
+public enum ToolResultPruneReplacementMode: String, Sendable, Equatable {
+    case blankMarker
+    case oneLineSummary
+}
+
 /// Strips volatile tool result text for the **compaction** summarizer LLM only; persisted conversation messages are unchanged.
 public enum ContextCompactionToolResultPruning: Sendable {
     public static let clearedToolResultContentPlaceholder = "[Old tool result content cleared]"
@@ -24,9 +34,10 @@ public enum ContextCompactionToolResultPruning: Sendable {
         toolNamesToPrune: Set<String>,
         maxRecentPerListedName: Int = 5,
         maxRecentUnlistedToolResults: Int = 5,
-        toolCallNameResolutionContext: [Message] = []
+        toolCallNameResolutionContext: [Message] = [],
+        replacementMode: ToolResultPruneReplacementMode = .blankMarker
     ) -> [Message] {
-        let toolCallIdToName = buildToolCallIdToName(
+        let toolCallIdToCall = buildToolCallIdToCall(
             resolutionContext: toolCallNameResolutionContext,
             middle: messages
         )
@@ -34,27 +45,29 @@ public enum ContextCompactionToolResultPruning: Sendable {
             messages: messages,
             toolNamesToPrune: toolNamesToPrune,
             maxKeep: max(0, maxRecentPerListedName),
-            toolCallIdToName: toolCallIdToName
+            toolCallIdToCall: toolCallIdToCall,
+            replacementMode: replacementMode
         )
         return applyUnlistedRecencyCap(
             messages: afterListed,
             toolNamesToPrune: toolNamesToPrune,
             maxKeep: max(0, maxRecentUnlistedToolResults),
-            toolCallIdToName: toolCallIdToName
+            toolCallIdToCall: toolCallIdToCall,
+            replacementMode: replacementMode
         )
     }
 
     // MARK: - Private
 
-    /// Merges `toolCalls` from the optional **head** (or other prefix) with `middle` so tool results in the middle still resolve when the calling assistant is outside the middle slice.
-    private static func buildToolCallIdToName(
+    /// Merges `toolCalls` from the optional **head** (or other prefix) with `middle` so tool results in the middle still resolve when the calling assistant is outside the middle slice. Carries the full `ToolCall` (arguments included) so rung-2 summaries can reconstruct intent.
+    private static func buildToolCallIdToCall(
         resolutionContext: [Message],
         middle: [Message]
-    ) -> [String: String] {
-        var map: [String: String] = [:]
+    ) -> [String: ToolCall] {
+        var map: [String: ToolCall] = [:]
         for m in resolutionContext + middle where m.role == .assistant {
             for tc in m.toolCalls {
-                if let id = tc.id { map[id] = tc.name }
+                if let id = tc.id { map[id] = tc }
             }
         }
         return map
@@ -68,14 +81,15 @@ public enum ContextCompactionToolResultPruning: Sendable {
         messages: [Message],
         toolNamesToPrune: Set<String>,
         maxKeep: Int,
-        toolCallIdToName: [String: String]
+        toolCallIdToCall: [String: ToolCall],
+        replacementMode: ToolResultPruneReplacementMode
     ) -> [Message] {
         guard !toolNamesToPrune.isEmpty else { return messages }
         var indicesByName: [String: [Int]] = [:]
         for (i, m) in messages.enumerated() where m.role == .tool {
             guard m.content != Self.clearedToolResultContentPlaceholder,
                   let tid = m.toolCallId, !tid.isEmpty,
-                  let name = toolCallIdToName[tid],
+                  let name = toolCallIdToCall[tid]?.name,
                   toolNamesToPrune.contains(name)
             else { continue }
             indicesByName[name, default: []].append(i)
@@ -89,7 +103,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
         guard !indicesToClear.isEmpty else { return messages }
         var out = Array(messages)
         for idx in indicesToClear {
-            out[idx] = makeToolMessageWithClearedContent(from: out[idx])
+            let resolvedCall = out[idx].toolCallId.flatMap { toolCallIdToCall[$0] }
+            out[idx] = makeReplacedToolMessage(from: out[idx], toolCall: resolvedCall, mode: replacementMode)
         }
         return out
     }
@@ -99,14 +114,15 @@ public enum ContextCompactionToolResultPruning: Sendable {
         messages: [Message],
         toolNamesToPrune: Set<String>,
         maxKeep: Int,
-        toolCallIdToName: [String: String]
+        toolCallIdToCall: [String: ToolCall],
+        replacementMode: ToolResultPruneReplacementMode
     ) -> [Message] {
         let placeholder = Self.clearedToolResultContentPlaceholder
         var indices: [Int] = []
         for (i, m) in messages.enumerated() where m.role == .tool {
             guard m.content != placeholder,
                   let tid = m.toolCallId, !tid.isEmpty,
-                  let name = toolCallIdToName[tid],
+                  let name = toolCallIdToCall[tid]?.name,
                   !toolNamesToPrune.contains(name)
             else { continue }
             indices.append(i)
@@ -114,16 +130,44 @@ public enum ContextCompactionToolResultPruning: Sendable {
         if indices.count <= maxKeep { return messages }
         var out = Array(messages)
         for idx in indices.dropLast(maxKeep) {
-            out[idx] = makeToolMessageWithClearedContent(from: out[idx])
+            let resolvedCall = out[idx].toolCallId.flatMap { toolCallIdToCall[$0] }
+            out[idx] = makeReplacedToolMessage(from: out[idx], toolCall: resolvedCall, mode: replacementMode)
         }
         return out
     }
 
-    private static func makeToolMessageWithClearedContent(from m: Message) -> Message {
-        Message(
+    /// Rebuilds a `tool` message whose payload is being shed, substituting content per `mode`.
+    /// `.oneLineSummary` requires the resolved `ToolCall` to reconstruct intent; if it is missing
+    /// (defensive only — unresolvable ids are never selected for replacement) it falls back to the
+    /// blank marker so we never emit a summary with missing intent.
+    private static func makeReplacedToolMessage(
+        from m: Message,
+        toolCall: ToolCall?,
+        mode: ToolResultPruneReplacementMode
+    ) -> Message {
+        let content: String
+        switch mode {
+        case .blankMarker:
+            content = Self.clearedToolResultContentPlaceholder
+        case .oneLineSummary:
+            if let toolCall {
+                content = DeterministicToolResultSummary.line(
+                    for: toolCall,
+                    result: ToolResult(
+                        success: true,
+                        content: m.content,
+                        metadata: .object([:]),
+                        toolCallId: m.toolCallId
+                    )
+                )
+            } else {
+                content = Self.clearedToolResultContentPlaceholder
+            }
+        }
+        return Message(
             id: m.id,
             role: m.role,
-            content: Self.clearedToolResultContentPlaceholder,
+            content: content,
             timestamp: m.timestamp,
             images: m.images,
             toolCalls: m.toolCalls,

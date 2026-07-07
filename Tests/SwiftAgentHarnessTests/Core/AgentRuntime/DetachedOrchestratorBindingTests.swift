@@ -50,9 +50,7 @@ private struct SlowDetachedRunExecutor: AgentRuntimeExecuting {
 @Suite("Orchestrator pool binding", .serialized)
 struct OrchestratorPoolBindingTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel(name: String) -> Model {
@@ -253,9 +251,7 @@ struct OrchestratorPoolBindingTests {
 struct ActiveMemoryPoolOrchestratorTests {
     @Test("blocking recall child run preserves parent orchestrator binding")
     func recallChildRunPreservesParentBinding() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: config)
+                let container = try HarnessTestModelContainer.makeInMemory()
         let session = HarnessRuntimeSession(
             container: container,
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container),

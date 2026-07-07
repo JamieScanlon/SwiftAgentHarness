@@ -183,12 +183,12 @@ enum ContextCompactionCheckpointSupport {
             config.fallbackContextLimitTokens,
             config.charactersPerToken,
             config.maxCompactedMiddleMessages,
-            config.toolResultSummarizationCharacterThreshold,
             config.middleMinCharactersForCompactionLLM,
             Int(config.compactionLLMCooldownSeconds * 1000),
             config.compactionToolResultPruneNames.sorted().joined(separator: ","),
             config.maxRecentToolResults,
             config.maxRecentPerNameToolResults,
+            config.toolResultPruneReplacementMode.rawValue,
             config.compactionSummaryBudgetTokens,
             config.compactionCustomInstructionsBlock,
             config.compactionSummarizerContextLimitTokens,
@@ -223,6 +223,12 @@ enum ContextCompactionCheckpointSupport {
             config.compactionSummaryBudgetProportionalEnabled,
             config.sessionMemorySwapBeforeCompactionEnabled,
             config.compactionReinjectionEnabled,
+            config.reinjectionRecentFileCount,
+            config.reinjectionPerFileTokenBudget,
+            config.reinjectionTotalFileTokenBudget,
+            config.reinjectionPerSkillTokenBudget,
+            config.reinjectionTotalSkillTokenBudget,
+            config.reinjectFileContentEnabled,
             config.compactionCircuitBreakerMaxFailures,
             config.compactionMinPromptTokenSavingsFraction,
             config.useSessionTreeProjection,
@@ -301,9 +307,7 @@ enum ContextCompactionCheckpointSupport {
             messages: compactedMiddle,
             charactersPerToken: cpt
         )
-        let maxTokens = Int(
-            Double(config.compactionSummaryBudgetTokens) * compactionCheckpointPersistenceSizeSlack
-        )
+        let maxTokens = config.compactionPersistenceTokenCeiling
         if middleTokens > maxTokens {
             return false
         }
@@ -484,6 +488,29 @@ enum ContextCompactionCheckpointSupport {
             return compactedMiddle.map { ContextCompactionMessageDTO(message: $0) }
         case .pruned:
             return compactedMiddle.map { ContextCompactionMessageDTO.prunedDTO(from: $0) }
+        }
+    }
+
+    /// Fans out a single summarized summary across covered raw middle messages so checkpoint reuse
+    /// satisfies `syntheticMessages.count == coveredMessageIDs.count`.
+    static func summarizedSyntheticDTOsForPersistence(
+        summaryMessages: [Message],
+        coveredRawMiddle: [Message],
+        kind: ContextCompactionCheckpointKind
+    ) -> [ContextCompactionMessageDTO] {
+        guard kind == .summarized,
+              summaryMessages.count < coveredRawMiddle.count,
+              let summary = summaryMessages.first
+        else {
+            return syntheticMessagesForPersistence(from: summaryMessages, kind: kind)
+        }
+        let body = summary.content
+        return coveredRawMiddle.map { raw in
+            ContextCompactionMessageDTO(
+                id: UUID(),
+                role: raw.role.rawValue,
+                content: body
+            )
         }
     }
 

@@ -4,7 +4,6 @@ import Vapor
 
 private let clientSessionCookieName = "sah_client_session"
 private let clientSessionHeaderName = "X-SAH-Client-Session"
-private let authenticatedOwnerHeaderName = "X-SAH-Authenticated-Owner"
 
 /// Assigns ``APISessionContext/connectionNamespace`` for each `/api` request so implicit REST routes resolve the correct selection.
 ///
@@ -14,9 +13,11 @@ private let authenticatedOwnerHeaderName = "X-SAH-Authenticated-Owner"
 /// deterministic isolation without cookies should send ``X-SAH-Client-Session`` on every request (see docs / openapi).
 struct ClientSessionMiddleware: AsyncMiddleware {
     private let logger: Logger
+    private let accessTokenValidator: (any APIAccessTokenValidating)?
 
-    init(logger: Logger) {
+    init(logger: Logger, accessTokenValidator: (any APIAccessTokenValidating)? = nil) {
         self.logger = logger
+        self.accessTokenValidator = accessTokenValidator
     }
 
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
@@ -35,13 +36,10 @@ struct ClientSessionMiddleware: AsyncMiddleware {
             namespace = UUID()
         }
 
-        let ownerUUID: UUID? = {
-            guard let raw = request.headers.first(name: authenticatedOwnerHeaderName)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !raw.isEmpty
-            else { return nil }
-            return UUID(uuidString: raw)
-        }()
+        let ownerUUID = APISessionAuthenticatedOwnerResolver.resolve(
+            from: request.headers,
+            validator: accessTokenValidator
+        )
 
         let response = try await APISessionContext.$connectionNamespace.withValue(namespace) {
             try await APISessionContext.$authenticatedOwnerAccountID.withValue(ownerUUID) {

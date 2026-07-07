@@ -160,6 +160,18 @@ actor TurnLoopFinishReasonRecorder {
     }
 }
 
+actor TurnLoopMarkerRecorder {
+    private var markers: [(conversationID: UUID, runID: UUID?, iteration: Int)] = []
+
+    func record(conversationID: UUID, runID: UUID?, iteration: Int) {
+        markers.append((conversationID, runID, iteration))
+    }
+
+    func recordedMarkers() -> [(conversationID: UUID, runID: UUID?, iteration: Int)] {
+        markers
+    }
+}
+
 enum TurnLoopTestPorts {
     static func make(
         state: TurnLoopConversationState,
@@ -173,8 +185,11 @@ enum TurnLoopTestPorts {
         slowDispatchGate: SlowDispatchGate? = nil,
         compactionRecorder: TurnLoopCompactionRecorder? = nil,
         finishReasonRecorder: TurnLoopFinishReasonRecorder? = nil,
+        markerRecorder: TurnLoopMarkerRecorder? = nil,
         effectiveToolEntries: [ToolRegistryEntry] = [],
-        temperatureRecorder: TurnLoopTemperatureRecorder? = nil
+        temperatureRecorder: TurnLoopTemperatureRecorder? = nil,
+        agentHarness: AgentHarnessConfiguration = .default,
+        stopRequestedFn: (@Sendable (UUID) async -> Bool)? = nil
     ) -> AgentLoopPorts {
         let emptySnapshot = RuntimeToolTurnPolicySnapshot(
             availabilitySnapshots: [],
@@ -190,7 +205,15 @@ enum TurnLoopTestPorts {
                 }
                 await state.append(message)
             },
-            markerFn: { _, _, _ in },
+            markerFn: { conversationID, runID, iteration in
+                if let markerRecorder {
+                    await markerRecorder.record(
+                        conversationID: conversationID,
+                        runID: runID,
+                        iteration: iteration
+                    )
+                }
+            },
             rollbackFn: { _, _ in },
             stampFinishReasonFn: { messageID, conversationID, finishReason in
                 if let finishReasonRecorder {
@@ -201,7 +224,12 @@ enum TurnLoopTestPorts {
                     )
                 }
             },
-            stopRequestedFn: { _ in false }
+            stopRequestedFn: { conversationID in
+                if let stopRequestedFn {
+                    return await stopRequestedFn(conversationID)
+                }
+                return false
+            }
         )
         let resolvedStream: @Sendable () async -> AsyncThrowingStream<ModelStreamEvent, Error> = {
             if assistantToolCalls.isEmpty {
@@ -251,7 +279,7 @@ enum TurnLoopTestPorts {
             tools: toolPort,
             conversation: conversationPort,
             memory: nil,
-            agentHarness: .default,
+            agentHarness: agentHarness,
             contextCompaction: contextCompaction,
             modeRegistry: modeRegistry ?? ModeRegistryTestSupport.makePort(seedingBuiltIns: true),
             logger: nil

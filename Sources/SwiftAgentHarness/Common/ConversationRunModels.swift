@@ -248,6 +248,7 @@ public struct CancelConversationRunConflictBody: Codable, Sendable, Equatable {
 public struct ConversationRunConflictBody: Codable, Sendable, Equatable {
     public static let errorCode = "run_in_progress"
     public static let modeChangeRunInProgressCode = "mode_change_run_in_progress"
+    public static let modelOrPromptChangeRunInProgressCode = "model_or_prompt_change_run_in_progress"
 
     public let code: String
     public let conversationID: UUID
@@ -262,6 +263,13 @@ public struct ConversationRunConflictBody: Codable, Sendable, Equatable {
     /// `409` when a mode / phase patch arrives while a streaming run is active for the conversation.
     public init(modeChangeBlocked conversationID: UUID, activeRunID: UUID) {
         self.code = Self.modeChangeRunInProgressCode
+        self.conversationID = conversationID
+        self.activeRunID = activeRunID
+    }
+
+    /// `409` when a model or user prompt patch arrives while a streaming run is active for the conversation.
+    public init(modelOrPromptChangeBlocked conversationID: UUID, activeRunID: UUID) {
+        self.code = Self.modelOrPromptChangeRunInProgressCode
         self.conversationID = conversationID
         self.activeRunID = activeRunID
     }

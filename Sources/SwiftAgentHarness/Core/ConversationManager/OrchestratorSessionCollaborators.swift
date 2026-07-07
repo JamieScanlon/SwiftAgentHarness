@@ -20,7 +20,9 @@ protocol OrchestratorModePolicyProviding: Sendable {
 
 protocol OrchestratorSessionRuntimeCollaborating: Sendable {
     func startOrchestratorStateListeners(for conversationID: UUID) async
+    func persistActivatedSkillsFromLoader(conversationID: UUID) async
     func persistActivatedSkillsFromLoaderToCurrentConversation() async
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async
     func runtimeToolResultMiddlewarePipeline() async -> ToolResultMiddlewarePipeline
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async
 }

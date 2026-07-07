@@ -28,9 +28,11 @@ struct PromptConfigBundleResourceOverrideTests {
     /// parallel and may read this override (e.g. orchestrator warm-up builds a `SystemPrompt`,
     /// which reads `options.includeAgentSkills`). A payload missing `options` makes those concurrent
     /// builds fall back to skills-enabled and throw `skillLoaderNotFound`, nulling their orchestrator
-    /// and flaking unrelated suites. Including a valid `options` block keeps concurrent readers happy.
+    /// and flaking unrelated suites. Include valid `options`, `settings`, and `agentHarness` blocks.
     private func config(_ value: String) -> Data {
-        Data("{\"\(Self.marker)\":\"\(value)\",\"options\":{\"includeAgentSkills\":false}}".utf8)
+        Data("""
+        {"\(Self.marker)":"\(value)","options":{"includeAgentSkills":false,"includeCurrentDateTime":true},"settings":{},"agentHarness":{"strictAgentHarnessPrompts":true},"modeProfiles":{"profiles":[{"id":"chat","interactionMode":"chat","assemblyKind":"chat"}]}}
+        """.utf8)
     }
 
     private func markerValue(of data: Data?) -> String? {

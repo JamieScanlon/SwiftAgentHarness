@@ -35,6 +35,11 @@ struct TurnLoop {
         var retriedCompactionThisIteration = false
         var continuationsUsed = 0
         var hasTranscriptDeltaAcrossRun = false
+        var isFirstModelCall = true
+        let messageOutputPolicy = MessageOutputPolicyResolver.policy(
+            originSurface: configuration.originSurface,
+            legacyStreamedTextSurfaces: agentHarness.legacyStreamedTextSurfaces
+        )
         for iteration in 1...maxIterations {
             try Task.checkCancellation()
             guard let conv = await ports.conversation.conversation(id: conversationID) else {
@@ -63,13 +68,13 @@ struct TurnLoop {
             if toolChoice == .required, runtimePolicy.termination?.policy != .terminalTool {
                 toolChoice = .auto
             }
-            let phase: ContextTransformInvocationPhase = iteration == 1
+            let phase: ContextTransformInvocationPhase = isFirstModelCall
                 ? .initial
                 : .continuation(round: continuationsUsed)
             let compaction: CompactionHint = retriedCompactionThisIteration ? .forceCompaction : .normal
 
             // Fire situational prefetch before assembly so recall overlaps context assembly.
-            if iteration == 1, case .initial = phase, let memoryPort = ports.memory,
+            if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
                 if let query = resolveUserQuery(from: conv.messages, anchorUserMessageID: anchorUserMessageID) {
                     await memoryPort.prefetchRecall(conversationID: conversationID, userQuery: query)
@@ -90,7 +95,7 @@ struct TurnLoop {
                 ports.logger?.error("[TurnLoop] context assembly failed: \(error)")
                 throw error
             }
-            if iteration == 1, case .initial = phase {
+            if isFirstModelCall {
                 if let reminder = configuration.ephemeralSystemReminder {
                     let reminderMessage = HarnessInjectedMessageMetadata.systemMessage(
                         id: UUID(),
@@ -102,7 +107,7 @@ struct TurnLoop {
                     messages = [reminderMessage] + messages
                 }
             }
-            if iteration == 1, case .initial = phase, let memoryPort = ports.memory,
+            if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
                 let userQuery = resolveUserQuery(from: messages, anchorUserMessageID: anchorUserMessageID)
                 if let query = userQuery,
@@ -137,12 +142,37 @@ struct TurnLoop {
             // Final provider-agnostic guard: never dispatch an unrenderable array (orphaned leading
             // tool result / missing system prompt) regardless of how `messages` was assembled.
             messages = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: ports.logger)
+            let providerBinding = ProviderBinding(
+                providerId: conv.model.modelProtocol.rawValue,
+                modelProtocol: conv.model.modelProtocol,
+                endpointModelId: conv.model.modelName,
+                serverURL: conv.model.serverURL
+            )
+            let compat = ProviderRuntimeHooks.compatForBinding(providerBinding)
+            let targetCapabilities = Set(conv.model.capabilities)
+            _ = ProviderRuntimeHooks.validateReplayTurns(
+                messages,
+                binding: providerBinding,
+                compat: compat,
+                targetCapabilities: targetCapabilities,
+                logger: ports.logger
+            )
+            messages = ProviderRuntimeHooks.transformMessages(
+                messages,
+                binding: providerBinding,
+                compat: compat,
+                targetCapabilities: targetCapabilities
+            )
+            let normalizedTools = ProviderRuntimeHooks.normalizeTools(
+                snapshot.effectiveTools,
+                binding: providerBinding
+            )
             do {
                 let stream = await ports.model.stream(
                     messages,
                     orchestrator: orchestrator,
                     handle: handle,
-                    tools: snapshot.effectiveTools,
+                    tools: normalizedTools,
                     toolChoice: toolChoice,
                     temperatureOverride: temperatureOverride
                 )
@@ -170,6 +200,12 @@ struct TurnLoop {
                 if !sawStreamComplete {
                     let userStopRequested = await ports.conversation.stopRequested(conversationID: conversationID)
                     if Task.isCancelled || userStopRequested {
+                        await persistInterruptedPartialAssistantIfNeeded(
+                            acc: acc,
+                            messageOutputPolicy: messageOutputPolicy,
+                            conversationID: conversationID,
+                            runID: runID
+                        )
                         await ports.conversation.appendRunCancelledMarker(
                             conversationID: conversationID,
                             runID: runID,
@@ -180,9 +216,21 @@ struct TurnLoop {
                             detail: Task.isCancelled ? "task_cancelled" : "user_stop_requested"
                         )
                     }
+                    await persistInterruptedPartialAssistantIfNeeded(
+                        acc: acc,
+                        messageOutputPolicy: messageOutputPolicy,
+                        conversationID: conversationID,
+                        runID: runID
+                    )
                     throw LLMError.timeout
                 }
             } catch is CancellationError {
+                await persistInterruptedPartialAssistantIfNeeded(
+                    acc: acc,
+                    messageOutputPolicy: messageOutputPolicy,
+                    conversationID: conversationID,
+                    runID: runID
+                )
                 await ports.conversation.appendRunCancelledMarker(
                     conversationID: conversationID,
                     runID: runID,
@@ -196,7 +244,16 @@ struct TurnLoop {
                 continue
             }
 
-            let assistant = acc.finalize()
+            if isFirstModelCall {
+                isFirstModelCall = false
+            }
+
+            let assistantEnvelope = MessageOutputPostProcessor.apply(
+                envelope: acc.finalize(),
+                policy: messageOutputPolicy
+            )
+            HarnessMessageEnvelopeStore.store(assistantEnvelope)
+            let assistant = assistantEnvelope.message
             let rejectedBareRequiredTurn = toolChoice == .required
                 && runtimePolicy.termination?.policy == .terminalTool
                 && !snapshot.effectiveTools.isEmpty
@@ -476,6 +533,44 @@ struct TurnLoop {
         )
     }
 
+    private static let interruptedFinishReason = "interrupted"
+
+    private func hasPersistablePartial(_ envelope: HarnessMessageEnvelope) -> Bool {
+        let assistant = envelope.message
+        if !assistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !assistant.toolCalls.isEmpty || !assistant.images.isEmpty {
+            return true
+        }
+        return !envelope.contentBlocks.isEmpty
+    }
+
+    private func persistInterruptedPartialAssistantIfNeeded(
+        acc: AssistantMessageAccumulator,
+        messageOutputPolicy: MessageOutputPolicy,
+        conversationID: UUID,
+        runID: UUID?
+    ) async {
+        let assistantEnvelope = MessageOutputPostProcessor.apply(
+            envelope: acc.finalize(),
+            policy: messageOutputPolicy
+        )
+        guard hasPersistablePartial(assistantEnvelope) else { return }
+        HarnessMessageEnvelopeStore.store(assistantEnvelope)
+        let assistant = assistantEnvelope.message
+        do {
+            try await ports.conversation.append(assistant, conversationID: conversationID, runID: runID)
+            await ports.conversation.stampAssistantFinishReason(
+                messageID: assistant.id,
+                conversationID: conversationID,
+                finishReason: Self.interruptedFinishReason
+            )
+        } catch {
+            ports.logger?.warning("[TurnLoop] interrupted partial assistant persist failed: \(error)")
+        }
+    }
+
     private func stampTerminalAssistantFinishReasonIfNeeded(
         assistant: Message,
         terminal: ConversationRunTerminalReason,
@@ -523,8 +618,25 @@ struct TurnLoop {
                         runID
                     )
                     published = true
-                @unknown default:
-                    break
+                case .toolCallStarted(let id, let name, let contentIndex):
+                    await publishDelta(
+                        .toolCallStarted(toolName: name, toolCallId: id, contentIndex: contentIndex),
+                        conversationID,
+                        runID
+                    )
+                    published = true
+                case .toolCallCompleted(let id, let name, let arguments):
+                    await publishDelta(
+                        .toolCallCompleted(
+                            toolName: name,
+                            toolCallId: id,
+                            arguments: arguments,
+                            blockIndex: nil
+                        ),
+                        conversationID,
+                        runID
+                    )
+                    published = true
                 }
             }
         case .complete:
@@ -567,7 +679,10 @@ struct TurnLoop {
             modeRegistry: ports.modeRegistry,
             logger: ports.logger
         )
-        return profile.runtime.maxIterations ?? Self.defaultTurnLoopMaxIterations
+        guard let configured = profile.runtime.maxIterations else {
+            return Self.defaultTurnLoopMaxIterations
+        }
+        return max(1, configured)
     }
 
     private static let defaultTurnLoopMaxIterations = Int.max
@@ -713,8 +828,21 @@ struct TurnLoop {
         switch outcome {
         case .completed(let message), .pendingHandle(let message), .denied(let message):
             try? await ports.conversation.append(message, conversationID: conversationID, runID: runID)
-        case .approvalRequired:
-            break
+        case .approvalRequired(let toolName, let outcomeToolCallID):
+            await ports.tools.handleDispatchApprovalRequired(
+                toolName: toolName,
+                toolCallID: outcomeToolCallID ?? toolCallID,
+                snapshot: snapshot,
+                conversationID: conversationID,
+                runID: runID,
+                iteration: iteration,
+                modelID: modelID,
+                lifecycleEmitter: lifecycleEmitter
+            )
+            let pendingResult = AgentLoopToolDispatch.approvalPendingToolResultMessage(
+                toolCallId: outcomeToolCallID ?? toolCallID
+            )
+            try? await ports.conversation.append(pendingResult, conversationID: conversationID, runID: runID)
         }
         ports.logger?.info(
             "[TurnLoop] behavioral recovery injected think tool call conversationID=\(conversationID.uuidString) runID=\(runID?.uuidString ?? "nil") iteration=\(iteration)"

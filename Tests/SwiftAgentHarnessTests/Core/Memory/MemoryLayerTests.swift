@@ -106,6 +106,41 @@ struct MemoryProviderRegistryTests {
         #expect(FileManager.default.fileExists(atPath: memoryDir.appendingPathComponent("MEMORY.md").path))
         try? FileManager.default.removeItem(at: dir)
     }
+
+    @Test("endSession clears per-conversation state and allows re-bootstrap")
+    func endSessionClearsStateAndAllowsRebootstrap() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mem-end-session-\(UUID().uuidString)", isDirectory: true)
+        let memoryDir = dir.appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: dir.path,
+            canonicalGitRoot: dir.path,
+            memoryDirectory: memoryDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+        await service.recordMemoryWrite(path: memoryDir.appendingPathComponent("notes.md").path, conversationID: conversationID)
+
+        #expect(await service.currentSnapshotGeneration(conversationID: conversationID) > 0)
+        #expect(await service.sessionContext(for: conversationID) != nil)
+        #expect(await service.systemPromptBlocks(conversationID: conversationID) != nil)
+        #expect(await service.writeObserver().hadWrites(conversationID: conversationID))
+
+        await service.endSession(conversationID: conversationID)
+
+        #expect(await service.currentSnapshotGeneration(conversationID: conversationID) == 0)
+        #expect(await service.sessionContext(for: conversationID) == nil)
+        #expect(await service.systemPromptBlocks(conversationID: conversationID) == nil)
+        #expect(await service.writeObserver().hadWrites(conversationID: conversationID) == false)
+
+        _ = try await service.bootstrapSession(context: context)
+        #expect(await service.currentSnapshotGeneration(conversationID: conversationID) == 1)
+    }
 }
 
 @Suite("Team memory path validator")

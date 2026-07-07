@@ -1,0 +1,31 @@
+{
+  "id": "openai",
+  "label": "OpenAI",
+  "providerEndpoints": [
+    { "id": "openai-default", "baseUrl": "https://api.openai.com/v1" }
+  ],
+  "providerAuthAliases": ["openai", "gpt"],
+  "providerAuthChoices": [
+    {
+      "id": "api-key",
+      "label": "API Key",
+      "authType": "api-key",
+      "envVars": ["SAH_OPENAI_API_KEY", "OPENAI_API_KEY"],
+      "cliFlag": "--openai-key",
+      "cliOption": "openaiKey",
+      "onboardingScopes": []
+    }
+  ],
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1-", "o3-", "o4-"]
+  },
+  "cliBackends": [
+    { "id": "openai-codex", "label": "Codex CLI" }
+  ],
+  "uiHints": {
+    "iconRef": "openai-mark",
+    "category": "frontier"
+  },
+  "capabilitySlots": ["text-inference", "cli-inference-backend", "speech", "image-generation", "realtime-voice"],
+  "default": true
+}

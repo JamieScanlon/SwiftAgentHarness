@@ -39,7 +39,16 @@ enum ScheduledTaskTriggerBuilder {
         if let conversationID = task.conversationID, routingMode == .threaded {
             var metadata = trigger.sourceMetadata
             metadata["conversationID"] = conversationID
+            if let ownerAccountID = task.ownerAccountID {
+                metadata["ownerAccountID"] = ownerAccountID.uuidString
+            }
+            if let createdBy = task.createdByConversationID {
+                metadata["createdByConversationID"] = createdBy.uuidString
+            }
             trigger.sourceMetadata = metadata
+        }
+        if let correlation = task.correlation {
+            trigger.correlation = correlation
         }
         return trigger
     }

@@ -100,6 +100,30 @@ struct ApprovalCoordinatorTests {
         #expect(outcome.decision == .allowOnce)
     }
 
+    @Test("consumeExpired with matchingIDs resolves only scoped expired pendings")
+    func consumeExpiredScopedByMatchingIDs() async {
+        let coordinator = ApprovalCoordinator()
+        let past = Date().addingTimeInterval(-10)
+        _ = await coordinator.register(
+            id: "old-a",
+            requestedAt: past,
+            timeoutMs: 1000,
+            timeoutResolution: .deny,
+            timeoutSource: "runtime.approvalTimeout"
+        )
+        _ = await coordinator.register(
+            id: "old-b",
+            requestedAt: past,
+            timeoutMs: 1000,
+            timeoutResolution: .deny,
+            timeoutSource: "runtime.approvalTimeout"
+        )
+        let expired = await coordinator.consumeExpired(matchingIDs: ["old-a"])
+        #expect(expired.map(\.id) == ["old-a"])
+        #expect(await coordinator.isPending(id: "old-b"))
+        #expect(await coordinator.isPending(id: "old-a") == false)
+    }
+
     @Test("consumeExpired ignores pendings with no expiry")
     func consumeExpiredIgnoresDisabledTimeout() async {
         let coordinator = ApprovalCoordinator()

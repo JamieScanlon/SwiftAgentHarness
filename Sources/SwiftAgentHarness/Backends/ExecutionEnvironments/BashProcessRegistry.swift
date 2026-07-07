@@ -18,6 +18,7 @@ public struct ProcessSession: Sendable, Identifiable, Equatable {
     public var pendingStdout: Data
     public var pendingStderr: Data
     public var aggregated: Data
+    public var aggregatedStderr: Data
     public var tail: Data
     public var exitCode: Int32?
     public var createdAt: Date
@@ -116,6 +117,7 @@ public actor BashProcessRegistry {
             pendingStdout: Data(),
             pendingStderr: Data(),
             aggregated: Data(),
+            aggregatedStderr: Data(),
             tail: Data(),
             exitCode: nil,
             createdAt: Date(),
@@ -156,7 +158,7 @@ public actor BashProcessRegistry {
         let hardDeadline = timeoutSeconds.map { Date().addingTimeInterval($0) }
         while Date() < deadline {
             if let hardDeadline, Date() >= hardDeadline {
-                kill(id: id)
+                killUnchecked(id: id)
                 return ForegroundBudgetRunResult(outcome: .timedOut)
             }
             if let completed = completedResult(id: id) {
@@ -180,7 +182,8 @@ public actor BashProcessRegistry {
         return ForegroundBudgetRunResult(outcome: .backgrounded(taskID: id))
     }
 
-    public func waitForCompletion(id: String, timeoutSeconds: TimeInterval?) async -> ShellProcessRunner.RunResult? {
+    public func waitForCompletion(id: String, sessionSlug: String, timeoutSeconds: TimeInterval?) async -> ShellProcessRunner.RunResult? {
+        guard authorizedSession(id: id, sessionSlug: sessionSlug) != nil else { return nil }
         if let completed = completedResult(id: id) { return completed }
         guard handles[id] != nil else { return nil }
         let waitSeconds = timeoutSeconds ?? .infinity
@@ -200,7 +203,11 @@ public actor BashProcessRegistry {
         guard handles[id] == nil, let session = sessions[id], let exitCode = session.exitCode else {
             return nil
         }
-        return ShellProcessRunner.RunResult(stdout: session.aggregated, stderr: Data(), exitCode: exitCode)
+        return ShellProcessRunner.RunResult(
+            stdout: session.aggregated,
+            stderr: session.aggregatedStderr,
+            exitCode: exitCode
+        )
     }
 
     private func resumeCompletionWaiters(id: String, result: ShellProcessRunner.RunResult?) {
@@ -218,9 +225,9 @@ public actor BashProcessRegistry {
 
     /// Consuming poll: returns the output delta since the last poll and advances the surfaced
     /// offset. Used by the model `process` tool for incremental delivery.
-    public func poll(id: String) -> ProcessSession? {
+    public func poll(id: String, sessionSlug: String) -> ProcessSession? {
         reapExpired()
-        guard var session = sessions[id] else { return nil }
+        guard var session = authorizedSession(id: id, sessionSlug: sessionSlug) else { return nil }
         if let handle = handles[id] {
             let stdoutDelta = Self.pollDelta(buffer: handle.liveStdoutBuffer, surfacedBytes: &session.surfacedStdoutBytes)
             session.pendingStdout = stdoutDelta.data
@@ -234,12 +241,19 @@ public actor BashProcessRegistry {
 
             session.tail = Data(handle.liveStdout.suffix(4096))
         } else {
-            let dropped = max(0, session.totalStdoutBytes - session.aggregated.count)
-            let start = max(session.surfacedStdoutBytes, dropped)
-            let localOffset = start - dropped
-            session.pendingStdout = localOffset < session.aggregated.count
-                ? Data(session.aggregated.dropFirst(localOffset)) : Data()
+            let stdoutDropped = max(0, session.totalStdoutBytes - session.aggregated.count)
+            let stdoutStart = max(session.surfacedStdoutBytes, stdoutDropped)
+            let stdoutLocalOffset = stdoutStart - stdoutDropped
+            session.pendingStdout = stdoutLocalOffset < session.aggregated.count
+                ? Data(session.aggregated.dropFirst(stdoutLocalOffset)) : Data()
             session.surfacedStdoutBytes = session.totalStdoutBytes
+
+            let stderrDropped = max(0, session.totalStderrBytes - session.aggregatedStderr.count)
+            let stderrStart = max(session.surfacedStderrBytes, stderrDropped)
+            let stderrLocalOffset = stderrStart - stderrDropped
+            session.pendingStderr = stderrLocalOffset < session.aggregatedStderr.count
+                ? Data(session.aggregatedStderr.dropFirst(stderrLocalOffset)) : Data()
+            session.surfacedStderrBytes = session.totalStderrBytes
         }
         session.lastPolledAt = Date()
         sessions[id] = session
@@ -248,8 +262,8 @@ public actor BashProcessRegistry {
 
     /// Non-consuming snapshot: returns cumulative output (possibly truncated) without advancing
     /// the poll offset. Used by ACP terminalOutput so clients always see full accumulated output.
-    public func snapshot(id: String) -> ProcessSessionSnapshot? {
-        guard let session = sessions[id] else { return nil }
+    public func snapshot(id: String, sessionSlug: String) -> ProcessSessionSnapshot? {
+        guard let session = authorizedSession(id: id, sessionSlug: sessionSlug) else { return nil }
         if let handle = handles[id] {
             let output = handle.liveStdout
             return ProcessSessionSnapshot(
@@ -265,16 +279,32 @@ public actor BashProcessRegistry {
         )
     }
 
-    public func kill(id: String) {
-        handles.removeValue(forKey: id)?.terminate()
-        sessions.removeValue(forKey: id)
+    @discardableResult
+    public func kill(id: String, sessionSlug: String) -> Bool {
+        guard authorizedSession(id: id, sessionSlug: sessionSlug) != nil else { return false }
+        killUnchecked(id: id)
+        return true
     }
 
-    public func sendKeys(id: String, data: Data) throws {
+    public func sendKeys(id: String, sessionSlug: String, data: Data) throws {
+        guard authorizedSession(id: id, sessionSlug: sessionSlug) != nil else {
+            throw SandboxBackendError.commandFailed("process not found: \(id)")
+        }
         guard let handle = handles[id] else {
             throw SandboxBackendError.commandFailed("process not found: \(id)")
         }
         handle.sendKeys(data)
+    }
+
+    private func authorizedSession(id: String, sessionSlug: String) -> ProcessSession? {
+        guard let session = sessions[id], session.sessionSlug == sessionSlug else { return nil }
+        return session
+    }
+
+    private func killUnchecked(id: String) {
+        handles.removeValue(forKey: id)?.terminate()
+        sessions.removeValue(forKey: id)
+        resumeCompletionWaiters(id: id, result: nil)
     }
 
     static func pollDelta(buffer: DataBuffer, surfacedBytes: inout Int) -> (data: Data, truncated: Bool) {
@@ -285,7 +315,10 @@ public actor BashProcessRegistry {
 
     private func complete(id: String, result: ShellProcessRunner.RunResult?) {
         let handle = handles.removeValue(forKey: id)
-        guard var session = sessions[id], let result else { return }
+        guard var session = sessions[id], let result else {
+            resumeCompletionWaiters(id: id, result: nil)
+            return
+        }
         if let handle {
             session.stdoutTruncated = handle.liveStdoutBuffer.isTruncated
             session.stderrTruncated = handle.liveStderrBuffer.isTruncated
@@ -293,6 +326,7 @@ public actor BashProcessRegistry {
             session.totalStderrBytes = handle.liveStderrBuffer.totalBytes
         }
         session.aggregated = result.stdout
+        session.aggregatedStderr = result.stderr
         session.tail = Data(result.stdout.suffix(4096))
         session.exitCode = result.exitCode
         sessions[id] = session
@@ -303,6 +337,13 @@ public actor BashProcessRegistry {
         let expired = sessions.filter { $0.value.isExpired }.keys
         for id in expired { handles.removeValue(forKey: id)?.terminate() }
         sessions = sessions.filter { !$0.value.isExpired }
+        for id in expired { resumeCompletionWaiters(id: id, result: nil) }
+    }
+
+    func markSessionExpiredForTesting(id: String) {
+        guard var session = sessions[id] else { return }
+        session.createdAt = Date.distantPast
+        sessions[id] = session
     }
 
     public func resetForTesting() {

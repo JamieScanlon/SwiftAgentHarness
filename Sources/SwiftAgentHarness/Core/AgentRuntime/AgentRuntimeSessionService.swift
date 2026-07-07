@@ -23,11 +23,13 @@ public actor AgentRuntimeSessionService {
     private var turnLoopStopRequestedConversationIDs: Set<UUID> = []
     private var activeTurnConfigurationsByRunID: [UUID: (conversationID: UUID, configuration: AgentRuntimeTurnConfiguration)] = [:]
     private var activeRunOrchestratorHandles: [UUID: OrchestratorHandle] = [:]
-    var agentLoopPartialContinuation: AsyncStream<ChatStreamingPartial>.Continuation?
+    var agentLoopPartialContinuationsByRunID: [UUID: AsyncStream<ChatStreamingPartial>.Continuation] = [:]
     private(set) var testing_clearBindingCallCount = 0
 
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService?
     nonisolated(unsafe) private var controlPlane: (any ConversationControlPlaneServicing)?
+    nonisolated(unsafe) private var channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator?
+    nonisolated(unsafe) private var channelRegistryForLifecycle: ChannelListenerRegistry?
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -53,6 +55,14 @@ public actor AgentRuntimeSessionService {
 
     nonisolated func installControlPlane(_ controlPlane: any ConversationControlPlaneServicing) {
         self.controlPlane = controlPlane
+    }
+
+    nonisolated func installChannelSessionLifecycle(
+        coordinator: ChannelSessionLifecycleCoordinator,
+        registry: ChannelListenerRegistry
+    ) {
+        channelSessionLifecycleCoordinator = coordinator
+        channelRegistryForLifecycle = registry
     }
 
     func flushPendingModeTransitionAfterRunTerminal(
@@ -118,6 +128,13 @@ public actor AgentRuntimeSessionService {
     func clearActiveTurnConfiguration(runID: UUID?) {
         guard let runID else { return }
         activeTurnConfigurationsByRunID.removeValue(forKey: runID)
+    }
+
+    private func configurationApplyingInteractiveDefaults(_ configuration: Configuration) -> Configuration {
+        let runtimeConfiguration = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(
+            to: AgentRuntimeTurnConfiguration(managerConfiguration: configuration)
+        )
+        return Configuration(runtimeConfiguration: runtimeConfiguration)
     }
 
     // MARK: - Runtime streaming API surface
@@ -192,8 +209,25 @@ public actor AgentRuntimeSessionService {
             throw ConversationServiceError.conversationRunInProgress(conversationID: conversation.id, activeRunID: busyRun)
         }
 
-        if let slashCommandResponse = try await runSlashCommandIfNeeded(text, conversationID: conversation.id) {
-            return slashCommandResponse
+        var effectiveText = text
+        var effectiveConfiguration = configurationApplyingInteractiveDefaults(configuration)
+
+        switch try await processControlInputBoundary(
+            text: text,
+            conversationID: conversation.id,
+            configuration: effectiveConfiguration
+        ) {
+        case .shortCircuit(let response):
+            return response
+        case let .continueTurn(modelText, patch, preTurnAckContent):
+            effectiveText = modelText
+            effectiveConfiguration.turnThinkingOverride = patch.turnThinkingOverride
+            effectiveConfiguration.turnModelSlug = patch.turnModelSlug
+            if let preTurnAckContent, !preTurnAckContent.isEmpty {
+                try await savePreTurnAcknowledgement(preTurnAckContent, conversationID: conversation.id)
+            }
+        case .passthrough:
+            break
         }
 
         let runID = UUID()
@@ -202,7 +236,7 @@ public actor AgentRuntimeSessionService {
             throw await runtimeSessionError(for: admission, conversationID: conversation.id, fallbackRunID: runID)
         }
 
-        let resolvedConfiguration = await configurationApplyingTrustPolicy(configuration)
+        let resolvedConfiguration = await configurationApplyingTrustPolicy(effectiveConfiguration)
         let sendingConversationID = conversation.id
 
         do {
@@ -220,7 +254,7 @@ public actor AgentRuntimeSessionService {
             await invokeTestingPreRunStateSendHook(for: conversation)
 
             let trustRaw = MessageInputTrustCodec.sanitizedInputTrustRaw(resolvedConfiguration.inputTrustRaw)
-            let newMessage = Message(id: UUID(), role: .user, content: text, images: images, inputTrustRaw: trustRaw)
+            let newMessage = Message(id: UUID(), role: .user, content: effectiveText, images: images, inputTrustRaw: trustRaw)
             _ = try await saveMessageToCache(
                 newMessage,
                 for: conversation.id,
@@ -280,7 +314,7 @@ public actor AgentRuntimeSessionService {
                 messageID: newMessage.id
             )
         } catch {
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
+            await releasePreGenerationStreamingRun(runID: runID, sessionLaneKey: sessionLaneKey)
             throw error
         }
     }
@@ -317,6 +351,8 @@ public actor AgentRuntimeSessionService {
         if let admission = await deps.runtimeLaneCoordinator.tryAcquireMainRun(sessionKey: sessionLaneKey, runID: revertRunID) {
             throw await runtimeSessionError(for: admission, conversationID: sendingConversationID, fallbackRunID: revertRunID)
         }
+
+        let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
 
         do {
             let prefixMessages = try await routingRevert(
@@ -389,7 +425,7 @@ public actor AgentRuntimeSessionService {
             await startStreamingOrchestrationTask(
                 sendingConversationID: sendingConversationID,
                 turnLoopAnchorUserMessageID: messageID,
-                configuration: configuration,
+                configuration: resolvedConfiguration,
                 orchestrator: orchestrator
             )
             return ChatStreamResponse(
@@ -399,7 +435,7 @@ public actor AgentRuntimeSessionService {
                 runID: revertRunID
             )
         } catch {
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: revertRunID)
+            await releasePreGenerationStreamingRun(runID: revertRunID, sessionLaneKey: sessionLaneKey)
             throw error
         }
     }
@@ -447,48 +483,55 @@ public actor AgentRuntimeSessionService {
             await touchCurrentMessagesProjection(for: conv)
         }
 
-        guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
-            conversation: conv,
-            model: conv.model
-        ) else {
-            throw ConversationServiceError.failedToInitialize
-        }
-        activeRunOrchestratorHandles[splitRunID] = acquisition.handle
-        await orchestratorPort.startOrchestratorStateListeners(for: sendingConversationID)
-        guard let orchestrator = await orchestrationCore.orchestrator(for: sendingConversationID) else {
-            throw ConversationServiceError.failedToInitialize
-        }
+        do {
+            guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
+                conversation: conv,
+                model: conv.model
+            ) else {
+                throw ConversationServiceError.failedToInitialize
+            }
+            activeRunOrchestratorHandles[splitRunID] = acquisition.handle
+            await orchestratorPort.startOrchestratorStateListeners(for: sendingConversationID)
+            guard let orchestrator = await orchestrationCore.orchestrator(for: sendingConversationID) else {
+                throw ConversationServiceError.failedToInitialize
+            }
 
-        let (turnStateStream, turnContinuation) = AsyncStream.makeStream(
-            of: ConversationOrchestrationState.self,
-            bufferingPolicy: .bufferingNewest(64)
-        )
-        setTurnStateContinuation(turnContinuation)
-        if let initial = await buildOrchestrationSnapshot(
-            forStreamingConversation: sendingConversationID,
-            isTerminalSnapshotAfterCompletion: false,
-            forceStreamingPhases: false
-        ) {
-            turnContinuation.yield(initial)
-        }
+            let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
 
-        let partialContent = await buildRuntimePartialContentStream(
-            orchestrator: orchestrator,
-            conversationID: sendingConversationID,
-            runID: splitRunID
-        )
-        await startStreamingOrchestrationTask(
-            sendingConversationID: sendingConversationID,
-            turnLoopAnchorUserMessageID: anchorNewId,
-            configuration: configuration,
-            orchestrator: orchestrator
-        )
-        return ChatStreamResponse(
-            partialContent: partialContent,
-            orchestrationState: turnStateStream,
-            conversationID: sendingConversationID,
-            runID: splitRunID
-        )
+            let (turnStateStream, turnContinuation) = AsyncStream.makeStream(
+                of: ConversationOrchestrationState.self,
+                bufferingPolicy: .bufferingNewest(64)
+            )
+            setTurnStateContinuation(turnContinuation)
+            if let initial = await buildOrchestrationSnapshot(
+                forStreamingConversation: sendingConversationID,
+                isTerminalSnapshotAfterCompletion: false,
+                forceStreamingPhases: false
+            ) {
+                turnContinuation.yield(initial)
+            }
+
+            let partialContent = await buildRuntimePartialContentStream(
+                orchestrator: orchestrator,
+                conversationID: sendingConversationID,
+                runID: splitRunID
+            )
+            await startStreamingOrchestrationTask(
+                sendingConversationID: sendingConversationID,
+                turnLoopAnchorUserMessageID: anchorNewId,
+                configuration: resolvedConfiguration,
+                orchestrator: orchestrator
+            )
+            return ChatStreamResponse(
+                partialContent: partialContent,
+                orchestrationState: turnStateStream,
+                conversationID: sendingConversationID,
+                runID: splitRunID
+            )
+        } catch {
+            await releasePreGenerationStreamingRun(runID: splitRunID, sessionLaneKey: nil)
+            throw error
+        }
     }
 
     func cancelGeneration() async {
@@ -500,6 +543,11 @@ public actor AgentRuntimeSessionService {
     }
 
     func cancelGeneration(for conversationID: UUID?) async {
+        if let conversationID,
+           let conversation = await modelConversation(id: conversationID),
+           TriggerHostConversationMetadata.isChannelTriggerHost(conversation.metadata) {
+            await drainChannelSessionLifecycle(conversationID: conversationID)
+        }
         let runtimeLifecycle = if let conversationID {
             await currentLifecycleSnapshot(for: conversationID)
         } else {
@@ -550,6 +598,20 @@ public actor AgentRuntimeSessionService {
                     lifecycle.isContentStreamingActive = false
                 }
             }
+        }
+    }
+
+    private func drainChannelSessionLifecycle(conversationID: UUID) async {
+        await channelRegistryForLifecycle?.drainSessionLifecycle(conversationID: conversationID)
+    }
+
+    private func releasePreGenerationStreamingRun(
+        runID: UUID,
+        sessionLaneKey: String?
+    ) async {
+        await releaseRunOrchestrator(runID: runID)
+        if let sessionLaneKey {
+            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
         }
     }
 

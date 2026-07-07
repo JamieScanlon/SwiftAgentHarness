@@ -16,6 +16,7 @@ actor ConversationMessagingRuntimeService {
     private let sessionProjection: SessionProjectionAccessing
     private let topics: ConversationTopicPublicationPort
     private let toolEntryLookup = ToolRegistryEntryLookup()
+    private var agentToolResultMiddlewares: [AgentToolResultMiddleware] = []
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -384,23 +385,37 @@ actor ConversationMessagingRuntimeService {
         conversationID: UUID,
         assistantMessageID: UUID?
     ) async {
-        guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
         guard let assistantMessageID else { return }
-        guard let idx = conversation.messages.lastIndex(where: { $0.id == assistantMessageID && $0.role == .assistant }) else {
-            return
+        do {
+            let prefixMessages = try await persistenceDomain.routingRevertActiveBranchRemovingAssistantMessageAsync(
+                conversationID: conversationID,
+                assistantMessageID: assistantMessageID
+            )
+            guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
+            conversation.messages = prefixMessages
+            conversation.turns = await selection.transformedTurns(
+                messages: prefixMessages,
+                interactionMode: conversation.interactionMode,
+                previousTurns: conversation.turns
+            )
+            await persistenceDomain.applyRegistryTranscriptTruncation(conversation)
+            await syncSessionProjectionFromRegistry(conversationID: conversationID, convo: conversation)
+        } catch {
+            logger?.warning(
+                "[ConversationMessagingRuntimeService] stalled-turn rollback failed for conversation \(conversationID): \(error)"
+            )
         }
-        conversation.messages.remove(at: idx)
-        conversation.turns = await selection.transformedTurns(
-            messages: conversation.messages,
-            interactionMode: conversation.interactionMode,
-            previousTurns: conversation.turns
-        )
-        await persistenceDomain.replaceConversationInRegistry(conversation)
-        await syncSessionProjectionFromRegistry(conversationID: conversationID, convo: conversation)
     }
 
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async {
         await toolEntryLookup.install(entries)
+    }
+
+    /// Mounts a host-supplied runtime-delivery middleware on the tool-result seam. Registrations are
+    /// applied (ordered by ``AgentToolResultMiddleware/order`` then `id`) at the order-100 slot of
+    /// ``runtimeToolResultMiddlewarePipeline()``.
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) {
+        agentToolResultMiddlewares.append(middleware)
     }
 
     func runtimeToolResultMiddlewarePipeline() -> ToolResultMiddlewarePipeline {
@@ -414,7 +429,7 @@ actor ConversationMessagingRuntimeService {
                     await self.applySubdirectoryHintMiddleware(toolCall: toolCall, result: result)
                 },
                 ToolResultMiddlewareRegistration(
-                    id: "conversation-transformer",
+                    id: "agent-tool-result-middleware",
                     stage: .runtimeDelivery,
                     order: 100
                 ) { toolCall, result in
@@ -471,47 +486,45 @@ actor ConversationMessagingRuntimeService {
         )
     }
 
+    /// Applies host-registered runtime-delivery middleware (the ``registerAgentToolResultMiddleware``
+    /// seam) to a tool result, then runtime-stage formatting. When a middleware rewrites content it
+    /// feeds the dormant `tool_result_trim` checkpoint via a `synthesizedWithTransform` pending
+    /// record. With no host middleware mounted this is a deterministic passthrough that performs no
+    /// LLM call.
     func applyToolResultTransform(toolCall: ToolCall, result: ToolResult, conversationID: UUID? = nil) async -> ToolResult {
         guard let resolvedConversationID = await runtimeScopedConversationID(explicit: conversationID),
               let conversation = await persistenceDomain.modelConversation(id: resolvedConversationID) else {
             return applyToolResultFormatting(result: result, stage: .runtime)
         }
-        guard deps.conversationTransformConfiguration.toggles(for: conversation.interactionMode).enableToolResultTransform else {
+        guard deps.conversationTransformConfiguration.toggles(for: conversation.interactionMode).enableToolResultTransform,
+              !agentToolResultMiddlewares.isEmpty else {
             return applyToolResultFormatting(result: result, stage: .runtime)
         }
-        let input = ToolResultTransformInput(
-            toolCall: toolCall,
-            result: result,
-            conversation: ContextAssemblyService.conversationTransformMetadata(for: conversation)
-        )
-        do {
-            let output = try await ContextAssemblyService.runTransformWithTimeout(
-                transformTimeoutSeconds: deps.conversationTransformConfiguration.transformTimeoutSeconds
-            ) {
-                try await self.deps.conversationTransformer.transformToolResult(input)
-            }
-            if output.result.content.count != result.content.count || output.diagnostics != nil {
-                logger?.info(
-                    "[ConversationMessagingRuntimeService] transformToolResult applied for \(toolCall.name) (\(result.content.count) -> \(output.result.content.count) chars)\(output.diagnostics.map { " \($0)" } ?? "")"
-                )
-            }
-            if let toolCallID = toolCall.id {
-                let transformed = output.result.content != result.content
-                let record = ContextProjectionService.PendingToolResultTransformRecord(
-                    origin: transformed ? .synthesizedWithTransform : .original,
-                    originalContent: transformed ? result.content : nil
-                )
-                await contextProjection.storePendingToolResultTransform(
-                    conversationID: resolvedConversationID,
-                    toolCallID: toolCallID,
-                    record: record
-                )
-            }
-            return applyToolResultFormatting(result: output.result, stage: .runtime)
-        } catch {
-            logger?.warning("[ConversationMessagingRuntimeService] transformToolResult failed for \(toolCall.name); using original result: \(error)")
-            return applyToolResultFormatting(result: result, stage: .runtime)
+        let ordered = agentToolResultMiddlewares.sorted {
+            $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order
         }
+        var current = result
+        for middleware in ordered {
+            current = await middleware.transform(toolCall, current)
+        }
+        if current.content.count != result.content.count {
+            logger?.info(
+                "[ConversationMessagingRuntimeService] agent tool-result middleware applied for \(toolCall.name) (\(result.content.count) -> \(current.content.count) chars)"
+            )
+        }
+        if let toolCallID = toolCall.id {
+            let transformed = current.content != result.content
+            let record = ContextProjectionService.PendingToolResultTransformRecord(
+                origin: transformed ? .synthesizedWithTransform : .original,
+                originalContent: transformed ? result.content : nil
+            )
+            await contextProjection.storePendingToolResultTransform(
+                conversationID: resolvedConversationID,
+                toolCallID: toolCallID,
+                record: record
+            )
+        }
+        return applyToolResultFormatting(result: current, stage: .runtime)
     }
 
     func applyTurnSummaryTransformIfNeeded(conversationID: UUID) async {

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftAgentKit
+import SwiftAgentHarnessProviders
 import Testing
 @testable import SwiftAgentHarness
 
@@ -134,7 +135,7 @@ private actor AuthProbeBindingLLM: LLMProtocol, AdapterAuthProbing {
     func observedSendCalls() -> Int { sendCalls }
 }
 
-@Suite("MultiBindingFailoverLLM")
+@Suite("MultiBindingFailoverLLM", .serialized)
 struct MultiBindingFailoverLLMTests {
     private static func binding(_ endpoint: String, priority: Int) -> ProviderBinding {
         ProviderBinding(
@@ -318,6 +319,33 @@ struct MultiBindingFailoverLLMTests {
         #expect(hasSucceededSecondary)
     }
 
+    @Test("secondary binding failure does not emit spurious succeeded telemetry")
+    func secondaryFailureOmitsPrematureSucceeded() async throws {
+        let collector = MultiBindingAttemptCollector()
+        let primary = BindingScriptedLLM(sendQueue: [.failure(LLMError.timeout)])
+        let secondary = BindingScriptedLLM(sendQueue: [.failure(LLMError.modelNotFound("missing"))])
+        let llm = MultiBindingFailoverLLM(
+            bindings: [Self.binding("a", priority: 0), Self.binding("b", priority: 1)],
+            makeBindingLLM: { binding in
+                binding.endpointModelId == "a" ? primary : secondary
+            },
+            modelID: UUID(),
+            attemptObserver: { observation in
+                await collector.append(observation)
+            }
+        )
+        await #expect(throws: LLMError.self) {
+            _ = try await llm.send([], config: LLMRequestConfig())
+        }
+        let rows = await collector.rows
+        #expect(!rows.contains { row in
+            row.kind == .bindingFailover && row.outcome == .succeeded && row.endpointModelID == "b"
+        })
+        #expect(rows.contains { row in
+            row.kind == .bindingFailover && row.outcome == .terminalFailure && row.endpointModelID == "b"
+        })
+    }
+
     @Test("auth probe remains visible through retry prompt-cache and response-cache wrappers")
     func authProbeDelegatesThroughWrappers() async throws {
         let deniedBase = AuthProbeBindingLLM(allowAuth: false)
@@ -386,6 +414,50 @@ struct MultiBindingFailoverLLMTests {
         #expect(response.content == "fallback")
         #expect(await primary.sendCalls == 1)
         #expect(await secondary.sendCalls == 1)
+    }
+
+    @Test("heterogeneous failover replays anthropic thinking without signature on openAI target")
+    func heterogeneousFailoverTransformsForeignThinking() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
+        HarnessMessageEnvelopeStore.resetForTesting()
+        let assistantID = UUID()
+        let assistant = Message(
+            id: assistantID,
+            role: .assistant,
+            content: "prior answer",
+            timestamp: Date(),
+            toolCalls: []
+        )
+        HarnessMessageEnvelopeStore.store(
+            HarnessMessageEnvelope(
+                message: assistant,
+                contentBlocks: [.thinking(text: "chain", signature: "sig-foreign"), .text("prior answer")]
+            )
+        )
+        let openAIBinding = Self.binding("gpt-proxy", priority: 10)
+        let history: [Message] = [
+            Message(id: UUID(), role: .user, content: "question", timestamp: Date(), toolCalls: []),
+            assistant,
+        ]
+        let replaySafe = ProviderRuntimeHooks.transformMessages(
+            history,
+            binding: openAIBinding,
+            compat: ProviderModelCompat(supportsEagerToolInputStreaming: false)
+        )
+        #expect(replaySafe.count == 2)
+        #expect(replaySafe[1].content.contains("chain"))
+        #expect(!replaySafe[1].content.contains("sig-foreign"))
+
+        let primary = BindingScriptedLLM(sendQueue: [.failure(LLMError.modelNotFound("claude"))])
+        let secondary = BindingScriptedLLM(sendQueue: [.success(LLMResponse(content: "fallback", toolCalls: []))])
+        let llm = MultiBindingFailoverLLM(
+            bindings: [Self.anthropicBinding("claude", priority: 0), openAIBinding],
+            makeBindingLLM: { binding in
+                binding.modelProtocol == .anthropic ? primary : secondary
+            }
+        )
+        let response = try await llm.send(replaySafe, config: LLMRequestConfig())
+        #expect(response.content == "fallback")
     }
 }
 

@@ -24,6 +24,25 @@ struct ScheduledTaskTriggerBuilderTests {
         #expect(trigger.sourceMetadata["cronJobId"] == task.id)
     }
 
+    @Test("task correlation copied to fired trigger")
+    func taskCorrelationCopied() {
+        let task = ScheduledTask(
+            schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
+            payloadKind: .agentTurn,
+            payloadText: "follow up",
+            recurring: false,
+            correlation: TriggerCorrelation(
+                rootId: "root-1",
+                parentTriggerId: "parent-1",
+                correlationId: "workflow-1"
+            )
+        )
+        let trigger = ScheduledTaskTriggerBuilder.makeTrigger(from: task, fireTimestampMs: 42)
+        #expect(trigger.correlation?.rootId == "root-1")
+        #expect(trigger.correlation?.parentTriggerId == "parent-1")
+        #expect(trigger.correlation?.correlationId == "workflow-1")
+    }
+
     @Test("threaded cron includes conversationID metadata")
     func threadedCron() {
         let conversationID = UUID().uuidString

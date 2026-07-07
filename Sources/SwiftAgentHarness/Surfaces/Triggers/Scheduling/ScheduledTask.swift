@@ -38,9 +38,12 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
     var durable: Bool
     var trust: CommEnvelopeOriginTrust
     var conversationID: String?
+    var ownerAccountID: UUID?
+    var createdByConversationID: UUID?
     var title: String?
     var routingMode: TriggerRoutingMode
     var delegate: TriggerDelegateProfile?
+    var correlation: TriggerCorrelation?
 
     init(
         id: String = UUID().uuidString,
@@ -56,9 +59,12 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         durable: Bool = true,
         trust: CommEnvelopeOriginTrust = .userDeferred,
         conversationID: String? = nil,
+        ownerAccountID: UUID? = nil,
+        createdByConversationID: UUID? = nil,
         title: String? = nil,
         routingMode: TriggerRoutingMode = .isolated,
-        delegate: TriggerDelegateProfile? = nil
+        delegate: TriggerDelegateProfile? = nil,
+        correlation: TriggerCorrelation? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -73,8 +79,11 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         self.durable = durable
         self.trust = trust
         self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
+        self.createdByConversationID = createdByConversationID
         self.title = title
         self.routingMode = routingMode
         self.delegate = delegate
+        self.correlation = correlation
     }
 }

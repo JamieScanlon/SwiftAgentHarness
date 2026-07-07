@@ -98,18 +98,9 @@ private final class SubscribeRouterConversationDouble: APILayerConversationManag
     var currentConversationID: UUID? { nil }
 }
 
-private final class SubscribeRouterModelManagerDouble: APILayerModelManaging, Sendable {
-    private let models: [Model]
-    init(models: [Model]) {
-        self.models = models
-    }
-
-    func getAvailableModels() async -> [Model] { models }
-}
-
 struct WebSocketTopicSubscriptionRouterAuthorizeTests {
     private func fixtureModel(id: UUID) -> Model {
-        Model(id: id, protocol: .openAIAPI, modelName: "fixture", serverURL: URL(string: "http://localhost")!)
+        WebSocketRouterTestFixtures.model(id: id)
     }
 
     private func fixtureConversation(id: UUID, owner: UUID?, modelID: UUID) -> ModelConversation {
@@ -515,5 +506,124 @@ struct WebSocketTopicSubscriptionRouterAuthorizeTests {
         )
 
         #expect(err?.contains("since cannot be combined") == true)
+    }
+
+    @Test func subscribeConversationEventsDeniedWhenStrictTenancyWithoutOwner() async throws {
+        let hub = ConversationEventsTopicHub()
+        let cid = UUID()
+        let mid = UUID()
+        let conv = fixtureConversation(id: cid, owner: UUID(), modelID: mid)
+        let session = SubscribeRouterConversationDouble(conversationsByID: [cid: conv], registryScope: nil)
+        let collector = RouterAuthLineCollector()
+        let registration = WebSocketTopicWireRegistration()
+        registration.conversationEventsTopicHubToken = await hub.registerConnection { line in
+            await collector.append(line.json)
+        }
+        let strictTenancy = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+
+        let err = await APISessionContext.$authenticatedOwnerAccountID.withValue(nil) {
+            await WebSocketTopicSubscriptionRouter.applyCommClientControlMessage(
+                modelHub: nil,
+                conversationHub: hub,
+                conversationStateHub: nil,
+                traceHub: nil,
+                subAgentLifecycleHub: nil,
+                capabilityRegistryHub: nil,
+                conversationsRegistryHub: nil,
+                coordinator: nil,
+                conversationSession: session,
+                chatRuntime: nil,
+                modelManager: nil,
+                tenancyPolicy: strictTenancy,
+                message: CommClientControlMessage(
+                    kind: .subscribe,
+                    topic: ConversationTopicFormat.topic(conversationID: cid),
+                    since: nil
+                ),
+                registration: registration
+            )
+        }
+
+        #expect(err == WebSocketTopicSubscribeAuthorization.deniedMessage)
+        #expect(await collector.lines.isEmpty)
+    }
+
+    @Test func subscribeConversationEventsAllowedWhenStrictTenancyOwnerMatches() async throws {
+        let hub = ConversationEventsTopicHub()
+        let cid = UUID()
+        let mid = UUID()
+        let owner = UUID()
+        let conv = fixtureConversation(id: cid, owner: owner, modelID: mid)
+        let session = SubscribeRouterConversationDouble(conversationsByID: [cid: conv], registryScope: nil)
+        let collector = RouterAuthLineCollector()
+        let registration = WebSocketTopicWireRegistration()
+        registration.conversationEventsTopicHubToken = await hub.registerConnection { line in
+            await collector.append(line.json)
+        }
+        let strictTenancy = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+
+        let err = await APISessionContext.$authenticatedOwnerAccountID.withValue(owner) {
+            await WebSocketTopicSubscriptionRouter.applyCommClientControlMessage(
+                modelHub: nil,
+                conversationHub: hub,
+                conversationStateHub: nil,
+                traceHub: nil,
+                subAgentLifecycleHub: nil,
+                capabilityRegistryHub: nil,
+                conversationsRegistryHub: nil,
+                coordinator: nil,
+                conversationSession: session,
+                chatRuntime: nil,
+                modelManager: nil,
+                tenancyPolicy: strictTenancy,
+                message: CommClientControlMessage(
+                    kind: .subscribe,
+                    topic: ConversationTopicFormat.topic(conversationID: cid),
+                    since: nil
+                ),
+                registration: registration
+            )
+        }
+
+        #expect(err == nil)
+        let lines = await collector.lines
+        #expect(!lines.isEmpty)
+    }
+
+    @Test func subscribeConversationsRegistryDeniedWhenStrictTenancyWithoutOwner() async throws {
+        let hub = ConversationsRegistryTopicHub()
+        let collector = RouterAuthLineCollector()
+        let registration = WebSocketTopicWireRegistration()
+        registration.conversationsRegistryTopicHubToken = await hub.registerConnection { line in
+            await collector.append(line.json)
+        }
+        let session = SubscribeRouterConversationDouble(conversationsByID: [:], registryScope: nil)
+        let strictTenancy = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+
+        let err = await APISessionContext.$authenticatedOwnerAccountID.withValue(nil) {
+            await WebSocketTopicSubscriptionRouter.applyCommClientControlMessage(
+                modelHub: nil,
+                conversationHub: nil,
+                conversationStateHub: nil,
+                traceHub: nil,
+                subAgentLifecycleHub: nil,
+                capabilityRegistryHub: nil,
+                conversationsRegistryHub: hub,
+                coordinator: nil,
+                conversationSession: session,
+                chatRuntime: nil,
+                modelManager: nil,
+                tenancyPolicy: strictTenancy,
+                message: CommClientControlMessage(
+                    kind: .subscribe,
+                    topic: ResourceTopicName.conversationsRegistry,
+                    since: nil
+                ),
+                registration: registration
+            )
+        }
+
+        #expect(err == WebSocketTopicSubscribeAuthorization.deniedMessage)
+        #expect(await collector.lines.isEmpty)
     }
 }

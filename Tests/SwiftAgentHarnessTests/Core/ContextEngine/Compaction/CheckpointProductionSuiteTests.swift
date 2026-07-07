@@ -21,18 +21,6 @@ private struct CheckpointSuiteTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(
-            result: ToolResult(
-                success: input.result.success,
-                content: "[trimmed] \(input.result.content)",
-                metadata: input.result.metadata,
-                toolCallId: input.result.toolCallId
-            ),
-            diagnostics: "checkpoint_suite_tool"
-        )
-    }
-
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: nil)
     }
@@ -41,9 +29,7 @@ private struct CheckpointSuiteTransformer: ConversationTransforming {
 @Suite("Checkpoint production suite runtime coverage", .serialized)
 struct CheckpointProductionSuiteTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel(name: String = "checkpoint-suite-test") -> Model {
@@ -120,6 +106,16 @@ struct CheckpointProductionSuiteTests {
             container: container,
             conversationTransformConfiguration: transformConfig(),
             conversationTransformer: CheckpointSuiteTransformer()
+        )
+        await runtimeSession.orchestratorRuntimeService.registerAgentToolResultMiddleware(
+            AgentToolResultMiddleware(id: "checkpoint-suite-trim") { _, result in
+                ToolResult(
+                    success: result.success,
+                    content: "[trimmed] \(result.content)",
+                    metadata: result.metadata,
+                    toolCallId: result.toolCallId
+                )
+            }
         )
         let conversationAPI = await makeSplitConversationAdapter(runtimeSession: runtimeSession)
         let model = makeModel(name: "checkpoint-suite-tools")

@@ -36,23 +36,42 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
     ) async throws -> ChatStreamResponse {
-        try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
+        let harness = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        let base = AgentRuntimeTurnConfiguration(
+            enableTools: enableTools,
+            enableAgents: enableAgents,
+            expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
+            inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
+            ephemeralSystemReminder: systemReminder
+        )
+        let configuration: AgentRuntimeTurnConfiguration
+        if let originSurface, !originSurface.isEmpty {
+            configuration = MessageOutputTurnConfiguration.applyingDirectUserEntryTrustWhenEligible(
+                to: MessageOutputTurnConfiguration.forInteractiveSend(
+                    base: base,
+                    originSurface: originSurface,
+                    originSenderID: originSenderID ?? "*",
+                    harness: harness
+                )
+            )
+        } else {
+            configuration = MessageOutputTurnConfiguration.forCLISend(
+                base: base,
+                originSenderID: originSenderID,
+                harness: harness
+            )
+        }
+        return try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
             text,
             images: images,
             conversationID: conversationID,
-            configuration: .init(
-                enableTools: enableTools,
-                enableAgents: enableAgents,
-                expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
-                inputTrustRaw: inputTrustRaw,
-                ephemeralSystemReminder: systemReminder,
-                originSurface: originSurface ?? "cli",
-                originSenderID: originSenderID ?? "*"
-            )
+            configuration: configuration
         )
     }
 
@@ -65,7 +84,10 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         try await agentRuntime.serviceRuntimeRevertToUserMessageAndStreamResponse(
             conversationID: conversationID,
             messageID: messageID,
-            configuration: .init(enableTools: enableTools, enableAgents: enableAgents)
+            configuration: MessageOutputTurnConfiguration.forInteractiveSend(
+                base: AgentRuntimeTurnConfiguration(enableTools: enableTools, enableAgents: enableAgents),
+                originSurface: InteractiveSurfaceID.rest
+            )
         )
     }
 
@@ -78,7 +100,10 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         try await agentRuntime.serviceRuntimeSplitConversationAtUserMessage(
             conversationID: conversationID,
             messageID: messageID,
-            configuration: .init(enableTools: enableTools, enableAgents: enableAgents)
+            configuration: MessageOutputTurnConfiguration.forInteractiveSend(
+                base: AgentRuntimeTurnConfiguration(enableTools: enableTools, enableAgents: enableAgents),
+                originSurface: InteractiveSurfaceID.rest
+            )
         )
     }
 

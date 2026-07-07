@@ -14,6 +14,7 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     private let branchRouteError: APILayerConversationRouteError?
     private let resolveToolApprovalRouteError: APILayerConversationRouteError?
     private let previewContextCompactionResult: ContextCompactionPreviewResult?
+    private let conversationsByID: [UUID: ModelConversation]
 
     init(
         defaultSystemPrompt: String = "",
@@ -25,7 +26,8 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
         modeProfiles: [ModeProfilePickerRow] = [],
         branchRouteError: APILayerConversationRouteError? = nil,
         resolveToolApprovalRouteError: APILayerConversationRouteError? = nil,
-        previewContextCompactionResult: ContextCompactionPreviewResult? = nil
+        previewContextCompactionResult: ContextCompactionPreviewResult? = nil,
+        conversationsByID: [UUID: ModelConversation] = [:]
     ) {
         self.defaultSystemPrompt = defaultSystemPrompt
         self.tools = tools
@@ -37,11 +39,12 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
         self.branchRouteError = branchRouteError
         self.resolveToolApprovalRouteError = resolveToolApprovalRouteError
         self.previewContextCompactionResult = previewContextCompactionResult
+        self.conversationsByID = conversationsByID
     }
 
     func apiListConversationInfo() async -> [ModelConversation] { [] }
     func apiListConversationMetadata(visibility: ConversationCatalogVisibilityFilter) async -> [ConversationMetadata] { [] }
-    func apiGetConversation(id: UUID) async -> ModelConversation? { nil }
+    func apiGetConversation(id: UUID) async -> ModelConversation? { conversationsByID[id] }
     func apiGetConversationWithDerived(id: UUID) async -> ConversationReadWithDerivedResponse? { nil }
     func apiProjectConversation(conversationID: UUID, request: ConversationProjectRequest) async throws -> ConversationProjectResponse {
         _ = (conversationID, request)
@@ -166,11 +169,11 @@ final class ProtocolOnlyRuntimeGatewayStub: APILayerChatRuntimeManaging, Sendabl
     }
 
     func apiMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]> { _ = conversationID; return AsyncStream { $0.finish() } }
-    func apiSendMessageAndStreamResponse(conversationID: UUID, _ text: String, images: [Message.Image], enableTools: Bool, enableAgents: Bool, expectedPreviousTailHarnessMessageID: UUID?, inputTrustRaw: String?, systemReminder: String?,
+    func apiSendMessageAndStreamResponse(conversationID: UUID, _ text: String, images: [Message.Image], enableTools: Bool, enableAgents: Bool, expectedPreviousTailHarnessMessageID: UUID?, inputTrustRaw: String?, resolvedInputTrustClass: TrustPolicyClass? = nil, systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
     ) async throws -> ChatStreamResponse {
-        _ = (conversationID, text, images, enableTools, enableAgents, expectedPreviousTailHarnessMessageID, inputTrustRaw, systemReminder)
+        _ = (conversationID, text, images, enableTools, enableAgents, expectedPreviousTailHarnessMessageID, inputTrustRaw, resolvedInputTrustClass, systemReminder)
         throw APILayerConversationAPIError.unsupported
     }
     func apiRevertToUserMessageAndStreamResponse(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse {

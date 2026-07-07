@@ -49,6 +49,7 @@ struct RawHistoryMutationTests {
             conversationID: conv.id,
             rawMiddleMessageIDs: [u1.id],
             compactedMiddleMessages: [compactMsg],
+            coveredRawMiddle: [u1],
             kind: .summarized,
             config: cfg,
             expectedDerivedSequence: nil

@@ -52,6 +52,7 @@ enum SessionBlockedIPAddress {
 
     static func isBlockedIPv4(_ bytes: [UInt8]) -> Bool {
         guard bytes.count == 4 else { return true }
+        if bytes[0] == 0 { return true }
         if bytes[0] == 127 { return true }
         if bytes[0] == 10 { return true }
         if bytes[0] == 192, bytes[1] == 168 { return true }
@@ -66,6 +67,7 @@ enum SessionBlockedIPAddress {
         if isIPv4MappedAddress(bytes) {
             return isBlockedIPv4(Array(bytes[12 ..< 16]))
         }
+        if bytes.allSatisfy({ $0 == 0 }) { return true }
         if bytes[0 ..< 8].allSatisfy({ $0 == 0 }), bytes[15] == 1 { return true }
         if bytes[0] == 0xfe, (bytes[1] & 0xc0) == 0x80 { return true }
         if bytes[0] == 0xfc || bytes[0] == 0xfd { return true }

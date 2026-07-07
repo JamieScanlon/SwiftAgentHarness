@@ -38,7 +38,16 @@ This differs from the harness template, which places thinking resolution in the 
 | `lmStudio` | `LMStudioLLM` |
 | `anthropic` | `AnthropicLLM` |
 
-`MultiBindingFailoverLLM` rotates across ordered `ProviderBinding` rows when the registry supplies multiple bindings. `ModelManager` discovery still emits one binding per discovered local model; multi-cloud registry population is follow-up work.
+`MultiBindingFailoverLLM` rotates across ordered `ProviderBinding` rows when the registry supplies multiple bindings. Discovery merges single-binding provider rows that share a `canonicalModelKey` into one logical entry (see below).
+
+Cross-provider binding merge:
+
+- Each catalog row (and local `Constants` model map entry) may declare `canonicalModelKey` (logical identity: family + version) and `modelFamily` (coarse family for ranking).
+- `ModelManager.syncRegistryFromDiscovery` groups rows by that key and unions bindings sorted by configured provider preference (`settings.modelPoolProviderPreference.order`).
+- Unknown OpenRouter runtime rows may derive a key from `vendor/model` only when the tail exactly matches an existing explicit key (audited in logs).
+- Per-binding fields (`cost`, `routing`, `serverURL`, `authProfile`, `toolChoiceModesOverride`) are preserved on each binding; model-level metadata comes from the highest-preference source.
+
+**Breaking change:** per-provider registry UUIDs for models merged under a first-party UUID (for example OpenRouter Sonnet `c300…0001` merged into Anthropic `b200…0002`) are no longer published as separate registry rows.
 
 Cross-provider failover coverage:
 

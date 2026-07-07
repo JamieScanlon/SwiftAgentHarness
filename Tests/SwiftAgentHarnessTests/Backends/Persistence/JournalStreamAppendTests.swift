@@ -7,9 +7,7 @@ import Testing
 @Suite("Journal stream append (raw vs derived OC)")
 struct JournalStreamAppendTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeHarness(_ container: ModelContainer) throws -> (
@@ -186,6 +184,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [mid],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: mid, role: .assistant, content: "raw", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,
@@ -197,6 +196,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [mid],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: mid, role: .assistant, content: "raw", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,
@@ -226,6 +226,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [mid],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: mid, role: .assistant, content: "raw", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,
@@ -242,6 +243,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [mid],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: mid, role: .assistant, content: "raw", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,
@@ -272,6 +274,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [UUID()],
             compactedMiddleMessages: [Message(id: UUID(), role: .assistant, content: "first", timestamp: Date(), toolCalls: [])],
+            coveredRawMiddle: [],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,
@@ -293,6 +296,7 @@ struct JournalStreamAppendTests {
             conversationID: cid,
             rawMiddleMessageIDs: [UUID()],
             compactedMiddleMessages: [Message(id: UUID(), role: .assistant, content: "second", timestamp: Date(), toolCalls: [])],
+            coveredRawMiddle: [],
             kind: .summarized,
             config: cfg,
             strategyRawValue: nil,

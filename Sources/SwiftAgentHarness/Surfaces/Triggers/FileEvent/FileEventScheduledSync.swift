@@ -17,6 +17,12 @@ struct FileEventScheduledSync: Sendable {
               atDate > Date() else { return false }
         let trust = FileEventTrustResolver.resolve(for: eventURL)
         let taskID = FileEventScheduledFileKind.oneShotTaskIDPrefix + eventURL.deletingPathExtension().lastPathComponent
+        let correlation = TriggerCorrelation.fromPayload(
+            rootId: payload.rootId,
+            parentTriggerId: payload.parentTriggerId,
+            correlationId: payload.correlationId,
+            fallbackTriggerID: taskID
+        )
         let task = ScheduledTask(
             id: taskID,
             schedule: ScheduledTaskSchedule(kind: .at, at: atRaw),
@@ -25,7 +31,8 @@ struct FileEventScheduledSync: Sendable {
             recurring: false,
             trust: trust.trust,
             conversationID: payload.conversationID,
-            title: eventURL.lastPathComponent
+            title: eventURL.lastPathComponent,
+            correlation: correlation
         )
         switch ScheduledTaskCreateScanner.validateCreate(task: task) {
         case .failure(let error):

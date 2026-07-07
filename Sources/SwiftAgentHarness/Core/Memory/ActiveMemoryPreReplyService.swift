@@ -48,6 +48,10 @@ actor ActiveMemoryPreReplyService {
         await cache.invalidate(conversationID: conversationID, lane: .standing)
     }
 
+    func endSession(conversationID: UUID) async {
+        await cache.invalidate(conversationID: conversationID, lane: nil)
+    }
+
     // MARK: - Situational lane (query-dependent: project + reference)
 
     func prefetchSituational(session: MemorySessionContext, userQuery: String) async {

@@ -134,6 +134,24 @@ public struct SandboxFsStat: Sendable, Equatable {
         self.size = size
         self.exists = exists
     }
+
+    static func parse(from result: SandboxBackendCommandResult) -> SandboxFsStat {
+        guard result.code == 0,
+              let text = String(data: result.stdout, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return SandboxFsStat(isDirectory: false, size: 0, exists: false)
+        }
+        let parts = text.split(separator: "\t", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let kind = Int(parts[0]),
+              let size = Int64(parts[1])
+        else {
+            return SandboxFsStat(isDirectory: false, size: 0, exists: false)
+        }
+        return SandboxFsStat(isDirectory: kind == 1, size: size, exists: true)
+    }
 }
 
 public struct SandboxFsBridgeParams: Sendable {

@@ -189,6 +189,7 @@ public enum TriggerReplayCLI {
                     ingress: ChannelIngressAdapter(
                         dispatch: TriggerReplayHarness.makeDispatch(createConversation: { _ in UUID() }, logger: logger)
                     ),
+                    dedupe: ReplayHarnessDedupe(),
                     logger: logger,
                     enabled: false,
                     configURL: nil

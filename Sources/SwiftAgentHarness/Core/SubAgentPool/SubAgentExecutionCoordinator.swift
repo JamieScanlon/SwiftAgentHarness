@@ -44,11 +44,12 @@ struct SubAgentExecutionCoordinator: Sendable {
             from: orchestrationEntries,
             conversationID: parentConversationID
         )
-        if let adapter = await subAgentPool.selectTransportAdapter(
+        let selectedTransportAdapter = await subAgentPool.selectTransportAdapter(
             for: launchRequest,
             entries: orchestrationEntries,
             conversationID: parentConversationID
-        ), launchRequest.subagentType == nil {
+        )
+        if let adapter = selectedTransportAdapter, launchRequest.subagentType == nil {
             launchRequest.subagentType = adapter.transportKind.rawValue
         }
 
@@ -76,8 +77,17 @@ struct SubAgentExecutionCoordinator: Sendable {
         if let profileCap = modeProfileMaxDepth {
             depthCaps.append(profileCap)
         }
-        if let maxDepth = depthCaps.min(), parentDepth >= maxDepth {
-            throw ConversationServiceError.runtimeLaneUnavailable(reason: "subagent_recursion_depth_exceeded:\(maxDepth)")
+        if let transportCap = selectedTransportAdapter?.capabilities.maxRecursionDepth {
+            depthCaps.append(transportCap)
+        } else if let selectedToolEntry,
+                  let toolCap = subAgentPool.maxRecursionDepth(for: selectedToolEntry) {
+            depthCaps.append(toolCap)
+        }
+        let effectiveMaxDepth = depthCaps.min() ?? SubAgentRecursionLimits.absoluteMaxDepthFallback
+        if parentDepth >= effectiveMaxDepth {
+            throw ConversationServiceError.runtimeLaneUnavailable(
+                reason: "subagent_recursion_depth_exceeded:\(effectiveMaxDepth)"
+            )
         }
 
         let launchPlan = try subAgentPool.planLaunch(launchRequest, parentConversationID: parentConversationID)

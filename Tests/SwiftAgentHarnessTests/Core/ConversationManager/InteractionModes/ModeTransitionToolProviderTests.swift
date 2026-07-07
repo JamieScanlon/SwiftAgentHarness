@@ -75,6 +75,48 @@ struct ModeTransitionToolProviderTests {
         #expect(result.error?.contains("mode_change_run_in_progress") == true)
     }
 
+    @Test("enter_plan_mode returns not found when data provider denies cross-owner access")
+    func enterPlanModeCrossOwnerDenied() async throws {
+        let mock = MockModeTransitionDataProvider()
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let conversationA = UUID()
+        let conversationB = UUID()
+        mock.conversations[conversationA] = ModelConversation(
+            id: conversationA,
+            model: .testModel(),
+            systemPrompt: "sys",
+            interactionMode: .chat,
+            ownerAccountID: ownerA
+        )
+        mock.conversations[conversationB] = ModelConversation(
+            id: conversationB,
+            model: .testModel(),
+            systemPrompt: "sys",
+            interactionMode: .chat,
+            ownerAccountID: ownerB
+        )
+        let provider = ModeTransitionToolProvider(dataProvider: mock)
+        let scope = ConversationScope(
+            selfID: conversationA,
+            parentID: nil,
+            rootID: conversationA,
+            lineageKind: .root,
+            origin: .user
+        )
+        let call = ToolCall(
+            name: ModeTransitionToolProvider.enterPlanModeToolName,
+            arguments: .object(["conversation_id": .string(conversationB.uuidString)]),
+            id: "tc-cross-owner"
+        )
+        let result = try await ConversationScope.withCurrent(scope) {
+            try await provider.executeTool(call)
+        }
+        #expect(result.success == false)
+        #expect(result.error?.contains("Conversation not found") == true)
+        #expect(mock.transitions.isEmpty)
+    }
+
     @Test("deferred mode transition returns scheduled message")
     func deferredModeTransitionMessage() async throws {
         let mock = MockModeTransitionDataProvider()
@@ -110,7 +152,13 @@ private final class MockModeTransitionDataProvider: @unchecked Sendable, ModeTra
     var transitionResult: ModeTransitionApplyResult = .applied
 
     func getConversation(id: UUID) async -> ModelConversation? {
-        conversations[id]
+        guard let conv = conversations[id] else { return nil }
+        guard let scope = ConversationScope.current,
+              let caller = conversations[scope.selfID],
+              let callerOwner = caller.ownerAccountID else {
+            return conv
+        }
+        return conv.ownerAccountID == callerOwner ? conv : nil
     }
 
     func transitionConversationMode(

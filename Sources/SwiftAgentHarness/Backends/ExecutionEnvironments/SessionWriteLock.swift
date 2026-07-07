@@ -1,11 +1,5 @@
 import Foundation
 
-#if os(Linux)
-import Glibc
-#elseif canImport(Darwin)
-import Darwin
-#endif
-
 public enum SessionWriteLockError: Error, Equatable {
     case timeout
     case flockFailed
@@ -24,61 +18,44 @@ public struct SessionWriteLockPayload: Codable, Sendable, Equatable {
 }
 
 public final class SessionWriteLockFile: @unchecked Sendable {
-    public static let defaultStaleMs = 60_000
+    /// Watchdog poll interval while blocked on acquire (not a stale-after threshold).
+    public static let defaultWatchdogIntervalMs = 60_000
     public static let defaultMaxHoldMs = 300_000
+    public static let defaultMaxHoldGraceMs = 30_000
 
-    private let lockURL: URL
-    private var fd: Int32 = -1
+    private let backing: AdvisoryProcessAwareWriteLockFile
 
     public init(lockURL: URL) {
-        self.lockURL = lockURL
+        backing = AdvisoryProcessAwareWriteLockFile(lockURL: lockURL, removeOnRelease: true)
     }
 
-    public func acquire(timeoutMs: Int = 30_000, staleMs: Int = defaultStaleMs) throws {
-        let dir = lockURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fd = open(lockURL.path, O_CREAT | O_RDWR, 0o644)
-        guard fd >= 0 else { throw SessionWriteLockError.flockFailed }
-        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
-        while Date() < deadline {
-            if flock(fd, LOCK_EX | LOCK_NB) == 0 {
-                try writePayload()
-                return
-            }
-            if try isStale(staleMs: staleMs) {
-                _ = flock(fd, LOCK_UN)
-                try? FileManager.default.removeItem(at: lockURL)
-                fd = open(lockURL.path, O_CREAT | O_RDWR, 0o644)
-            }
-            Thread.sleep(forTimeInterval: 0.05)
+    var openFileDescriptorForTesting: Int32 { backing.openFileDescriptorForTesting }
+
+    public func acquire(
+        timeoutMs: Int = 30_000,
+        watchdogIntervalMs: Int = defaultWatchdogIntervalMs,
+        maxHoldMs: Int = defaultMaxHoldMs,
+        maxHoldGraceMs: Int = defaultMaxHoldGraceMs
+    ) throws {
+        let config = AdvisoryProcessAwareWriteLockConfiguration(
+            timeoutMs: timeoutMs,
+            watchdogIntervalMs: watchdogIntervalMs,
+            maxHoldMs: maxHoldMs,
+            maxHoldGraceMs: maxHoldGraceMs,
+            removeOnRelease: true,
+            wireFormat: .sessionLegacy
+        )
+        do {
+            try backing.acquire(config: config)
+        } catch AdvisoryProcessAwareWriteLockError.timeout {
+            throw SessionWriteLockError.timeout
+        } catch AdvisoryProcessAwareWriteLockError.flockFailed {
+            throw SessionWriteLockError.flockFailed
         }
-        throw SessionWriteLockError.timeout
     }
 
     public func release() {
-        guard fd >= 0 else { return }
-        flock(fd, LOCK_UN)
-        close(fd)
-        fd = -1
-        try? FileManager.default.removeItem(at: lockURL)
-    }
-
-    deinit { release() }
-
-    private func writePayload() throws {
-        let payload = SessionWriteLockPayload(pid: getpid(), createdAt: Date().timeIntervalSince1970, starttime: 0)
-        let data = try JSONEncoder().encode(payload)
-        _ = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-    }
-
-    private func isStale(staleMs: Int) throws -> Bool {
-        guard let data = try? Data(contentsOf: lockURL),
-              let payload = try? JSONDecoder().decode(SessionWriteLockPayload.self, from: data) else {
-            return true
-        }
-        let ageMs = (Date().timeIntervalSince1970 - payload.createdAt) * 1000
-        if ageMs > Double(staleMs) { return true }
-        return kill(payload.pid, 0) != 0 && errno == ESRCH
+        backing.release()
     }
 }
 

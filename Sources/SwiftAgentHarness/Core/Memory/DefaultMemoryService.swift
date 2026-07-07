@@ -247,6 +247,17 @@ public actor DefaultMemoryService: MemoryServicing {
         await snapshotStore.invalidate(conversationID: conversationID)
     }
 
+    func endSession(conversationID: UUID) async {
+        sessionByConversation.removeValue(forKey: conversationID)
+        storeByConversation.removeValue(forKey: conversationID)
+        hintTrackerByConversation.removeValue(forKey: conversationID)
+        await snapshotStore.endSession(conversationID: conversationID)
+        await writeTracker.removeConversation(conversationID: conversationID)
+        await activeMemory.endSession(conversationID: conversationID)
+        await extractor.discardStashedWork(for: conversationID)
+        await providerRegistry.endSessionAll(messages: [])
+    }
+
     func currentSnapshotGeneration(conversationID: UUID) async -> Int {
         await snapshotStore.generation(for: conversationID)
     }

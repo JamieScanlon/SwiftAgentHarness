@@ -27,7 +27,28 @@ extension ContextProjectionService: ContextProjectionTransformServicing {
 
 extension SlashCommandDispatchService: SlashCommandRuntimeDispatching {
     func runSlashCommandIfNeeded(_ text: String, conversationID: UUID) async throws -> ChatStreamResponse? {
-        try await runSlashCommandIfNeeded(text, conversationID: conversationID, skipQueue: false)
+        let isOwner = await resolvedSlashDispatchIsOwner(conversationID: conversationID)
+        return try await runSlashCommandIfNeeded(
+            text,
+            conversationID: conversationID,
+            skipQueue: false,
+            isOwner: isOwner
+        )
+    }
+
+    func processControlInputBoundary(
+        text: String,
+        conversationID: UUID,
+        trustClass: TrustPolicyClass?,
+        senderLabel: String?
+    ) async throws -> ControlInputBoundaryOutcome {
+        try await processControlInputBoundary(
+            text: text,
+            conversationID: conversationID,
+            trustClass: trustClass,
+            senderLabel: senderLabel,
+            capabilities: .terminal
+        )
     }
 }
 

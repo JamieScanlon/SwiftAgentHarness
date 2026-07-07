@@ -190,6 +190,14 @@ struct ModeRegistryModesTemplateTests {
         #expect(try await registry.resolve(modeId: "uncapped-plan").runtime.maxIterations == nil)
     }
 
+    @Test("ModeProfileRuntimeSlice init clamps non-positive maxIterations")
+    func runtimeSliceInitClampsNonPositiveMaxIterations() {
+        #expect(ModeProfileRuntimeSlice(maxIterations: nil).maxIterations == nil)
+        #expect(ModeProfileRuntimeSlice(maxIterations: 0).maxIterations == 1)
+        #expect(ModeProfileRuntimeSlice(maxIterations: -5).maxIterations == 1)
+        #expect(ModeProfileRuntimeSlice(maxIterations: 8).maxIterations == 8)
+    }
+
     @Test("config maxIterations below 1 clamp to 1")
     func configMaxIterationsBelowOneClamps() async throws {
         let config = ModeProfileConfiguration(
@@ -463,5 +471,66 @@ struct ModeRegistryModesTemplateTests {
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
         let diagnostics = await registry.configurationDiagnostics().joined(separator: "\n")
         #expect(diagnostics.contains("modeProfiles[malformed-subagents].subAgents.allow must be '*' or [String]"))
+    }
+
+    @Test("tools allow-list diagnostics report malformed values and fail closed")
+    func toolsAllowListMalformedDiagnostics() async throws {
+        let config = ModeProfileConfiguration(
+            profiles: [
+                ModeProfileConfiguration.RawProfile(
+                    id: "malformed-tools",
+                    extends: InteractionMode.agent.rawValue,
+                    tools: .object([
+                        "allow": .string("read_file"),
+                    ])
+                ),
+            ],
+            diagnostics: []
+        )
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
+        let profile = try await registry.resolve(modeId: "malformed-tools")
+        let diagnostics = await registry.configurationDiagnostics().joined(separator: "\n")
+        #expect(profile.tools.allow == [])
+        #expect(diagnostics.contains("modeProfiles[malformed-tools].tools.allow must be '*' or [String]"))
+    }
+
+    @Test("skills allow-list diagnostics report malformed values and fail closed")
+    func skillsAllowListMalformedDiagnostics() async throws {
+        let config = ModeProfileConfiguration(
+            profiles: [
+                ModeProfileConfiguration.RawProfile(
+                    id: "malformed-skills",
+                    extends: InteractionMode.agent.rawValue,
+                    skills: .object([
+                        "allow": .boolean(true),
+                    ])
+                ),
+            ],
+            diagnostics: []
+        )
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
+        let profile = try await registry.resolve(modeId: "malformed-skills")
+        let diagnostics = await registry.configurationDiagnostics().joined(separator: "\n")
+        #expect(profile.skills.allow == [])
+        #expect(diagnostics.contains("modeProfiles[malformed-skills].skills.allow must be '*' or [String]"))
+    }
+
+    @Test("tools allow-list accepts string wildcard")
+    func toolsAllowListStringWildcard() async throws {
+        let config = ModeProfileConfiguration(
+            profiles: [
+                ModeProfileConfiguration.RawProfile(
+                    id: "wildcard-tools",
+                    extends: InteractionMode.agent.rawValue,
+                    tools: .object([
+                        "allow": .string("*"),
+                    ])
+                ),
+            ],
+            diagnostics: []
+        )
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
+        let profile = try await registry.resolve(modeId: "wildcard-tools")
+        #expect(profile.tools.allow == ["*"])
     }
 }

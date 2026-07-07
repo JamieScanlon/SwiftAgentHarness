@@ -32,7 +32,7 @@ public actor OrchestratorRuntimeService {
     internal let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
 
     nonisolated(unsafe) private var additionalToolProviderFactory: HarnessToolProviderFactory?
-    nonisolated(unsafe) private var channelRegistry: (any ChannelListenerLooking)?
+    nonisolated(unsafe) private var channelRegistry: (any ChannelPluginLooking)?
     nonisolated(unsafe) private var topicPublication: ConversationTopicPublicationPort?
 
     init(
@@ -91,14 +91,24 @@ public actor OrchestratorRuntimeService {
         self.additionalToolProviderFactory = factory
     }
 
-    nonisolated func installChannelRegistry(_ registry: any ChannelListenerLooking, holder: ChannelRegistryHolder? = nil) {
-        precondition(self.channelRegistry == nil, "ChannelListenerLooking already installed")
+    nonisolated func installChannelRegistry(_ registry: any ChannelPluginLooking, holder: ChannelRegistryHolder? = nil) {
+        precondition(self.channelRegistry == nil, "ChannelPluginLooking already installed")
         self.channelRegistry = registry
         holder?.assign(registry)
     }
 
-    nonisolated public func installChannelRegistry(_ registry: ChannelListenerRegistry, holder: ChannelRegistryHolder? = nil) {
-        installChannelRegistry(registry as any ChannelListenerLooking, holder: holder)
+    nonisolated public func installChannelRegistry(
+        _ registry: ChannelListenerRegistry,
+        holder: ChannelRegistryHolder? = nil,
+        sessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil
+    ) {
+        installChannelRegistry(registry as any ChannelPluginLooking, holder: holder)
+        if let sessionLifecycleCoordinator {
+            agentRuntime?.installChannelSessionLifecycle(
+                coordinator: sessionLifecycleCoordinator,
+                registry: registry
+            )
+        }
     }
 
     public func resolvedChannelRegistry() -> ChannelListenerRegistry? {
@@ -141,6 +151,13 @@ public actor OrchestratorRuntimeService {
 
     func installTurnToolRegistryEntriesForRuntimeMiddleware(_ entries: [ToolRegistryEntry]) async {
         await installedSessionCollaborator.installTurnToolRegistryEntries(entries)
+    }
+
+    /// Mounts a host-supplied deterministic runtime-delivery tool-result middleware on the
+    /// runtime-neutral interception seam (applied between the harness subdirectory-hint tracker and
+    /// the external-content envelope, before the orchestrator forwards the result to the model).
+    public func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async {
+        await installedSessionCollaborator.registerAgentToolResultMiddleware(middleware)
     }
 
     private func orchestratorBinding() async -> any AgentRuntimeOrchestratorBinding {
@@ -306,18 +323,37 @@ public actor OrchestratorRuntimeService {
         let thinkingConfig: ThinkingConfig?
         if let conversation {
             let callContext: ThinkingCallContext = conversation.parentConversationID == nil ? .foreground : .subAgent
-            thinkingConfig = await installedModePolicy.resolvedThinkingConfig(for: conversation, callContext: callContext)
+            var resolved = await installedModePolicy.resolvedThinkingConfig(for: conversation, callContext: callContext)
+            if let runID = conversation.currentRunID,
+               let turnConfig = await agentRuntime?.activeTurnConfiguration(
+                   conversationID: conversation.id,
+                   runID: runID
+               ),
+               let override = turnConfig.turnThinkingOverride {
+                resolved = override
+            }
+            thinkingConfig = resolved
         } else {
             thinkingConfig = nil
         }
-        if metadata.isEmpty, thinkingConfig == nil {
+        var enrichedMetadata = metadata
+        if let conversation,
+           let entry = await deps.registryEntryProvider?(conversation.model.id),
+           let binding = entry.primaryBinding,
+           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+            ProviderPromptContribution.applySectionOverrides(
+                metadata: &enrichedMetadata,
+                contribution: contribution
+            )
+        }
+        if enrichedMetadata.isEmpty, thinkingConfig == nil {
             return nil
         }
 
         var payload: [String: JSON] = [:]
-        if !metadata.isEmpty {
-            payload["systemPromptMetadata"] = .object(metadata.mapValues { .string($0) })
-            payload["contextEngineSystemPromptMetadata"] = .object(metadata.mapValues { .string($0) })
+        if !enrichedMetadata.isEmpty {
+            payload["systemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
+            payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
         }
         if let conversationID = conversation?.id,
            let attachmentProjection = await contextProjection.cachedAttachmentProjection(conversationID: conversationID) {
@@ -462,7 +498,11 @@ public actor OrchestratorRuntimeService {
                     && (routingConv.map { ModeProfileSkillsSlice.isSkillAllowedByRoutingPolicy(name: skillName, conversation: $0) } ?? true)
             }
             let persisting = PersistingActivatedSkillsToolProvider(inner: gated) {
-                await self.installedSessionCollaborator.persistActivatedSkillsFromLoaderToCurrentConversation()
+                if let conversationID = activeConversation?.id {
+                    await self.installedSessionCollaborator.persistActivatedSkillsFromLoader(conversationID: conversationID)
+                } else {
+                    await self.installedSessionCollaborator.persistActivatedSkillsFromLoaderToCurrentConversation()
+                }
             }
             providers.append(persisting)
         }
@@ -476,6 +516,21 @@ public actor OrchestratorRuntimeService {
         providers.append(
             AgentPlanToolProvider(
                 dataProvider: toolData,
+                logger: logger
+            )
+        )
+        let messageConv = activeConversation
+        providers.append(
+            MessageToolProvider(
+                resolveConversationID: {
+                    if let scope = ConversationScope.current {
+                        return scope.selfID
+                    }
+                    return messageConv?.id
+                },
+                resolveDeliveryMetadata: {
+                    Self.messageDeliveryMetadata(from: messageConv)
+                },
                 logger: logger
             )
         )
@@ -533,7 +588,14 @@ public actor OrchestratorRuntimeService {
                     payload: .surfaceIntentJSONUTF8(utf8)
                 )
             }
+            let execApprovalScope: ExecApprovalScope? = activeConversation.map {
+                ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
+            }
             let approvalDelivery = await ExecApprovalDeliveryFactory.make(
+                scope: execApprovalScope ?? ExecApprovalScope(
+                    conversationID: UUID(uuidString: sessionKey) ?? UUID(),
+                    ownerAccountID: nil
+                ),
                 channelRegistry: channelRegistry,
                 metadata: activeConversation?.metadata,
                 onPending: execApprovalPending,
@@ -918,7 +980,7 @@ public actor OrchestratorRuntimeService {
         preDispatchEvaluator: ToolSystemLivePreDispatchPolicyEvaluator
     ) async -> BuiltOrchestrator? {
         let activeConversationID = activeConversation?.id
-        let skillLoader = await skillActivation.currentSkillLoader()
+        let skillLoader = await skillActivation.skillLoader(for: activeConversationID)
         let systemPrompt: SystemPrompt
         do {
             let conv = activeConversation
@@ -1056,6 +1118,19 @@ public actor OrchestratorRuntimeService {
             orchestrator: orchestrator,
             queuedLLM: llm,
             conversationID: activeConversationID
+        )
+    }
+
+    static func messageDeliveryMetadata(from conversation: ModelConversation?) -> MessageOutputDeliveryMetadata {
+        guard let conversation,
+              let trigger = TriggerHostConversationMetadata.triggerFromFingerprint(conversation.metadata) else {
+            return MessageOutputDeliveryMetadata()
+        }
+        return MessageOutputDeliveryMetadata(
+            originSurface: trigger.sourceMetadata["channel"] ?? trigger.source.rawValue,
+            originSenderID: trigger.sourceMetadata["senderId"] ?? trigger.initiator.id,
+            chatId: trigger.sourceMetadata["chatId"],
+            threadId: trigger.sourceMetadata["threadId"]
         )
     }
 }

@@ -75,6 +75,7 @@ struct ChannelTriggerBuilderSessionKeyTests {
         let trigger = try ChannelTriggerBuilder.build(
             event: sampleEvent(),
             config: config,
+            sessionGrammar: ChannelSessionGrammar(config: config),
             trust: .userDirect,
             effectiveWasMentioned: true,
             burst: nil

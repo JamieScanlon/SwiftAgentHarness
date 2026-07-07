@@ -3,10 +3,10 @@ import Testing
 @testable import SwiftAgentHarness
 
 private actor PerModelChangeCollector {
-    var tuples: [(UUID, Int)] = []
+    var tuples: [(UUID, Int, Int?)] = []
     var poolHealth: [(queueDepth: Int, inFlight: Int)] = []
 
-    func appendChange(_ item: (UUID, Int)) {
+    func appendChange(_ item: (UUID, Int, Int?)) {
         tuples.append(item)
     }
 
@@ -25,8 +25,8 @@ struct ModelCallSchedulerPerModelInFlightTests {
             onPoolHealthChange: { payload in
                 await collector.appendHealth(payload)
             },
-            onModelInFlightChange: { modelID, count in
-                await collector.appendChange((modelID, count))
+            onModelInFlightChange: { modelID, count, concurrencyLimit in
+                await collector.appendChange((modelID, count, concurrencyLimit))
             }
         )
         let modelID = UUID()
@@ -44,6 +44,8 @@ struct ModelCallSchedulerPerModelInFlightTests {
         let changes = await collector.tuples
         let counts = changes.filter { $0.0 == modelID }.map { $0.1 }
         #expect(counts == [1, 2, 1, 0])
+        let limits = changes.filter { $0.0 == modelID }.map { $0.2 }
+        #expect(limits.allSatisfy { $0 == 4 })
     }
 
     @Test("Per-model counts are independent across modelIDs")
@@ -51,8 +53,8 @@ struct ModelCallSchedulerPerModelInFlightTests {
         let collector = PerModelChangeCollector()
         let scheduler = ModelCallScheduler(
             maxConcurrent: 4,
-            onModelInFlightChange: { modelID, count in
-                await collector.appendChange((modelID, count))
+            onModelInFlightChange: { modelID, count, concurrencyLimit in
+                await collector.appendChange((modelID, count, concurrencyLimit))
             }
         )
         let modelA = UUID()
@@ -95,5 +97,16 @@ struct ModelCallSchedulerPerModelInFlightTests {
         let scheduler = ModelCallScheduler(maxConcurrent: 1)
         let count = await scheduler.inFlightCount(for: UUID())
         #expect(count == 0)
+    }
+
+    @Test("concurrencyLimit(for:) uses per-model cap override when configured")
+    func concurrencyLimitUsesPerModelCap() async throws {
+        let modelID = UUID()
+        let scheduler = ModelCallScheduler(
+            maxConcurrent: 8,
+            policy: ModelCallSchedulerPolicy(perModelCaps: [modelID: 3])
+        )
+        #expect(await scheduler.concurrencyLimit(for: modelID) == 3)
+        #expect(await scheduler.concurrencyLimit(for: UUID()) == 8)
     }
 }

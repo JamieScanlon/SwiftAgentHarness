@@ -2,10 +2,17 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import Testing
+import SwiftAgentHarnessProviders
 import SwiftAgentHarness
 
 @Suite("Public API surface (non-testable import)")
 struct PublicAPISurfaceTests {
+    @Test("Provider registry bootstrap is linked for the test target")
+    func providerRegistryBootstrapLinked() {
+        #expect(testTargetBootstrapGate)
+        #expect(!ProviderRegistry.allManifests().isEmpty)
+    }
+
     @Test("SubAgentHostingPolicy is constructible with public members")
     func subAgentHostingPolicy() {
         let policy = SubAgentHostingPolicy(
@@ -71,7 +78,10 @@ struct PublicAPISurfaceTests {
 
     @Test("ModelManager and ModelPoolCostLedger initializers are public")
     func modelPoolExports() async {
-        let manager = ModelManager(logger: Logger(label: "public-api-test"))
+        let manager = ModelManager(
+            logger: Logger(label: "public-api-test"),
+            authProfileStore: AuthProfileStore(environment: [:])
+        )
         let ledger = ModelPoolCostLedger()
         _ = await manager.getAvailableModels()
         await ledger.setConversationMaxUSD(conversationID: UUID(), maxUSD: 1.0)
@@ -80,7 +90,7 @@ struct PublicAPISurfaceTests {
     @Test("APILayer wiring entry points are public")
     func apiLayerWiring() async throws {
         let api = APILayer(port: 0)
-        let manager = ModelManager()
+        let manager = ModelManager(authProfileStore: AuthProfileStore(environment: [:]))
         await api.setModelManager(manager)
         await api.setBudgetReporting(NilBudgetReporting())
         await api.stop()
@@ -108,6 +118,7 @@ struct PublicAPISurfaceTests {
         _ = AgentRuntimeTurnConfiguration(enableTools: true)
         _ = HTTPPreconditionPolicySettings(strictMode: true)
         _ = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: false)
+        _ = APIAccessTokenAuthenticationSettings(hs256Secret: "secret")
         _ = TriggerTaskRunPorts(
             append: { _, _, _ in UUID() },
             latestUndelivered: { _ in nil },

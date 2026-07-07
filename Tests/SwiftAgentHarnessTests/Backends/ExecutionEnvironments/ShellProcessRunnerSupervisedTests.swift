@@ -67,7 +67,8 @@ struct ShellProcessRunnerSupervisedTests {
         defer { try? FileManager.default.removeItem(atPath: pidPath) }
         let task = Task {
             try await ShellProcessRunner.runSupervised(
-                argv: ["/bin/bash", "-c", grandchildScript(pidPath: pidPath)]
+                argv: ["/bin/bash", "-c", grandchildScript(pidPath: pidPath)],
+                timeoutSeconds: 10
             )
         }
         let grandchild = await readPID(from: pidPath)
@@ -90,7 +91,7 @@ struct ShellProcessRunnerSupervisedTests {
         )
         let grandchild = await readPID(from: pidPath)
         #expect(grandchild != nil)
-        await BashProcessRegistry.shared.kill(id: id)
+        await BashProcessRegistry.shared.kill(id: id, sessionSlug: "s")
         if let grandchild { #expect(await awaitDead(grandchild)) }
         await BashProcessRegistry.shared.resetForTesting()
     }
@@ -139,6 +140,27 @@ struct ShellProcessRunnerSupervisedTests {
             inheritHostEnvironment: false
         )
         #expect(leaked.exitCode == 1)
+    }
+
+    @Test("bare executable name resolves via PATH without cwd")
+    func bareNameSupervised() async throws {
+        let result = try await ShellProcessRunner.runSupervised(
+            argv: ["true"],
+            timeoutSeconds: 10
+        )
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("unresolved bare name throws hostToolMissing for supervised spawn")
+    func bareNameMissingSupervised() async {
+        await #expect(throws: SandboxBackendError.hostToolMissing(tool: "sah-definitely-missing-tool", location: "gateway")) {
+            try await ShellProcessRunner.runSupervised(
+                argv: ["sah-definitely-missing-tool"],
+                env: ["PATH": "/nonexistent/bin"],
+                timeoutSeconds: 10,
+                inheritHostEnvironment: false
+            )
+        }
     }
 }
 #endif

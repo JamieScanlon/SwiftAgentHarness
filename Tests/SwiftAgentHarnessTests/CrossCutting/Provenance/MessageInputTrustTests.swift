@@ -18,20 +18,45 @@ struct MessageInputTrustTests {
         #expect(MessageInputTrust.scripted.rawValue == "scripted")
     }
 
-    @Test("safePolicyClass keeps omitted trust trusted and unknown values on safe fallback")
+    @Test("safePolicyClass fails closed on omitted trust and unknown values use safe fallback")
     func safePolicyClassMapping() {
-        #expect(MessageInputTrustCodec.safePolicyClass(raw: nil) == .trusted)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: nil) == .lowTrust)
         #expect(MessageInputTrustCodec.safePolicyClass(raw: MessageInputTrust.directUserEntry.rawValue) == .trusted)
         #expect(MessageInputTrustCodec.safePolicyClass(raw: MessageInputTrust.automation.rawValue) == .lowTrust)
         #expect(MessageInputTrustCodec.safePolicyClass(raw: "future_value") == .lowTrust)
         #expect(MessageInputTrustCodec.safePolicyClass(raw: "future_value", unknownFallback: .trusted) == .trusted)
     }
 
+    @Test("safePolicyClass maps comm-envelope origin trust raws to execution classes")
+    func commEnvelopeOriginTrustMapping() {
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.system.rawValue) == .trusted)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.userDirect.rawValue) == .trusted)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.knownParty.rawValue) == .trusted)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.userDeferred.rawValue) == .lowTrust)
+        #expect(MessageInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.unknownParty.rawValue) == .lowTrust)
+    }
+
+    @Test("comm-envelope origin trust ignores unknownFallback for recognized raws")
+    func commEnvelopeOriginTrustIgnoresFallback() {
+        #expect(
+            MessageInputTrustCodec.safePolicyClass(
+                raw: CommEnvelopeOriginTrust.unknownParty.rawValue,
+                unknownFallback: .trusted
+            ) == .lowTrust
+        )
+        #expect(
+            MessageInputTrustCodec.safePolicyClass(
+                raw: CommEnvelopeOriginTrust.userDirect.rawValue,
+                unknownFallback: .lowTrust
+            ) == .trusted
+        )
+    }
+
     @Test("attachment trust typed helper and safe mapping are forward-compatible")
     func attachmentTrustMapping() {
         #expect(AttachmentInputTrustCodec.typedTrust(from: AttachmentInputTrust.directUserEntry.rawValue) == .directUserEntry)
         #expect(AttachmentInputTrustCodec.typedTrust(from: "unknown_value") == nil)
-        #expect(AttachmentInputTrustCodec.safePolicyClass(raw: nil) == .trusted)
+        #expect(AttachmentInputTrustCodec.safePolicyClass(raw: nil) == .lowTrust)
         #expect(AttachmentInputTrustCodec.safePolicyClass(raw: AttachmentInputTrust.scripted.rawValue) == .lowTrust)
     }
 

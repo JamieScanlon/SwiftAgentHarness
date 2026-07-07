@@ -172,6 +172,7 @@ final class ConversationPersistenceStack {
         conversationID: UUID,
         rawMiddleMessageIDs: [UUID],
         compactedMiddleMessages: [Message],
+        coveredRawMiddle: [Message],
         kind: ContextCompactionCheckpointKind,
         config: ContextCompactionConfiguration,
         strategyRawValue: String? = nil,
@@ -183,6 +184,7 @@ final class ConversationPersistenceStack {
             conversationID: conversationID,
             rawMiddleMessageIDs: rawMiddleMessageIDs,
             compactedMiddleMessages: compactedMiddleMessages,
+            coveredRawMiddle: coveredRawMiddle,
             kind: kind,
             config: config,
             strategyRawValue: strategyRawValue,
@@ -424,6 +426,30 @@ final class ConversationPersistenceStack {
             guard entry.type == .message || entry.type == .system else { return nil }
             return try? SessionTranscriptMapping.messageForReplay(from: entry)
         }
+    }
+
+    func revertActiveBranchRemovingAssistantMessage(
+        conversationID: UUID,
+        assistantMessageID: UUID
+    ) throws -> [Message] {
+        let harness = conversationManager.harnessSessionPersistence
+        let activeMessages = try ConversationTranscriptLineage.activeMessages(
+            conversationID: conversationID,
+            harness: harness
+        )
+        guard let tail = activeMessages.last,
+              tail.id == assistantMessageID,
+              tail.role == .assistant else {
+            throw ConversationServiceError.invalidRevertTarget
+        }
+        guard activeMessages.count > 1 else {
+            throw ConversationServiceError.invalidRevertTarget
+        }
+        let preserveThroughID = activeMessages[activeMessages.count - 2].id
+        return try revertConversationPreservingPrefixThroughMessage(
+            conversationID: conversationID,
+            messageID: preserveThroughID
+        )
     }
 
     func applyBackgroundCompactionIfEligible(conversationID: UUID) {

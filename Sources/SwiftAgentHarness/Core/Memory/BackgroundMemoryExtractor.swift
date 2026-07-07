@@ -41,6 +41,12 @@ actor BackgroundMemoryExtractor {
         stashedTurn = nil
     }
 
+    func discardStashedWork(for conversationID: UUID) {
+        if stashedTurn?.session.conversationID == conversationID {
+            stashedTurn = nil
+        }
+    }
+
     func drain(timeoutMs: Int) async {
         beginShutdown()
         guard inFlight else { return }

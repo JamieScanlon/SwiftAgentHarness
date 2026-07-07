@@ -553,10 +553,12 @@ actor ConversationControlPlaneServiceImpl: ConversationControlPlaneServicing {
             throw ConversationServiceError.noMeaningfulModelOrPromptChange
         }
 
-        if modelChange {
-            if await selection.currentConversationID() == conversationID {
-                await installedRunControl.cancelGeneration(for: conversationID)
-            }
+        if (modelChange || promptChange),
+           let activeRunID = await activeStreamingRunID(for: conversationID) {
+            throw ConversationServiceError.conversationModelOrPromptChangeRunInProgress(
+                conversationID: conversationID,
+                activeRunID: activeRunID
+            )
         }
 
         let updatedConversation = try await deps.persistenceDomain.updateConversationModelAndUserPrompt(

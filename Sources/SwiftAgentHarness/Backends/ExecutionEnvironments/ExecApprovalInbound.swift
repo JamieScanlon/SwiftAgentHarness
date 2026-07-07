@@ -9,17 +9,41 @@ public enum ExecApprovalInbound {
     public static func resolve(
         approvalID: String,
         actionID: String,
+        scope: ExecApprovalScope,
+        strictTenancy: Bool,
+        ownerScope: UUID?,
         store: ExecApprovalStore = .shared,
         reason: String? = nil
     ) async -> ExecApprovalResolution? {
         guard let decision = ApprovalDecision.fromToken(actionID) else { return nil }
         switch decision {
         case .allowOnce:
-            return await store.resolve(id: approvalID, approved: true, durable: false)
+            return await store.resolve(
+                id: approvalID,
+                scope: scope,
+                strictTenancy: strictTenancy,
+                ownerScope: ownerScope,
+                approved: true,
+                durable: false
+            )
         case .allowAlways:
-            return await store.resolve(id: approvalID, approved: true, durable: true)
+            return await store.resolve(
+                id: approvalID,
+                scope: scope,
+                strictTenancy: strictTenancy,
+                ownerScope: ownerScope,
+                approved: true,
+                durable: true
+            )
         case .deny, .timeout, .cancelled:
-            return await store.resolve(id: approvalID, approved: false, reason: reason ?? "denied")
+            return await store.resolve(
+                id: approvalID,
+                scope: scope,
+                strictTenancy: strictTenancy,
+                ownerScope: ownerScope,
+                approved: false,
+                reason: reason ?? "denied"
+            )
         }
     }
 }

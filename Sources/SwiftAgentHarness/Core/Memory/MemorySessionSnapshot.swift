@@ -87,4 +87,9 @@ actor MemorySessionSnapshotStore {
     func invalidate(conversationID: UUID) {
         snapshots.removeValue(forKey: conversationID)
     }
+
+    func endSession(conversationID: UUID) {
+        snapshots.removeValue(forKey: conversationID)
+        generationByConversation.removeValue(forKey: conversationID)
+    }
 }

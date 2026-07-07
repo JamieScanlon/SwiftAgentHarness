@@ -25,6 +25,11 @@ enum WorkspaceGrepRunner {
             return .failure(.invalidRegex(error.localizedDescription))
         }
         if !forceInProcess && LocalExecArgv.isSandboxAvailable {
+            #if os(macOS)
+            if let grepError = await grepEREValidationFailure(pattern: pattern) {
+                return .failure(.invalidRegex(grepError))
+            }
+            #endif
             switch await runSandboxBacked(
                 pattern: pattern,
                 searchRoot: searchRoot,
@@ -42,13 +47,27 @@ enum WorkspaceGrepRunner {
     }
 
     static func sandboxPipelineResult(exitCode: Int32, output: String) -> Result<String, WorkspaceGrepError> {
-        if exitCode == 2 || output.lowercased().contains("invalid") {
+        if exitCode == 2 || looksLikeGrepRegexError(output) {
             return .failure(.invalidRegex(sandboxRegexError(from: output)))
         }
-        if exitCode == 1 || exitCode == 141 {
+        if exitCode == 0 || exitCode == 1 || exitCode == 141 {
             return .success(trimTrailingNewline(output))
         }
         return .failure(.executionFailed("grep pipeline exited with status \(exitCode)"))
+    }
+
+    private static func looksLikeGrepRegexError(_ output: String) -> Bool {
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("grep:") else { continue }
+            let lower = trimmed.lowercased()
+            if lower.contains("invalid")
+                || lower.contains("repetition-operator")
+                || lower.contains("backreference") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func runSandboxBacked(
@@ -66,27 +85,63 @@ enum WorkspaceGrepRunner {
         let decodeFlag = "base64 -d"
         #endif
         let command = """
-        pat=$(printf '%s' '\(encoded)' | \(decodeFlag)) && grep -rHn -E -e "$pat" --binary-files=without-match \(searchArg) | LC_ALL=C sort | head -n \(maxMatchingLines)
+        set -o pipefail
+        pat=$(printf '%s' '\(encoded)' | \(decodeFlag))
+        grep -E -e "$pat" /dev/null
+        ec=$?
+        if [ $ec -eq 2 ]; then exit 2; fi
+        grep -rHn -E -e "$pat" --binary-files=without-match \(searchArg) | LC_ALL=C sort | head -n \(maxMatchingLines)
         """
         do {
             let result = try await withWallClockTimeout(seconds: maxWallClockSeconds) {
                 try await execRuntime.runShell(command: command, context: runtimeContext)
             }
-            return .success(trimTrailingNewline(result.stdout))
+            return await classifySandboxExecResult(
+                exitCode: result.exitCode,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                pattern: pattern,
+                searchRoot: searchRoot
+            )
         } catch let error as WorkspaceGrepError {
+            #if os(macOS)
+            if case .timedOut = error, let grepError = await grepEREValidationFailure(pattern: pattern) {
+                return .failure(.invalidRegex(grepError))
+            }
+            #endif
             return .failure(error)
         } catch let error as SandboxBackendError {
             switch error {
             case .nonZeroExit(let code, let output):
-                return sandboxPipelineResult(exitCode: code, output: output)
+                return await classifySandboxExecResult(
+                    exitCode: code,
+                    stdout: output,
+                    stderr: "",
+                    pattern: pattern,
+                    searchRoot: searchRoot
+                )
             case .emptyCommand, .sandboxUnavailable:
                 return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
             default:
-                return .failure(.executionFailed(error.localizedDescription))
+                return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
             }
         } catch {
             return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
         }
+    }
+
+    private static func classifySandboxExecResult(
+        exitCode: Int32,
+        stdout: String,
+        stderr: String,
+        pattern: String,
+        searchRoot: String
+    ) async -> Result<String, WorkspaceGrepError> {
+        let pipeline = sandboxPipelineResult(exitCode: exitCode, output: stdout + stderr)
+        if case .failure(.executionFailed) = pipeline {
+            return await runInProcessWithTimeout(pattern: pattern, searchRoot: searchRoot)
+        }
+        return pipeline
     }
 
     private static func sandboxRegexError(from output: String) -> String {
@@ -178,6 +233,36 @@ enum WorkspaceGrepRunner {
     private static func trimTrailingNewline(_ value: String) -> String {
         value.hasSuffix("\n") ? String(value.dropLast()) : value
     }
+
+    #if os(macOS)
+    private static let grepEREProbeSeconds: TimeInterval = 2
+
+    private static func grepEREValidationFailure(pattern: String) async -> String? {
+        do {
+            let result: (exitCode: Int32, stderr: String) = try await withWallClockTimeout(seconds: grepEREProbeSeconds) {
+                try await Task.detached(priority: .utility) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+                    process.arguments = ["-E", "-e", pattern, "/dev/null"]
+                    let stderrPipe = Pipe()
+                    process.standardOutput = Pipe()
+                    process.standardError = stderrPipe
+                    try process.run()
+                    process.waitUntilExit()
+                    let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errText = String(data: errData, encoding: .utf8) ?? ""
+                    return (process.terminationStatus, errText)
+                }.value
+            }
+            if result.exitCode == 2 || looksLikeGrepRegexError(result.stderr) {
+                return sandboxRegexError(from: result.stderr)
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+    #endif
 
     private static func withWallClockTimeout<T: Sendable>(
         seconds: TimeInterval,

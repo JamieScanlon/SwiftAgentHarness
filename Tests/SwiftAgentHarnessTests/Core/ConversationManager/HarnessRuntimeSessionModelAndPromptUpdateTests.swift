@@ -6,9 +6,7 @@ import Testing
 
 private enum Support {
     static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeModel(name: String, protocol p: ModelProtocol = .ollama) -> Model {
@@ -19,6 +17,23 @@ private enum Support {
             capabilities: [],
             modelProtocol: p
         )
+    }
+
+    static func withActiveStreamingRun<T>(
+        runtimeSession: HarnessRuntimeSession,
+        conversationID: UUID,
+        runID: UUID,
+        operation: () async throws -> T
+    ) async throws -> T {
+        await runtimeSession.testing_setActiveStreamingRun(conversationID: conversationID, runID: runID)
+        do {
+            let result = try await operation()
+            await runtimeSession.testing_setActiveStreamingRun(conversationID: conversationID, runID: nil)
+            return result
+        } catch {
+            await runtimeSession.testing_setActiveStreamingRun(conversationID: conversationID, runID: nil)
+            throw error
+        }
     }
 }
 
@@ -185,6 +200,130 @@ struct HarnessRuntimeSessionModelAndPromptUpdateTests {
 
         await #expect(throws: ConversationServiceError.noMeaningfulModelOrPromptChange) {
             try await runtimeSession.updateConversationModelAndUserPrompt(conversationID: id, model: nil, userSystemPrompt: "same")
+        }
+    }
+
+    @Test("model change rejects while run is active")
+    func modelChangeRejectsDuringActiveRun() async throws {
+        let container = try Support.makeContainer()
+        let modelA = Support.makeModel(name: "a:latest")
+        let modelB = Support.makeModel(name: "b:latest")
+        let runtimeSession = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
+        try await runtimeSession.createConversation(with: modelA, userSystemPrompt: "sys", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationID = try #require(await runtimeSession.currentConversationID)
+        let conversation = try #require(await runtimeSession.currentConversation())
+        await runtimeSession.testing_ensureOrchestratorPoolEntry(model: modelA, conversation: conversation)
+        let activeRunID = UUID()
+
+        try await Support.withActiveStreamingRun(
+            runtimeSession: runtimeSession,
+            conversationID: conversationID,
+            runID: activeRunID
+        ) {
+            await #expect(throws: ConversationServiceError.conversationModelOrPromptChangeRunInProgress(conversationID: conversationID, activeRunID: activeRunID)) {
+                try await runtimeSession.conversationDomainServices.controlPlane.updateConversationModelAndUserPrompt(
+                    conversationID: conversationID,
+                    model: modelB,
+                    userSystemPrompt: nil
+                )
+            }
+
+            let conv = try #require(await runtimeSession.listConversationInfo().first(where: { $0.id == conversationID }))
+            #expect(conv.model.id == modelA.id)
+        }
+    }
+
+    @Test("prompt change rejects while run is active")
+    func promptChangeRejectsDuringActiveRun() async throws {
+        let container = try Support.makeContainer()
+        let model = Support.makeModel(name: "m:latest")
+        let runtimeSession = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
+        try await runtimeSession.createConversation(with: model, userSystemPrompt: "v1", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationID = try #require(await runtimeSession.currentConversationID)
+        let conversation = try #require(await runtimeSession.currentConversation())
+        await runtimeSession.testing_ensureOrchestratorPoolEntry(model: model, conversation: conversation)
+        let activeRunID = UUID()
+
+        try await Support.withActiveStreamingRun(
+            runtimeSession: runtimeSession,
+            conversationID: conversationID,
+            runID: activeRunID
+        ) {
+            await #expect(throws: ConversationServiceError.conversationModelOrPromptChangeRunInProgress(conversationID: conversationID, activeRunID: activeRunID)) {
+                try await runtimeSession.conversationDomainServices.controlPlane.updateConversationModelAndUserPrompt(
+                    conversationID: conversationID,
+                    model: nil,
+                    userSystemPrompt: "v2"
+                )
+            }
+
+            let conv = try #require(await runtimeSession.listConversationInfo().first(where: { $0.id == conversationID }))
+            #expect(conv.systemPrompt == "v1")
+        }
+    }
+
+    @Test("background model change rejects while run is active on non-selected conversation")
+    func backgroundModelChangeRejectsDuringActiveRun() async throws {
+        let container = try Support.makeContainer()
+        let modelA = Support.makeModel(name: "a:latest")
+        let modelB = Support.makeModel(name: "b:latest")
+        let runtimeSession = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
+        try await runtimeSession.createConversation(with: modelA, userSystemPrompt: "conv-a", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationA = try #require(await runtimeSession.currentConversation())
+        await runtimeSession.testing_ensureOrchestratorPoolEntry(model: modelA, conversation: conversationA)
+
+        try await runtimeSession.createConversation(with: modelA, userSystemPrompt: "conv-b", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationB = try #require(await runtimeSession.currentConversation())
+        #expect(conversationB.id != conversationA.id)
+
+        let activeRunID = UUID()
+        try await Support.withActiveStreamingRun(
+            runtimeSession: runtimeSession,
+            conversationID: conversationA.id,
+            runID: activeRunID
+        ) {
+            await #expect(throws: ConversationServiceError.conversationModelOrPromptChangeRunInProgress(conversationID: conversationA.id, activeRunID: activeRunID)) {
+                try await runtimeSession.conversationDomainServices.controlPlane.updateConversationModelAndUserPrompt(
+                    conversationID: conversationA.id,
+                    model: modelB,
+                    userSystemPrompt: nil
+                )
+            }
+
+            let convA = try #require(await runtimeSession.listConversationInfo().first(where: { $0.id == conversationA.id }))
+            #expect(convA.model.id == modelA.id)
+        }
+    }
+
+    @Test("background prompt change rejects while run is active on non-selected conversation")
+    func backgroundPromptChangeRejectsDuringActiveRun() async throws {
+        let container = try Support.makeContainer()
+        let model = Support.makeModel(name: "m:latest")
+        let runtimeSession = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
+        try await runtimeSession.createConversation(with: model, userSystemPrompt: "conv-a", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationA = try #require(await runtimeSession.currentConversation())
+        await runtimeSession.testing_ensureOrchestratorPoolEntry(model: model, conversation: conversationA)
+
+        try await runtimeSession.createConversation(with: model, userSystemPrompt: "conv-b", topic: nil, description: nil, metadata: nil, interactionMode: .chat)
+        let conversationB = try #require(await runtimeSession.currentConversation())
+        #expect(conversationB.id != conversationA.id)
+
+        let activeRunID = UUID()
+        try await Support.withActiveStreamingRun(
+            runtimeSession: runtimeSession,
+            conversationID: conversationA.id,
+            runID: activeRunID
+        ) {
+            await #expect(throws: ConversationServiceError.conversationModelOrPromptChangeRunInProgress(conversationID: conversationA.id, activeRunID: activeRunID)) {
+                try await runtimeSession.conversationDomainServices.controlPlane.updateConversationModelAndUserPrompt(
+                    conversationID: conversationA.id,
+                    model: nil,
+                    userSystemPrompt: "conv-a-updated"
+                )
+            }
+
+            let convA = try #require(await runtimeSession.listConversationInfo().first(where: { $0.id == conversationA.id }))
+            #expect(convA.systemPrompt == "conv-a")
         }
     }
 }

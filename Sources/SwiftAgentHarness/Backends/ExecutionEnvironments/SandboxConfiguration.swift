@@ -30,11 +30,11 @@ public struct SSHOnboardingChecker: Sendable {
         if let identity = settings.identityFile, !FileManager.default.fileExists(atPath: identity) {
             issues.append("identity file not found: \(identity)")
         }
-        let result = try? await ShellProcessRunner.run(argv: [
-            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            "-p", String(settings.port),
-            "\(settings.user)@\(settings.host)", "echo", "ok",
-        ])
+        let control = SSHControlMaster(settings: settings)
+        let result = try? await ShellProcessRunner.run(argv: SSHSandboxArgv.connectivityProbe(
+            control: control,
+            settings: settings
+        ))
         if result?.exitCode != 0 {
             issues.append("ssh connectivity check failed")
         }

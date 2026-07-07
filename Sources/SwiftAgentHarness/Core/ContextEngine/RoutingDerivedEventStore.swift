@@ -60,6 +60,7 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
         conversationID: UUID,
         rawMiddleMessageIDs: [UUID],
         compactedMiddleMessages: [Message],
+        coveredRawMiddle: [Message],
         kind: ContextCompactionCheckpointKind,
         config: ContextCompactionConfiguration,
         strategyRawValue: String?,
@@ -67,8 +68,9 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
         expectedDerivedSequence: Int?
     ) throws {
         guard !rawMiddleMessageIDs.isEmpty else { return }
-        let syntheticMessages = ContextCompactionCheckpointSupport.syntheticMessagesForPersistence(
-            from: compactedMiddleMessages,
+        let syntheticMessages = ContextCompactionCheckpointSupport.summarizedSyntheticDTOsForPersistence(
+            summaryMessages: compactedMiddleMessages,
+            coveredRawMiddle: coveredRawMiddle,
             kind: kind
         )
         let configFingerprint = ContextCompactionCheckpointSupport.configFingerprint(config)

@@ -16,6 +16,13 @@ actor SubAgentCompletionService {
         await completionAnnounceStore.hasDelivered(delegateHandleID: delegateHandleID, toolCallID: toolCallID)
     }
 
+    func tryBeginDelivery(delegateHandleID: String, toolCallID: String) async -> Bool {
+        await completionAnnounceStore.tryBeginDelivery(
+            delegateHandleID: delegateHandleID,
+            toolCallID: toolCallID
+        )
+    }
+
     func markDelivered(_ announce: CompletionAnnouncePayload) async {
         await completionAnnounceStore.markDelivered(announce)
     }

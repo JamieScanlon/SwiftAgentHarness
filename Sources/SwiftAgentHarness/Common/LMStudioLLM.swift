@@ -26,6 +26,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
     private let systemPrompt: SystemPrompt
     private let logger: Logger?
     private let streamSource: any LMStudioStreamSourcing
+    private let supportsEagerToolInputStreaming: Bool
     
     init(
         model: String,
@@ -34,7 +35,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         requestFeatures: ModelRequestFeatures = .unknown,
         systemPrompt: SystemPrompt,
         logger: Logger? = nil,
-        streamSource: any LMStudioStreamSourcing = DefaultLMStudioStreamSource()
+        streamSource: any LMStudioStreamSourcing = DefaultLMStudioStreamSource(),
+        supportsEagerToolInputStreaming: Bool = false
     ) {
         self.model = model
         self.serverURL = serverURL
@@ -43,6 +45,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         self.systemPrompt = systemPrompt
         self.logger = logger
         self.streamSource = streamSource
+        self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
         logger?.info("Initialized LMStudioLLM - Model: \(model), ServerURL: \(serverURL.absoluteString), Capabilities: \(capabilities.map { $0.rawValue })")
     }
     
@@ -143,9 +146,12 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         }
         
         return AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> { continuation in
-            let emitter = StreamCompletionEmitter(continuation: continuation)
-            
             Task {
+                var emitter = NormalizedStreamEmitter(
+                    continuation: continuation,
+                    supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
+                )
+                
                 self.logger?.info("Starting streaming chat request\(LLMRequestPurposeReader.logSuffix(from: config)) - Model: \(self.model), Message count: \(messages.count)")
                 
                 let requestBody = await self.createLMStudioChatRequest(messages: messages, config: config, stream: true)
@@ -263,14 +269,10 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                         
                         fullContent += content
                         
-                        let chunkResponse = NormalizedEventMapper.streamChunk(
-                            for: .contentDelta(content),
+                        emitter.yield(
+                            .textDelta(content),
                             availableTools: config.availableTools
                         )
-
-                        self.logger?.debug("Yielding stream chunk with content length: \(chunkResponse.content.count), fullContent length: \(fullContent.count)")
-
-                        emitter.yieldStream(chunkResponse)
                     }
                     
                     // Handle tool-call deltas via the contract accumulator (index-keyed,
@@ -296,15 +298,13 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                                 argsDelta = function["arguments"] as? String
                             }
                             if nameDelta != nil || !(argsDelta ?? "").isEmpty {
-                                emitter.yieldStream(
-                                    NormalizedEventMapper.streamChunk(
-                                        for: .toolCallDelta(
-                                            id: idDelta,
-                                            name: nameDelta,
-                                            argumentsFragment: argsDelta ?? ""
-                                        ),
-                                        availableTools: config.availableTools
-                                    )
+                                emitter.yield(
+                                    .toolCallDelta(
+                                        id: idDelta,
+                                        name: nameDelta,
+                                        argumentsFragment: argsDelta ?? ""
+                                    ),
+                                    availableTools: config.availableTools
                                 )
                             }
                             
@@ -325,12 +325,31 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                         
                         let canonicalFinishReason = FinishReason.fromLMStudio(finishReason)
                         let storedFinishReason = canonicalFinishReason == .unknown ? finishReason : canonicalFinishReason.rawValue
+                        if let streamUsage {
+                            emitter.yield(
+                                .usage(NormalizedUsage(
+                                    inputTokens: streamUsage.promptTokens,
+                                    outputTokens: streamUsage.completionTokens
+                                )),
+                                availableTools: config.availableTools
+                            )
+                        }
+                        emitter.yield(
+                            .stop(NormalizedStopReason(finishReason: canonicalFinishReason)),
+                            availableTools: config.availableTools
+                        )
                         let metadata = Self.lmStudioOpenAIMetadata(usage: streamUsage, config: config, finishReason: storedFinishReason)
+                        let toolCalls = accumulator.finalize()
                         let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
-                            .appending(toolCalls: accumulator.finalize())
+                            .appending(toolCalls: toolCalls)
                             .updatingMetadata(with: metadata)
                         self.logLLMResponsePayloadIfDebug(finalResponse)
-                        emitter.finishSuccess(with: finalResponse)
+                        emitter.finishSuccess(
+                            content: fullContent,
+                            toolCalls: toolCalls,
+                            availableTools: config.availableTools,
+                            metadata: metadata
+                        )
                         return
                     }
                 }
@@ -358,12 +377,31 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                         guard let raw = lastFinishReason else { return nil }
                         return canonicalFinishReason == .unknown ? raw : canonicalFinishReason.rawValue
                     }()
+                    if let streamUsage {
+                        emitter.yield(
+                            .usage(NormalizedUsage(
+                                inputTokens: streamUsage.promptTokens,
+                                outputTokens: streamUsage.completionTokens
+                            )),
+                            availableTools: config.availableTools
+                        )
+                    }
+                    emitter.yield(
+                        .stop(NormalizedStopReason(finishReason: canonicalFinishReason)),
+                        availableTools: config.availableTools
+                    )
                     let metadata = Self.lmStudioOpenAIMetadata(usage: streamUsage, config: config, finishReason: storedFinishReason)
+                    let toolCalls = accumulator.finalize()
                     let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
-                        .appending(toolCalls: accumulator.finalize())
+                        .appending(toolCalls: toolCalls)
                         .updatingMetadata(with: metadata)
                     self.logLLMResponsePayloadIfDebug(finalResponse)
-                    emitter.finishSuccess(with: finalResponse)
+                    emitter.finishSuccess(
+                        content: fullContent,
+                        toolCalls: toolCalls,
+                        availableTools: config.availableTools,
+                        metadata: metadata
+                    )
                     return
                 }
                 

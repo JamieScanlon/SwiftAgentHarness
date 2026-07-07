@@ -1,6 +1,7 @@
 import Foundation
 import SwiftAgentKit
 import Testing
+import SwiftAgentHarnessProviders
 @testable import SwiftAgentHarness
 
 private actor FactoryFailoverStubLLM: LLMProtocol {
@@ -56,12 +57,13 @@ struct StandardModelLLMFactoryAdapterTests {
     }
 
     private static func binding(
+        _ providerId: String,
         _ modelProtocol: ModelProtocol,
         endpoint: String,
         priority: Int
     ) -> ProviderBinding {
         ProviderBinding(
-            providerId: "\(modelProtocol.rawValue)-\(endpoint)",
+            providerId: providerId,
             modelProtocol: modelProtocol,
             endpointModelId: endpoint,
             serverURL: URL(string: "http://localhost:1/")!,
@@ -71,35 +73,82 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("makeBindingAdapter selects native adapter per ModelProtocol")
     func adapterDispatchPerProtocol() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let prompt = try await Self.systemPrompt()
         let model = Self.model()
-        let cases: [(ModelProtocol, any LLMProtocol.Type)] = [
-            (.ollama, OllamaLLM.self),
-            (.openAIAPI, OpenAILLM.self),
-            (.lmStudio, LMStudioLLM.self),
-            (.anthropic, AnthropicLLM.self),
+        let store = AuthProfileStore(
+            environment: [
+                "OPENAI_API_KEY": "test-openai",
+                "ANTHROPIC_API_KEY": "test-anthropic",
+            ]
+        )
+        let cases: [(String, ModelProtocol, any LLMProtocol.Type)] = [
+            ("ollama", .ollama, OllamaLLM.self),
+            ("openai", .openAIAPI, OpenAILLM.self),
+            ("lmstudio", .lmStudio, LMStudioLLM.self),
+            ("anthropic", .anthropic, AnthropicLLM.self),
         ]
-        for (modelProtocol, expectedAdapterType) in cases {
+        for (providerId, modelProtocol, expectedAdapterType) in cases {
             let adapter = StandardModelLLMFactory.makeBindingAdapter(
-                binding: Self.binding(modelProtocol, endpoint: "model", priority: 0),
+                binding: Self.binding(providerId, modelProtocol, endpoint: "model", priority: 0),
                 model: model,
                 systemPrompt: prompt,
-                logger: nil
+                logger: nil,
+                authProfileStore: store
             )
             #expect(type(of: adapter) == expectedAdapterType, "Expected \(expectedAdapterType) for \(modelProtocol)")
         }
     }
 
+    @Test("merged bundled Sonnet registry entry wraps in MultiBindingFailoverLLM")
+    func mergedBundledSonnetUsesMultiBindingFailover() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
+        let anthropicCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "anthropic")
+        let openRouterCatalog = try ProviderCatalogLoader.decodeBundledCatalog(for: "openrouter")
+        ProviderTestManifestSupport.activateProviderResources()
+        let anthropicEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "anthropic").defaultEndpoint?.baseURL)
+        let openRouterEndpoint = try #require(try ProviderTestManifestSupport.loadManifest(for: "openrouter").defaultEndpoint?.baseURL)
+        let discovered = anthropicCatalog.map {
+            $0.toRegistryEntry(providerID: "anthropic", serverURL: anthropicEndpoint)
+        } + openRouterCatalog.map {
+            $0.toRegistryEntry(providerID: "openrouter", serverURL: openRouterEndpoint)
+        }
+        let merged = LogicalModelRegistryMerger.merge(
+            entries: discovered,
+            providerPreference: .specDefaults
+        )
+        let sonnet = try #require(merged.values.first { $0.canonicalModelKey == "claude-sonnet-4-6" })
+        #expect(sonnet.providers.count == 2)
+
+        let factory = StandardModelLLMFactory(
+            advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
+        )
+        let llm = factory.makeBaseLLM(
+            model: sonnet.toModel(),
+            providerBindings: sonnet.providers,
+            conversationID: UUID(),
+            ownerAccountID: nil,
+            systemPrompt: try await Self.systemPrompt(),
+            logger: nil
+        )
+        guard let budget = llm as? BudgetEnforcingLLM else {
+            Issue.record("expected BudgetEnforcingLLM wrapper")
+            return
+        }
+        #expect(budget.base is MultiBindingFailoverLLM)
+    }
+
     @Test("multiple provider bindings wrap factory stack in MultiBindingFailoverLLM")
     func multiBindingUsesFailoverWrapper() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         let factory = StandardModelLLMFactory(
             advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
         )
         let llm = factory.makeBaseLLM(
             model: Self.model(),
             providerBindings: [
-                Self.binding(.anthropic, endpoint: "claude", priority: 0),
-                Self.binding(.openAIAPI, endpoint: "gpt", priority: 1),
+                Self.binding("anthropic", .anthropic, endpoint: "claude", priority: 0),
+                Self.binding("openai", .openAIAPI, endpoint: "gpt", priority: 1),
             ],
             conversationID: UUID(),
             ownerAccountID: nil,
@@ -115,6 +164,7 @@ struct StandardModelLLMFactoryAdapterTests {
 
     @Test("factory heterogeneous binding failover uses cross-provider adapters")
     func factoryHeterogeneousBindingFailover() async throws {
+        ProviderTestManifestSupport.prepareRegistry()
         var factory = StandardModelLLMFactory(
             advanced: ModelPoolAdvancedConfiguration(failover: FailoverPolicy(maxRetries: 0))
         )
@@ -131,8 +181,8 @@ struct StandardModelLLMFactoryAdapterTests {
         let llm = factory.makeBaseLLM(
             model: Self.model(),
             providerBindings: [
-                Self.binding(.anthropic, endpoint: "claude", priority: 0),
-                Self.binding(.openAIAPI, endpoint: "gpt", priority: 1),
+                Self.binding("anthropic", .anthropic, endpoint: "claude", priority: 0),
+                Self.binding("openai", .openAIAPI, endpoint: "gpt", priority: 1),
             ],
             conversationID: UUID(),
             ownerAccountID: nil,
@@ -144,23 +194,16 @@ struct StandardModelLLMFactoryAdapterTests {
     }
 
     @Test("profile-specific Anthropic key is preferred")
-    func profileSpecificAnthropicKeyPreferred() {
-        let binding = ProviderBinding(
-            providerId: "anthropic",
-            modelProtocol: .anthropic,
-            endpointModelId: "claude-test",
-            serverURL: URL(string: "https://api.anthropic.com/v1/messages")!,
-            priority: 0,
-            authProfile: "prod-west"
-        )
-        let key = StandardModelLLMFactory.resolveAnthropicAPIKey(
-            binding: binding,
-            defaultAuthProfile: nil,
+    func profileSpecificAnthropicKeyPreferred() throws {
+        ProviderTestManifestSupport.prepareRegistry()
+        let store = AuthProfileStore(
             environment: [
                 "SAH_ANTHROPIC_API_KEY_PROD_WEST": "profile-key",
                 "ANTHROPIC_API_KEY": "global-key",
-            ]
+            ],
+            defaultAuthProfileLabel: "prod-west"
         )
-        #expect(key == "profile-key")
+        let resolved = try store.resolveAPIKey(providerID: "anthropic", authProfileLabel: "prod-west")
+        #expect(resolved.apiKey == "profile-key")
     }
 }

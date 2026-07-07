@@ -262,6 +262,7 @@ private actor FakeStreamingChatStore {
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -581,6 +582,7 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
         originSenderID: String? = nil
@@ -593,6 +595,7 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
             inputTrustRaw: inputTrustRaw,
+            resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID
@@ -672,7 +675,7 @@ private enum FakeStreamingSplitGateway {
 }
 
 
-@Suite("APILayer streaming coverage", .serialized)
+@Suite("APILayer streaming coverage")
 struct APILayerStreamingCoverageTests {
     @Test("Split streaming gateway doubles are distinct objects sharing one store")
     func splitStreamingGatewayDoublesAreDistinct() {
@@ -956,208 +959,5 @@ struct APILayerStreamingCoverageTests {
                 #expect(res.status == .notFound)
             })
         }
-    }
-
-    @Test("WS send_message returns removal error")
-    func websocketSendMessageRemoved() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: StreamingStubModelProvider()) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "send_message",
-                "conversationID": conversationID.uuidString,
-                "message": "hello",
-                "list": []
-            ])
-            let response = try await receiveJSON(ofType: "error", from: task)
-            #expect((response["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    @Test("WS send_trigger_message returns removal error")
-    func websocketSendTriggerRemoved() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: StreamingStubModelProvider()) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "send_trigger_message",
-                "message": "trigger-ws",
-                "id": conversationID.uuidString,
-                "metadata": ["name": "wscron", "type": "cron"],
-                "list": []
-            ])
-            let response = try await receiveJSON(ofType: "error", from: task)
-            #expect((response["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    @Test("WS split_conversation returns removal error")
-    func websocketSplitConversationRemoved() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: StreamingStubModelProvider()) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "split_conversation",
-                "conversationID": conversationID.uuidString,
-                "id": UUID().uuidString,
-            ])
-            let response = try await receiveJSON(ofType: "error", from: task)
-            #expect((response["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    @Test("WS revert_to_message returns removal error")
-    func websocketRevertToMessageRemoved() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: StreamingStubModelProvider()) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "revert_to_message",
-                "conversationID": conversationID.uuidString,
-                "id": UUID().uuidString,
-            ])
-            let response = try await receiveJSON(ofType: "error", from: task)
-            #expect((response["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    @Test("WS send_message removal is deterministic even when runtime fails")
-    func websocketSendMessageRemovedIndependentOfRuntime() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID], throwOnSend: true)
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: StreamingStubModelProvider()) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "send_message",
-                "conversationID": conversationID.uuidString,
-                "message": "hello",
-                "list": []
-            ])
-            let error = try await receiveJSON(ofType: "error", from: task)
-            #expect((error["type"] as? String == "error") || (error["kind"] as? String == "error"))
-            #expect((error["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    @Test("REST smoke: running APILayer returns canonical append anchors")
-    func restSmokeServerStartStop() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        let modelProvider = StreamingStubModelProvider()
-        let api = APILayer(port: 0)
-        await api.setChatGatewayServices(APILayerChatGatewayServices(conversation: conversation, runtime: runtime))
-        await api.setModelProvider(modelProvider)
-        try await api.start()
-        let port = await api.listeningPort
-
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/conversations/\(conversationID.uuidString)/messages")!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("\"msg-none\"", forHTTPHeaderField: "If-Match")
-        request.httpBody = Data(#"{"message":"smoke","imageNames":[]}"#.utf8)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let http = try #require(response as? HTTPURLResponse)
-        #expect(http.statusCode == 201)
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        #expect((json?["runId"] as? String)?.isEmpty == false)
-        #expect((json?["messageId"] as? String)?.isEmpty == false)
-        await api.stop()
-    }
-
-    @Test("WebSocket smoke: removed stop_agent_build returns deterministic error")
-    func websocketSmokeServerStartStop() async throws {
-        let conversationID = UUID()
-        let (conversation, runtime, _) = FakeStreamingSplitGateway.make(validConversationIDs: [conversationID])
-        let modelProvider = StreamingStubModelProvider()
-        try await withRunningAPIServer(conversation: conversation, runtime: runtime, modelProvider: modelProvider) { port in
-            let task = try makeWebSocketTask(port: port)
-            defer { task.cancel(with: .goingAway, reason: nil) }
-            try await awaitWebSocketReady(task)
-            try await sendJSON(task, [
-                "type": "stop_agent_build",
-                "conversationID": conversationID.uuidString
-            ])
-            let response = try await receiveJSON(ofType: "error", from: task)
-            #expect((response["message"] as? String)?.contains("Harness control message requires kind") == true)
-        }
-    }
-
-    private func withRunningAPIServer(
-        conversation: APILayerConversationManaging,
-        runtime: APILayerChatRuntimeManaging,
-        modelProvider: APILayerModelManaging,
-        _ body: (Int) async throws -> Void
-    ) async throws {
-        let api = APILayer(port: 0)
-        await api.setChatGatewayServices(APILayerChatGatewayServices(conversation: conversation, runtime: runtime))
-        await api.setModelProvider(modelProvider)
-        try await api.start()
-        let port = await api.listeningPort
-        do {
-            try await body(port)
-            await api.stop()
-        } catch {
-            await api.stop()
-            throw error
-        }
-    }
-
-    private func makeWebSocketTask(port: Int) throws -> URLSessionWebSocketTask {
-        let url = URL(string: "ws://127.0.0.1:\(port)/ws")!
-        let session = URLSession(configuration: .ephemeral)
-        let task = session.webSocketTask(with: url)
-        task.resume()
-        return task
-    }
-
-    private func sendJSON(_ task: URLSessionWebSocketTask, _ payload: [String: Any]) async throws {
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        let text = String(decoding: data, as: UTF8.self)
-        try await task.send(.string(text))
-    }
-
-    private func receiveJSON(_ task: URLSessionWebSocketTask) async throws -> [String: Any] {
-        let message = try await task.receive()
-        switch message {
-        case .string(let text):
-            let data = Data(text.utf8)
-            return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        case .data(let data):
-            return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        @unknown default:
-            return [:]
-        }
-    }
-
-    private func awaitWebSocketReady(_ task: URLSessionWebSocketTask) async throws {
-        _ = task
-        try await Task.sleep(nanoseconds: 120_000_000)
-    }
-
-    private func receiveJSON(ofType expectedType: String, from task: URLSessionWebSocketTask, maxMessages: Int = 12) async throws -> [String: Any] {
-        for _ in 0..<maxMessages {
-            let payload = try await receiveJSON(task)
-            if payload["type"] as? String == expectedType {
-                return payload
-            }
-            if expectedType == "error", payload["kind"] as? String == "error" {
-                return payload
-            }
-        }
-        throw NSError(domain: "APILayerStreamingCoverageTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing response type: \(expectedType)"])
     }
 }

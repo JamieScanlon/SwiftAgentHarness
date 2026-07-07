@@ -126,6 +126,91 @@ struct TurnLoopBehavioralRecoveryTests {
         #expect(temperatures.contains(0.15))
     }
 
+    @Test("think recovery appends approval-pending tool result when dispatch requires approval")
+    func thinkRecoveryApprovalRequiredAppendsPendingToolResult() async throws {
+        let conversationID = UUID()
+        let modeProfileID = "turn-loop-behavioral-recovery-approval"
+        let profile = ResolvedModeProfile(
+            id: modeProfileID,
+            interactionMode: .agent,
+            assemblyKind: .agentBuild,
+            allowsProactiveCompactionTriggers: true,
+            appliesAgentBuildOrchestratorHarness: true,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            runtime: ModeProfileRuntimeSlice(
+                termination: ModeProfileTerminationSlice(
+                    policy: .terminalTool,
+                    recovery: ModeProfileTerminationRecoverySlice(
+                        strategy: .forcedToolChoice,
+                        rollbackStalledTurn: true,
+                        maxAttempts: 3,
+                        reminder: .escalating,
+                        behavioralInjectAfterStalls: 1,
+                        behavioralRecoveryTemperature: 0.15
+                    )
+                )
+            )
+        )
+        let state = TurnLoopConversationState(
+            conversation: ModelConversation(
+                id: conversationID,
+                model: unsupportedModel(),
+                messages: [Message(id: UUID(), role: .user, content: "go", timestamp: Date(), toolCalls: [])],
+                turns: [],
+                interactionMode: .agent,
+                modeProfileID: modeProfileID
+            )
+        )
+        let recorder = TurnLoopTranscriptRecorder()
+        let ports = TurnLoopTestPorts.make(
+            state: state,
+            recorder: recorder,
+            dispatchOutcomes: [
+                .approvalRequired(toolName: TerminationToolProvider.thinkToolName, toolCallID: nil),
+            ],
+            streamFactory: {
+                AsyncThrowingStream { continuation in
+                    continuation.yield(.complete(LLMResponse(content: "still thinking out loud", toolCalls: [])))
+                    continuation.finish()
+                }
+            },
+            modeRegistry: ModeRegistryTestSupport.makePort(
+                seedingBuiltIns: false,
+                additionalProfiles: [profile]
+            ),
+            effectiveToolEntries: [thinkEntry()]
+        )
+        let loop = TurnLoop(ports: ports)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: StubTurnLoopLLM(),
+            config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+        )
+        _ = try await loop.run(
+            conversationID: conversationID,
+            runID: UUID(),
+            anchorUserMessageID: await state.anchorUserMessageID(),
+            configuration: AgentRuntimeTurnConfiguration(),
+            orchestrator: orchestrator,
+            lifecycleEmitter: AgentRuntimeLifecycleEmitter { _, _ in }
+        )
+
+        let conversation = await state.snapshot()
+        let thinkCallIDs = Set(
+            conversation.messages
+                .filter { $0.role == .assistant }
+                .flatMap(\.toolCalls)
+                .filter { $0.name == TerminationToolProvider.thinkToolName }
+                .compactMap(\.id)
+        )
+        #expect(!thinkCallIDs.isEmpty)
+
+        let toolMessages = await recorder.appendedToolMessages()
+        #expect(!toolMessages.isEmpty)
+        #expect(toolMessages.allSatisfy { $0.content == AgentLoopToolDispatch.approvalPendingToolResultContent })
+        #expect(Set(toolMessages.compactMap(\.toolCallId)) == thinkCallIDs)
+    }
+
     @Test("forced-capable model recovery does not apply a temperature nudge")
     func forcedRecoveryKeepsDefaultTemperature() async throws {
         let conversationID = UUID()

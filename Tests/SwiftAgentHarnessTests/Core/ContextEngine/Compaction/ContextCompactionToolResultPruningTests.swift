@@ -681,4 +681,112 @@ struct ContextCompactionToolResultPruningTests {
         )
         #expect(out[2].content == ContextCompactionToolResultPruning.clearedToolResultContentPlaceholder)
     }
+
+    // MARK: - Replacement-mode strategy (CR-E rung 2)
+
+    private func searchTranscript(count: Int, perName: Int) -> [Message] {
+        var messages: [Message] = []
+        for i in 0..<count {
+            let tid = "ws-\(i)"
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .assistant,
+                    content: "a",
+                    timestamp: Date(),
+                    toolCalls: [ToolCall(name: "web_search", arguments: .object(["query": .string("q\(i)")]), id: tid)]
+                )
+            )
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .tool,
+                    content: String(repeating: "Z", count: 100),
+                    timestamp: Date(),
+                    toolCalls: [],
+                    toolCallId: tid
+                )
+            )
+        }
+        return messages
+    }
+
+    @Test("Strategy switch: same messages pruned, content differs by mode")
+    func strategySwitchSameSelectionDifferentContent() {
+        let messages = searchTranscript(count: 4, perName: 1)
+        let blank = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["web_search"],
+            maxRecentPerListedName: 1,
+            replacementMode: .blankMarker
+        )
+        let summary = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["web_search"],
+            maxRecentPerListedName: 1,
+            replacementMode: .oneLineSummary
+        )
+        let ph = ContextCompactionToolResultPruning.clearedToolResultContentPlaceholder
+        let blankTool = blank.filter { $0.role == .tool }.map(\.content)
+        let summaryTool = summary.filter { $0.role == .tool }.map(\.content)
+        // Same set replaced (first 3 of 4), last kept verbatim in both modes.
+        let blankReplaced = blankTool.enumerated().filter { $0.element == ph }.map(\.offset)
+        let summaryReplaced = summaryTool.enumerated()
+            .filter { $0.element.hasPrefix("[web_search]") }.map(\.offset)
+        #expect(blankReplaced == [0, 1, 2])
+        #expect(summaryReplaced == [0, 1, 2])
+        #expect(blankTool[3] == summaryTool[3])
+        #expect(summaryTool[0] == "[web_search] query='q0' (100 chars result)")
+    }
+
+    @Test("Recency caps unchanged under one-line summary mode")
+    func recencyCapsUnchangedUnderSummary() {
+        let messages = searchTranscript(count: 5, perName: 2)
+        let summary = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["web_search"],
+            maxRecentPerListedName: 2,
+            replacementMode: .oneLineSummary
+        )
+        let toolContents = summary.filter { $0.role == .tool }.map(\.content)
+        // First 3 summarized, last 2 kept verbatim.
+        #expect(toolContents[0].hasPrefix("[web_search]"))
+        #expect(toolContents[1].hasPrefix("[web_search]"))
+        #expect(toolContents[2].hasPrefix("[web_search]"))
+        #expect(toolContents[3] == String(repeating: "Z", count: 100))
+        #expect(toolContents[4] == String(repeating: "Z", count: 100))
+    }
+
+    @Test("Unresolvable toolCallId is never summarized (resolution fallback safety)")
+    func unresolvableNeverSummarized() {
+        let t = Message(
+            id: UUID(),
+            role: .tool,
+            content: "mystery payload",
+            timestamp: Date(),
+            toolCalls: [],
+            toolCallId: "no-assistant-for-this"
+        )
+        let out = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: [t],
+            toolNamesToPrune: [],
+            maxRecentUnlistedToolResults: 0,
+            replacementMode: .oneLineSummary
+        )
+        #expect(out[0].content == "mystery payload")
+    }
+
+    @Test("Source messages are left untouched after a one-line-summary pass (projection-only)")
+    func sourceMessagesUntouchedAfterSummaryPass() {
+        let messages = searchTranscript(count: 3, perName: 1)
+        let originalToolContents = messages.filter { $0.role == .tool }.map(\.content)
+        _ = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["web_search"],
+            maxRecentPerListedName: 1,
+            replacementMode: .oneLineSummary
+        )
+        #expect(messages.filter { $0.role == .tool }.map(\.content) == originalToolContents)
+        #expect(messages.allSatisfy { $0.role != .tool || $0.content == String(repeating: "Z", count: 100) })
+    }
 }

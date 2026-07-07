@@ -24,12 +24,7 @@ enum SubAgentTransportPermissionGate {
     }
 
     static func permissionAlreadyGranted(_ request: SubAgentTransportInvocationRequest) -> Bool {
-        guard let metadata = request.launchPlan.request.metadata,
-              case .object(let object) = metadata,
-              case .boolean(true) = object["permissionAlreadyGranted"] else {
-            return false
-        }
-        return true
+        request.launchPlan.request.permissionAlreadyGranted
     }
 }
 
@@ -377,8 +372,9 @@ struct ACPStdioSubAgentTransportAdapter: SubAgentTransportAdapting {
                     completionHandleID: request.launchPlan.asyncHandleID
                 )
             }
+            var streamMapper = SubAgentACPDelegateStreamMapper()
             for await event in events {
-                guard let mapped = SubAgentACPDelegateStreamMapping.map(event: event, session: sessionTemplate) else {
+                guard let mapped = streamMapper.map(event: event, session: sessionTemplate) else {
                     continue
                 }
                 await sessionStore.emit(mapped, lifecycleID: lifecycleID)

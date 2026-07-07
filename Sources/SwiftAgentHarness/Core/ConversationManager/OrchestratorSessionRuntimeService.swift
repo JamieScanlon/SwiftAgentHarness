@@ -127,6 +127,10 @@ public actor OrchestratorSessionRuntimeService {
         await invalidateOrchestrator(for: nil)
     }
 
+    func persistActivatedSkillsFromLoader(conversationID: UUID) async {
+        await skillActivation.persistActivatedSkillsFromLoader(conversationID: conversationID)
+    }
+
     func persistActivatedSkillsFromLoaderToCurrentConversation() async {
         guard let cid = await selection.currentConversationID() else { return }
         await skillActivation.persistActivatedSkillsFromLoader(conversationID: cid)
@@ -138,6 +142,10 @@ public actor OrchestratorSessionRuntimeService {
 
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async {
         await messaging.installTurnToolRegistryEntries(entries)
+    }
+
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async {
+        await messaging.registerAgentToolResultMiddleware(middleware)
     }
 
     func recordContextSnapshot(from response: LLMResponse, requestConfig: LLMRequestConfig) async {
@@ -192,25 +200,27 @@ public actor OrchestratorSessionRuntimeService {
     }
 
     func generateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String {
-        let skillLoader = await skillActivation.currentSkillLoader()
+        let skillLoader = await skillActivation.skillLoader(for: conversationID)
+        let conv: ModelConversation?
+        if let conversationID {
+            conv = await persistenceDomain.modelConversation(id: conversationID)
+        } else {
+            conv = nil
+        }
+        let interactionMode = conv?.interactionMode ?? .chat
+        let resolved = if let conv {
+            await makeResolvedModeProfile(for: conv)
+        } else {
+            (await deps.modeRegistry.resolveReportingFallback(
+                modeId: InteractionMode.chat.rawValue,
+                logger: logger,
+                fallbackModeId: InteractionMode.chat.rawValue
+            )).profile
+        }
+        let modeCtx = ModePolicyContext(interactionMode: interactionMode, resolvedProfile: resolved)
+        let metadata = makeSystemPromptMetadata(for: conv, resolvedProfile: resolved)
+
         do {
-            let conv: ModelConversation?
-            if let conversationID {
-                conv = await persistenceDomain.modelConversation(id: conversationID)
-            } else {
-                conv = nil
-            }
-            let interactionMode = conv?.interactionMode ?? .chat
-            let resolved = if let conv {
-                await makeResolvedModeProfile(for: conv)
-            } else {
-                (await deps.modeRegistry.resolveReportingFallback(
-                    modeId: InteractionMode.chat.rawValue,
-                    logger: logger,
-                    fallbackModeId: InteractionMode.chat.rawValue
-                )).profile
-            }
-            let modeCtx = ModePolicyContext(interactionMode: interactionMode, resolvedProfile: resolved)
             let systemPrompt = try await SystemPrompt(
                 skillLoader: skillLoader,
                 logger: logger,
@@ -221,7 +231,7 @@ public actor OrchestratorSessionRuntimeService {
             )
             let text = try await systemPrompt.generateSystemPrompt(
                 withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: makeSystemPromptMetadata(for: conv, resolvedProfile: resolved)
+                additionalMetadata: metadata
             )
             if let conv {
                 do {
@@ -232,8 +242,21 @@ public actor OrchestratorSessionRuntimeService {
             }
             return text
         } catch {
-            logger?.error("[OrchestratorSessionRuntimeService] Failed to create full system prompt: \(error)")
-            return userSystemPrompt ?? ""
+            logger?.warning("[OrchestratorSessionRuntimeService] System prompt build failed, retrying without agent skills: \(error)")
+            let fallbackPrompt = try await SystemPrompt(
+                includeCurrentDateTime: nil,
+                includeAgentSkills: false,
+                skillLoader: skillLoader,
+                logger: logger,
+                interactionMode: interactionMode,
+                assemblyKind: resolved.assemblyKind,
+                routingPolicyConversation: conv,
+                modePolicyContext: modeCtx
+            )
+            return try await fallbackPrompt.generateSystemPrompt(
+                withUserSystemPrompt: userSystemPrompt,
+                additionalMetadata: metadata
+            )
         }
     }
 
@@ -513,6 +536,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         await startOrchestratorStateListeners(for: conversationID)
         guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else {
             logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
+            await agentRuntime.releaseRunOrchestrator(runID: runID)
             await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
             return
         }

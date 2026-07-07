@@ -76,8 +76,16 @@ public struct SystemPrompt: Sendable {
             resolvedIncludeAgentSkills = includeAgentSkills
         }
 
+        var effectiveIncludeAgentSkills = resolvedIncludeAgentSkills
+        if effectiveIncludeAgentSkills, skillLoader == nil {
+            if skipConfigLoad {
+                throw PromptsConfigError.skillLoaderNotFound
+            }
+            effectiveIncludeAgentSkills = false
+        }
+
         let resolvedSkillMetadata: [SkillMetadata]?
-        if resolvedIncludeAgentSkills {
+        if effectiveIncludeAgentSkills {
             guard let skillLoader else {
                 throw PromptsConfigError.skillLoaderNotFound
             }
@@ -104,7 +112,7 @@ public struct SystemPrompt: Sendable {
         self.assemblyKind = resolvedAssemblyKind
         self.skillLoader = skillLoader
         self.includeCurrentDateTime = resolvedIncludeCurrentDateTime
-        self.includeAgentSkills = resolvedIncludeAgentSkills
+        self.includeAgentSkills = effectiveIncludeAgentSkills
         self.strictAgentHarnessPrompts = resolvedStrictAgentHarnessPrompts
         self.skillMetadata = resolvedSkillMetadata
         self.promptTemplate = Self.makePromptTemplate(includeCurrentDateTime: resolvedIncludeCurrentDateTime)
@@ -271,10 +279,6 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         if let harness = jsonResult["agentHarness"] as? [String: Any],
            let strict = harness["strictAgentHarnessPrompts"] as? Bool {
             strictAgentHarnessPrompts = strict
-        }
-
-        guard jsonResult["settings"] is [String: Any] else {
-            throw PromptsConfigError.invalidJSON
         }
 
         return PromptConfigValues(

@@ -43,7 +43,9 @@ public struct ExecRuntimeService: Sendable {
         workspaceRoot: String,
         agentWorkspaceDir: String? = nil,
         globalSettings: SandboxGlobalSettings = SandboxGlobalSettings(),
-        approvalDelivery: any ExecApprovalDelivering = DefaultExecApprovalDelivery(),
+        approvalDelivery: any ExecApprovalDelivering = DefaultExecApprovalDelivery(
+            approvalScope: ExecApprovalScope(conversationID: UUID(), ownerAccountID: nil)
+        ),
         logger: Logger? = nil
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)
@@ -117,20 +119,32 @@ public struct ExecRuntimeService: Sendable {
         context: ExecRuntimeContext,
         runInBackground: Bool = false,
         requiresApproval: Bool = false,
-        usePty: Bool = false
+        usePty: Bool = false,
+        approvalContextLines: [String] = []
     ) async throws -> ExecSupervisorResult {
         if context.elevated.isActive {
             if ElevatedExecHost.requiresExecApproval(mode: context.elevated.mode) {
-                try await requestExecApproval(command: command, context: context)
+                try await requestExecApproval(
+                    command: command,
+                    context: context,
+                    approvalContextLines: approvalContextLines
+                )
             }
+            let config = resolvedConfig(context: context)
             return try await ElevatedExecHost.run(
                 context: context.elevated,
-                params: SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot),
+                params: SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot, usePty: usePty),
+                sessionSlug: context.sessionKey,
+                budgetSeconds: config.assistantBlockingBudgetSeconds,
                 execApprovalGranted: true
             )
         }
         if requiresApproval {
-            try await requestExecApproval(command: command, context: context)
+            try await requestExecApproval(
+                command: command,
+                context: context,
+                approvalContextLines: approvalContextLines
+            )
         }
         let handle = try await backendHandle(context: context)
         let params = SandboxBuildExecSpecParams(command: command, workdir: workspaceRoot, usePty: usePty)
@@ -154,22 +168,30 @@ public struct ExecRuntimeService: Sendable {
         return result
     }
 
-    private func requestExecApproval(command: String, context: ExecRuntimeContext) async throws {
+    private func requestExecApproval(
+        command: String,
+        context: ExecRuntimeContext,
+        approvalContextLines: [String] = []
+    ) async throws {
         let title = context.elevated.isActive
-            ? "Approve elevated shell command?"
+            ? "Run command outside the sandbox?"
             : "Approve shell command?"
+        var contextLines = [command]
+        if !approvalContextLines.isEmpty {
+            contextLines.append(contentsOf: approvalContextLines)
+        } else if context.elevated.isActive {
+            contextLines.append("Runs on the host outside the sandbox.")
+        }
         let presentation = ApprovalPresentation.standard(
             title: title,
-            context: [
-                command,
-                context.elevated.isActive ? "Runs on the host outside the sandbox." : "",
-            ]
+            context: contextLines
         )
         let request = ExecApprovalRequest(
             id: UUID().uuidString,
             command: command,
             title: title,
             description: command,
+            allowsDurableBypass: !context.elevated.isActive,
             presentation: presentation
         )
         switch await approvalDelivery.requestApproval(request, headless: context.headless) {
@@ -179,6 +201,31 @@ public struct ExecRuntimeService: Sendable {
         case .deferred(let message):
             throw SandboxBackendError.commandFailed(message)
         }
+    }
+
+    /// Runs the elevated exec approval gate and returns a stub result without spawning host shell.
+    func runElevatedShellStub(
+        command: String,
+        context: ExecRuntimeContext,
+        stdout: String,
+        approvalContextLines: [String] = []
+    ) async throws -> ExecSupervisorResult {
+        if context.elevated.isActive {
+            if ElevatedExecHost.requiresExecApproval(mode: context.elevated.mode) {
+                try await requestExecApproval(
+                    command: command,
+                    context: context,
+                    approvalContextLines: approvalContextLines
+                )
+            }
+        }
+        return ExecSupervisorResult(
+            stdout: stdout,
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            backgroundTaskID: nil
+        )
     }
 
     public func runShellCommand(

@@ -2,6 +2,10 @@ import Foundation
 
 enum ChannelTransportKind: String, Codable, Sendable, Equatable {
     case mock
+    case slack
+    case telegram
+    case discord
+    case email
 }
 
 struct ChannelAuthConfig: Codable, Sendable, Equatable {
@@ -40,12 +44,36 @@ struct ChannelDebounceConfig: Codable, Sendable, Equatable {
     }
 }
 
+struct ChannelDedupeConfig: Codable, Sendable, Equatable {
+    var ttlSeconds: Int = 3600
+
+    enum CodingKeys: String, CodingKey {
+        case ttlSeconds = "ttl_seconds"
+    }
+}
+
 struct ChannelMediaConfig: Codable, Sendable, Equatable {
     var cacheDir: String?
 }
 
 struct ChannelAckConfig: Codable, Sendable, Equatable {
     var reactionScope: String = "group-mentions"
+}
+
+enum ChannelStreamingPreset: String, Codable, Sendable, Equatable {
+    case social
+    case `operator`
+    case finalOnly = "final_only"
+}
+
+struct ChannelStreamingConfig: Codable, Sendable, Equatable {
+    var preset: ChannelStreamingPreset = .social
+    var textChunkLimit: Int = 4000
+
+    enum CodingKeys: String, CodingKey {
+        case preset
+        case textChunkLimit = "text_chunk_limit"
+    }
 }
 
 enum ChannelDMScope: String, Codable, Sendable, Equatable {
@@ -63,8 +91,10 @@ struct ChannelListenerConfig: Codable, Sendable, Equatable {
     var auth: ChannelAuthConfig = ChannelAuthConfig()
     var mention: ChannelMentionConfig = ChannelMentionConfig()
     var debounce: ChannelDebounceConfig = ChannelDebounceConfig()
+    var dedupe: ChannelDedupeConfig = ChannelDedupeConfig()
     var media: ChannelMediaConfig = ChannelMediaConfig()
     var ack: ChannelAckConfig = ChannelAckConfig()
+    var streaming: ChannelStreamingConfig = ChannelStreamingConfig()
     var routingMode: TriggerRoutingMode = .isolated
     var delegate: TriggerDelegateProfile?
     var dmScope: ChannelDMScope = .perChannelPeer
@@ -79,8 +109,10 @@ struct ChannelListenerConfig: Codable, Sendable, Equatable {
         case auth
         case mention
         case debounce
+        case dedupe
         case media
         case ack
+        case streaming
         case routingMode = "routing_mode"
         case delegate
         case dmScope = "dm_scope"

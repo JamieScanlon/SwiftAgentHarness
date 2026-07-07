@@ -3,19 +3,34 @@ import Foundation
 
 public struct SSHControlMaster: Sendable {
     public let socketPath: String
+    public let knownHostsPath: String
     public let target: String
     public let port: Int
 
-    public init(settings: SSHSandboxSettings) {
+    public init(settings: SSHSandboxSettings, fileManager: FileManager = .default) {
         let triple = "\(settings.user)@\(settings.host):\(settings.port)"
         let digest = Insecure.MD5.hash(data: Data(triple.utf8)).map { String(format: "%02x", $0) }.joined()
-        socketPath = "/tmp/sah-ssh-\(digest.prefix(16)).sock"
+        let sshDir = fileManager.sahHomeDirectory.appendingPathComponent(".ssh", isDirectory: true)
+        try? fileManager.createDirectory(
+            at: sshDir,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        socketPath = sshDir.appendingPathComponent("sah-control-\(digest.prefix(16)).sock").path
+        knownHostsPath = sshDir.appendingPathComponent("sah-known-hosts").path
         target = triple
         port = settings.port
     }
 
     public var baseArgs: [String] {
-        ["ssh", "-S", socketPath, "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-p", String(port)]
+        [
+            "ssh", "-S", socketPath,
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=600",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UserKnownHostsFile=\(knownHostsPath)",
+            "-p", String(port),
+        ]
     }
 }
 
@@ -77,6 +92,41 @@ public struct FileSyncManager: Sendable {
     }
 }
 
+enum SSHSandboxRemoteRoot {
+    static let baseRelative = ".sah/workspaces"
+
+    static func runtimeId(scopeKey: String) -> String {
+        "~/\(baseRelative)/\(scopeKey)"
+    }
+
+    static func shellPath(scopeKey: String) -> String {
+        "\"$HOME/\(baseRelative)/\(scopeKey)\""
+    }
+
+    static func rsyncRelativeRoot(scopeKey: String) -> String {
+        "\(baseRelative)/\(scopeKey)"
+    }
+
+    static func rsyncRelativePath(scopeKey: String) -> String {
+        "\(rsyncRelativeRoot(scopeKey: scopeKey))/"
+    }
+
+    static func legacyPath(scopeKey: String) -> String {
+        "/tmp/sah-\(scopeKey)"
+    }
+
+    static func securePrepareCommand(scopeKey: String) -> String {
+        """
+        set -e
+        umask 077
+        mkdir -p "$HOME/\(baseRelative)" && chmod 700 "$HOME/\(baseRelative)"
+        target="$HOME/\(baseRelative)/\(scopeKey)"
+        if [ -e "$target" ] && { [ -L "$target" ] || [ ! -d "$target" ]; }; then exit 1; fi
+        mkdir -p "$target"
+        """
+    }
+}
+
 public struct SSHSandboxBackendHandle: SandboxBackendHandle {
     public let id: SandboxBackendID = "ssh"
     public let runtimeId: String
@@ -89,16 +139,17 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
 
     private let settings: SSHSandboxSettings
     private let hostWorkspace: String
-    private let remoteRoot: String
+    private let scopeKey: String
     private let control: SSHControlMaster
 
     init(params: CreateSandboxBackendParams) throws {
         guard let ssh = params.config.ssh else { throw SandboxBackendError.commandFailed("SSH settings missing") }
         self.settings = ssh
         self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
-        self.remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
-        self.workdir = remoteRoot
-        self.runtimeId = remoteRoot
+        self.scopeKey = params.scopeKey
+        let runtimeId = SSHSandboxRemoteRoot.runtimeId(scopeKey: params.scopeKey)
+        self.workdir = runtimeId
+        self.runtimeId = runtimeId
         self.runtimeLabel = "\(ssh.user)@\(ssh.host)"
         self.configLabel = runtimeLabel
         self.control = SSHControlMaster(settings: ssh)
@@ -109,24 +160,34 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
         let trimmed = params.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         try await seedRemoteWorkspaceIfNeeded()
+        let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
+        let remoteCommand = try SSHRemoteShellCommand.wrapWithEnv(
+            params.env,
+            remoteCommand: "cd \(shellPath) && \(trimmed)"
+        )
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(remoteRoot) && \(trimmed)",
+            remoteCommand: remoteCommand,
             usePty: params.usePty
         )
-        return SandboxBackendExecSpec(argv: argv, env: params.env, cwd: nil, usePty: params.usePty)
+        return SandboxBackendExecSpec(argv: argv, cwd: nil, usePty: params.usePty)
     }
 
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         try await seedRemoteWorkspaceIfNeeded()
         let remoteScript = SSHRemoteShellCommand.build(params: params)
+        let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
+        let remoteCommand = try SSHRemoteShellCommand.wrapWithEnv(
+            params.env,
+            remoteCommand: "cd \(shellPath) && \(remoteScript)"
+        )
         let argv = SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "cd \(remoteRoot) && \(remoteScript)"
+            remoteCommand: remoteCommand
         )
-        let result = try await ShellProcessRunner.run(argv: argv, env: params.env, stdin: params.stdin)
+        let result = try await ShellProcessRunner.run(argv: argv, stdin: params.stdin)
         return SandboxBackendCommandResult(stdout: result.stdout, stderr: result.stderr, code: result.exitCode)
     }
 
@@ -139,7 +200,7 @@ public struct SSHSandboxBackendHandle: SandboxBackendHandle {
             control: control,
             settings: settings,
             hostWorkspace: hostWorkspace,
-            remoteRoot: remoteRoot
+            scopeKey: scopeKey
         )
     }
 }
@@ -157,9 +218,8 @@ public struct RemoteFsBridge: SandboxFsBridge {
 
     public func stat(path: String) async throws -> SandboxFsStat {
         let rel = try relativePath(path)
-        let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.exists(rel: rel))
-        let exists = String(data: result.stdout, encoding: .utf8)?.contains("yes") == true
-        return SandboxFsStat(isDirectory: false, size: 0, exists: exists)
+        let result = try await handle.runShellCommand(params: SandboxFsBridgeShellCommands.stat(rel: rel))
+        return SandboxFsStat.parse(from: result)
     }
 
     public func readFile(path: String) async throws -> Data {
@@ -218,17 +278,22 @@ public struct SSHSandboxBackendManager: SandboxBackendManager {
         try SSHHostTools.requireLocalRsync()
         let control = SSHControlMaster(settings: ssh)
         try await SSHHostTools.requireRemoteRsync(control: control, settings: ssh, runner: syncRunner)
-        let remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
-        return SandboxBackendRuntimeInfo(runtimeId: remoteRoot, running: true, configMatches: true, runtimeLabel: remoteRoot)
+        let runtimeId = SSHSandboxRemoteRoot.runtimeId(scopeKey: params.scopeKey)
+        return SandboxBackendRuntimeInfo(runtimeId: runtimeId, running: true, configMatches: true, runtimeLabel: runtimeId)
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
         guard let ssh = params.config.ssh else { return }
-        let remoteRoot = "/tmp/sah-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
         let control = SSHControlMaster(settings: ssh)
-        let argv = SSHSandboxArgv.exec(control: control, settings: ssh, remoteCommand: "rm -rf \(remoteRoot)")
+        let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: params.scopeKey)
+        let legacyQuoted = SSHRemoteShellCommand.shellQuote(SSHSandboxRemoteRoot.legacyPath(scopeKey: params.scopeKey))
+        let argv = SSHSandboxArgv.exec(
+            control: control,
+            settings: ssh,
+            remoteCommand: "rm -rf \(shellPath) \(legacyQuoted)"
+        )
         _ = try await ShellProcessRunner.run(argv: argv)
-        await SSHWorkspaceSyncCache.shared.remove(remoteRoot: remoteRoot)
+        await SSHWorkspaceSyncCache.shared.remove(scopeKey: params.scopeKey)
     }
 }
 

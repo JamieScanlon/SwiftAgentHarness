@@ -9,6 +9,7 @@ actor ConversationSelectionRuntimeService {
     private let sessionProjection: SessionProjectionAccessing
     private let contextProjection: ContextProjectionService
     private let registryOwnerAccountScope: @Sendable () -> UUID?
+    private let tenancyPolicy: TenancyPolicySettings
 
     private(set) var currentConversationID: UUID?
     private(set) var currentMessages: [Message] = []
@@ -21,7 +22,8 @@ actor ConversationSelectionRuntimeService {
         skillActivation: SkillActivationService,
         sessionProjection: SessionProjectionAccessing,
         contextProjection: ContextProjectionService,
-        registryOwnerAccountScope: @escaping @Sendable () -> UUID?
+        registryOwnerAccountScope: @escaping @Sendable () -> UUID?,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.deps = deps
         self.persistenceDomain = persistenceDomain
@@ -29,6 +31,7 @@ actor ConversationSelectionRuntimeService {
         self.sessionProjection = sessionProjection
         self.contextProjection = contextProjection
         self.registryOwnerAccountScope = registryOwnerAccountScope
+        self.tenancyPolicy = tenancyPolicy
     }
 
     func currentConversation() async -> ModelConversation? {
@@ -46,6 +49,9 @@ actor ConversationSelectionRuntimeService {
 
     func selectConversation(conversationID: UUID) async throws {
         guard let conv = await persistenceDomain.modelConversation(id: conversationID) else {
+            throw ConversationServiceError.conversationNotFound
+        }
+        guard await isSelectionAccessible(conv) else {
             throw ConversationServiceError.conversationNotFound
         }
 
@@ -183,5 +189,42 @@ actor ConversationSelectionRuntimeService {
     private func setCurrentMessages(_ messages: [Message]) {
         currentMessages = messages
         messageStreamContinuation?.yield(messages)
+    }
+
+    private func isSelectionAccessible(_ target: ModelConversation) async -> Bool {
+        let scope = ConversationScope.current
+        let callerConversation: ModelConversation?
+        if let callerID = scope?.selfID {
+            callerConversation = await persistenceDomain.modelConversation(id: callerID)
+        } else {
+            callerConversation = nil
+        }
+        let ownerScope = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: tenancyPolicy.requireAuthenticatedOwnerOnMutations,
+            authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID,
+            callerConversation: callerConversation,
+            registryOwnerAccountID: APISessionContext.authenticatedOwnerAccountID ?? registryOwnerAccountScope()
+        )
+        let callerLineageRoot: UUID?
+        if let callerConversation {
+            callerLineageRoot = await lineageRoot(for: callerConversation)
+        } else {
+            callerLineageRoot = nil
+        }
+        let targetLineageRoot = await lineageRoot(for: target)
+        return ToolConversationAccessPolicy.isConversationAccessible(
+            target: target,
+            callerScope: scope,
+            ownerScope: ownerScope,
+            callerLineageRoot: callerLineageRoot,
+            targetLineageRoot: targetLineageRoot,
+            strictTenancy: tenancyPolicy.requireAuthenticatedOwnerOnMutations
+        )
+    }
+
+    private func lineageRoot(for conversation: ModelConversation) async -> UUID {
+        await ToolConversationAccessPolicy.lineageRoot(for: conversation) { id in
+            await self.persistenceDomain.modelConversation(id: id)
+        }
     }
 }

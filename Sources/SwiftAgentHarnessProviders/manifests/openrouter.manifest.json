@@ -1,0 +1,27 @@
+{
+  "id": "openrouter",
+  "label": "OpenRouter",
+  "providerEndpoints": [
+    { "id": "openrouter-default", "baseUrl": "https://openrouter.ai/api/v1" }
+  ],
+  "providerAuthAliases": ["openrouter"],
+  "providerAuthChoices": [
+    {
+      "id": "api-key",
+      "label": "API Key",
+      "authType": "api-key",
+      "envVars": ["SAH_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+      "onboardingScopes": []
+    }
+  ],
+  "modelSupport": {
+    "modelPrefixes": []
+  },
+  "cliBackends": [],
+  "uiHints": {
+    "iconRef": "openrouter-mark",
+    "category": "aggregator"
+  },
+  "capabilitySlots": ["text-inference"],
+  "default": true
+}

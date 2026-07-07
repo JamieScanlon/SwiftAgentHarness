@@ -14,7 +14,15 @@ extension SlashCommandDispatchService {
         // Accept the unified `allow-always` aliases (`always`, `durable`, ...).
         let durable = parts.count > 1 && ApprovalDecision.fromToken(String(parts[1])) == .allowAlways
         let store = ExecApprovalStore.shared
-        guard let resolution = await store.resolve(id: approvalID, approved: true, durable: durable) else {
+        let resolverContext = await execApprovalResolverContext(conversationID: conversationID)
+        guard let resolution = await store.resolve(
+            id: approvalID,
+            scope: resolverContext.scope,
+            strictTenancy: resolverContext.strictTenancy,
+            ownerScope: resolverContext.ownerScope,
+            approved: true,
+            durable: durable
+        ) else {
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
                 content: "No pending exec approval found for id \(approvalID)."
@@ -49,7 +57,15 @@ extension SlashCommandDispatchService {
             ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
             : "denied via slash command"
         let store = ExecApprovalStore.shared
-        guard let resolution = await store.resolve(id: approvalID, approved: false, reason: reason) else {
+        let resolverContext = await execApprovalResolverContext(conversationID: conversationID)
+        guard let resolution = await store.resolve(
+            id: approvalID,
+            scope: resolverContext.scope,
+            strictTenancy: resolverContext.strictTenancy,
+            ownerScope: resolverContext.ownerScope,
+            approved: false,
+            reason: reason
+        ) else {
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
                 content: "No pending exec approval found for id \(approvalID)."
@@ -65,6 +81,29 @@ extension SlashCommandDispatchService {
         return try await deliverSyntheticSlashAssistantResponse(
             conversationID: conversationID,
             content: message
+        )
+    }
+
+    private func execApprovalResolverContext(conversationID: UUID) async -> (
+        scope: ExecApprovalScope,
+        strictTenancy: Bool,
+        ownerScope: UUID?
+    ) {
+        let conversation = await deps.persistenceDomain.modelConversation(id: conversationID)
+        let strictTenancy = tenancyPolicy.requireAuthenticatedOwnerOnMutations
+        let ownerScope = ToolConversationAccessPolicy.resolveOwnerScope(
+            strictTenancy: strictTenancy,
+            authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID,
+            callerConversation: conversation,
+            registryOwnerAccountID: nil
+        )
+        return (
+            scope: ExecApprovalScope(
+                conversationID: conversationID,
+                ownerAccountID: conversation?.ownerAccountID
+            ),
+            strictTenancy: strictTenancy,
+            ownerScope: ownerScope
         )
     }
 }

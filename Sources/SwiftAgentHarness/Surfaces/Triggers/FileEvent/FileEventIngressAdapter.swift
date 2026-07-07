@@ -29,8 +29,15 @@ struct FileEventIngressAdapter: Sendable {
         if let source = trust.source { metadata["producerSource"] = source }
         if let conversationID = payload.conversationID { metadata["conversationID"] = conversationID }
         let routingMode: TriggerRoutingMode = payload.conversationID == nil ? .isolated : .threaded
+        let triggerID = "file-event:\(eventURL.lastPathComponent):\(mtime)"
+        let correlation = TriggerCorrelation.fromPayload(
+            rootId: payload.rootId,
+            parentTriggerId: payload.parentTriggerId,
+            correlationId: payload.correlationId,
+            fallbackTriggerID: triggerID
+        )
         return HarnessTrigger(
-            id: "file-event:\(eventURL.lastPathComponent):\(mtime)",
+            id: triggerID,
             source: .fileEvent,
             sourceMetadata: metadata,
             receivedAt: Int64(Date().timeIntervalSince1970 * 1000),
@@ -40,7 +47,8 @@ struct FileEventIngressAdapter: Sendable {
             trust: trust.trust,
             enableTools: true,
             enableAgents: true,
-            routingMode: routingMode
+            routingMode: routingMode,
+            correlation: correlation
         )
     }
 }

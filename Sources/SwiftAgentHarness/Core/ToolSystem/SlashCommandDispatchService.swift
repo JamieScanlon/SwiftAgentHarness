@@ -3,6 +3,7 @@ import SwiftAgentKit
 
 actor SlashCommandDispatchService {
     let deps: ConversationRuntimeDependencies
+    let tenancyPolicy: TenancyPolicySettings
     let topics: ConversationTopicPublicationPort
     let messaging: ConversationMessagingPort
     let selection: ConversationSelectionAccessing
@@ -20,6 +21,7 @@ actor SlashCommandDispatchService {
 
     init(
         deps: ConversationRuntimeDependencies,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         topics: ConversationTopicPublicationPort,
         messaging: ConversationMessagingPort,
         selection: ConversationSelectionAccessing,
@@ -32,6 +34,7 @@ actor SlashCommandDispatchService {
         subAgentPool: any SubAgentPooling
     ) {
         self.deps = deps
+        self.tenancyPolicy = tenancyPolicy
         self.topics = topics
         self.messaging = messaging
         self.selection = selection
@@ -80,7 +83,13 @@ actor SlashCommandDispatchService {
                 pendingSlashCommandsByConversationID[conversationID] = q
             }
             do {
-                _ = try await runSlashCommandIfNeeded(raw, conversationID: conversationID, skipQueue: true)
+                let isOwner = await resolvedSlashDispatchIsOwner(conversationID: conversationID)
+                _ = try await runSlashCommandIfNeeded(
+                    raw,
+                    conversationID: conversationID,
+                    skipQueue: true,
+                    isOwner: isOwner
+                )
             } catch {
                 deps.logger?.warning(
                     "[SlashCommandDispatchService] Draining queued slash command failed: \(String(describing: error))"
@@ -92,7 +101,8 @@ actor SlashCommandDispatchService {
     func runSlashCommandIfNeeded(
         _ text: String,
         conversationID: UUID,
-        skipQueue: Bool = false
+        skipQueue: Bool = false,
+        isOwner: Bool = true
     ) async throws -> ChatStreamResponse? {
         guard slashCommandRuntimeConfiguration.enabled else { return nil }
         let parser = SlashCommandParser()
@@ -119,7 +129,7 @@ actor SlashCommandDispatchService {
             let dispatch = dispatcher.dispatchBuiltin(
                 parsed: parsed,
                 runtimeConfig: slashCommandRuntimeConfiguration,
-                isOwner: true
+                isOwner: isOwner
             )
             switch dispatch {
             case .passthrough, .unknown, .disabled:
@@ -177,13 +187,16 @@ actor SlashCommandDispatchService {
         }
     }
 
-    private var slashCommandRuntimeConfiguration: SlashCommandRuntimeConfiguration {
+    var slashCommandRuntimeConfiguration: SlashCommandRuntimeConfiguration {
         let config = deps.conversationTransformConfiguration
         return SlashCommandRuntimeConfiguration(
             enabled: config.slashCommands.enabled,
             allowUnknownPassthrough: config.slashCommands.allowUnknownPassthrough,
             compactEnabled: config.slashCommands.compactEnabled && config.contextCompaction.manualSlashEnabled,
-            skillSlashEnabled: config.slashCommands.skillSlashEnabled
+            skillSlashEnabled: config.slashCommands.skillSlashEnabled,
+            directivesEnabled: config.slashCommands.directivesEnabled,
+            inlineShortcutsEnabled: config.slashCommands.inlineShortcutsEnabled,
+            ownerOnlyDirectiveNames: Set(config.slashCommands.ownerOnlyDirectiveNames)
         )
     }
 
@@ -194,7 +207,7 @@ actor SlashCommandDispatchService {
         return conv.state == .generating || conv.agenticPhase != .idle
     }
 
-    private func buildSlashCommandRegistry(conversationID: UUID) async -> SlashCommandRegistry {
+    func buildSlashCommandRegistry(conversationID: UUID) async -> SlashCommandRegistry {
         let slashConfig = deps.conversationTransformConfiguration.slashCommands
         let excluded = Set(deps.conversationTransformConfiguration.slashCommands.staticSkillNamesExcludedFromSkillColon)
         let baseRegistry: SlashCommandRegistry

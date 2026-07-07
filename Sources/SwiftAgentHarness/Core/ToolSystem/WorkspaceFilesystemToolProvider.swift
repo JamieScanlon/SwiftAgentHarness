@@ -22,6 +22,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let resolveSenderIdentity: @Sendable () async -> ExecSenderIdentity
     private let onMemoryWrite: (@Sendable (String) async -> Void)?
     private let logger: Logger?
+    private let bashRunnerFactory: @Sendable (ExecRuntimeContext) -> any BashShellRunning
+    private let grepForceInProcess: Bool
 
     public var name: String { "WorkspaceFilesystem" }
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
@@ -45,7 +47,34 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        grepForceInProcess: Bool = false
+    ) {
+        self.init(
+            workspaceRoot: workspaceRoot,
+            execRuntime: execRuntime,
+            runtimeContext: runtimeContext,
+            perCallElevationModes: perCallElevationModes,
+            elevatedAllowlist: elevatedAllowlist,
+            resolveSenderIdentity: resolveSenderIdentity,
+            onMemoryWrite: onMemoryWrite,
+            logger: logger,
+            bashRunnerFactory: nil,
+            grepForceInProcess: grepForceInProcess
+        )
+    }
+
+    init(
+        workspaceRoot: String,
+        execRuntime: ExecRuntimeService,
+        runtimeContext: ExecRuntimeContext,
+        perCallElevationModes: [String: ElevatedMode] = [:],
+        elevatedAllowlist: ElevatedAllowlist = .cliDefault,
+        resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
+        onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
+        logger: Logger? = nil,
+        bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?,
+        grepForceInProcess: Bool = false
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)
         self.execRuntime = execRuntime
@@ -55,6 +84,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.resolveSenderIdentity = resolveSenderIdentity
         self.onMemoryWrite = onMemoryWrite
         self.logger = logger
+        self.grepForceInProcess = grepForceInProcess
+        self.bashRunnerFactory = bashRunnerFactory ?? { context in
+            LocalSandboxBashExecutor(execRuntime: execRuntime, runtimeContext: context)
+        }
     }
 
     public func availableTools() async -> [ToolDefinition] {
@@ -181,8 +214,12 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             let bridge = try await execRuntime.fsBridge(context: runtimeContext)
             let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let content = extractString(from: toolCall.arguments, key: "content") ?? ""
-            try MemoryContentScanner.validateWrite(content).get()
             let path = try resolveToolPath(raw: raw, requireExists: false)
+            try MemoryContentScanner.validateWriteIfMemoryTarget(
+                path: path,
+                memoryDirectory: memoryDirectoryURL(),
+                content: content
+            ).get()
             try await bridge.writeFile(path: raw, content: Data(content.utf8))
             await notifyMemoryWrite(path)
             return ok(toolCall, "Wrote \(path)")
@@ -204,7 +241,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 return err(toolCall, "old_string not found")
             }
             content = content.replacingOccurrences(of: oldString, with: newString)
-            try MemoryContentScanner.validateWrite(content).get()
+            try MemoryContentScanner.validateWriteIfMemoryTarget(
+                path: path,
+                memoryDirectory: memoryDirectoryURL(),
+                content: content
+            ).get()
             try await bridge.writeFile(path: raw, content: Data(content.utf8))
             await notifyMemoryWrite(path)
             return ok(toolCall, "Edited \(path)")
@@ -270,7 +311,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             searchRoot: sub,
             workspaceRoot: workspaceRoot,
             execRuntime: execRuntime,
-            runtimeContext: runtimeContext
+            runtimeContext: runtimeContext,
+            forceInProcess: grepForceInProcess
         ) {
         case .success(let output):
             return ok(toolCall, output)
@@ -283,7 +325,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         }
     }
 
-    private func sandboxExecutor(for context: ExecRuntimeContext) -> LocalSandboxBashExecutor {
+    private func bashRunner(for context: ExecRuntimeContext) -> any BashShellRunning {
+        bashRunnerFactory(context)
+    }
+
+    private func bashExecutor(for context: ExecRuntimeContext) -> LocalSandboxBashExecutor {
         LocalSandboxBashExecutor(execRuntime: execRuntime, runtimeContext: context)
     }
 
@@ -303,18 +349,58 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         )
     }
 
+    private func canEscalateSandboxDenial(toolName: String) async -> Bool {
+        guard perCallElevationModes[toolName] != nil else { return false }
+        let identity = await resolveSenderIdentity()
+        return ElevatedSenderResolver.isAllowed(identity: identity, allowlist: elevatedAllowlist)
+    }
+
+    private static func escalationUnavailableMessage() -> String {
+        "Command requires elevated execution outside the sandbox, but elevation is not available for this tool or sender. Sandbox denied with exit 126."
+    }
+
+    private func bashSuccess(_ toolCall: ToolCall, _ result: ExecSupervisorResult) -> ToolResult {
+        if let taskID = result.backgroundTaskID {
+            return ok(toolCall, "background task: \(taskID)")
+        }
+        return ok(toolCall, result.stdout)
+    }
+
     private func bash(_ toolCall: ToolCall) async -> ToolResult {
         let command = extractString(from: toolCall.arguments, key: "command") ?? ""
         let runInBackground = extractBool(from: toolCall.arguments, key: "run_in_background") ?? false
         let usePty = extractBool(from: toolCall.arguments, key: "use_pty") ?? false
         let elevated = extractBool(from: toolCall.arguments, key: "elevated") ?? false
+
+        if elevated {
+            return await runBashElevated(
+                toolCall: toolCall,
+                command: command,
+                runInBackground: runInBackground,
+                usePty: usePty
+            )
+        }
+
         do {
-            let context = await elevatedRuntimeContext(toolName: Self.bashToolName, elevated: elevated)
-            let result = try await sandboxExecutor(for: context).runBash(command: command, runInBackground: runInBackground, usePty: usePty)
-            if let taskID = result.backgroundTaskID {
-                return ok(toolCall, "background task: \(taskID)")
+            let context = await elevatedRuntimeContext(toolName: Self.bashToolName, elevated: false)
+            let result = try await bashRunner(for: context).runBash(
+                command: command,
+                runInBackground: runInBackground,
+                usePty: usePty,
+                approvalContextLines: []
+            )
+            return bashSuccess(toolCall, result)
+        } catch let error as SandboxBackendError where error.isSandboxExecDenial {
+            if await canEscalateSandboxDenial(toolName: Self.bashToolName) {
+                return await runBashElevated(
+                    toolCall: toolCall,
+                    command: command,
+                    runInBackground: runInBackground,
+                    usePty: usePty,
+                    sandboxDenial: error
+                )
             }
-            return ok(toolCall, result.stdout)
+            return err(toolCall, Self.escalationUnavailableMessage())
         } catch let error as SandboxBackendError {
             return err(toolCall, sandboxErrorMessage(error))
         } catch {
@@ -322,14 +408,49 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         }
     }
 
+    private func runBashElevated(
+        toolCall: ToolCall,
+        command: String,
+        runInBackground: Bool,
+        usePty: Bool,
+        sandboxDenial: SandboxBackendError? = nil
+    ) async -> ToolResult {
+        let context = await elevatedRuntimeContext(toolName: Self.bashToolName, elevated: true)
+        guard context.elevated.isActive else {
+            if sandboxDenial != nil {
+                return err(toolCall, Self.escalationUnavailableMessage())
+            }
+            return err(toolCall, "Elevated execution is not allowed for this sender or tool")
+        }
+        let approvalContextLines = sandboxDenial != nil
+            ? ["Sandbox denied execution with exit 126."]
+            : []
+        do {
+            let result = try await bashRunner(for: context).runBash(
+                command: command,
+                runInBackground: runInBackground,
+                usePty: usePty,
+                approvalContextLines: approvalContextLines
+            )
+            return bashSuccess(toolCall, result)
+        } catch let error as SandboxBackendError {
+            return err(toolCall, sandboxErrorMessage(error))
+        } catch {
+            return err(toolCall, "Elevated execution failed: \(error.localizedDescription)")
+        }
+    }
+
     private func process(_ toolCall: ToolCall) async -> ToolResult {
         let taskID = extractString(from: toolCall.arguments, key: "task_id") ?? ""
         let action = extractString(from: toolCall.arguments, key: "action") ?? "poll"
         if action == "kill" {
-            await sandboxExecutor(for: runtimeContext).killProcess(taskID: taskID)
-            return ok(toolCall, "killed \(taskID)")
+            let killed = await bashExecutor(for: runtimeContext).killProcess(taskID: taskID)
+            if killed {
+                return ok(toolCall, "killed \(taskID)")
+            }
+            return err(toolCall, "task not found")
         }
-        guard let session = await sandboxExecutor(for: runtimeContext).pollProcess(taskID: taskID) else {
+        guard let session = await bashExecutor(for: runtimeContext).pollProcess(taskID: taskID) else {
             return err(toolCall, "task not found")
         }
         return ok(toolCall, "\(session.status)\n\(session.stdout)")
@@ -339,8 +460,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         let taskID = extractString(from: toolCall.arguments, key: "task_id") ?? ""
         let keys = extractString(from: toolCall.arguments, key: "keys") ?? ""
         do {
-            try await BashProcessRegistry.shared.sendKeys(id: taskID, data: Data(keys.utf8))
+            try await bashExecutor(for: runtimeContext).sendKeys(taskID: taskID, keys: keys)
             return ok(toolCall, "sent keys")
+        } catch let error as SandboxBackendError {
+            return err(toolCall, sandboxErrorMessage(error))
         } catch {
             return err(toolCall, error.localizedDescription)
         }
@@ -400,7 +523,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         case .emptyCommand:
             return "Command is empty"
         case .sandboxUnavailable:
-            return "Sandbox execution is unavailable"
+            return "Sandbox execution is unavailable (Seatbelt/bwrap tooling missing). Full host exec requires elevated: true on bash with approval policy."
         case .nonZeroExit(let code, let output):
             return "Command failed with exit \(code): \(output)"
         case .pathEscapes(let path):

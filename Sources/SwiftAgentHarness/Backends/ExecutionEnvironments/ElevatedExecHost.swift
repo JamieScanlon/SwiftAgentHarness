@@ -76,7 +76,10 @@ public enum ElevatedExecHost {
     public static func run(
         context: ElevatedExecContext,
         params: SandboxBuildExecSpecParams,
-        execApprovalGranted: Bool = false
+        sessionSlug: String = "",
+        budgetSeconds: TimeInterval? = nil,
+        execApprovalGranted: Bool = false,
+        registry: BashProcessRegistry = .shared
     ) async throws -> ExecSupervisorResult {
         guard context.isActive else {
             throw SandboxBackendError.commandFailed("elevated mode not active")
@@ -87,7 +90,42 @@ public enum ElevatedExecHost {
         switch context.escapePath {
         case .gateway:
             let argv = ["/bin/bash", "-c", params.command]
-            let result = try await ShellProcessRunner.runSupervised(argv: argv, env: params.env, cwd: params.workdir)
+            if let budgetSeconds {
+                let budgetResult = try await registry.runWithForegroundBudget(
+                    sessionSlug: sessionSlug,
+                    argv: argv,
+                    env: params.env,
+                    cwd: params.workdir,
+                    budgetSeconds: budgetSeconds,
+                    usePty: params.usePty
+                )
+                switch budgetResult.outcome {
+                case .completed(let stdout, let stderr, let exitCode):
+                    return ExecSupervisorResult(
+                        stdout: stdout,
+                        stderr: stderr,
+                        exitCode: exitCode,
+                        timedOut: false,
+                        backgroundTaskID: nil
+                    )
+                case .backgrounded(let taskID):
+                    return ExecSupervisorResult(
+                        stdout: "",
+                        stderr: "",
+                        exitCode: 0,
+                        timedOut: false,
+                        backgroundTaskID: taskID
+                    )
+                case .timedOut:
+                    throw SandboxBackendError.commandFailed("timed out")
+                }
+            }
+            let result = try await ShellProcessRunner.runSupervised(
+                argv: argv,
+                env: params.env,
+                cwd: params.workdir,
+                usePty: params.usePty
+            )
             return ExecSupervisorResult(
                 stdout: String(decoding: result.stdout, as: UTF8.self),
                 stderr: String(decoding: result.stderr, as: UTF8.self),

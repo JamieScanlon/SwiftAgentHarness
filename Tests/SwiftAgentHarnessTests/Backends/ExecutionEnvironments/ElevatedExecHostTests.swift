@@ -30,7 +30,7 @@ struct ElevatedSenderResolverTests {
     }
 }
 
-@Suite("ElevatedExecHost")
+@Suite("ElevatedExecHost", .serialized)
 struct ElevatedExecHostTests {
     @Test("on and ask modes require exec approval")
     func onAndAskRequireApproval() {
@@ -62,5 +62,51 @@ struct ElevatedExecHostTests {
                 execApprovalGranted: false
             )
         }
+    }
+
+    @Test("fast elevated command completes inline within foreground budget")
+    func fastElevatedCompletesInline() async throws {
+        let registry = BashProcessRegistry()
+        let context = ElevatedExecContext(mode: .full, senderAllowed: true)
+        let result = try await ElevatedExecHost.run(
+            context: context,
+            params: SandboxBuildExecSpecParams(command: "echo inline", workdir: "/tmp"),
+            sessionSlug: "elevated-test",
+            budgetSeconds: 5,
+            execApprovalGranted: true,
+            registry: registry
+        )
+        #expect(result.backgroundTaskID == nil)
+        #expect(result.stdout.contains("inline"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("slow elevated command auto-backgrounds when budget elapses")
+    func slowElevatedAutoBackgrounds() async throws {
+        let registry = BashProcessRegistry()
+        let context = ElevatedExecContext(mode: .full, senderAllowed: true)
+        let result = try await ElevatedExecHost.run(
+            context: context,
+            params: SandboxBuildExecSpecParams(command: "echo started; sleep 3", workdir: "/tmp"),
+            sessionSlug: "elevated-test",
+            budgetSeconds: 0.3,
+            execApprovalGranted: true,
+            registry: registry
+        )
+        guard let taskID = result.backgroundTaskID else {
+            Issue.record("expected background task ID")
+            return
+        }
+        var sawOutput = false
+        for _ in 0..<60 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if let snap = await registry.snapshot(id: taskID, sessionSlug: "elevated-test"),
+               snap.output.contains("started") {
+                sawOutput = true
+                break
+            }
+        }
+        #expect(sawOutput)
+        await registry.kill(id: taskID, sessionSlug: "elevated-test")
     }
 }

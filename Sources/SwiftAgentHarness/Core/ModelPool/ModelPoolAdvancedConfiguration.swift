@@ -63,17 +63,26 @@ public struct FailoverPolicy: Sendable {
     /// Random ± fraction applied to each delay (e.g. `0.25` multiplies the computed delay
     /// by a uniform draw from `[0.75, 1.25]`). Clamped to `[0, 1]`. `0` disables jitter.
     public var jitterFraction: Double
+    public var rotationStrategy: AuthProfileRotationStrategy
+    public var billingCooldown: TimeInterval
+    public var rateLimitCooldown: TimeInterval
 
     public init(
         maxRetries: Int = 0,
         baseDelay: TimeInterval = 0.25,
         maxDelay: TimeInterval = 8.0,
-        jitterFraction: Double = 0.25
+        jitterFraction: Double = 0.25,
+        rotationStrategy: AuthProfileRotationStrategy = .fillFirst,
+        billingCooldown: TimeInterval = 3600,
+        rateLimitCooldown: TimeInterval = 900
     ) {
         self.maxRetries = max(0, maxRetries)
         self.baseDelay = max(0, baseDelay)
         self.maxDelay = max(0, maxDelay)
         self.jitterFraction = max(0, min(1, jitterFraction))
+        self.rotationStrategy = rotationStrategy
+        self.billingCooldown = billingCooldown
+        self.rateLimitCooldown = rateLimitCooldown
     }
 }
 

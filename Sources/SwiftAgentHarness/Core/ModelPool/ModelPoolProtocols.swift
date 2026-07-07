@@ -153,6 +153,7 @@ public enum ModelCallAttemptKind: String, Sendable, Codable, Equatable {
     case modelSubstitution
     case authProbeSkip
     case promptCache
+    case credentialRotation
 }
 
 public enum ModelCallAttemptOutcome: String, Sendable, Codable, Equatable {
@@ -182,6 +183,7 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
     public var promptCacheEstimatedCacheWriteTokens: Int?
     public var promptCacheEstimatedSavingsUSD: Double?
     public var latencyMs: Double?
+    public var authProfileCredentialID: String?
     public var observedAt: Date
 
     public init(
@@ -203,6 +205,7 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
         promptCacheEstimatedCacheWriteTokens: Int? = nil,
         promptCacheEstimatedSavingsUSD: Double? = nil,
         latencyMs: Double? = nil,
+        authProfileCredentialID: String? = nil,
         observedAt: Date = Date()
     ) {
         self.modelID = modelID
@@ -223,6 +226,7 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
         self.promptCacheEstimatedCacheWriteTokens = promptCacheEstimatedCacheWriteTokens
         self.promptCacheEstimatedSavingsUSD = promptCacheEstimatedSavingsUSD
         self.latencyMs = latencyMs
+        self.authProfileCredentialID = authProfileCredentialID
         self.observedAt = observedAt
     }
 }

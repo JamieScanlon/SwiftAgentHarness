@@ -436,11 +436,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
     private static func validateEngineArtifactRouteKey(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         let key = raw.removingPercentEncoding ?? raw
-        guard key.count <= 256 else { return nil }
-        guard !key.contains("/"), !key.contains("\\"), !key.contains("..") else { return nil }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        guard key.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        return key
+        return APISafeRelativeFilename.validate(key)
     }
 
     private static func parseConversationID(_ req: Request) -> UUID? {
@@ -699,7 +695,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             headers.add(name: .contentType, value: "application/json")
             return Response(status: .badRequest, headers: headers, body: .init(data: data))
         }
-        let page = await dependencies.conversation.apiSearchConversations(query: searchReq)
+        let (forbidden, resolvedOwner) = dependencies.tenancyResolveCollectionOwnerScope(
+            explicitOwner: searchReq.ownerAccountID
+        )
+        if let forbidden { return forbidden }
+        var scopedSearchReq = searchReq
+        scopedSearchReq.ownerAccountID = resolvedOwner
+        let page = await dependencies.conversation.apiSearchConversations(query: scopedSearchReq)
         do {
             let enc = JSONEncoder()
             let data = try enc.encode(page)
@@ -729,7 +731,12 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             ?? req.logger[metadataKey: "request-id"]?.description
             ?? "unknown"
         dependencies.logger.warning("Handling GET /api/conversations request-id=\(requestID) query=\(req.url.query ?? "")")
-        let query = try Self.conversationListQuery(from: req)
+        var query = try Self.conversationListQuery(from: req)
+        let (forbidden, resolvedOwner) = dependencies.tenancyResolveCollectionOwnerScope(
+            explicitOwner: query.ownerAccountID
+        )
+        if let forbidden { return forbidden }
+        query.ownerAccountID = resolvedOwner
         let page = await dependencies.conversation.apiListConversations(query: query)
         let enc = JSONEncoder()
         let data = try enc.encode(page)
@@ -2215,9 +2222,14 @@ enum APILayerImageLoader {
                     )
                     continue
                 }
+                logger.warning("Warning: Could not load blob image: \(filename)")
+                continue
             }
 
-            let fileURL = tempDir.appendingPathComponent(filename)
+            guard let fileURL = APISafeRelativeFilename.resolveContainedFileURL(root: tempDir, relativeName: filename) else {
+                logger.warning("Warning: Could not read image file: \(filename)")
+                continue
+            }
             guard FileManager.default.fileExists(atPath: fileURL.path), let data = try? Data(contentsOf: fileURL) else {
                 logger.warning("Warning: Could not read image file: \(filename)")
                 continue
@@ -2281,7 +2293,7 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
         let expectedTail = ifMatch != nil
             ? APILayer.parseMessageTailIfMatch(ifMatch)
             : chatRequest.expectedPreviousTailHarnessMessageID
-        let configuration = AgentRuntimeTurnConfiguration(
+        let configuration = MessageOutputTurnConfiguration.forRESTSend(
             enableTools: chatRequest.includeTools != false,
             enableAgents: chatRequest.includeAgents != false,
             expectedPreviousTailHarnessMessageID: expectedTail,
@@ -2322,6 +2334,14 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
                     case .toolCall(let toolName, let toolCallId, let argumentsFragment, let blockIndex):
                         dependencies.logger.debug(
                             "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCall toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") argumentChars=\(argumentsFragment?.count ?? 0) blockIndex=\(blockIndex.map(String.init) ?? "nil")"
+                        )
+                    case .toolCallStarted(let toolName, let toolCallId, let contentIndex):
+                        dependencies.logger.debug(
+                            "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCallStarted toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") contentIndex=\(contentIndex.map(String.init) ?? "nil")"
+                        )
+                    case .toolCallCompleted(let toolName, let toolCallId, let arguments, let blockIndex):
+                        dependencies.logger.debug(
+                            "appendInput drain chunk conversationID=\(routingConversationID.uuidString) runID=\(runID.uuidString) index=\(chunkCount) kind=toolCallCompleted toolName=\(toolName ?? "nil") toolCallId=\(toolCallId ?? "nil") argumentChars=\(arguments.count) blockIndex=\(blockIndex.map(String.init) ?? "nil")"
                         )
                     case .surfaceIntent(let intent):
                         dependencies.logger.debug(
@@ -2525,7 +2545,7 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 throw Abort(.badRequest, reason: "No file data found")
             }
 
-            guard let filename = req.headers.first(name: "X-File-Name"),
+            guard let filenameHeader = req.headers.first(name: "X-File-Name"),
                   let contentType = req.headers.first(name: "Content-Type")
             else {
                 throw Abort(.badRequest, reason: "Missing required headers: X-File-Name and Content-Type")
@@ -2537,14 +2557,14 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 let ref = try store.put(
                     data: data,
                     durability: .ephemeral,
-                    originalName: filename,
+                    originalName: filenameHeader,
                     mimeTypeHint: contentType,
                     trust: "user-direct",
                     ttlSeconds: SessionPersistenceConfiguration.blobDefaultEphemeralTTLSeconds,
                     lane: .inbound
                 )
                 return FileUploadResponse(
-                    filename: filename,
+                    filename: filenameHeader,
                     size: data.count,
                     contentType: contentType,
                     blobId: ref.id,
@@ -2552,9 +2572,15 @@ struct APILayerUploadModule: APILayerRESTEndpointModule {
                 )
             }
 
-            let uniqueFilename = "\(UUID().uuidString)_\(filename)"
+            guard let safeFilename = APISafeRelativeFilename.validate(filenameHeader) else {
+                throw Abort(.badRequest, reason: "Invalid X-File-Name")
+            }
+
+            let uniqueFilename = "\(UUID().uuidString)_\(safeFilename)"
             let tempDir = FileManager.default.temporaryDirectory
-            let fileURL = tempDir.appendingPathComponent(uniqueFilename)
+            guard let fileURL = APISafeRelativeFilename.resolveContainedFileURL(root: tempDir, relativeName: uniqueFilename) else {
+                throw Abort(.badRequest, reason: "Invalid upload filename")
+            }
             try data.write(to: fileURL)
 
             return FileUploadResponse(
@@ -2639,24 +2665,25 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 return Response(status: .badRequest, body: .init(data: data))
             }
             let store = ExecApprovalStore.shared
-            let resolution: ExecApprovalResolution?
-            if body.approved {
-                resolution = await store.resolve(id: id, approved: true, durable: body.durable ?? false)
-            } else {
-                resolution = await store.resolve(
-                    id: id,
-                    approved: false,
-                    reason: body.reason ?? "denied via api.rest"
-                )
-            }
-            guard resolution != nil else {
+            switch await Self.resolveExecApprovalViaREST(
+                id: id,
+                dependencies: dependencies,
+                store: store,
+                approved: body.approved,
+                durable: body.durable ?? false,
+                reason: body.reason ?? "denied via api.rest"
+            ) {
+            case .forbidden(let response):
+                return response
+            case .notFound:
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",
                     "message": "Exec approval not found",
                 ])
                 return Response(status: .notFound, body: .init(data: data))
+            case .resolved:
+                return Response(status: .ok)
             }
-            return Response(status: .ok)
         }
 
         // Unified resolve endpoint (spec: one POST /approvals/:id on the shared
@@ -2691,23 +2718,75 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 return Response(status: .badRequest, body: .init(data: data))
             }
             let store = ExecApprovalStore.shared
-            let resolution: ExecApprovalResolution?
+            let approved: Bool
+            let durable: Bool
             switch decision {
             case .allowOnce:
-                resolution = await store.resolve(id: id, approved: true, durable: false)
+                approved = true
+                durable = false
             case .allowAlways:
-                resolution = await store.resolve(id: id, approved: true, durable: true)
+                approved = true
+                durable = true
             case .deny, .timeout, .cancelled:
-                resolution = await store.resolve(id: id, approved: false, reason: body.reason ?? "denied via api.rest")
+                approved = false
+                durable = false
             }
-            guard resolution != nil else {
+            switch await Self.resolveExecApprovalViaREST(
+                id: id,
+                dependencies: dependencies,
+                store: store,
+                approved: approved,
+                durable: durable,
+                reason: body.reason ?? "denied via api.rest"
+            ) {
+            case .forbidden(let response):
+                return response
+            case .notFound:
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",
                     "message": "Approval not found",
                 ])
                 return Response(status: .notFound, body: .init(data: data))
+            case .resolved:
+                return Response(status: .ok)
             }
-            return Response(status: .ok)
         }
+    }
+
+    private enum ExecApprovalRESTResolveOutcome {
+        case resolved(ExecApprovalResolution)
+        case notFound
+        case forbidden(Response)
+    }
+
+    private static func resolveExecApprovalViaREST(
+        id: String,
+        dependencies: APILayerRouteDependencies,
+        store: ExecApprovalStore,
+        approved: Bool,
+        durable: Bool,
+        reason: String?
+    ) async -> ExecApprovalRESTResolveOutcome {
+        guard let pendingScope = await store.pendingScope(id: id) else {
+            return .notFound
+        }
+        if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(
+            conversationID: pendingScope.conversationID
+        ) {
+            return .forbidden(forbidden)
+        }
+        let strictTenancy = dependencies.tenancyPolicy.requireAuthenticatedOwnerOnMutations
+        guard let resolution = await store.resolve(
+            id: id,
+            scope: pendingScope,
+            strictTenancy: strictTenancy,
+            ownerScope: APISessionContext.authenticatedOwnerAccountID,
+            approved: approved,
+            durable: durable,
+            reason: reason
+        ) else {
+            return .notFound
+        }
+        return .resolved(resolution)
     }
 }

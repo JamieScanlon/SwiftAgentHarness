@@ -306,13 +306,16 @@ struct ModeRegistryTests {
         let initial = """
         {
           "id": "reload-mode",
-          "interactionMode": "plan",
-          "assemblyKind": "planCollaboration",
+          "extends": "plan",
           "label": "Reload Mode A"
         }
         """
         try initial.write(to: file, atomically: true, encoding: .utf8)
-        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, projectConfigDirectory: dir)
+        let registry = ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            projectConfigDirectory: dir,
+            projectConfigSource: .operatorDirectory
+        )
         #expect(try await registry.resolve(modeId: "reload-mode").label == "Reload Mode A")
 
         final class Counter: @unchecked Sendable { var value = 0 }
@@ -322,8 +325,7 @@ struct ModeRegistryTests {
         let updated = """
         {
           "id": "reload-mode",
-          "interactionMode": "plan",
-          "assemblyKind": "planCollaboration",
+          "extends": "plan",
           "label": "Reload Mode B"
         }
         """
@@ -331,5 +333,85 @@ struct ModeRegistryTests {
         #expect(await registry.reloadProjectConfig())
         #expect(counter.value == 1)
         #expect(try await registry.resolve(modeId: "reload-mode").label == "Reload Mode B")
+    }
+
+    @Test("Operator project overlay cannot escalate tools allow list")
+    func operatorProjectOverlayCannotEscalateTools() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mode-profile-security-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let baseline = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
+        let baselineAgent = try await baseline.resolve(modeId: InteractionMode.agent.rawValue)
+
+        let file = dir.appendingPathComponent("escalation.json")
+        let raw = """
+        {
+          "id": "project-agent",
+          "extends": "agent",
+          "label": "Project Agent",
+          "tools": { "allow": ["*"], "deny": [] },
+          "runtime": { "maxIterations": 999 },
+          "subAgents": { "allow": ["*"] }
+        }
+        """
+        try raw.write(to: file, atomically: true, encoding: .utf8)
+
+        let registry = ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            projectConfigDirectory: dir,
+            projectConfigSource: .operatorDirectory
+        )
+        let profile = try await registry.resolve(modeId: "project-agent")
+        #expect(profile.tools.allow == baselineAgent.tools.allow)
+        #expect(profile.runtime.maxIterations == baselineAgent.runtime.maxIterations)
+        #expect(profile.subAgents.allow == baselineAgent.subAgents.allow)
+        #expect(profile.label == "Project Agent")
+
+        let diagnostics = await registry.configurationDiagnostics()
+        #expect(diagnostics.contains("modeProfiles[project-agent] project overlay stripped security slice 'tools'"))
+        #expect(diagnostics.contains("modeProfiles[project-agent] project overlay stripped security slice 'runtime'"))
+        #expect(diagnostics.contains("modeProfiles[project-agent] project overlay stripped security slice 'subAgents'"))
+    }
+
+    @Test("Operator project overlay reload remains sanitized")
+    func operatorProjectOverlayReloadRemainsSanitized() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mode-profile-reload-security-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let baseline = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
+        let baselineAgent = try await baseline.resolve(modeId: InteractionMode.agent.rawValue)
+
+        let file = dir.appendingPathComponent("escalation-reload.json")
+        try """
+        {
+          "id": "reload-project-agent",
+          "extends": "agent",
+          "tools": { "allow": ["*"] }
+        }
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        let registry = ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            projectConfigDirectory: dir,
+            projectConfigSource: .operatorDirectory
+        )
+        #expect(try await registry.resolve(modeId: "reload-project-agent").tools.allow == baselineAgent.tools.allow)
+
+        try """
+        {
+          "id": "reload-project-agent",
+          "extends": "agent",
+          "tools": { "allow": ["bash", "write_file"] },
+          "runtime": { "maxIterations": 500 }
+        }
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        #expect(await registry.reloadProjectConfig())
+        #expect(try await registry.resolve(modeId: "reload-project-agent").tools.allow == baselineAgent.tools.allow)
+        #expect(try await registry.resolve(modeId: "reload-project-agent").runtime.maxIterations == baselineAgent.runtime.maxIterations)
     }
 }

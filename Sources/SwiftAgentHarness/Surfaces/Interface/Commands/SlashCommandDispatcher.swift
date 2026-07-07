@@ -5,17 +5,26 @@ public struct SlashCommandRuntimeConfiguration: Sendable, Equatable {
     public var allowUnknownPassthrough: Bool
     public var compactEnabled: Bool
     public var skillSlashEnabled: Bool
+    public var directivesEnabled: Bool
+    public var inlineShortcutsEnabled: Bool
+    public var ownerOnlyDirectiveNames: Set<String>
 
     public init(
         enabled: Bool = true,
         allowUnknownPassthrough: Bool = true,
         compactEnabled: Bool = true,
-        skillSlashEnabled: Bool = true
+        skillSlashEnabled: Bool = true,
+        directivesEnabled: Bool = true,
+        inlineShortcutsEnabled: Bool = true,
+        ownerOnlyDirectiveNames: Set<String> = ["model"]
     ) {
         self.enabled = enabled
         self.allowUnknownPassthrough = allowUnknownPassthrough
         self.compactEnabled = compactEnabled
         self.skillSlashEnabled = skillSlashEnabled
+        self.directivesEnabled = directivesEnabled
+        self.inlineShortcutsEnabled = inlineShortcutsEnabled
+        self.ownerOnlyDirectiveNames = ownerOnlyDirectiveNames
     }
 }
 
@@ -85,7 +94,7 @@ public struct SlashCommandRegistry: Sendable {
         self.commandByName = map
     }
 
-    private static func normalizeKey(_ s: String) -> String {
+    static func normalizeKey(_ s: String) -> String {
         var t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if t.hasPrefix("/") { t.removeFirst() }
         return t
@@ -131,58 +140,29 @@ public struct SlashCommandRegistry: Sendable {
     }
 
     public static func builtins(compactEnabled: Bool) -> SlashCommandRegistry {
-        let compact = SlashCommand(
-            base: SlashCommandBase(
-                name: "compact",
-                description: "Compact the current conversation context.",
-                argumentHint: "[reason]",
-                hiddenKeywords: "shrink context window summarize",
-                bypassTier: .queued,
-                isEnabled: compactEnabled
+        let extensions: [SlashCommand] = [
+            SlashCommand(
+                base: SlashCommandBase(
+                    name: "memory",
+                    description: "Request the client to open a memory file for editing.",
+                    argumentHint: "[filename]",
+                    hiddenKeywords: "edit remember persistent",
+                    bypassTier: .queued
+                ),
+                kind: .local
             ),
-            kind: .local
-        )
-        let memory = SlashCommand(
-            base: SlashCommandBase(
-                name: "memory",
-                description: "Request the client to open a memory file for editing.",
-                argumentHint: "[filename]",
-                hiddenKeywords: "edit remember persistent",
-                bypassTier: .queued
+            SlashCommand(
+                base: SlashCommandBase(
+                    name: "init",
+                    description: "Bootstrap AGENTS.md for the current workspace.",
+                    argumentHint: "",
+                    hiddenKeywords: "bootstrap agents claude project",
+                    bypassTier: .queued
+                ),
+                kind: .local
             ),
-            kind: .local
-        )
-        let initCmd = SlashCommand(
-            base: SlashCommandBase(
-                name: "init",
-                description: "Bootstrap AGENTS.md for the current workspace.",
-                argumentHint: "",
-                hiddenKeywords: "bootstrap agents claude project",
-                bypassTier: .queued
-            ),
-            kind: .local
-        )
-        let approve = SlashCommand(
-            base: SlashCommandBase(
-                name: "approve",
-                description: "Approve a pending exec request by ID.",
-                argumentHint: "<approval-id> [always]",
-                hiddenKeywords: "exec approval allow once durable",
-                bypassTier: .always
-            ),
-            kind: .local
-        )
-        let deny = SlashCommand(
-            base: SlashCommandBase(
-                name: "deny",
-                description: "Deny a pending exec request by ID.",
-                argumentHint: "<approval-id> [reason]",
-                hiddenKeywords: "exec approval reject refuse",
-                bypassTier: .always
-            ),
-            kind: .local
-        )
-        return SlashCommandRegistry(commands: [compact, memory, initCmd, approve, deny])
+        ]
+        return CoreCommandCatalog.registry(compactEnabled: compactEnabled, additional: extensions)
     }
 
     /// Built-in commands plus one registry row per eligible skill (`name` key `skill:<lowercased>`).

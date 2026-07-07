@@ -38,10 +38,14 @@ public struct DockerBrowserSandboxBackendHandle: SandboxBackendHandle {
 
     private let containerName: String
     private let settings: BrowserSandboxSettings
+    private let hostWorkspace: String
+    private let configHash: String
 
     init(params: CreateSandboxBackendParams) {
-        self.containerName = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        self.containerName = "sah-browser-\(params.scopeKey)"
         self.settings = params.config.browser
+        self.hostWorkspace = FilesystemCanonicalPath.resolve(params.workspaceDir)
+        self.configHash = SandboxConfigHash.compute(config: params.config)
         self.workdir = "/home/browser"
         self.runtimeId = containerName
         self.runtimeLabel = containerName
@@ -60,16 +64,21 @@ public struct DockerBrowserSandboxBackendHandle: SandboxBackendHandle {
     }
 
     func ensureContainer() async throws {
-        let inspect = try await ShellProcessRunner.run(argv: ["docker", "inspect", "-f", "{{.State.Running}}", containerName])
-        if String(data: inspect.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "true" {
-            return
+        if try await DockerSandboxInspect.isRunning(containerName: containerName) {
+            let label = try await DockerSandboxInspect.configHash(containerName: containerName)
+            if label == configHash { return }
+            _ = try await ShellProcessRunner.run(argv: ["docker", "rm", "-f", containerName])
         }
-        _ = try await ShellProcessRunner.run(argv: [
-            "docker", "run", "-d", "--name", containerName,
-            "--network", "sah-sandbox-browser",
-            settings.image,
-            "sleep", "infinity",
-        ])
+        try await DockerSandboxNetwork.ensureExists(name: settings.network)
+        let runUser = DockerSandboxRunArgs.resolveRunUser(hostWorkspace: hostWorkspace)
+        let runArgs = DockerSandboxRunArgs.buildBrowser(
+            containerName: containerName,
+            settings: settings,
+            runUser: runUser,
+            configHash: configHash,
+            workdir: workdir
+        )
+        _ = try await ShellProcessRunner.run(argv: runArgs)
     }
 }
 
@@ -77,14 +86,16 @@ public struct DockerBrowserSandboxBackendManager: SandboxBackendManager {
     public init() {}
 
     public func describeRuntime(params: SandboxBackendDescribeRuntimeParams) async throws -> SandboxBackendRuntimeInfo {
-        let name = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
-        let inspect = try await ShellProcessRunner.run(argv: ["docker", "inspect", "-f", "{{.State.Running}}", name])
-        let running = String(data: inspect.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
-        return SandboxBackendRuntimeInfo(runtimeId: name, running: running, configMatches: true, runtimeLabel: name)
+        let name = "sah-browser-\(params.scopeKey)"
+        let running = try await DockerSandboxInspect.isRunning(containerName: name)
+        let currentHash = SandboxConfigHash.compute(config: params.config)
+        let labelHash = running ? try await DockerSandboxInspect.configHash(containerName: name) : nil
+        let configMatches = DockerSandboxConfigMatch.matches(running: running, labelHash: labelHash, currentHash: currentHash)
+        return SandboxBackendRuntimeInfo(runtimeId: name, running: running, configMatches: configMatches, runtimeLabel: name)
     }
 
     public func removeRuntime(params: SandboxBackendRemoveRuntimeParams) async throws {
-        let name = "sah-browser-\(params.scopeKey.replacingOccurrences(of: ":", with: "-"))"
+        let name = "sah-browser-\(params.scopeKey)"
         _ = try await ShellProcessRunner.run(argv: ["docker", "rm", "-f", name])
     }
 }

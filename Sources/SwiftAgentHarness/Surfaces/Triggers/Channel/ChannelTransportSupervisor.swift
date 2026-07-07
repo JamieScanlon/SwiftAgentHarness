@@ -7,12 +7,12 @@ actor ChannelTransportSupervisor {
     private let maxBackoffSeconds: TimeInterval = 60
     private var backoffSeconds: TimeInterval = 1
     private var runTask: Task<Void, Never>?
-    private let onEvent: @Sendable (MockChannelRawEvent) async -> Void
+    private let onEvent: @Sendable (ChannelTransportRawEvent) async -> Void
 
     init(
         transport: any ChannelTransport,
         logger: Logger,
-        onEvent: @escaping @Sendable (MockChannelRawEvent) async -> Void
+        onEvent: @escaping @Sendable (ChannelTransportRawEvent) async -> Void
     ) {
         self.transport = transport
         self.logger = logger
@@ -26,7 +26,7 @@ actor ChannelTransportSupervisor {
         }
     }
 
-    func stop() {
+    func stop() async {
         runTask?.cancel()
         runTask = nil
         Task { await transport.disconnect() }

@@ -8,9 +8,7 @@ import Testing
 @Suite("ConversationManager", .serialized)
 struct ConversationManagerTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeManager(container: ModelContainer) -> ConversationManager {
@@ -384,6 +382,308 @@ struct ConversationManagerTests {
         #expect(payload.basedOnEventID == 1)
         #expect(payload.startEventID == 1)
         #expect(payload.endEventID == 1)
+    }
+
+    private func makeBranchJournalCompactionConfig() -> ContextCompactionConfiguration {
+        ContextCompactionConfiguration(
+            enabled: true,
+            ollamaServerURL: URL(string: "http://localhost:11434")!,
+            model: "m",
+            fallbackContextLimitTokens: 131_072,
+            charactersPerToken: 4,
+            maxCompactedMiddleMessages: 15
+        )
+    }
+
+    private func branchJournalRunLifecyclePayloadJSON() -> String {
+        ConversationEventCodec.encode(
+            RunLifecycleEventPayload(
+                runID: UUID(),
+                status: .completed,
+                terminalReason: nil,
+                markerKind: nil,
+                createdAt: Date()
+            )
+        )
+    }
+
+    struct BranchWireCheckpointCase: Sendable {
+        let kind: String
+        let makeInnerPayload: @Sendable (UUID, Int) -> String
+        let decodedBasedOnEventID: @Sendable (String) -> Int?
+    }
+
+    static let branchWireCheckpointCases: [BranchWireCheckpointCase] = [
+        BranchWireCheckpointCase(
+            kind: ConversationEventKind.contextCompactionCheckpoint.rawValue,
+            makeInnerPayload: { msgID, basedOn in
+                let config = ContextCompactionConfiguration(
+                    enabled: true,
+                    ollamaServerURL: URL(string: "http://localhost:11434")!,
+                    model: "m",
+                    fallbackContextLimitTokens: 131_072,
+                    charactersPerToken: 4,
+                    maxCompactedMiddleMessages: 15
+                )
+                return ConversationEventCodec.encode(
+                    ContextCompactionCheckpointPayload(
+                        schemaVersion: ContextCompactionCheckpointPayload.currentSchemaVersion,
+                        kind: .summarized,
+                        coveredMessageIDs: [msgID],
+                        syntheticMessages: [ContextCompactionMessageDTO(id: UUID(), role: "assistant", content: "s")],
+                        configFingerprint: ContextCompactionCheckpointSupport.configFingerprint(config),
+                        basedOnEventID: basedOn,
+                        basedOnTailMessageID: msgID,
+                        createdAt: Date()
+                    )
+                )
+            },
+            decodedBasedOnEventID: { json in
+                ConversationEventCodec.decode(ContextCompactionCheckpointPayload.self, from: json)?.basedOnEventID
+            }
+        ),
+        BranchWireCheckpointCase(
+            kind: ConversationEventKind.memoryInjectionSnapshotCheckpoint.rawValue,
+            makeInnerPayload: { msgID, basedOn in
+                ConversationEventCodec.encode(
+                    MemoryInjectionSnapshotCheckpointWire(
+                        schemaVersion: MemoryInjectionSnapshotCheckpointWire.currentSchemaVersion,
+                        basedOnEventID: basedOn,
+                        injectionFingerprint: "inj-fp",
+                        snapshotJSON: "{}",
+                        scopeMessageIDs: [msgID],
+                        createdAt: Date()
+                    )
+                )
+            },
+            decodedBasedOnEventID: { json in
+                ConversationEventCodec.decode(MemoryInjectionSnapshotCheckpointWire.self, from: json)?.basedOnEventID
+            }
+        ),
+        BranchWireCheckpointCase(
+            kind: ConversationEventKind.toolResultTrimCheckpoint.rawValue,
+            makeInnerPayload: { msgID, basedOn in
+                ConversationEventCodec.encode(
+                    ToolResultTrimCheckpointWire(
+                        schemaVersion: ToolResultTrimCheckpointWire.currentSchemaVersion,
+                        basedOnEventID: basedOn,
+                        coveredMessageIDs: [msgID],
+                        trimmedToolCallIds: ["tc-1"],
+                        configFingerprint: "trim-fp",
+                        createdAt: Date()
+                    )
+                )
+            },
+            decodedBasedOnEventID: { json in
+                ConversationEventCodec.decode(ToolResultTrimCheckpointWire.self, from: json)?.basedOnEventID
+            }
+        ),
+        BranchWireCheckpointCase(
+            kind: ConversationEventKind.systemPromptAssemblyCheckpoint.rawValue,
+            makeInnerPayload: { _, basedOn in
+                ConversationEventCodec.encode(
+                    SystemPromptAssemblyCheckpointWire(
+                        schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
+                        basedOnEventID: basedOn,
+                        assemblyFingerprint: "assembly-fp",
+                        createdAt: Date()
+                    )
+                )
+            },
+            decodedBasedOnEventID: { json in
+                ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: json)?.basedOnEventID
+            }
+        ),
+        BranchWireCheckpointCase(
+            kind: ConversationEventKind.attachmentProjectionCheckpoint.rawValue,
+            makeInnerPayload: { _, basedOn in
+                ConversationEventCodec.encode(
+                    AttachmentProjectionCheckpointWire(
+                        schemaVersion: AttachmentProjectionCheckpointWire.currentSchemaVersion,
+                        basedOnEventID: basedOn,
+                        projectionFingerprint: "proj-fp",
+                        decisions: [
+                            ConversationAttachmentProjectionDecision(
+                                attachmentID: UUID(),
+                                attachmentName: "doc.pdf",
+                                attachmentKind: "document",
+                                disposition: .summarize,
+                                reason: "within_summary_budget"
+                            ),
+                        ],
+                        createdAt: Date()
+                    )
+                )
+            },
+            decodedBasedOnEventID: { json in
+                ConversationEventCodec.decode(AttachmentProjectionCheckpointWire.self, from: json)?.basedOnEventID
+            }
+        ),
+    ]
+
+    @discardableResult
+    private func appendBranchJournalRemapScenario(
+        local: LocalHarnessSessionPersistence,
+        conversationID: UUID,
+        msgA: UUID,
+        omittedMessages: [UUID],
+        checkpointKind: String,
+        makeCheckpointInnerPayload: (Int) -> String,
+        lifecyclePaddingCount: Int
+    ) throws -> (checkpointBasedOnEventID: Int, checkpointEventID: Int) {
+        let lifecyclePayload = branchJournalRunLifecyclePayloadJSON()
+        var lastEventID = try HarnessConversationTestFixtures.appendHarnessJournalEvent(
+            local: local,
+            conversationID: conversationID,
+            stream: .raw,
+            kind: ConversationEventKind.messageAppended.rawValue,
+            innerPayloadJSON: ConversationEventCodec.encode(MessageAppendedEventPayload(messageID: msgA)),
+            basedOnEventID: nil
+        )
+        for _ in 0..<lifecyclePaddingCount {
+            lastEventID = try HarnessConversationTestFixtures.appendHarnessJournalEvent(
+                local: local,
+                conversationID: conversationID,
+                stream: .derived,
+                kind: ConversationEventKind.runLifecycleEvent.rawValue,
+                innerPayloadJSON: lifecyclePayload,
+                basedOnEventID: lastEventID
+            )
+        }
+        for omittedID in omittedMessages {
+            lastEventID = try HarnessConversationTestFixtures.appendHarnessJournalEvent(
+                local: local,
+                conversationID: conversationID,
+                stream: .raw,
+                kind: ConversationEventKind.messageAppended.rawValue,
+                innerPayloadJSON: ConversationEventCodec.encode(MessageAppendedEventPayload(messageID: omittedID)),
+                basedOnEventID: lastEventID
+            )
+        }
+        let checkpointBasedOnEventID = try HarnessConversationTestFixtures.appendHarnessJournalEvent(
+            local: local,
+            conversationID: conversationID,
+            stream: .derived,
+            kind: ConversationEventKind.runLifecycleEvent.rawValue,
+            innerPayloadJSON: lifecyclePayload,
+            basedOnEventID: lastEventID
+        )
+        let checkpointEventID = try HarnessConversationTestFixtures.appendHarnessJournalEvent(
+            local: local,
+            conversationID: conversationID,
+            stream: .derived,
+            kind: checkpointKind,
+            innerPayloadJSON: makeCheckpointInnerPayload(checkpointBasedOnEventID),
+            basedOnEventID: checkpointBasedOnEventID
+        )
+        return (checkpointBasedOnEventID, checkpointEventID)
+    }
+
+    @Test("Branch wire-checkpoint payload basedOnEventID is remapped to child event numbering", arguments: branchWireCheckpointCases)
+    func branchWireCheckpointPayloadBasedOnEventIDIsRemapped(testCase: BranchWireCheckpointCase) throws {
+        let model = makeModel(name: "branch-wire-remap-\(testCase.kind)")
+        let (stack, local, root) = try HarnessConversationTestFixtures.makeLocalPersistenceStack(label: "branch-wire-remap")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cm = stack.conversationManager
+        _ = try cm.createConversation(with: model, userSystemPrompt: "sys")
+        let sourceID = try #require(cm.listConversationInfo().first?.id)
+        let msgA = UUID()
+        let msgB = UUID()
+        let msgARecord = Message(id: msgA, role: .user, content: "prefix", timestamp: Date(), toolCalls: [])
+        let msgBRecord = Message(id: msgB, role: .user, content: "suffix", timestamp: Date().addingTimeInterval(1), toolCalls: [])
+        try HarnessConversationTestFixtures.appendThinTranscriptMessage(local: local, conversationID: sourceID, message: msgARecord)
+        try HarnessConversationTestFixtures.appendThinTranscriptMessage(local: local, conversationID: sourceID, message: msgBRecord)
+        try cm.resetConversationsFromCatalog(availableModels: [model])
+
+        let (checkpointBasedOnEventID, _) = try appendBranchJournalRemapScenario(
+            local: local,
+            conversationID: sourceID,
+            msgA: msgA,
+            omittedMessages: [msgB],
+            checkpointKind: testCase.kind,
+            makeCheckpointInnerPayload: { basedOn in testCase.makeInnerPayload(msgA, basedOn) },
+            lifecyclePaddingCount: 0
+        )
+
+        let childID = UUID()
+        try HarnessConversationTestFixtures.bootstrapEmptySession(local: local, id: childID, model: model, topic: "branch-child")
+        try cm.copyInheritedJournalTranscriptEntriesForBranch(
+            parentConversationID: sourceID,
+            childConversationID: childID,
+            anchorMessageID: msgA
+        )
+
+        let (childEvents, childFrontier) = cm.loadConversationEventsWithFrontier(conversationID: childID)
+        let childCheckpoint = try #require(childEvents.last { $0.kind == testCase.kind })
+        let decodedBasedOn = try #require(testCase.decodedBasedOnEventID(childCheckpoint.payloadJSON))
+        #expect(decodedBasedOn == checkpointBasedOnEventID - 1)
+        #expect(decodedBasedOn <= childFrontier)
+        #expect(childCheckpoint.eventID == childFrontier)
+    }
+
+    @Test("Branch inherited context compaction checkpoint is reusable on child frontier")
+    func branchInheritedContextCompactionCheckpointIsReusableOnChildFrontier() throws {
+        let model = makeModel(name: "branch-compaction-reuse")
+        let (stack, local, root) = try HarnessConversationTestFixtures.makeLocalPersistenceStack(label: "branch-compaction-reuse")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cm = stack.conversationManager
+        let config = makeBranchJournalCompactionConfig()
+        _ = try cm.createConversation(with: model, userSystemPrompt: "sys")
+        let sourceID = try #require(cm.listConversationInfo().first?.id)
+        let msgA = UUID()
+        let msgB = UUID()
+        let msgC = UUID()
+        let msgARecord = Message(id: msgA, role: .user, content: "prefix", timestamp: Date(), toolCalls: [])
+        let msgBRecord = Message(id: msgB, role: .user, content: "mid", timestamp: Date().addingTimeInterval(1), toolCalls: [])
+        let msgCRecord = Message(id: msgC, role: .user, content: "suffix", timestamp: Date().addingTimeInterval(2), toolCalls: [])
+        try HarnessConversationTestFixtures.appendThinTranscriptMessage(local: local, conversationID: sourceID, message: msgARecord)
+        try HarnessConversationTestFixtures.appendThinTranscriptMessage(local: local, conversationID: sourceID, message: msgBRecord)
+        try HarnessConversationTestFixtures.appendThinTranscriptMessage(local: local, conversationID: sourceID, message: msgCRecord)
+        try cm.resetConversationsFromCatalog(availableModels: [model])
+
+        try appendBranchJournalRemapScenario(
+            local: local,
+            conversationID: sourceID,
+            msgA: msgA,
+            omittedMessages: [msgB, msgC],
+            checkpointKind: ConversationEventKind.contextCompactionCheckpoint.rawValue,
+            makeCheckpointInnerPayload: { basedOn in
+                ConversationEventCodec.encode(
+                    ContextCompactionCheckpointPayload(
+                        schemaVersion: ContextCompactionCheckpointPayload.currentSchemaVersion,
+                        kind: .summarized,
+                        coveredMessageIDs: [msgA],
+                        syntheticMessages: [ContextCompactionMessageDTO(id: UUID(), role: "assistant", content: "s")],
+                        configFingerprint: ContextCompactionCheckpointSupport.configFingerprint(config),
+                        basedOnEventID: basedOn,
+                        basedOnTailMessageID: msgA,
+                        createdAt: Date()
+                    )
+                )
+            },
+            lifecyclePaddingCount: 0
+        )
+
+        let childID = UUID()
+        try HarnessConversationTestFixtures.bootstrapEmptySession(local: local, id: childID, model: model, topic: "branch-child")
+        try cm.copyInheritedJournalTranscriptEntriesForBranch(
+            parentConversationID: sourceID,
+            childConversationID: childID,
+            anchorMessageID: msgA
+        )
+
+        let (childEvents, childFrontier) = cm.loadConversationEventsWithFrontier(conversationID: childID)
+        let match = ContextCompactionCheckpointSupport.latestValidCheckpoint(
+            events: childEvents,
+            rawMiddle: [msgARecord],
+            config: config,
+            frontierEventID: childFrontier
+        )
+        #expect(match != nil)
+        if let match {
+            #expect(match.payload.basedOnEventID <= childFrontier)
+            #expect(match.payload.coveredMessageIDs == [msgA])
+        }
     }
 
     @Test("listConversationSummaries uses catalog title and first user prompt for list topic")

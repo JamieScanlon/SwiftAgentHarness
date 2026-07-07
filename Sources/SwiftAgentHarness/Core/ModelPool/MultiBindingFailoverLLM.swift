@@ -112,7 +112,7 @@ struct MultiBindingFailoverLLM: LLMProtocol {
                     } catch {
                         let canAdvance = !firstYielded
                             && index < bindings.count - 1
-                            && BindingFailoverClassifier.classify(error) == .tryNextBinding
+                            && BindingFailoverClassifier.classify(error, providerID: binding.providerId) == .tryNextBinding
                         if canAdvance {
                             await emitAttempt(
                                 binding: binding,
@@ -163,6 +163,7 @@ struct MultiBindingFailoverLLM: LLMProtocol {
                 throw LLMError.authenticationFailed
             }
             do {
+                let result = try await work(llm)
                 if index > 0 {
                     await emitAttempt(
                         binding: binding,
@@ -171,13 +172,13 @@ struct MultiBindingFailoverLLM: LLMProtocol {
                         error: nil
                     )
                 }
-                return try await work(llm)
+                return result
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 lastError = error
                 let canAdvance = index < bindings.count - 1
-                    && BindingFailoverClassifier.classify(error) == .tryNextBinding
+                    && BindingFailoverClassifier.classify(error, providerID: binding.providerId) == .tryNextBinding
                 if canAdvance {
                     await emitAttempt(
                         binding: binding,

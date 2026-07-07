@@ -224,7 +224,7 @@ public struct ModeProfileRuntimeSlice: Sendable, Equatable {
         stopOnApprovalRequest: Bool? = nil,
         termination: ModeProfileTerminationSlice? = nil
     ) {
-        self.maxIterations = maxIterations
+        self.maxIterations = maxIterations.map { max(1, $0) }
         self.stopOnApprovalRequest = stopOnApprovalRequest
         self.termination = termination
     }

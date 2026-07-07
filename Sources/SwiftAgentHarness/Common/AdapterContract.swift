@@ -24,8 +24,8 @@
 //  2. `stream(_:config:)` yields zero or more `.stream(LLMResponse)` chunks,
 //     followed by **exactly one** `.complete(LLMResponse)` on success, then
 //     `continuation.finish()`. Tool calls accumulated mid-stream are surfaced on
-//     the `.complete` value (also as `.toolCall` `PartialFragment` chunks where
-//     the upstream API exposes per-delta tool args; today: OpenAI only).
+//     the `.complete` value (also as lifecycle / argument `PartialFragment` chunks
+//     governed by `compat.supportsEagerToolInputStreaming` on the registry row).
 //
 //  3. **Fragment classification** uses `LLMResponse.streamingFragment`. Adapters
 //     that cannot classify a delta MUST leave `streamingFragment` nil so the

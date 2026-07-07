@@ -84,6 +84,16 @@ extension ConversationPersistenceStack {
         )
     }
 
+    func routingRevertActiveBranchRemovingAssistantMessage(
+        conversationID: UUID,
+        assistantMessageID: UUID
+    ) throws -> [Message] {
+        try revertActiveBranchRemovingAssistantMessage(
+            conversationID: conversationID,
+            assistantMessageID: assistantMessageID
+        )
+    }
+
     func routingPersistRunLifecycleTranscriptMarker(conversationID: UUID, payload: RunLifecycleTranscriptMarkerPayload) throws {
         try persistRunLifecycleTranscriptMarker(conversationID: conversationID, payload: payload)
     }

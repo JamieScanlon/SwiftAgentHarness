@@ -72,6 +72,32 @@ struct A2ASubAgentTransportAdapterTests {
         )
         #expect(mapped?.phase == .done)
         #expect(mapped?.completionSource == "result text")
+        #expect(mapped?.completionUsage == nil)
+    }
+
+    @Test("stream mapping maps completion metadata to completion usage")
+    func streamMappingMapsCompletionMetadata() {
+        let session = RemoteTransportSession(
+            correlation: SubAgentTransportInvocationCorrelation(
+                lifecycleID: "lifecycle-2",
+                transportKind: .a2a,
+                sessionHandleID: "agent-1",
+                completionHandleID: "handle-2"
+            ),
+            parentConversationID: UUID(),
+            delegateToolName: "delegate_agent",
+            defaultTrustLevel: SubAgentTrustLevel.knownParty.rawValue,
+            permissionPolicy: SubAgentPermissionPolicy.auto.rawValue,
+            status: .running
+        )
+        let metadata = LLMMetadata(promptTokens: 80, completionTokens: 20, totalTokens: 100)
+        let mapped = SubAgentA2ADelegateStreamMapping.map(
+            event: .completed(A2ADelegateCompletion(content: "done", metadata: metadata, taskID: "task-2", contextID: "ctx-2")),
+            session: session
+        )
+        #expect(mapped?.completionUsage?.promptTokens == 80)
+        #expect(mapped?.completionUsage?.completionTokens == 20)
+        #expect(mapped?.completionUsage?.totalTokens == 100)
     }
 
     @Test("invoke reaches done without synthetic usage")
@@ -142,7 +168,7 @@ struct A2ASubAgentTransportAdapterTests {
                 taskDescription: "Run delegated work",
                 subagentType: SubAgentTransportKind.a2a.rawValue,
                 agentID: agentName,
-                metadata: .object(["permissionAlreadyGranted": .boolean(true)])
+                permissionAlreadyGranted: true
             ),
             parentConversationID: parentConversationID
         )
@@ -162,13 +188,11 @@ struct A2ASubAgentTransportAdapterTests {
                 parentConversationID: parentConversationID
             )
         )
-        var terminal: SubAgentDelegateEvent?
+        var events: [SubAgentDelegateEvent] = []
         for await event in stream {
-            if event.phase == .done || event.phase == .failed {
-                terminal = event
-                break
-            }
+            events.append(event)
         }
+        let terminal = events.last { $0.phase == .done || $0.phase == .failed }
         #expect(terminal?.phase == .done)
         #expect(terminal?.completionUsage == nil)
     }

@@ -15,9 +15,7 @@ private enum ConversationBulkMirrorTestSupport {
 
     static func makeContainer() throws -> ModelContainer {
         enableV2BootstrapForTests()
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeModel(modelName: String) -> Model {

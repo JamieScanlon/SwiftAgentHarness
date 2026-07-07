@@ -4,8 +4,11 @@ import Logging
 actor ChannelIntakePipeline {
     private let config: ChannelListenerConfig
     private let channel: ChannelId
+    private let security: any ChannelSecurityAdapting
+    private let sessionGrammar: any ChannelSessionGrammarAdapting
     private let mediaRoot: URL
     private let dedup: ChannelMessageDedup
+    private let lifecycleCoordinator: ChannelSessionLifecycleCoordinator?
     private let mentionGate: ChannelMentionGate
     private let debounce: ChannelInboundDebounce
     private let logger: Logger
@@ -16,29 +19,42 @@ actor ChannelIntakePipeline {
     init(
         channel: ChannelId,
         config: ChannelListenerConfig,
+        security: any ChannelSecurityAdapting,
+        sessionGrammar: any ChannelSessionGrammarAdapting,
         mediaRoot: URL,
+        dedup: ChannelMessageDedup,
+        lifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil,
         logger: Logger,
         emitTrigger: @escaping @Sendable (HarnessTrigger) async -> Void
     ) {
         self.channel = channel
         self.config = config
+        self.security = security
+        self.sessionGrammar = sessionGrammar
         self.mediaRoot = mediaRoot
         self.logger = logger
         self.emitTrigger = emitTrigger
-        self.dedup = ChannelMessageDedup()
-        self.mentionGate = ChannelMentionGate(config: config.mention)
+        self.dedup = dedup
+        self.lifecycleCoordinator = lifecycleCoordinator
+        self.mentionGate = security.makeMentionGate(config: config.mention)
         self.debounce = ChannelInboundDebounce(debounceMs: config.debounce.textMs)
     }
 
     func process(event: ChannelMessageEvent) async {
         counters.parsed += 1
-        if await dedup.isDuplicate(channel: channel, platformMessageId: event.platformMessageId) {
+        if await dedup.isDuplicate(
+            channel: channel,
+            platformMessageId: event.platformMessageId,
+            accountId: config.platformIdentity,
+            peerId: event.senderId,
+            sessionKey: sessionGrammar.resolveDedupSessionKey(event: event, config: config)
+        ) {
             counters.dedupDropped += 1
             logger.debug("channel_intake_dedup channel=\(channel.rawValue) id=\(event.platformMessageId)")
             return
         }
         let resolved = ChannelAttachmentResolver.resolve(event: event, mediaRoot: mediaRoot, channel: channel)
-        if !ChannelAllowlistPolicy.isAllowed(event: resolved, config: config) {
+        if !security.isAllowed(event: resolved, config: config) {
             counters.authDenied += 1
             logger.debug("channel_intake_auth_denied channel=\(channel.rawValue) sender=\(event.senderId)")
             return
@@ -55,12 +71,16 @@ actor ChannelIntakePipeline {
             debounceTasks[schedule.key]?.cancel()
             let waitMs = schedule.waitMs
             let key = schedule.key
-            debounceTasks[key] = Task {
+            let task = Task {
                 if waitMs > 0 {
                     try? await Task.sleep(nanoseconds: UInt64(waitMs) * 1_000_000)
                 }
                 guard !Task.isCancelled else { return }
                 await self.flushDebounce(key: key)
+            }
+            debounceTasks[key] = task
+            if let lifecycleCoordinator {
+                await lifecycleCoordinator.registerDebounce(burstKey: key, task: task)
             }
             return
         }
@@ -75,6 +95,14 @@ actor ChannelIntakePipeline {
         for task in debounceTasks.values { task.cancel() }
         debounceTasks.removeAll()
         await debounce.cancelAll()
+    }
+
+    func cancelDebounce(burstKeys: Set<String>) async {
+        for key in burstKeys {
+            debounceTasks[key]?.cancel()
+            debounceTasks[key] = nil
+            _ = await debounce.takeBurst(key: key)
+        }
     }
 
     private func flushDebounce(key: String) async {
@@ -110,7 +138,7 @@ actor ChannelIntakePipeline {
         mention: ChannelMentionGateResult,
         burst: ChannelDebounceBurstMetadata?
     ) async {
-        let trust = ChannelTrustClassifier.classify(
+        let trust = security.classifyTrust(
             event: event,
             config: config,
             effectiveWasMentioned: mention.effectiveWasMentioned
@@ -118,6 +146,7 @@ actor ChannelIntakePipeline {
         guard let trigger = try? ChannelTriggerBuilder.build(
             event: event,
             config: config,
+            sessionGrammar: sessionGrammar,
             trust: trust,
             effectiveWasMentioned: mention.effectiveWasMentioned,
             burst: burst

@@ -20,6 +20,7 @@ enum SessionTranscriptPayloadAllowlist {
         "inputTrustRaw",
         "finishReason",
         "responseFormat",
+        "contentBlocks",
     ]
 
     /// Allowed top-level keys for ``RunLifecycleTranscriptMarkerPayload`` (`custom` transcript rows).

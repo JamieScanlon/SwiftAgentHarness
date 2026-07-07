@@ -47,7 +47,7 @@ struct SessionTranscriptAttachmentPayloadTests {
         try local.appendTranscriptEntry(conversationID: cid, entry: entry)
 
         let payload = try MessageTranscriptPayloadCodec.decode(entry.payloadJSON)
-        #expect(payload.v == 3)
+        #expect(payload.v == 4)
         #expect(payload.attachmentRefs?.count == 1)
         #expect(payload.attachmentRefs?.first?.blobId == blobRef.id)
 

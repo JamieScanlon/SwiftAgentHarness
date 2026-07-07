@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import Testing
+import VaporTesting
 @testable import SwiftAgentHarness
 
 private final class SplitGatewayStubModelProvider: APILayerModelManaging, Sendable {
@@ -25,6 +26,16 @@ enum APILayerGatewaySplitServicesTests {
     }
 
     @Test
+    static func configureChatGatewayAcceptsIndependentProtocolOnlyInstances() async {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        #expect(ObjectIdentifier(conversation) != ObjectIdentifier(runtime))
+        let gateway = APILayerChatGatewayServices(conversation: conversation, runtime: runtime)
+        #expect(ObjectIdentifier(gateway.conversation as AnyObject) == ObjectIdentifier(conversation))
+        #expect(ObjectIdentifier(gateway.runtime as AnyObject) == ObjectIdentifier(runtime))
+    }
+
+    @Test
     static func routeDependenciesPreserveSplitInstances() {
         let gateway = APILayerChatGatewayServices(
             conversation: ConversationSessionService(backend: ProtocolOnlyConversationGatewayStub()),
@@ -41,5 +52,53 @@ enum APILayerGatewaySplitServicesTests {
         )
         #expect(ObjectIdentifier(deps.conversation as AnyObject) == ObjectIdentifier(conversation))
         #expect(ObjectIdentifier(deps.runtime as AnyObject) == ObjectIdentifier(runtime))
+    }
+
+    @Test
+    static func explicitGatewayWiringServesRESTStatus() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let api = APILayer(port: 0)
+        await api.setChatGatewayServices(APILayerChatGatewayServices(conversation: conversation, runtime: runtime))
+        await api.setModelProvider(SplitGatewayStubModelProvider(models: []))
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: SplitGatewayStubModelProvider(models: [])
+            )
+            try await app.testing().test(.GET, "/api/status") { res async throws in
+                #expect(res.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(json?["status"] as? String == "running")
+                #expect(json?["sessions"] as? Int == 0)
+            }
+        }
+    }
+
+    @Test
+    static func traceFetchRouteReturnsConversationTracePayload() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let conversationID = UUID()
+        let api = APILayer(port: 0)
+        await api.setChatGatewayServices(APILayerChatGatewayServices(conversation: conversation, runtime: runtime))
+        await api.setModelProvider(SplitGatewayStubModelProvider(models: []))
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: SplitGatewayStubModelProvider(models: [])
+            )
+            try await app.testing().test(.GET, "/api/traces/\(conversationID.uuidString)") { res async throws in
+                #expect(res.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect((json?["conversationID"] as? String)?.lowercased() == conversationID.uuidString.lowercased())
+                let spans = json?["spans"] as? [Any]
+                #expect(spans?.isEmpty == true)
+            }
+        }
     }
 }

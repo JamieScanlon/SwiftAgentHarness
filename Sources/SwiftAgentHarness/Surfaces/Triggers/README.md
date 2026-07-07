@@ -53,6 +53,7 @@ At boot, the host app typically:
 2. Optionally sets **`eventsDirectory`** or relies on `TRIGGER_EVENTS_DIR` / `{persistenceRoot}/events/`.
 3. Calls `TriggersRuntimeWiring.resolve(...)` with runtime, dedupe, conversation-creation, and delegated sub-agent ports.
 4. Registers webhook routes and starts the file-event watcher / channel listeners when enabled.
+5. Installs channel lifecycle on the agent runtime: `orchestratorRuntime.installChannelRegistry(bundle.channelRegistry, holder: channelRegistryHolder, sessionLifecycleCoordinator: bundle.channelSessionLifecycleCoordinator)` after `installAgentRuntime`.
 
 | `Configuration` field | Purpose |
 |-----------------------|---------|
@@ -108,13 +109,17 @@ Platform-agnostic intake pipeline under `Channel/`:
 transport → parse → instance lock → dedup → attachments → allowlist → mention gate → debounce → trust → Trigger
 ```
 
-v1 ships **mock transport only** (`transport: mock` in `channels.json`). Trust comes from mechanical classification (`user-direct`, `known-party`, `unknown-party`, `system`), not message content.
+`channels.json` accepts all `ChannelTransportKind` values (`mock`, `slack`, `telegram`, `discord`, `email`). **Only `mock` is implemented today**; other kinds log `channel_transport_not_implemented` at startup and are skipped until platform PRs land. Trust comes from mechanical classification (`user-direct`, `known-party`, `unknown-party`, `system`), not message content.
 
-Config: `{dataDirectory}/channels.json` with per-channel `auth`, `mention`, `debounce`, `primary_user`, optional `routing_mode` / `delegate`, and optional `include_known_party_security_preamble` (default `true`). Disabled by default (`channelListenersEnabled: false` in wiring).
+Config: `{dataDirectory}/channels.json` with per-channel `auth`, `mention`, `debounce`, `dedupe` (`ttl_seconds`, default 3600), `primary_user`, optional `routing_mode` / `delegate`, and optional `include_known_party_security_preamble` (default `true`). Disabled by default (`channelListenersEnabled: false` in wiring).
+
+Inbound dedupe uses the same persistence primitive as trigger idempotency and WS `dedupe_check_and_set` (host-provided `dedupeCheckAndSet` port → `cache/dedupe.sqlite`). Keys are namespaced `channel-intake:{channel}:{account}:{peer}:{session}:{platformMessageId}` so reconnect redelivery survives process restarts within the configured TTL window.
 
 Runtime status: `{dataDirectory}/channel-status/{channel}.json` with stage counters and inflight debounce count.
 
-**Deferred:** live Slack/Telegram/Discord adapters, attachment download over credentials.
+**Follow-up platform PR checklist** (one PR per platform): add a `ChannelPluginFactory.build` branch returning transport (`ChannelTransport`), supervised listener (`ChannelSupervisedListening`), raw parser (`ChannelTransportRawEvent` → `ChannelMessageEvent`), outbound slot (native rich render), optional `sessionGrammar` / `security` overrides, transport-specific config fields, and fixture-based tests.
+
+**Deferred:** live Slack/Telegram/Discord/Email SDK adapters, credential storage, attachment download over credentials.
 
 ## Trigger replay (Step 14)
 
@@ -145,7 +150,42 @@ Runtime status: `{dataDirectory}/channel-status/{channel}.json` with stage count
 
 Admitted triggers are snapshotted to `{dataDirectory}/trigger_snapshots/<id>.json` for audit replay.
 
+### Cross-trigger correlation
+
+Each `HarnessTrigger` may carry an optional `TriggerCorrelation` triad:
+
+| Field | Meaning |
+|-------|---------|
+| `rootId` | First trigger in the logical workflow |
+| `parentTriggerId` | Immediate causal parent (`nil` for roots) |
+| `correlationId` | Shared workflow id (defaults to `rootId` for root triggers) |
+
+Lineage is assigned at **creation time** in ingress builders, `schedule_create`, and file-event producers — not stamped after dispatch. Root triggers (webhook, channel, standalone cron/file) set `rootId = correlationId = trigger.id`. Scheduled follow-ups inherit from the host trigger fingerprint (via `schedule_create`) or from explicit `rootId` / `parentTriggerId` / `correlationId` fields on file-event JSON.
+
+Durable query surfaces (no separate lineage store):
+
+- **`trigger_audit.jsonl`** — every activation decision includes the triad; filter by `correlationId` to list all legs (including rate-limited and dedup-hit).
+- **`trigger_snapshots/<id>.json`** — full trigger JSON for replay of any admitted leg.
+
+Lineage is best-effort over audit retention; rotated audit rows drop early legs from reconstructable chains.
+
 Default fire path enqueues to `{eventsDirectory}/replay-<uuid>.json`; the host's file-event watcher consumes it when the server process is running.
+
+## Channels (Messaging-as-Interface)
+
+Channel code is split across two surface trees:
+
+| Tree | Role |
+|------|------|
+| [`Surfaces/Interface/Channel/`](../Interface/Channel/) | Surface contract: `ChannelSurfacePlugin`, outbound/presentation, streaming sink, message-tool delivery, approvals |
+| [`Surfaces/Triggers/Channel/`](Channel/) | Inbound provenance: intake, trust, session grammar, transport, lifecycle; assembles `ChannelPlugin` from surface + trigger slots |
+
+- **`ChannelPlugin`** (Triggers) — composed runtime record: `surface` + `security` + `sessionGrammar` + platform `listener`.
+- **Core `message` tool** — registered in `OrchestratorRuntimeService.buildToolManager`; assistant prose always streams as `text_delta`. The `message` tool is additive for structured/native output (blocks, buttons, media). Channel and interactive turns use `MessageOutputPolicy.structuredPreferred` for prompt guidance.
+- **Session grammar** — `ChannelSessionGrammar.resolveSessionConversation` + `parentFallbackCandidates` wired through `TriggerSessionRouter`.
+- **Lifecycle helpers** — `ChannelTypingKeepalive`, `ChannelTransportSupervisor`, `ChannelSessionLifecycleCoordinator`. Session reset drains per-conversation tasks; channel `stop()` tears down transport separately.
+
+See [`Interface/Channel/README.md`](../Interface/Channel/README.md) and [`Documentation/channels-phase0-spike-report.md`](../../../Documentation/channels-phase0-spike-report.md).
 
 ## Upcoming work (next steps)
 

@@ -46,16 +46,20 @@ struct TriggerSymmetricOutputRouter: TriggerSymmetricOutputRouting {
     private func deliverChannel(trigger: HarnessTrigger, result: TriggerCompletionResult) async throws {
         guard let channelRaw = trigger.sourceMetadata["channel"],
               let channel = ChannelId(rawValue: channelRaw),
-              let listener = await channelRegistry.listener(for: channel) else {
-            recordAudit(trigger: trigger, result: result, delivery: "channel-missing-listener")
+              let plugin = await channelRegistry.plugin(for: channel) else {
+            recordAudit(trigger: trigger, result: result, delivery: "channel-missing-plugin")
             return
         }
-        let legacyRouter = TriggerOutputRouter()
-        let sendResult = await legacyRouter.routeResponse(
-            trigger: trigger,
-            responseText: result.text,
-            listener: listener
+        let target = ChannelDeliveryTarget(
+            chatId: trigger.sourceMetadata["chatId"] ?? "",
+            threadId: trigger.sourceMetadata["threadId"],
+            replyToMessageId: trigger.sourceMetadata["platformMessageId"]
         )
+        let presentation = MessagePresentation(blocks: [.text(result.text)])
+        let payload = plugin.outbound.renderPresentation(presentation)
+        let sendResult = await ChannelRetryingSender().send {
+            await plugin.outbound.sendPayload(payload, target: target)
+        }
         recordAudit(trigger: trigger, result: result, delivery: "channel:\(String(describing: sendResult))")
     }
 
@@ -100,16 +104,8 @@ struct TriggerSymmetricOutputRouter: TriggerSymmetricOutputRouting {
     }
 
     private func recordAudit(trigger: HarnessTrigger, result: TriggerCompletionResult, delivery: String) {
-        auditLog.record(
-            TriggerAuditEntry(
-                triggerID: "\(trigger.id):completion:\(delivery)",
-                source: trigger.source,
-                trust: trigger.trust,
-                receivedAt: trigger.receivedAt,
-                decision: .admitted,
-                sessionID: result.childSessionID,
-                loggedAt: Date()
-            )
-        )
+        var entry = TriggerAuditEntry.from(trigger: trigger, decision: .admitted, sessionID: result.childSessionID)
+        entry.triggerID = "\(trigger.id):completion:\(delivery)"
+        auditLog.record(entry)
     }
 }

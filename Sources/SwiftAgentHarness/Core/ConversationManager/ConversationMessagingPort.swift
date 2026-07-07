@@ -27,6 +27,7 @@ protocol ConversationMessagingPort: Sendable {
     func applyTurnSummaryTransformIfNeeded(conversationID: UUID) async
     func runtimeToolResultMiddlewarePipeline() async -> ToolResultMiddlewarePipeline
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async
     func rollbackLatestAssistantTurnForRuntime(conversationID: UUID, assistantMessageID: UUID?) async
     func persistDelegateSpendSnapshot(conversationID: UUID) async
 }
@@ -174,6 +175,11 @@ final class ConversationMessagingPortAdapter: ConversationMessagingPort, Sendabl
     func installTurnToolRegistryEntries(_ entries: [ToolRegistryEntry]) async {
         guard let messagingService = backing.messagingService else { return }
         await messagingService.installTurnToolRegistryEntries(entries)
+    }
+
+    func registerAgentToolResultMiddleware(_ middleware: AgentToolResultMiddleware) async {
+        guard let messagingService = backing.messagingService else { return }
+        await messagingService.registerAgentToolResultMiddleware(middleware)
     }
 
     func rollbackLatestAssistantTurnForRuntime(conversationID: UUID, assistantMessageID: UUID?) async {

@@ -11,12 +11,14 @@ public struct LocalSandboxBackendHandle: SandboxBackendHandle {
     public let configLabelKind: String? = "Target"
     public let capabilities: SandboxBackendCapabilities? = SandboxBackendManifests.local.capabilities
 
+    private let tmpDirectory: String
     private let memoryDirectory: String?
     private let logger: Logger?
 
     init(params: CreateSandboxBackendParams, logger: Logger? = nil) {
         self.runtimeId = "local-\(params.scopeKey)"
         self.workdir = FilesystemCanonicalPath.resolve(params.workspaceDir)
+        self.tmpDirectory = SandboxHostPaths.localExecTempDirectory(scopeKey: params.scopeKey).path
         self.memoryDirectory = params.memoryDirectory
         self.env = nil
         self.logger = logger
@@ -27,8 +29,14 @@ public struct LocalSandboxBackendHandle: SandboxBackendHandle {
         guard !trimmed.isEmpty else { throw SandboxBackendError.emptyCommand }
         guard LocalExecArgv.isSandboxAvailable else { throw SandboxBackendError.sandboxUnavailable }
         let cwd = params.workdir ?? workdir
-        let childEnv = SandboxChildEnvironment.build(overlay: params.env, cwd: cwd)
-        let argv = LocalExecArgv.sandboxed(command: trimmed, workspaceRoot: workdir, memoryDirectory: memoryDirectory, env: childEnv)
+        let childEnv = try childEnvironment(overlay: params.env, cwd: cwd)
+        let argv = LocalExecArgv.sandboxed(
+            command: trimmed,
+            workspaceRoot: workdir,
+            memoryDirectory: memoryDirectory,
+            tmpDirectory: tmpDirectory,
+            env: childEnv
+        )
         return SandboxBackendExecSpec(
             argv: argv,
             env: childEnv,
@@ -42,8 +50,14 @@ public struct LocalSandboxBackendHandle: SandboxBackendHandle {
     public func runShellCommand(params: SandboxBackendCommandParams) async throws -> SandboxBackendCommandResult {
         guard LocalExecArgv.isSandboxAvailable else { throw SandboxBackendError.sandboxUnavailable }
         let cwd = params.workdir ?? workdir
-        let childEnv = SandboxChildEnvironment.build(overlay: params.env, cwd: cwd)
-        let argv = LocalExecArgv.sandboxed(command: params.script, workspaceRoot: workdir, memoryDirectory: memoryDirectory, env: childEnv)
+        let childEnv = try childEnvironment(overlay: params.env, cwd: cwd)
+        let argv = LocalSandboxShellCommand.argv(
+            params: params,
+            workspaceRoot: workdir,
+            memoryDirectory: memoryDirectory,
+            tmpDirectory: tmpDirectory,
+            env: childEnv
+        )
         let result = try await ShellProcessRunner.run(
             argv: argv,
             env: childEnv,
@@ -56,6 +70,17 @@ public struct LocalSandboxBackendHandle: SandboxBackendHandle {
 
     public func createFsBridge(params: SandboxFsBridgeParams) -> (any SandboxFsBridge)? {
         LocalHostFsBridge(context: params.context, memoryWriteOnly: params.memoryWriteOnly)
+    }
+
+    private func childEnvironment(overlay: [String: String], cwd: String) throws -> [String: String] {
+        try SandboxHostPaths.ensureDirectory(at: URL(fileURLWithPath: tmpDirectory, isDirectory: true))
+        var forcedOverlay = overlay
+        #if os(Linux)
+        forcedOverlay["TMPDIR"] = "/tmp"
+        #else
+        forcedOverlay["TMPDIR"] = tmpDirectory
+        #endif
+        return SandboxChildEnvironment.build(overlay: forcedOverlay, cwd: cwd)
     }
 }
 
@@ -88,8 +113,8 @@ public enum LocalSandboxBackendRegistration {
 
 #if os(macOS)
 extension LocalSandboxBackendHandle {
-    public static func seatbeltProfile(workspaceRoot: String, memoryDirectory: String?) -> String {
-        LocalSeatbelt.profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory)
+    public static func seatbeltProfile(workspaceRoot: String, memoryDirectory: String?, tmpDirectory: String) -> String {
+        LocalSeatbelt.profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory, tmpDirectory: tmpDirectory)
     }
 }
 #endif

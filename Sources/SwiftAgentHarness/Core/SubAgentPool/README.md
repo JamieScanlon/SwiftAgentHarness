@@ -76,7 +76,7 @@ All remote delegate invocations share lifecycle IDs, topics, cancel, and complet
 2. **Model tool turn** — `AgentLoopToolDispatch` → `SubAgentDelegateInvocationService` → pool
 3. **Slash commands** — `SlashCommandDispatchService.executeSlashToolInvocation` → pool when target is a delegate tool
 
-Model-turn invocations seed lifecycle with `permissionAlreadyGranted` metadata when the gateway has already approved the tool.
+Model-turn invocations set the internal `permissionAlreadyGranted` field on `SubAgentLaunchRequest` when the gateway has already approved the tool (not via client metadata).
 
 ## Configuration → tool surface
 

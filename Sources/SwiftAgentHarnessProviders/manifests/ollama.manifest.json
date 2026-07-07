@@ -1,0 +1,18 @@
+{
+  "id": "ollama",
+  "label": "Ollama",
+  "providerEndpoints": [
+    { "id": "ollama-default", "baseUrl": "http://localhost:11434" }
+  ],
+  "providerAuthAliases": ["ollama"],
+  "providerAuthChoices": [],
+  "modelSupport": {
+    "modelPrefixes": []
+  },
+  "cliBackends": [],
+  "uiHints": {
+    "iconRef": "ollama-mark",
+    "category": "local"
+  },
+  "capabilitySlots": ["text-inference"]
+}

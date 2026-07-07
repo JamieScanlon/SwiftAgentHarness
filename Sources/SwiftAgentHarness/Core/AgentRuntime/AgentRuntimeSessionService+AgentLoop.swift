@@ -128,43 +128,26 @@ extension AgentRuntimeSessionService {
     }
 
     private func agentLoopManagerConfiguration(from runtime: AgentRuntimeTurnConfiguration) -> Configuration {
-        Configuration(
-            enableTools: runtime.enableTools,
-            enableAgents: runtime.enableAgents,
-            allowEscalatedTools: runtime.allowEscalatedTools,
-            preApprovedToolNames: runtime.preApprovedToolNames,
-            expectedPreviousTailHarnessMessageID: runtime.expectedPreviousTailHarnessMessageID,
-            inputTrustRaw: runtime.inputTrustRaw,
-            resolvedInputTrustClass: runtime.resolvedInputTrustClass,
-            ephemeralSystemReminder: runtime.ephemeralSystemReminder
-        )
+        Configuration(runtimeConfiguration: runtime)
     }
 
     private func agentLoopRuntimeConfiguration(from manager: Configuration) -> AgentRuntimeTurnConfiguration {
-        AgentRuntimeTurnConfiguration(
-            enableTools: manager.enableTools,
-            enableAgents: manager.enableAgents,
-            allowEscalatedTools: manager.allowEscalatedTools,
-            preApprovedToolNames: manager.preApprovedToolNames,
-            expectedPreviousTailHarnessMessageID: manager.expectedPreviousTailHarnessMessageID,
-            inputTrustRaw: manager.inputTrustRaw,
-            resolvedInputTrustClass: manager.resolvedInputTrustClass,
-            ephemeralSystemReminder: manager.ephemeralSystemReminder
-        )
+        AgentRuntimeTurnConfiguration(managerConfiguration: manager)
     }
 
-    func beginAgentLoopPartialStream() -> AsyncStream<ChatStreamingPartial> {
+    func beginAgentLoopPartialStream(runID: UUID) -> AsyncStream<ChatStreamingPartial> {
         let (stream, continuation) = AsyncStream.makeStream(
             of: ChatStreamingPartial.self,
             bufferingPolicy: .unbounded
         )
-        agentLoopPartialContinuation = continuation
+        agentLoopPartialContinuationsByRunID.removeValue(forKey: runID)?.finish()
+        agentLoopPartialContinuationsByRunID[runID] = continuation
         return stream
     }
 
-    func finishAgentLoopPartialStream() {
-        agentLoopPartialContinuation?.finish()
-        agentLoopPartialContinuation = nil
+    func finishAgentLoopPartialStream(runID: UUID?) {
+        guard let runID else { return }
+        agentLoopPartialContinuationsByRunID.removeValue(forKey: runID)?.finish()
     }
 
     func publishAgentLoopDelta(
@@ -172,7 +155,9 @@ extension AgentRuntimeSessionService {
         conversationID: UUID,
         runID: UUID?
     ) async {
-        agentLoopPartialContinuation?.yield(partial)
+        if let runID {
+            agentLoopPartialContinuationsByRunID[runID]?.yield(partial)
+        }
         if let payload = Self.agentLoopConversationTopicPayload(for: partial, runID: runID) {
             await publishConversationTopicIfBound(conversationID: conversationID, payload: payload)
         }
@@ -191,7 +176,10 @@ extension AgentRuntimeSessionService {
         conversationID: UUID,
         runID: UUID?
     ) -> AsyncStream<ChatStreamingPartial> {
-        let base = beginAgentLoopPartialStream()
+        guard let runID else {
+            return AsyncStream { $0.finish() }
+        }
+        let base = beginAgentLoopPartialStream(runID: runID)
         return AsyncStream { continuation in
             Task {
                 for await partial in base {
@@ -232,6 +220,24 @@ extension AgentRuntimeSessionService {
                 toolName: toolName,
                 toolCallId: toolCallId,
                 argumentsFragment: argumentsFragment,
+                blockIndex: blockIndex,
+                runId: runID,
+                callId: nil
+            )
+        case .toolCallStarted(let toolName, let toolCallId, let contentIndex):
+            return ConversationTopicWireEncoding.contentDeltaToolCallFragmentPayload(
+                toolName: toolName,
+                toolCallId: toolCallId,
+                argumentsFragment: nil,
+                blockIndex: contentIndex,
+                runId: runID,
+                callId: nil
+            )
+        case .toolCallCompleted(let toolName, let toolCallId, let arguments, let blockIndex):
+            return ConversationTopicWireEncoding.contentDeltaToolCallFragmentPayload(
+                toolName: toolName,
+                toolCallId: toolCallId,
+                argumentsFragment: arguments,
                 blockIndex: blockIndex,
                 runId: runID,
                 callId: nil
@@ -321,12 +327,19 @@ extension AgentRuntimeSessionService {
                 )
             },
             dispatchFn: { [self] call, conversationID, runID, orchestrator, snapshot, configuration, iteration, modelID, runtimePolicy, lifecycleEmitter in
+                let conversation = await self.runtimeConversation(id: conversationID)
                 let initial = await AgentLoopToolDispatch.dispatch(
                     call: call,
                     conversationID: conversationID,
                     runID: runID,
                     orchestrator: orchestrator,
                     snapshot: snapshot,
+                    configuration: configuration,
+                    conversation: conversation,
+                    gateway: DefaultToolSystemGateway(),
+                    parentLookup: { [deps = self.deps] id in
+                        await deps.persistenceDomain.modelConversation(id: id)
+                    },
                     spawnService: self.subAgentSpawnServiceForRuntime()
                 )
                 guard case .approvalRequired(let toolName, let toolCallID) = initial else {
@@ -442,6 +455,12 @@ extension AgentRuntimeSessionService {
                         runID: runID,
                         orchestrator: orchestrator,
                         snapshot: refreshedSnapshot,
+                        configuration: approvalConfig,
+                        conversation: conversation,
+                        gateway: DefaultToolSystemGateway(),
+                        parentLookup: { [deps = self.deps] id in
+                            await deps.persistenceDomain.modelConversation(id: id)
+                        },
                         spawnService: self.subAgentSpawnServiceForRuntime()
                     )
                 case .denied:

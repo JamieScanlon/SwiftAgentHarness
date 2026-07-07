@@ -7,13 +7,26 @@ public enum TriggerHostConversationMetadata {
     public static let triggerFingerprintKey = "triggerFingerprint"
 
     public static func fingerprintJSON(trigger: HarnessTrigger, sessionKey: String) -> JSON? {
-        let payload: [String: JSON] = [
+        var payload: [String: JSON] = [
             "id": .string(trigger.id),
             "source": .string(trigger.source.rawValue),
             "trust": .string(trigger.trust.rawValue),
             "sessionKey": .string(sessionKey),
             "sourceMetadata": .object(trigger.sourceMetadata.mapValues { .string($0) }),
         ]
+        if let correlation = trigger.correlation {
+            var correlationObject: [String: JSON] = [
+                "rootId": .string(correlation.rootId),
+                "correlationId": .string(correlation.correlationId),
+            ]
+            if let parentTriggerId = correlation.parentTriggerId {
+                correlationObject["parentTriggerId"] = .string(parentTriggerId)
+            }
+            if let followUpKind = correlation.followUpKind {
+                correlationObject["followUpKind"] = .string(followUpKind)
+            }
+            payload["correlation"] = .object(correlationObject)
+        }
         return .object(payload)
     }
 
@@ -46,6 +59,14 @@ public enum TriggerHostConversationMetadata {
         guard let metadata, case .object(let object) = metadata else { return false }
         guard case .boolean(let value) = object[triggerHostKey] else { return false }
         return value
+    }
+
+    public static func isChannelTriggerHost(_ metadata: JSON?) -> Bool {
+        guard isTriggerHost(metadata),
+              let trigger = triggerFromFingerprint(metadata) else {
+            return false
+        }
+        return trigger.source == .channel
     }
 
     public static func isFullyConfiguredTriggerHost(
@@ -82,6 +103,25 @@ public enum TriggerHostConversationMetadata {
                 }
             }
         }
+        var correlation: TriggerCorrelation?
+        if case .object(let correlationObject) = fingerprint["correlation"],
+           case .string(let rootId) = correlationObject["rootId"],
+           case .string(let correlationId) = correlationObject["correlationId"] {
+            var parentTriggerId: String?
+            if case .string(let parent) = correlationObject["parentTriggerId"] {
+                parentTriggerId = parent
+            }
+            var followUpKind: String?
+            if case .string(let kind) = correlationObject["followUpKind"] {
+                followUpKind = kind
+            }
+            correlation = TriggerCorrelation(
+                rootId: rootId,
+                parentTriggerId: parentTriggerId,
+                correlationId: correlationId,
+                followUpKind: followUpKind
+            )
+        }
         return HarnessTrigger(
             id: id,
             source: source,
@@ -89,7 +129,8 @@ public enum TriggerHostConversationMetadata {
             payload: "",
             initiator: TriggerInitiator(kind: .external),
             trust: trust,
-            routingMode: .delegated
+            routingMode: .delegated,
+            correlation: correlation
         )
     }
 }

@@ -9,6 +9,49 @@ struct TriggerAuditEntry: Codable, Sendable, Equatable {
     var decision: TriggerActivationDecision
     var sessionID: UUID?
     var loggedAt: Date
+    var rootId: String?
+    var parentTriggerId: String?
+    var correlationId: String?
+
+    init(
+        triggerID: String,
+        source: TriggerSource,
+        trust: CommEnvelopeOriginTrust,
+        receivedAt: Int64,
+        decision: TriggerActivationDecision,
+        sessionID: UUID?,
+        loggedAt: Date,
+        rootId: String? = nil,
+        parentTriggerId: String? = nil,
+        correlationId: String? = nil
+    ) {
+        self.triggerID = triggerID
+        self.source = source
+        self.trust = trust
+        self.receivedAt = receivedAt
+        self.decision = decision
+        self.sessionID = sessionID
+        self.loggedAt = loggedAt
+        self.rootId = rootId
+        self.parentTriggerId = parentTriggerId
+        self.correlationId = correlationId
+    }
+
+    static func from(trigger: HarnessTrigger, decision: TriggerActivationDecision, sessionID: UUID? = nil) -> TriggerAuditEntry {
+        let correlation = trigger.effectiveCorrelation()
+        return TriggerAuditEntry(
+            triggerID: trigger.id,
+            source: trigger.source,
+            trust: trigger.trust,
+            receivedAt: trigger.receivedAt,
+            decision: decision,
+            sessionID: sessionID,
+            loggedAt: Date(),
+            rootId: correlation.rootId,
+            parentTriggerId: correlation.parentTriggerId,
+            correlationId: correlation.correlationId
+        )
+    }
 }
 
 struct TriggerAuditLog: Sendable {

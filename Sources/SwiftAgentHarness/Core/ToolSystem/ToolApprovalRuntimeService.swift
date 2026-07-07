@@ -4,6 +4,7 @@ import SwiftAgentKit
 actor ToolApprovalRuntimeService {
     private let deps: ConversationRuntimeDependencies
     private let topics: ConversationTopicPublicationPort
+    private let tenancyPolicy: TenancyPolicySettings
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService!
     private let stateStore = ToolApprovalStateStore()
     private let permissionRules: any PermissionRuleStore
@@ -11,27 +12,49 @@ actor ToolApprovalRuntimeService {
     init(
         deps: ConversationRuntimeDependencies,
         topics: ConversationTopicPublicationPort,
-        permissionRules: any PermissionRuleStore = InMemoryPermissionRuleStore()
+        permissionRules: any PermissionRuleStore = InMemoryPermissionRuleStore(),
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.deps = deps
         self.topics = topics
         self.permissionRules = permissionRules
+        self.tenancyPolicy = tenancyPolicy
+    }
+
+    private var strictTenancy: Bool {
+        tenancyPolicy.requireAuthenticatedOwnerOnMutations
+    }
+
+    private func ownerAccountID(for conversationID: UUID) async -> UUID? {
+        await deps.persistenceDomain.modelConversation(id: conversationID)?.ownerAccountID
     }
 
     /// Persists an `allow-always` rule for a tool so future runs (and restarts when
-    /// the store is disk-backed) auto-approve it.
-    func grantDurableToolRule(toolName: String) async {
-        await permissionRules.add(.toolName(toolName))
+    /// the store is disk-backed) auto-approve it for the conversation owner.
+    func grantDurableToolRule(toolName: String, conversationID: UUID) async {
+        let ownerAccountID = await ownerAccountID(for: conversationID)
+        await permissionRules.addToolGrant(
+            toolName: toolName,
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        )
     }
 
-    /// Lists persisted durable tool-name grants, sorted ascending.
-    func listDurableToolGrants() async -> [String] {
-        await permissionRules.grantedToolNames().sorted()
+    /// Lists persisted durable tool-name grants for an owner, sorted ascending.
+    func listDurableToolGrants(ownerAccountID: UUID?) async -> [String] {
+        await permissionRules.grantedToolNames(
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        ).sorted()
     }
 
-    /// Revokes a persisted durable tool-name grant.
-    func revokeDurableToolGrant(toolName: String) async {
-        await permissionRules.remove(.toolName(toolName))
+    /// Revokes a persisted durable tool-name grant for an owner.
+    func revokeDurableToolGrant(toolName: String, ownerAccountID: UUID?) async {
+        await permissionRules.removeToolGrant(
+            toolName: toolName,
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        )
     }
 
     nonisolated func installSubAgentSpawnService(_ subAgentSpawnService: SubAgentSpawnService) {
@@ -67,9 +90,13 @@ actor ToolApprovalRuntimeService {
             route: route
         )
         out.preApprovedToolNames.formUnion(storeApproved)
-        // Durable `allow-always` tool grants apply across runs (and restarts when the
-        // permission rule store is disk-backed).
-        out.preApprovedToolNames.formUnion(await permissionRules.grantedToolNames())
+        let ownerAccountID = await ownerAccountID(for: conversationID)
+        out.preApprovedToolNames.formUnion(
+            await permissionRules.grantedToolNames(
+                ownerAccountID: ownerAccountID,
+                strictTenancy: strictTenancy
+            )
+        )
         return out
     }
 
@@ -163,7 +190,7 @@ actor ToolApprovalRuntimeService {
         durable: Bool = false
     ) async {
         if durable, status == .approved {
-            await grantDurableToolRule(toolName: toolName)
+            await grantDurableToolRule(toolName: toolName, conversationID: conversationID)
         }
         await applyToolApprovalResolution(
             conversationID: conversationID,
@@ -186,8 +213,11 @@ actor ToolApprovalRuntimeService {
         modelID: UUID?,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async {
-        let expired = await stateStore.consumeTimedOutApprovals()
-        for entry in expired where entry.conversationID == conversationID && entry.runID == runID {
+        let expired = await stateStore.consumeTimedOutApprovals(
+            conversationID: conversationID,
+            runID: runID
+        )
+        for entry in expired {
             await applyToolApprovalResolution(
                 conversationID: entry.conversationID,
                 runID: entry.runID,

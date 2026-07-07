@@ -52,5 +52,26 @@ struct ShellProcessRunnerDrainTests {
             Issue.record("unexpected error: \(error)")
         }
     }
+
+    @Test("bare executable name resolves via PATH")
+    func bareNameRun() async throws {
+        let result = try await ShellProcessRunner.run(
+            argv: ["true"],
+            timeoutSeconds: 10
+        )
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("unresolved bare name throws hostToolMissing")
+    func bareNameMissing() async {
+        await #expect(throws: SandboxBackendError.hostToolMissing(tool: "sah-definitely-missing-tool", location: "gateway")) {
+            try await ShellProcessRunner.run(
+                argv: ["sah-definitely-missing-tool"],
+                env: ["PATH": "/nonexistent/bin"],
+                timeoutSeconds: 10,
+                inheritHostEnvironment: false
+            )
+        }
+    }
 }
 #endif

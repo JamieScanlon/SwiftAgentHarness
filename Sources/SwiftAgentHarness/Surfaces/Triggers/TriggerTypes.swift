@@ -44,6 +44,7 @@ public struct HarnessTrigger: Codable, Sendable, Equatable {
     public var enableTools: Bool
     public var enableAgents: Bool
     public var routingMode: TriggerRoutingMode
+    public var correlation: TriggerCorrelation?
 
     public init(
         id: String,
@@ -56,7 +57,8 @@ public struct HarnessTrigger: Codable, Sendable, Equatable {
         trust: CommEnvelopeOriginTrust,
         enableTools: Bool = true,
         enableAgents: Bool = true,
-        routingMode: TriggerRoutingMode = .isolated
+        routingMode: TriggerRoutingMode = .isolated,
+        correlation: TriggerCorrelation? = nil
     ) {
         self.id = id
         self.source = source
@@ -69,6 +71,7 @@ public struct HarnessTrigger: Codable, Sendable, Equatable {
         self.enableTools = enableTools
         self.enableAgents = enableAgents
         self.routingMode = routingMode
+        self.correlation = correlation
     }
 }
 

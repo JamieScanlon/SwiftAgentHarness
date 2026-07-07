@@ -29,8 +29,8 @@ struct AgentLoopParityTests {
         #expect(harness.useAgentLoop == true)
     }
 
-    @Test("assistant accumulator does not persist reasoning on finalize")
-    func accumulatorOmitsReasoningFromMessage() {
+    @Test("assistant accumulator stores reasoning in content blocks")
+    func accumulatorStoresReasoningBlocks() {
         var acc = AssistantMessageAccumulator()
         acc.consume(
             .stream(
@@ -41,9 +41,14 @@ struct AgentLoopParityTests {
             )
         )
         acc.consume(.complete(LLMResponse.llmResponse(from: "answer", availableTools: [])))
-        let message = acc.finalize()
-        #expect(message.content == "answer")
-        #expect(message.toolCalls.isEmpty)
+        let envelope = acc.finalize()
+        #expect(envelope.message.content == "answer")
+        #expect(envelope.message.toolCalls.isEmpty)
+        if case .thinking(let text, nil)? = envelope.contentBlocks.first {
+            #expect(text == "think")
+        } else {
+            Issue.record("expected thinking content block")
+        }
     }
 
     @Test("tool invocation policy wiring exposes required posture")

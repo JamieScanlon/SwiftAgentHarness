@@ -9,6 +9,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     private let compactionCoordinator: CompactionConcurrencyCoordinator?
     public let memoryService: DefaultMemoryService?
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
+    private let reinjectionSkillProvider: any CompactionReinjectionSkillProviding
     private let logger: Logger?
 
     public init(
@@ -20,6 +21,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
             preCompactionMemoryFlushRunner: nil,
+            reinjectionSkillProvider: nil,
             logger: logger
         )
     }
@@ -28,6 +30,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
         memoryService: DefaultMemoryService? = nil,
         preCompactionMemoryFlushRunner: (any PreCompactionMemoryFlushRunning)? = nil,
+        reinjectionSkillProvider: (any CompactionReinjectionSkillProviding)? = nil,
         logger: Logger? = nil
     ) {
         self.compactionCoordinator = compactionCoordinator
@@ -39,6 +42,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         } else {
             self.preCompactionMemoryFlushRunner = DefaultPreCompactionMemoryFlushRunner()
         }
+        self.reinjectionSkillProvider = reinjectionSkillProvider
+            ?? DefaultCompactionReinjectionSkillProvider(logger: logger)
         self.logger = logger
     }
 
@@ -313,6 +318,12 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
 
         let input: ContextTransformInput
         if case .initial = request.phase {
+            let activatedSkillNames = ConversationMetadataActivatedSkills.activatedAgentSkillNames(
+                from: request.conversation.metadata
+            )
+            let reinjectableSkills = await reinjectionSkillProvider.reinjectableSkillContent(
+                activatedSkillNames: activatedSkillNames
+            )
             let initial = ContextCompactionInputBuilder.buildInitialPhaseInput(
                 messages: compactionTranscript,
                 conversation: request.conversation,
@@ -327,7 +338,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 gating: request.gatingOverride ?? .production,
                 allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
                 sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction,
-                compactionInjectedPrefix: compactionInjectedPrefix
+                compactionInjectedPrefix: compactionInjectedPrefix,
+                reinjectableSkills: reinjectableSkills
             )
             switch initial {
             case .passthrough(let reason):
@@ -516,16 +528,32 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     modelContextLimitTokens: modelLimit
                 )
                 let injectedCount = input.compactionInjectedPrefixMessages?.count ?? 0
-                let compactedMiddleRaw = ContextCompactionCheckpointSupport.compactedPortionInOutput(
+                let layoutSlice = ContextCompactionCheckpointSupport.compactedPortionInOutput(
                     output.messages,
                     headCount: injectedCount + before.head.count,
                     tailCount: before.tail.count
                 )
+                let compactedMiddleRaw: [Message] = {
+                    if layoutSlice.isEmpty,
+                       let persisted = output.compactionPersistedMiddle,
+                       !persisted.isEmpty {
+                        return persisted
+                    }
+                    return layoutSlice
+                }()
                 let compactedMiddle = ContextCompactionCheckpointSupport.durableCompactedMiddleForPersistence(
                     compactedMiddle: compactedMiddleRaw,
                     messageProvenance: output.messageProvenance
                 )
-                if compactedMiddle.isEmpty {
+                let durableCompactedMiddle: [Message] = {
+                    if compactedMiddle.isEmpty,
+                       let persisted = output.compactionPersistedMiddle,
+                       !persisted.isEmpty {
+                        return persisted
+                    }
+                    return compactedMiddle
+                }()
+                if durableCompactedMiddle.isEmpty {
                     logger?.warning(
                         "[ContextEngine] compaction diagnostic=\(kind) but middle slice empty conversation=\(request.conversation.id)"
                     )
@@ -545,17 +573,18 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                         config: request.compactionConfig
                     ) {
                         let passesSizeGuards = ContextCompactionCheckpointSupport.compactionCheckpointPersistencePassesSizeGuards(
-                            compactedMiddle: compactedMiddle,
+                            compactedMiddle: durableCompactedMiddle,
                             config: request.compactionConfig,
                             previousSummaryText: input.compactionPreviousSummaryText,
                             kind: kind
                         )
                         if passesSizeGuards {
-                            let summaryBody = compactedMiddle.first?.content
+                            let summaryBody = durableCompactedMiddle.first?.content
                             persistence = ContextCompactionCheckpointPersistenceSpec(
                                 conversationID: request.conversation.id,
                                 rawMiddleMessageIDs: before.middle.map(\Message.id),
-                                compactedMiddleMessages: compactedMiddle,
+                                compactedMiddleMessages: durableCompactedMiddle,
+                                coveredRawMiddle: before.middle,
                                 kind: kind,
                                 config: request.compactionConfig,
                                 strategyRawValue: input.compactionStrategy.rawValue,

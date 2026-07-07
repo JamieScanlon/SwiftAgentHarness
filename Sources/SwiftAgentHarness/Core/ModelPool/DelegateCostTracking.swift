@@ -28,11 +28,27 @@ public protocol DelegateCostTracking: BudgetAccounting, BudgetReporting {
     func recordDelegateCompletion(
         conversationID: UUID,
         success: Bool,
-        settledCostUSD: Double?
+        settledCostUSD: Double?,
+        completionAnnounceID: UUID?
     ) async
     func hydrate(from seeds: [BudgetLedgerHydrationSeed]) async
     func setConversationMaxUSD(conversationID: UUID, maxUSD: Double?) async
     func setActivePolicy(_ policy: BudgetPolicy) async
+}
+
+public extension DelegateCostTracking {
+    func recordDelegateCompletion(
+        conversationID: UUID,
+        success: Bool,
+        settledCostUSD: Double? = nil
+    ) async {
+        await recordDelegateCompletion(
+            conversationID: conversationID,
+            success: success,
+            settledCostUSD: settledCostUSD,
+            completionAnnounceID: nil
+        )
+    }
 }
 
 /// Process-wide model pool cost ledger: main-loop dispatches, compaction, memory recall, and sub-agent spend.
@@ -51,6 +67,7 @@ public actor ModelPoolCostLedger: DelegateCostTracking {
     private var activeGlobalCapUSD: Double?
     private var hasSeenEnabledPolicy: Bool = false
     private var conversationMaxUSDByConversationID: [UUID: Double] = [:]
+    private var settledCompletionAnnounceIDs: Set<UUID> = []
     private let defaultDelegateCompletionUSD: Double
 
     /// In-memory ledger for runtime accounting signals.
@@ -82,6 +99,7 @@ public actor ModelPoolCostLedger: DelegateCostTracking {
         pendingReservationsWithoutConversation = []
         pendingGlobalUSD = 0
         conversationMaxUSDByConversationID = [:]
+        settledCompletionAnnounceIDs = []
 
         var allIDs = Set<UUID>()
         for seed in seeds {
@@ -125,12 +143,19 @@ public actor ModelPoolCostLedger: DelegateCostTracking {
     public func recordDelegateCompletion(
         conversationID: UUID,
         success: Bool,
-        settledCostUSD: Double? = nil
+        settledCostUSD: Double? = nil,
+        completionAnnounceID: UUID? = nil
     ) async {
         guard success else { return }
+        if let completionAnnounceID, settledCompletionAnnounceIDs.contains(completionAnnounceID) {
+            return
+        }
         let explicitCost = max(0, settledCostUSD ?? 0)
         let resolvedCost = explicitCost > 0 ? explicitCost : defaultDelegateCompletionUSD
         guard resolvedCost > 0 else { return }
+        if let completionAnnounceID {
+            settledCompletionAnnounceIDs.insert(completionAnnounceID)
+        }
         applySettledSpend(resolvedCost, to: conversationID)
         settledGlobalUSD += resolvedCost
     }

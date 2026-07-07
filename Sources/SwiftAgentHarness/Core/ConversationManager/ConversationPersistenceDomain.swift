@@ -215,6 +215,16 @@ public actor ConversationPersistenceDomain {
         )
     }
 
+    func routingRevertActiveBranchRemovingAssistantMessage(
+        conversationID: UUID,
+        assistantMessageID: UUID
+    ) throws -> [Message] {
+        try stack.routingRevertActiveBranchRemovingAssistantMessage(
+            conversationID: conversationID,
+            assistantMessageID: assistantMessageID
+        )
+    }
+
     func routingPersistRunLifecycleTranscriptMarker(conversationID: UUID, payload: RunLifecycleTranscriptMarkerPayload) throws {
         try stack.routingPersistRunLifecycleTranscriptMarker(conversationID: conversationID, payload: payload)
     }

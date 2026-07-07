@@ -37,6 +37,10 @@ extension ConversationPersistenceDomain {
         stack.conversationManager.replaceConversationInRegistry(conversation)
     }
 
+    func applyRegistryTranscriptTruncation(_ conversation: ModelConversation) {
+        stack.conversationManager.applyRegistryTranscriptTruncation(conversation)
+    }
+
     public func resetConversationsFromCatalog(availableModels: [Model]) throws {
         try stack.conversationManager.resetConversationsFromCatalog(availableModels: availableModels)
     }
@@ -200,7 +204,8 @@ extension ConversationPersistenceDomain {
         metadata: JSON? = nil,
         interactionMode: InteractionMode? = nil,
         modeProfileID: String? = nil,
-        skipControlPlaneRevisionBump: Bool = false
+        skipControlPlaneRevisionBump: Bool = false,
+        allowHarnessMetadataKeys: Bool = false
     ) throws -> Bool {
         try stack.conversationManager.updateConversationMetadata(
             conversationID: conversationID,
@@ -209,7 +214,8 @@ extension ConversationPersistenceDomain {
             metadata: metadata,
             interactionMode: interactionMode,
             modeProfileID: modeProfileID,
-            skipControlPlaneRevisionBump: skipControlPlaneRevisionBump
+            skipControlPlaneRevisionBump: skipControlPlaneRevisionBump,
+            allowHarnessMetadataKeys: allowHarnessMetadataKeys
         )
     }
 

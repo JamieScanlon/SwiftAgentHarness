@@ -28,9 +28,10 @@ public enum ShellProcessRunner {
         inheritHostEnvironment: Bool = true
     ) async throws -> RunResult {
         #if os(macOS) || os(Linux)
+        let resolvedArgv = try resolveArgv(argv, env: env, inheritHostEnvironment: inheritHostEnvironment, cwd: cwd)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: argv[0])
-        process.arguments = Array(argv.dropFirst())
+        process.executableURL = URL(fileURLWithPath: resolvedArgv[0])
+        process.arguments = Array(resolvedArgv.dropFirst())
         if let resolved = resolvedEnvironment(provided: env, inheritHostEnvironment: inheritHostEnvironment) {
             process.environment = resolved
         }
@@ -112,10 +113,11 @@ public enum ShellProcessRunner {
         inheritHostEnvironment: Bool = true,
         maxLiveBufferBytes: Int = BashProcessRegistry.maxLiveBufferBytes
     ) throws -> SupervisedHandle {
+        let resolvedArgv = try resolveArgv(argv, env: env, inheritHostEnvironment: inheritHostEnvironment, cwd: cwd)
         let envDict = resolvedEnvironment(provided: env, inheritHostEnvironment: inheritHostEnvironment)
             ?? ProcessInfo.processInfo.environment
         let envp = envDict.map { "\($0.key)=\($0.value)" }
-        let effectiveArgv = cwd.map { ["/bin/sh", "-c", "cd \(shellQuote($0)) && exec \"$@\"", "sh"] + argv } ?? argv
+        let effectiveArgv = cwd.map { ["/bin/sh", "-c", "cd \(shellQuote($0)) && exec \"$@\"", "sh"] + resolvedArgv } ?? resolvedArgv
         let spawned = try SupervisedSpawn.spawn(
             argv: effectiveArgv,
             envp: envp,
@@ -209,6 +211,34 @@ public enum ShellProcessRunner {
             return merged
         }
         return provided
+    }
+
+    static func pathForResolution(provided: [String: String], inheritHostEnvironment: Bool) -> String {
+        if inheritHostEnvironment {
+            if provided.isEmpty {
+                return ProcessInfo.processInfo.environment["PATH"] ?? ExecutablePathResolver.defaultPath
+            }
+            var merged = ProcessInfo.processInfo.environment
+            provided.forEach { merged[$0.key] = $0.value }
+            return merged["PATH"] ?? ExecutablePathResolver.defaultPath
+        }
+        return provided["PATH"] ?? ExecutablePathResolver.defaultPath
+    }
+
+    private static func resolveArgv(
+        _ argv: [String],
+        env: [String: String],
+        inheritHostEnvironment: Bool,
+        cwd: String?
+    ) throws -> [String] {
+        guard let executable = argv.first else { throw SandboxBackendError.emptyCommand }
+        let path = pathForResolution(provided: env, inheritHostEnvironment: inheritHostEnvironment)
+        guard let resolved = ExecutablePathResolver.resolve(executable, path: path, cwd: cwd) else {
+            throw SandboxBackendError.hostToolMissing(tool: executable, location: "gateway")
+        }
+        var resolvedArgv = argv
+        resolvedArgv[0] = resolved
+        return resolvedArgv
     }
 }
 
@@ -400,13 +430,15 @@ import CryptoKit
 import Logging
 
 enum LocalSeatbelt {
-    static func profile(workspaceRoot: String, memoryDirectory: String?) -> String {
+    static func profile(workspaceRoot: String, memoryDirectory: String?, tmpDirectory: String) -> String {
         var lines = [
             "(version 1)",
             "(import \"dyld-support.sb\")",
             "(deny default)",
             "(allow file-read* (subpath \(q(workspaceRoot))))",
             "(allow file-write* (subpath \(q(workspaceRoot))))",
+            "(allow file-read* (subpath \(q(tmpDirectory))))",
+            "(allow file-write* (subpath \(q(tmpDirectory))))",
             "(allow file-read* (subpath \"/bin\"))",
             "(allow file-read* (subpath \"/usr\"))",
             "(allow file-read* (subpath \"/System/Library\"))",
@@ -420,8 +452,6 @@ enum LocalSeatbelt {
             "(allow mach-lookup)",
             "(allow signal)",
             "(allow ipc-posix-shm*)",
-            "(allow file-read* (subpath \"/tmp\"))",
-            "(allow file-write* (subpath \"/tmp\"))",
             "(allow file-read-metadata)",
             "(deny network*)",
         ]
@@ -432,8 +462,8 @@ enum LocalSeatbelt {
         return lines.joined(separator: "\n")
     }
 
-    static func wrapExecArgv(command: String, workspaceRoot: String, memoryDirectory: String?) -> [String] {
-        let profile = profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory)
+    static func wrapExecArgv(command: String, workspaceRoot: String, memoryDirectory: String?, tmpDirectory: String) -> [String] {
+        let profile = profile(workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory, tmpDirectory: tmpDirectory)
         return ["/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "-c", command]
     }
 
@@ -489,9 +519,20 @@ enum LinuxBwrap {
 #endif
 
 public enum LocalExecArgv {
-    public static func sandboxed(command: String, workspaceRoot: String, memoryDirectory: String?, env: [String: String]) -> [String] {
+    public static func sandboxed(
+        command: String,
+        workspaceRoot: String,
+        memoryDirectory: String?,
+        tmpDirectory: String,
+        env: [String: String]
+    ) -> [String] {
         #if os(macOS)
-        return LocalSeatbelt.wrapExecArgv(command: command, workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory)
+        return LocalSeatbelt.wrapExecArgv(
+            command: command,
+            workspaceRoot: workspaceRoot,
+            memoryDirectory: memoryDirectory,
+            tmpDirectory: tmpDirectory
+        )
         #elseif os(Linux)
         return LinuxBwrap.wrapExecArgv(command: command, workspaceRoot: workspaceRoot, memoryDirectory: memoryDirectory, env: env)
         #else

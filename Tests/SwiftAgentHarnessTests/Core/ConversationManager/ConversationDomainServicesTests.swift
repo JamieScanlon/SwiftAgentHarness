@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import SwiftData
 import SwiftAgentKit
 import Testing
@@ -7,9 +8,7 @@ import Testing
 @Suite("Conversation domain services")
 struct ConversationDomainServicesTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel(name: String = "domain-service-model") -> Model {
@@ -69,6 +68,97 @@ struct ConversationDomainServicesTests {
         try await lifecycle.deleteConversation(conversationID: conversationID, hard: false)
         let deleted = await catalog.getConversation(id: conversationID)
         #expect(deleted == nil)
+    }
+
+    @Test("lifecycle deleteConversation tears down memory session state")
+    func lifecycleDeleteTearsDownMemorySession() async throws {
+        let manager = HarnessRuntimeSession(container: try makeContainer())
+        let lifecycle = await manager.conversationDomainServices.lifecycle
+        try await manager.createConversation(with: makeModel(), userSystemPrompt: "sys")
+        let conversationID = try #require(await manager.currentConversationID)
+
+        let defaultEngine = try #require(await manager.contextEngine as? DefaultContextEngine)
+        let memoryService = try #require(defaultEngine.memoryService)
+        let workDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lifecycle-mem-teardown-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workDir) }
+
+        let context = try memoryService.makeSessionContext(conversationID: conversationID, cwd: workDir.path)
+        _ = try await memoryService.bootstrapSession(context: context)
+        #expect(await memoryService.currentSnapshotGeneration(conversationID: conversationID) > 0)
+
+        try await lifecycle.deleteConversation(conversationID: conversationID, hard: true)
+
+        #expect(await memoryService.currentSnapshotGeneration(conversationID: conversationID) == 0)
+        #expect(await memoryService.sessionContext(for: conversationID) == nil)
+    }
+
+    @Test("lifecycle deleteConversation cancels in-flight generation for soft delete")
+    func lifecycleDeleteCancelsGenerationSoftDelete() async throws {
+        try await assertDeleteConversationCancelsInFlightGeneration(hard: false)
+    }
+
+    @Test("lifecycle deleteConversation cancels in-flight generation for hard delete")
+    func lifecycleDeleteCancelsGenerationHardDelete() async throws {
+        try await assertDeleteConversationCancelsInFlightGeneration(hard: true)
+    }
+
+    private func assertDeleteConversationCancelsInFlightGeneration(hard: Bool) async throws {
+        let container = try makeContainer()
+        let model = makeModel(name: hard ? "delete-cancel-hard" : "delete-cancel-soft")
+        let manager = HarnessRuntimeSession(
+            container: container,
+            llmFactory: DeleteCancelTestScriptedLLMFactory(
+                llm: DeleteCancelTestScriptedStreamingLLM(
+                    modelName: model.modelName,
+                    chunks: ["partial-a", "partial-b"],
+                    finalContent: "assistant-final-should-not-persist",
+                    chunkDelayNanos: 300_000_000,
+                    finalDelayNanos: 300_000_000
+                )
+            ),
+            harnessSessionPersistenceOverride: InMemoryHarnessSessionPersistence()
+        )
+        let catalog = await manager.conversationDomainServices.catalog
+        let lifecycle = await manager.conversationDomainServices.lifecycle
+        try await manager.createConversation(with: model, userSystemPrompt: "delete-cancel-test")
+        let conversationID = try #require(await manager.currentConversationID)
+
+        let response = try await manager.sendMessageAndStreamResponse(
+            "delete me mid-run",
+            images: [],
+            conversationID: conversationID
+        )
+        async let drainedTask = deleteCancelTestDrainChatStreamOrchestration(response)
+        await deleteCancelTestWaitUntil {
+            let lifecycle = await manager.agentRuntimeSessionService.lifecycleSnapshot(for: conversationID)
+            return lifecycle.generationTask != nil || lifecycle.isContentStreamingActive
+        }
+
+        try await lifecycle.deleteConversation(conversationID: conversationID, hard: hard)
+
+        #expect(await catalog.getConversation(id: conversationID) == nil)
+
+        await deleteCancelTestWaitUntil {
+            let lifecycle = await manager.agentRuntimeSessionService.lifecycleSnapshot(for: conversationID)
+            return lifecycle.generationTask == nil && !lifecycle.isContentStreamingActive
+        }
+
+        let lifecycleSnapshot = await manager.agentRuntimeSessionService.lifecycleSnapshot(for: conversationID)
+        #expect(lifecycleSnapshot.generationTask == nil)
+        #expect(lifecycleSnapshot.isContentStreamingActive == false)
+
+        if hard {
+            #expect(await manager.modelConversation(id: conversationID) == nil)
+        } else if let tombstoned = await manager.modelConversation(id: conversationID) {
+            #expect(tombstoned.lifecycle == .deleted)
+        } else {
+            Issue.record("Expected soft-deleted conversation row to remain in registry")
+        }
+
+        _ = await drainedTask
+        #expect(await catalog.getConversation(id: conversationID) == nil)
     }
 
     @Test("runs-replay service list applies standard limit bounds")
@@ -196,6 +286,7 @@ struct ConversationDomainServicesTests {
             conversationID: conversationID,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config
         )
@@ -244,5 +335,150 @@ struct ConversationDomainServicesTests {
         #expect(scopedNames.isSubset(of: globalNames))
         #expect(scopedNames.contains("finish"))
         #expect(globalNames.contains("finish"))
+    }
+}
+
+private actor DeleteCancelTestScriptedStreamingLLM: LLMProtocol {
+    private var streamCallCount: Int = 0
+    private let modelName: String
+    private let chunks: [String]
+    private let finalContent: String
+    private let chunkDelayNanos: UInt64
+    private let finalDelayNanos: UInt64
+
+    init(
+        modelName: String,
+        chunks: [String],
+        finalContent: String,
+        chunkDelayNanos: UInt64 = 20_000_000,
+        finalDelayNanos: UInt64 = 20_000_000
+    ) {
+        self.modelName = modelName
+        self.chunks = chunks
+        self.finalContent = finalContent
+        self.chunkDelayNanos = chunkDelayNanos
+        self.finalDelayNanos = finalDelayNanos
+    }
+
+    nonisolated var currentState: LLMRuntimeState { .idle(.ready) }
+    nonisolated var stateUpdates: AsyncStream<LLMRuntimeState> { AsyncStream { $0.finish() } }
+    nonisolated func getModelName() -> String { modelName }
+    nonisolated func getCapabilities() -> [LLMCapability] { [.completion] }
+
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        let _ = (messages, config)
+        defer { streamCallCount += 1 }
+        if streamCallCount == 0 {
+            return MessageOutputTestSupport.messageToolLLMResponse(text: finalContent)
+        }
+        return MessageOutputTestSupport.emptyTurnStopLLMResponse()
+    }
+
+    nonisolated func stream(
+        _ messages: [Message],
+        config: LLMRequestConfig
+    ) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        let _ = (messages, config)
+        return AsyncThrowingStream { continuation in
+            let producer = Task {
+                do {
+                    let callIndex = await self.claimStreamCall()
+                    if callIndex > 0 {
+                        continuation.yield(.complete(MessageOutputTestSupport.emptyTurnStopLLMResponse()))
+                        continuation.finish()
+                        return
+                    }
+                    for chunk in await self.chunks {
+                        try Task.checkCancellation()
+                        continuation.yield(.stream(LLMResponse(content: chunk, toolCalls: [])))
+                        try await Task.sleep(nanoseconds: await self.chunkDelayNanos)
+                        try Task.checkCancellation()
+                    }
+                    try await Task.sleep(nanoseconds: await self.finalDelayNanos)
+                    try Task.checkCancellation()
+                    let finalContent = await self.finalContent
+                    continuation.yield(.complete(MessageOutputTestSupport.messageToolLLMResponse(text: finalContent)))
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
+            }
+        }
+    }
+
+    private func claimStreamCall() -> Int {
+        defer { streamCallCount += 1 }
+        return streamCallCount
+    }
+
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        let _ = config
+        throw LLMError.unsupportedCapability(.imageGeneration)
+    }
+}
+
+private struct DeleteCancelTestScriptedLLMFactory: ModelLLMFactoring {
+    let llm: any LLMProtocol
+
+    func makeBaseLLM(
+        model: Model,
+        providerBindings: [ProviderBinding]?,
+        conversationID: UUID?,
+        ownerAccountID: UUID?,
+        systemPrompt: SystemPrompt,
+        logger: Logger?,
+        attemptObserver: (@Sendable (ModelCallAttemptObservation) async -> Void)?
+    ) -> any LLMProtocol {
+        let _ = (model, providerBindings, conversationID, ownerAccountID, systemPrompt, logger, attemptObserver)
+        return llm
+    }
+}
+
+private func deleteCancelTestWaitUntil(
+    timeoutMS: Int = 4000,
+    predicate: @escaping () async -> Bool
+) async {
+    let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
+    while Date() < deadline {
+        if await predicate() { return }
+        try? await Task.sleep(nanoseconds: 40_000_000)
+    }
+}
+
+private func deleteCancelTestDrainChatStreamOrchestration(
+    _ response: ChatStreamResponse,
+    timeoutMS: Int = 5_000
+) async -> [ConversationOrchestrationState] {
+    await withCheckedContinuation { (continuation: CheckedContinuation<[ConversationOrchestrationState], Never>) in
+        let gate = DeleteCancelTestDrainResumeGate()
+        Task {
+            var values: [ConversationOrchestrationState] = []
+            for await state in response.orchestrationState {
+                values.append(state)
+            }
+            await gate.resumeOnce(returning: values, to: continuation)
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeoutMS) * 1_000_000)
+            await gate.resumeOnce(returning: [], to: continuation)
+        }
+    }
+}
+
+private actor DeleteCancelTestDrainResumeGate {
+    private var resumed = false
+
+    func resumeOnce(
+        returning values: [ConversationOrchestrationState],
+        to continuation: CheckedContinuation<[ConversationOrchestrationState], Never>
+    ) {
+        guard !resumed else { return }
+        resumed = true
+        continuation.resume(returning: values)
     }
 }

@@ -8,8 +8,7 @@ import Testing
 struct SubAgentCompletionRuntimeServiceTests {
     @Test("resolvePendingCompletionConversationID finds tool call in persisted conversation")
     func resolvePendingCompletionByToolCallID() async throws {
-        let schema = HarnessPersistenceSchema.latest
-        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                let container = try HarnessTestModelContainer.makeInMemory()
         let host = HarnessRuntimeSession(
             container: container,
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)

@@ -30,6 +30,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
     public var orchestratorPoolIdleTTLSeconds: Int
     /// Max resident orchestrator pool entries (VRAM cap for loaded models); pairs with idle TTL eviction.
     public var orchestratorPoolMaxEntries: Int
+    /// Deprecated: no longer affects output policy. Kept for PromptConfig backward compatibility.
+    public var legacyStreamedTextSurfaces: Set<String>
 
     public static let `default` = AgentHarnessConfiguration(
         strictAgentHarnessPrompts: true,
@@ -44,7 +46,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         maxCorrectionRetries: 0,
         useAgentLoop: true,
         orchestratorPoolIdleTTLSeconds: 300,
-        orchestratorPoolMaxEntries: 4
+        orchestratorPoolMaxEntries: 4,
+        legacyStreamedTextSurfaces: []
     )
 
     public init(
@@ -60,7 +63,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         maxCorrectionRetries: Int,
         useAgentLoop: Bool = true,
         orchestratorPoolIdleTTLSeconds: Int = 300,
-        orchestratorPoolMaxEntries: Int = 4
+        orchestratorPoolMaxEntries: Int = 4,
+        legacyStreamedTextSurfaces: Set<String> = []
     ) {
         self.strictAgentHarnessPrompts = strictAgentHarnessPrompts
         self.maxTurnLoopContinuationRounds = maxTurnLoopContinuationRounds
@@ -75,6 +79,7 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         self.useAgentLoop = useAgentLoop
         self.orchestratorPoolIdleTTLSeconds = orchestratorPoolIdleTTLSeconds
         self.orchestratorPoolMaxEntries = orchestratorPoolMaxEntries
+        self.legacyStreamedTextSurfaces = legacyStreamedTextSurfaces
     }
 
     /// Hard stop for consecutive “chatty” (non-tool, long-text) assistant messages.
@@ -120,6 +125,10 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
             default: return def
             }
         }
+        func stringSet(_ key: String) -> Set<String> {
+            guard let values = harness[key] as? [String] else { return [] }
+            return Set(values.filter { !$0.isEmpty })
+        }
         return AgentHarnessConfiguration(
             strictAgentHarnessPrompts: bool("strictAgentHarnessPrompts", default: true),
             maxTurnLoopContinuationRounds: int("maxTurnLoopContinuationRounds", default: Int.max, min: 1, max: 500),
@@ -133,7 +142,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
             maxCorrectionRetries: int("maxCorrectionRetries", default: 0, min: 0, max: 20),
             useAgentLoop: bool("useAgentLoop", default: true),
             orchestratorPoolIdleTTLSeconds: int("orchestratorPoolIdleTTLSeconds", default: 300, min: 30, max: 86_400),
-            orchestratorPoolMaxEntries: int("orchestratorPoolMaxEntries", default: 4, min: 1, max: 64)
+            orchestratorPoolMaxEntries: int("orchestratorPoolMaxEntries", default: 4, min: 1, max: 64),
+            legacyStreamedTextSurfaces: stringSet("legacyStreamedTextSurfaces")
         )
     }
 }

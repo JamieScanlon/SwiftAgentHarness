@@ -12,7 +12,9 @@ extension AgentRuntimeTurnConfiguration {
             resolvedInputTrustClass: managerConfiguration.resolvedInputTrustClass,
             ephemeralSystemReminder: managerConfiguration.ephemeralSystemReminder,
             originSurface: managerConfiguration.originSurface,
-            originSenderID: managerConfiguration.originSenderID
+            originSenderID: managerConfiguration.originSenderID,
+            turnThinkingOverride: managerConfiguration.turnThinkingOverride,
+            turnModelSlug: managerConfiguration.turnModelSlug
         )
     }
 }
@@ -29,7 +31,9 @@ extension HarnessRuntimeSession.Configuration {
             resolvedInputTrustClass: runtimeConfiguration.resolvedInputTrustClass,
             ephemeralSystemReminder: runtimeConfiguration.ephemeralSystemReminder,
             originSurface: runtimeConfiguration.originSurface,
-            originSenderID: runtimeConfiguration.originSenderID
+            originSenderID: runtimeConfiguration.originSenderID,
+            turnThinkingOverride: runtimeConfiguration.turnThinkingOverride,
+            turnModelSlug: runtimeConfiguration.turnModelSlug
         )
     }
 }

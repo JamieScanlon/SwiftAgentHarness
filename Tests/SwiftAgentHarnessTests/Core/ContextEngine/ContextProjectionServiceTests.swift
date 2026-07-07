@@ -7,9 +7,7 @@ import Testing
 @Suite("ContextProjectionService")
 struct ContextProjectionServiceTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeDependencies(container: ModelContainer) -> ConversationRuntimeDependencies {
@@ -386,11 +384,7 @@ private func makeLowSavingsProjectionService() async throws -> (
     LowSavingsTransformCounter,
     ModelConversation
 ) {
-    let schema = HarnessPersistenceSchema.latest
-    let container = try ModelContainer(
-        for: schema,
-        configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-    )
+    let container = try HarnessTestModelContainer.makeInMemory()
     let counter = LowSavingsTransformCounter()
     var transformConfig = ConversationTransformConfiguration.default
     transformConfig.contextCompaction.compactionCircuitBreakerMaxFailures = 3
@@ -462,10 +456,6 @@ private struct PreviewSummaryTransformer: ConversationTransforming {
         )
     }
 
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
-    }
-
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
         TurnSummaryTransformOutput(replacementTurnMessages: input.turnMessages, diagnostics: nil)
     }
@@ -481,10 +471,6 @@ private actor LowSavingsTransformCounter: ConversationTransforming {
             diagnostics: ContextCompactionTransformer.prunedDiagnostic,
             messageProvenance: nil
         )
-    }
-
-    func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        ToolResultTransformOutput(result: input.result, diagnostics: nil)
     }
 
     func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {

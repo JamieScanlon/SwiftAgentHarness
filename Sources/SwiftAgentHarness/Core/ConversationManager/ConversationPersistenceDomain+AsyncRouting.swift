@@ -77,6 +77,16 @@ extension ConversationPersistenceDomain {
         )
     }
 
+    func routingRevertActiveBranchRemovingAssistantMessageAsync(
+        conversationID: UUID,
+        assistantMessageID: UUID
+    ) async throws -> [Message] {
+        try routingRevertActiveBranchRemovingAssistantMessage(
+            conversationID: conversationID,
+            assistantMessageID: assistantMessageID
+        )
+    }
+
     func routingPersistRunLifecycleTranscriptMarkerAsync(conversationID: UUID, payload: RunLifecycleTranscriptMarkerPayload) async throws {
         try routingPersistRunLifecycleTranscriptMarker(conversationID: conversationID, payload: payload)
     }

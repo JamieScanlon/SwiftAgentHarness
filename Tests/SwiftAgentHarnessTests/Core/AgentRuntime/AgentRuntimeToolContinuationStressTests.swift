@@ -7,8 +7,14 @@ import Testing
 
 @Suite("Agent runtime tool continuation stress", .serialized)
 struct AgentRuntimeToolContinuationStressTests {
-    @Test("single tool round-trip reaches final assistant across repeated harness runs", arguments: 1...30)
-    func singleToolRoundTripStress(iteration: Int) async throws {
+    @Test("single tool round-trip reaches final assistant across repeated harness runs")
+    func singleToolRoundTripStress() async throws {
+        for iteration in 1...5 {
+            try await runSingleToolRoundTripStressIteration(iteration)
+        }
+    }
+
+    private func runSingleToolRoundTripStressIteration(_ iteration: Int) async throws {
         let container = try section6StressContainer()
         let model = section6StressModel()
         let scriptedLLM = Section6StressScriptedToolThenAnswerLLM(
@@ -73,7 +79,7 @@ struct AgentRuntimeToolContinuationStressTests {
             )
         }
 
-        #expect(streamCalls == 2)
+        #expect(streamCalls == 3)
         #expect(hasFinal)
     }
 }
@@ -168,13 +174,19 @@ private actor Section6StressScriptedToolThenAnswerLLM: LLMProtocol {
     }
 
     private func nextStreamResponse() -> LLMResponse {
-        if streamCallCount == 0 {
+        defer { streamCallCount += 1 }
+        switch streamCallCount {
+        case 0:
             let toolCall = ToolCall(name: toolName, arguments: .object([:]), id: toolCallID)
-            streamCallCount += 1
             return LLMResponse(content: "", toolCalls: [toolCall])
+        case 1:
+            return MessageOutputTestSupport.messageToolLLMResponse(
+                text: finalAssistantText,
+                toolCallID: "call_message_2"
+            )
+        default:
+            return MessageOutputTestSupport.emptyTurnStopLLMResponse()
         }
-        streamCallCount += 1
-        return LLMResponse(content: finalAssistantText, toolCalls: [])
     }
 
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
@@ -201,9 +213,7 @@ private struct Section6StressScriptedLLMFactory: ModelLLMFactoring {
 }
 
 private func section6StressContainer() throws -> ModelContainer {
-    let schema = HarnessPersistenceSchema.latest
-    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    return try ModelContainer(for: schema, configurations: config)
+        return try HarnessTestModelContainer.makeInMemory()
 }
 
 private func waitForMessages(

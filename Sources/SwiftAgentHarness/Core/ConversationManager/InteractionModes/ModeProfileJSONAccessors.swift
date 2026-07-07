@@ -70,13 +70,14 @@ enum ModeProfileJSONParsing {
         return mapped.isEmpty ? [] : mapped
     }
 
-    static func normalizedSubAgentAllowList(
+    static func normalizedProfileAllowList(
         raw: JSON?,
         profileID: String,
+        fieldPath: String,
         diagnostics: inout [String]
     ) -> [String] {
         guard let raw else {
-            diagnostics.append("modeProfiles[\(profileID)].subAgents.allow must be '*' or [String]")
+            diagnostics.append("modeProfiles[\(profileID)].\(fieldPath) must be '*' or [String]")
             return []
         }
         if case .string(let wildcard) = raw {
@@ -84,7 +85,7 @@ enum ModeProfileJSONParsing {
             if trimmed == "*" {
                 return ["*"]
             }
-            diagnostics.append("modeProfiles[\(profileID)].subAgents.allow must be '*' or [String]")
+            diagnostics.append("modeProfiles[\(profileID)].\(fieldPath) must be '*' or [String]")
             return []
         }
         if case .array(let values) = raw {
@@ -95,15 +96,28 @@ enum ModeProfileJSONParsing {
                     return trimmed.isEmpty ? nil : trimmed
                 }
             if normalized.count != values.count {
-                diagnostics.append("modeProfiles[\(profileID)].subAgents.allow must contain only strings")
+                diagnostics.append("modeProfiles[\(profileID)].\(fieldPath) must contain only strings")
             }
             if normalized.contains("*") {
                 return ["*"]
             }
             return Array(Set(normalized)).sorted()
         }
-        diagnostics.append("modeProfiles[\(profileID)].subAgents.allow must be '*' or [String]")
+        diagnostics.append("modeProfiles[\(profileID)].\(fieldPath) must be '*' or [String]")
         return []
+    }
+
+    static func normalizedSubAgentAllowList(
+        raw: JSON?,
+        profileID: String,
+        diagnostics: inout [String]
+    ) -> [String] {
+        normalizedProfileAllowList(
+            raw: raw,
+            profileID: profileID,
+            fieldPath: "subAgents.allow",
+            diagnostics: &diagnostics
+        )
     }
 
     static func normalizedHookIDList(from raw: JSON?) -> [String] {

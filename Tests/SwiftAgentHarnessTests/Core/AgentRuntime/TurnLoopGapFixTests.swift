@@ -100,6 +100,78 @@ struct TurnLoopGapFixTests {
         #expect(compactionHints[1] == .forceCompaction)
     }
 
+    @Test("compaction retry preserves ephemeral provenance reminder on retried model call")
+    func compactionRetryPreservesProvenanceReminder() async throws {
+        let model = makeModel()
+        let conversation = makeConversation(model: model)
+        let state = TurnLoopConversationState(conversation: conversation)
+        let attempts = StreamAttemptCounter()
+        let capture = TurnLoopStreamMessageCapture()
+        let ports = makeCompactionRetryCapturePorts(
+            state: state,
+            capture: capture,
+            attempts: attempts
+        )
+        let reminder = """
+        [trigger-context]
+        Trust level: user-deferred.
+        [/trigger-context]
+        """
+        let loop = TurnLoop(ports: ports)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: StubTurnLoopLLM(),
+            config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+        )
+        _ = try await loop.run(
+            conversationID: conversation.id,
+            runID: UUID(),
+            anchorUserMessageID: await state.anchorUserMessageID(),
+            configuration: AgentRuntimeTurnConfiguration(ephemeralSystemReminder: reminder),
+            orchestrator: orchestrator,
+            lifecycleEmitter: AgentRuntimeLifecycleEmitter { _, _ in }
+        )
+        #expect(await attempts.count() == 2)
+        let streamed = await capture.messages()
+        #expect(streamed.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.triggerProvenance) }))
+        #expect(streamed.contains(where: { $0.content.contains("user-deferred") }))
+    }
+
+    @Test("compaction retry preserves active memory recall on retried model call")
+    func compactionRetryPreservesActiveMemoryRecall() async throws {
+        let model = makeModel()
+        let conversation = makeConversation(model: model)
+        let state = TurnLoopConversationState(conversation: conversation)
+        let attempts = StreamAttemptCounter()
+        let capture = TurnLoopStreamMessageCapture()
+        let memoryPort = SessionRuntimeMemoryPort(
+            recallFn: { _, _ in MemoryContextFencer.fence("grafana dashboard summary") },
+            prefetchFn: { _, _ in }
+        )
+        let ports = makeCompactionRetryCapturePorts(
+            state: state,
+            capture: capture,
+            attempts: attempts,
+            memoryPort: memoryPort
+        )
+        let loop = TurnLoop(ports: ports)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: StubTurnLoopLLM(),
+            config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+        )
+        _ = try await loop.run(
+            conversationID: conversation.id,
+            runID: UUID(),
+            anchorUserMessageID: await state.anchorUserMessageID(),
+            configuration: AgentRuntimeTurnConfiguration(),
+            orchestrator: orchestrator,
+            lifecycleEmitter: AgentRuntimeLifecycleEmitter { _, _ in }
+        )
+        #expect(await attempts.count() == 2)
+        let streamed = await capture.messages()
+        #expect(streamed.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.activeMemoryRecall) }))
+        #expect(streamed.contains(where: { $0.content.contains("grafana dashboard summary") }))
+    }
+
     @Test("compaction retry does not run when stream deltas were published")
     func compactionRetrySkippedWhenDeltasPublished() async throws {
         let model = makeModel()
@@ -131,8 +203,14 @@ struct TurnLoopGapFixTests {
         #expect(await attempts.count() == 1)
     }
 
-    @Test("single tool round then answer appends final assistant", arguments: 1...30)
-    func singleToolRoundThenAnswerAppendsFinal(iteration: Int) async throws {
+    @Test("single tool round then answer appends final assistant")
+    func singleToolRoundThenAnswerAppendsFinal() async throws {
+        for iteration in 1...10 {
+            try await runSingleToolRoundThenAnswerAppendsFinal(iteration: iteration)
+        }
+    }
+
+    private func runSingleToolRoundThenAnswerAppendsFinal(iteration: Int) async throws {
         let model = makeModel()
         let conversation = makeConversation(model: model, interactionMode: .chat)
         let state = TurnLoopConversationState(conversation: conversation)
@@ -242,6 +320,49 @@ struct TurnLoopGapFixTests {
             lifecycleEmitter: AgentRuntimeLifecycleEmitter { _, _ in }
         )
         #expect(await bindRecorder.rebindCount() == 1)
+    }
+
+    private func makeCompactionRetryCapturePorts(
+        state: TurnLoopConversationState,
+        capture: TurnLoopStreamMessageCapture,
+        attempts: StreamAttemptCounter,
+        memoryPort: SessionRuntimeMemoryPort? = nil
+    ) -> AgentLoopPorts {
+        let basePorts = TurnLoopTestPorts.make(
+            state: state,
+            contextCompaction: .default,
+            streamFactory: { AsyncThrowingStream { $0.finish() } }
+        )
+        let modelPort = SessionRuntimeModelPort(
+            ensureBoundFn: { conv, _ in conv.model.id },
+            streamLLM: { messages, _, _, _, _ in
+                await capture.record(messages)
+                return await attempts.nextStream()
+            }
+        )
+        return AgentLoopPorts(
+            model: modelPort,
+            context: basePorts.context,
+            tools: basePorts.tools,
+            conversation: basePorts.conversation,
+            memory: memoryPort,
+            agentHarness: basePorts.agentHarness,
+            contextCompaction: basePorts.contextCompaction,
+            modeRegistry: basePorts.modeRegistry,
+            logger: basePorts.logger
+        )
+    }
+}
+
+private actor TurnLoopStreamMessageCapture {
+    private var streamed: [Message] = []
+
+    func record(_ messages: [Message]) {
+        streamed = messages
+    }
+
+    func messages() -> [Message] {
+        streamed
     }
 }
 

@@ -6,7 +6,7 @@ enum APISessionContext {
     /// When nil (middleware absent), ``HarnessRuntimeSession`` uses ``ClientSessionKey.implicitSharedNamespace``.
     @TaskLocal public static var connectionNamespace: UUID?
 
-    /// Multi-tenant authenticated principal for REST/WebSocket (see ``ClientSessionMiddleware`` and WS upgrade headers).
+    /// Multi-tenant authenticated principal for REST/WebSocket (see ``ClientSessionMiddleware`` and validated Bearer JWT on WS upgrade).
     /// When ``TenancyPolicySettings/requireAuthenticatedOwnerOnMutations`` is enabled, mutations require this to be non-nil.
     @TaskLocal public static var authenticatedOwnerAccountID: UUID?
 }

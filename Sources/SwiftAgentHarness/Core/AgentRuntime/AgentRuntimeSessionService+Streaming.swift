@@ -47,7 +47,7 @@ extension AgentRuntimeSessionService {
         orchestrator: SwiftAgentKitOrchestrator
     ) async {
         let logger = deps.logger
-        clearTurnLoopStopRequest()
+        clearTurnLoopStopRequest(for: sendingConversationID)
         await cancelInFlightStreamingGenerationOnly(for: sendingConversationID)
         var runtimeLifecycle = await currentLifecycleSnapshot(for: sendingConversationID)
         runtimeLifecycle.streamingGenerationSequence += 1
@@ -79,6 +79,7 @@ extension AgentRuntimeSessionService {
             defer {
                 // Backstop if the generation task exits abruptly before the explicit clear below.
                 Task { await self.clearActiveTurnConfiguration(runID: capturedRunID) }
+                Task { await self.finishAgentLoopPartialStream(runID: capturedRunID) }
             }
             let runtimeExecution: AgentRuntimeTurnExecution
             if let conversation = await self.runtimeConversation(id: sendingConversationID) {
@@ -161,7 +162,7 @@ extension AgentRuntimeSessionService {
                     logger?.error("\(message)")
                 }
             )
-            await finishAgentLoopPartialStream()
+            await finishAgentLoopPartialStream(runID: capturedRunID)
             await markStreamingGenerationCompleteIfCurrent(
                 token: generationToken,
                 terminalStatus: terminal.status,

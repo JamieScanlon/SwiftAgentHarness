@@ -6,9 +6,23 @@ enum WebSocketTopicSubscribeAuthorization {
     static let deniedMessage = "Subscribe denied"
 
     /// Pure tenancy / existence check for reuse in tests.
-    static func deniedReason(conversation: ModelConversation?, registryScope: UUID?) -> String? {
+    static func deniedReason(
+        conversation: ModelConversation?,
+        strictTenancy: Bool,
+        authenticatedOwnerAccountID: UUID?,
+        registryScope: UUID?
+    ) -> String? {
         guard let conversation else {
             return deniedMessage
+        }
+        if strictTenancy {
+            guard let owner = authenticatedOwnerAccountID else {
+                return deniedMessage
+            }
+            guard conversation.ownerAccountID == owner else {
+                return deniedMessage
+            }
+            return nil
         }
         if let scope = registryScope {
             guard conversation.ownerAccountID == scope else {
@@ -20,11 +34,34 @@ enum WebSocketTopicSubscribeAuthorization {
 
     static func deniedReasonForConversationObservation(
         conversationID: UUID,
-        session: APILayerConversationManaging
+        session: APILayerConversationManaging,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) async -> String? {
         let conv = await session.apiGetConversation(id: conversationID)
+        if tenancyPolicy.requireAuthenticatedOwnerOnMutations {
+            return deniedReason(
+                conversation: conv,
+                strictTenancy: true,
+                authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID,
+                registryScope: nil
+            )
+        }
         let scope = await session.apiRegistryOwnerAccountID()
-        return deniedReason(conversation: conv, registryScope: scope)
+        return deniedReason(
+            conversation: conv,
+            strictTenancy: false,
+            authenticatedOwnerAccountID: nil,
+            registryScope: scope
+        )
+    }
+
+    static func deniedReasonForConversationsRegistrySubscribe(
+        tenancyPolicy: TenancyPolicySettings,
+        authenticatedOwnerAccountID: UUID?
+    ) -> String? {
+        guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return nil }
+        guard authenticatedOwnerAccountID != nil else { return deniedMessage }
+        return nil
     }
 
     static func deniedReasonForModelStateSubscribe(

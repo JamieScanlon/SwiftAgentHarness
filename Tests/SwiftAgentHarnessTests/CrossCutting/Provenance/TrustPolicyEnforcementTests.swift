@@ -7,9 +7,7 @@ import Testing
 @Suite("Trust policy enforcement")
 struct TrustPolicyEnforcementTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     @Test("gateExecution mode forces tools/agents off for low-trust input")
@@ -24,6 +22,93 @@ struct TrustPolicyEnforcementTests {
                 enableTools: true,
                 enableAgents: true,
                 inputTrustRaw: MessageInputTrust.automation.rawValue
+            )
+        )
+        #expect(applied.enableTools == false)
+        #expect(applied.enableAgents == false)
+        #expect(applied.resolvedInputTrustClass == .lowTrust)
+    }
+
+    @Test("gateExecution keeps tools enabled for TUI direct entry with omitted trust marker")
+    func gateExecutionAllowsTUIOmittedTrust() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            trustPolicyConfiguration: TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .lowTrust)
+        )
+        let stamped = MessageOutputTurnConfiguration.applyingInteractiveSendDefaults(
+            to: AgentRuntimeTurnConfiguration(
+                enableTools: true,
+                enableAgents: true,
+                originSurface: InteractiveSurfaceID.tui
+            )
+        )
+        let applied = await runtimeSession.configurationApplyingTrustPolicy(
+            .init(
+                enableTools: stamped.enableTools,
+                enableAgents: stamped.enableAgents,
+                inputTrustRaw: stamped.inputTrustRaw,
+                resolvedInputTrustClass: stamped.resolvedInputTrustClass,
+                originSurface: stamped.originSurface
+            )
+        )
+        #expect(applied.enableTools == true)
+        #expect(applied.enableAgents == true)
+        #expect(applied.resolvedInputTrustClass == .trusted)
+    }
+
+    @Test("gateExecution keeps tools enabled for user-direct trigger origin trust")
+    func gateExecutionAllowsUserDirectTriggerTrust() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            trustPolicyConfiguration: TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .lowTrust)
+        )
+        let applied = await runtimeSession.configurationApplyingTrustPolicy(
+            .init(
+                enableTools: true,
+                enableAgents: true,
+                inputTrustRaw: CommEnvelopeOriginTrust.userDirect.rawValue
+            )
+        )
+        #expect(applied.enableTools == true)
+        #expect(applied.enableAgents == true)
+        #expect(applied.resolvedInputTrustClass == .trusted)
+    }
+
+    @Test("gateExecution disables tools for deferred and unknown trigger origin trust")
+    func gateExecutionRestrictsDeferredAndUnknownTriggerTrust() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            trustPolicyConfiguration: TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .lowTrust)
+        )
+        for raw in [CommEnvelopeOriginTrust.userDeferred.rawValue, CommEnvelopeOriginTrust.unknownParty.rawValue] {
+            let applied = await runtimeSession.configurationApplyingTrustPolicy(
+                .init(
+                    enableTools: true,
+                    enableAgents: true,
+                    inputTrustRaw: raw
+                )
+            )
+            #expect(applied.enableTools == false)
+            #expect(applied.enableAgents == false)
+            #expect(applied.resolvedInputTrustClass == .lowTrust)
+        }
+    }
+
+    @Test("unknown-party trigger trust stays low-trust even when safeDefaultClass is trusted")
+    func unknownPartyTriggerTrustFailsClosed() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            trustPolicyConfiguration: TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .trusted)
+        )
+        let applied = await runtimeSession.configurationApplyingTrustPolicy(
+            .init(
+                enableTools: true,
+                enableAgents: true,
+                inputTrustRaw: CommEnvelopeOriginTrust.unknownParty.rawValue
             )
         )
         #expect(applied.enableTools == false)

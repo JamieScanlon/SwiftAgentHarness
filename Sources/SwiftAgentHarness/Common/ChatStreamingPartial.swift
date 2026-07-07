@@ -20,6 +20,10 @@ public enum ChatStreamingPartial: Sendable, Equatable {
     case reasoning(String, blockIndex: Int?)
     /// Streaming tool-call fragment with optional name/id and partial serialized arguments.
     case toolCall(toolName: String?, toolCallId: String?, argumentsFragment: String?, blockIndex: Int?)
+    /// Tool call lifecycle: provider announced a tool invocation before arguments are complete.
+    case toolCallStarted(toolName: String?, toolCallId: String?, contentIndex: Int?)
+    /// Tool call lifecycle: full tool arguments are available (buffered providers emit once).
+    case toolCallCompleted(toolName: String?, toolCallId: String?, arguments: String, blockIndex: Int?)
     /// Structured client surface action emitted by slash commands and other control-plane paths.
     case surfaceIntent(ClientSurfaceIntent)
 
@@ -30,7 +34,7 @@ public enum ChatStreamingPartial: Sendable, Equatable {
     public var chunkedTransferUTF8: String? {
         switch self {
         case .text(let s): return s
-        case .reasoning, .toolCall, .surfaceIntent: return nil
+        case .reasoning, .toolCall, .toolCallStarted, .toolCallCompleted, .surfaceIntent: return nil
         }
     }
 

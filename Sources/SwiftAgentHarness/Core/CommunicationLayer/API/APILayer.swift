@@ -246,6 +246,7 @@ public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
         enableAgents: Bool,
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         systemReminder: String?,
         originSurface: String?,
         originSenderID: String?
@@ -692,6 +693,31 @@ public actor APILayer {
         self.tenancyPolicySettings = settings
     }
 
+    /// Configures HS256 JWT validation for ``Authorization: Bearer`` authenticated tenancy.
+    public func setAPIAccessTokenAuthenticationSettings(_ settings: APIAccessTokenAuthenticationSettings?) {
+        if let settings {
+            apiAccessTokenValidator = JWTAPIAccessTokenValidator(settings: settings)
+        } else {
+            apiAccessTokenValidator = nil
+        }
+    }
+
+    /// Wires tenancy, trace subscribe policy, and access-token auth from ``ServerConfig``.
+    public func applyServerConfig(_ config: ServerConfig) {
+        tenancyPolicySettings = config.tenancyPolicySettings()
+        serverTraceSubscribePolicy = config.resolvedServerTraceSubscribePolicy()
+        apiAccessTokenValidator = config.makeAPIAccessTokenValidator()
+        engineArtifactMaxUploadBytes = config.engineArtifactMaxUploadBytes
+        websocketOutboundFlowConfiguration = config.websocketOutboundFlowConfiguration
+        websocketOutboundSchemaEnforcementConfiguration = config.websocketOutboundSchemaEnforcementConfiguration
+        websocketResumeTokenHMACSecret = config.websocketResumeTokenHMACSecret
+        websocketInboundDedupeDefaultTtlSeconds = config.websocketInboundDedupeDefaultTtlSeconds
+        websocketInboundDedupeMaxTtlSeconds = config.websocketInboundDedupeMaxTtlSeconds
+        httpPreconditionPolicySettings = HTTPPreconditionPolicySettings(
+            strictMode: config.httpPreconditionsStrictMode
+        )
+    }
+
     public func setEngineArtifactRESTSettings(maxUploadBytes: Int) {
         self.engineArtifactMaxUploadBytes = max(1024, maxUploadBytes)
     }
@@ -886,8 +912,19 @@ public actor APILayer {
      * - Throws: APIError if the server components aren't properly initialized
      *           or if the server fails to start.
      */
+    /// Validates wiring required before ``start()`` without binding a listen socket.
+    func validateStartupPreconditions() throws {
+        guard chatGateway != nil, modelManager != nil else {
+            throw APIError.componentsNotInitialized
+        }
+        if tenancyPolicySettings.requireAuthenticatedOwnerOnMutations,
+           apiAccessTokenValidator == nil {
+            throw APIError.authenticationNotConfigured
+        }
+    }
+
     public func start() async throws {
-        // Verify that required components are initialized
+        try validateStartupPreconditions()
         guard let chatGateway = chatGateway, let modelManager = modelManager else {
             throw APIError.componentsNotInitialized
         }
@@ -999,10 +1036,11 @@ public actor APILayer {
 
     private var websocketOutboundFlowConfiguration: WebSocketOutboundFlowConfiguration = .init()
     private var websocketOutboundSchemaEnforcementConfiguration: WebSocketOutboundSchemaEnforcementConfiguration = .default
-    private let serverTraceSubscribePolicy: ServerTraceSubscribePolicy
+    private var serverTraceSubscribePolicy: ServerTraceSubscribePolicy
     private var websocketResumeTokenHMACSecret: String?
     private var websocketInboundDedupeDefaultTtlSeconds: Int = 600
     private var websocketInboundDedupeMaxTtlSeconds: Int = 3600
+    private var apiAccessTokenValidator: (any APIAccessTokenValidating)?
 
     /// Outbound fan-out for session capability registry topics (``CommunicationLayer`` or hub-only adapter in tests).
     private var capabilityRegistryPublisher: (any CapabilityRegistryPublishing)?
@@ -1034,7 +1072,10 @@ public actor APILayer {
         triggerWebhookRegistrar?.register(on: app)
         
         // API route group (per-client selection scope via ``ClientSessionMiddleware``).
-        let api = app.grouped("api").grouped(ClientSessionMiddleware(logger: logger))
+        let api = app.grouped("api").grouped(ClientSessionMiddleware(
+            logger: logger,
+            accessTokenValidator: apiAccessTokenValidator
+        ))
         let dependencies = APILayerRouteDependencies(
             gateway: chatGateway,
             modelManager: modelManager,
@@ -1055,7 +1096,7 @@ public actor APILayer {
             }
         )
         logger.info("Registering canonical route GET /api/conversations (paged list)")
-        app.get("api", "conversations") { req async throws -> Response in
+        api.get("conversations") { req async throws -> Response in
             try await APILayerConversationsModule.conversationListHTTPResponse(req: req, dependencies: dependencies)
         }
         APILayerRESTModuleRegistry(modules: APILayerModuleAssembly.restModules())
@@ -1087,11 +1128,13 @@ public actor APILayer {
         let wireResumeTokenSecret = websocketResumeTokenHMACSecret
         let wireInboundDedupeDefaultTtl = websocketInboundDedupeDefaultTtlSeconds
         let wireInboundDedupeMaxTtl = websocketInboundDedupeMaxTtlSeconds
+        let wireAccessTokenValidator = apiAccessTokenValidator
         let wireModelInvocationCoordinator = modelInvocationCoordinator
         let wireModelManager = modelManager
         let wireConversation = chatGateway.conversation
         let wireRuntime = chatGateway.runtime
         let wireBudgetReporting: any BudgetReporting = budgetReporting
+        let wireTenancyPolicy = tenancyPolicySettings
         let wireAfterOrchestrationStateChanged: @Sendable (UUID, ConversationOrchestrationState) async -> Void = { [weak self] id, orchestration in
             await self?.refreshConversationStateOnWire(
                 conversationID: id,
@@ -1107,13 +1150,19 @@ public actor APILayer {
                 ?? req.headers.first(name: "x-request-id")
                 ?? req.logger[metadataKey: "request-id"]?.description
                 ?? "unknown"
-            let wsAuthenticatedOwner: UUID? = {
-                guard let raw = req.headers.first(name: "X-SAH-Authenticated-Owner")?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                    !raw.isEmpty
-                else { return nil }
-                return UUID(uuidString: raw)
-            }()
+            let wsAuthenticatedOwner: UUID? = APISessionAuthenticatedOwnerResolver.resolve(
+                from: req.headers,
+                validator: wireAccessTokenValidator
+            )
+            if wireTenancyPolicy.requireAuthenticatedOwnerOnMutations, wsAuthenticatedOwner == nil {
+                logger.warning(
+                    "WS upgrade rejected requestID=\(wsRequestID): authenticated owner required (valid Authorization Bearer token on WebSocket handshake)"
+                )
+                Task {
+                    try? await ws.close(code: .policyViolation)
+                }
+                return
+            }
             let topicRegistration = WebSocketTopicWireRegistration()
             let outboundSchemaViolationTracker = WebSocketOutboundSchemaViolationTracker(
                 configuration: wireOutboundSchemaEnforcementConfiguration
@@ -1313,6 +1362,7 @@ public actor APILayer {
                             },
                             serverTraceSubscribePolicy: wireServerTraceSubscribePolicy,
                             conversationEventsReplayRetention: wireConversationEventsReplayRetention ?? .fromEnvironmentOrDefault(),
+                            tenancyPolicy: wireTenancyPolicy,
                             message: comm,
                             registration: topicRegistration
                         ) {
@@ -1532,12 +1582,27 @@ extension Model {
     }
 }
 
-public enum APIError: Error {
+public enum APIError: Error, Equatable {
     /// Thrown when the API layer's required components aren't initialized
     case componentsNotInitialized
+
+    /// Thrown when strict tenancy is enabled but no access-token validator is configured
+    case authenticationNotConfigured
     
     /// Thrown when there's an error during server configuration
-    case serverConfigurationError(Error)
+    case serverConfigurationError(String)
+
+    public static func == (lhs: APIError, rhs: APIError) -> Bool {
+        switch (lhs, rhs) {
+        case (.componentsNotInitialized, .componentsNotInitialized),
+             (.authenticationNotConfigured, .authenticationNotConfigured):
+            return true
+        case (.serverConfigurationError(let a), .serverConfigurationError(let b)):
+            return a == b
+        default:
+            return false
+        }
+    }
 }
 
 // Extension for sending structured data over WebSocket
@@ -1545,18 +1610,14 @@ extension WebSocket {
     func send(_ dictionary: [String: Any]) async throws {
         if let issue = WebSocketOutboundHarnessValidation.validationIssueForControlResponsePayload(dictionary) {
             throw APIError.serverConfigurationError(
-                NSError(
-                    domain: "WebSocket",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Outbound control payload schema violation: \(issue.detail)"]
-                )
+                "Outbound control payload schema violation: \(issue.detail)"
             )
         }
         if let data = try? JSONSerialization.data(withJSONObject: dictionary),
            let jsonString = String(data: data, encoding: .utf8) {
             try await self.send(jsonString)
         } else {
-            throw APIError.serverConfigurationError(NSError(domain: "WebSocket", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode message"]))
+            throw APIError.serverConfigurationError("Failed to encode message")
         }
     }
 }

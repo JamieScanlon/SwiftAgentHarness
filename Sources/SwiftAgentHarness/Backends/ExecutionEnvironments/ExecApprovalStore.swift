@@ -5,6 +5,17 @@ public enum ExecApprovalResolution: Sendable, Equatable {
     case denied(String)
 }
 
+/// Owning conversation and tenant for a pending exec approval (DEF-125).
+public struct ExecApprovalScope: Sendable, Equatable {
+    public let conversationID: UUID
+    public let ownerAccountID: UUID?
+
+    public init(conversationID: UUID, ownerAccountID: UUID?) {
+        self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
+    }
+}
+
 /// Thin exec-approval façade over the core-owned `ApprovalCoordinator`. Owns only
 /// the exec-specific concerns (command text + durable grant store); the pending
 /// registry, dedupe, waiter resume, and timeout live in the coordinator.
@@ -13,6 +24,8 @@ public actor ExecApprovalStore {
 
     private let coordinator: ApprovalCoordinator
     private var commands: [String: String] = [:]
+    private var scopesByID: [String: ExecApprovalScope] = [:]
+    private var allowsDurableBypassByID: [String: Bool] = [:]
     private var grantStore: any ExecApprovalGrantStore
 
     public init(
@@ -29,8 +42,25 @@ public actor ExecApprovalStore {
         self.grantStore = grantStore
     }
 
-    public func registerPending(id: String, command: String, presentation: ApprovalPresentation? = nil) async {
+    /// Resets pending exec approvals and grant state. Test-only isolation seam for `shared`.
+    public func resetForTesting() async {
+        commands.removeAll()
+        scopesByID.removeAll()
+        allowsDurableBypassByID.removeAll()
+        grantStore = InMemoryExecApprovalGrantStore()
+        await coordinator.resetForTesting()
+    }
+
+    public func registerPending(
+        id: String,
+        command: String,
+        scope: ExecApprovalScope,
+        allowsDurableBypass: Bool = true,
+        presentation: ApprovalPresentation? = nil
+    ) async {
         commands[id] = command
+        scopesByID[id] = scope
+        allowsDurableBypassByID[id] = allowsDurableBypass
         // Exec uses a caller-supplied wait timeout, so the registration timeout is a
         // large placeholder; the deny default only applies if a tool-style wait is used.
         _ = await coordinator.register(
@@ -42,13 +72,17 @@ public actor ExecApprovalStore {
         )
     }
 
+    public func pendingScope(id: String) -> ExecApprovalScope? {
+        scopesByID[id]
+    }
+
     public func isDurableApproved(command: String) async -> Bool {
-        guard let name = Self.commandName(from: command) else { return false }
+        guard let name = ExecApprovalGrantCommandName.durableGrantCommandName(from: command) else { return false }
         return await grantStore.isGranted(commandName: name)
     }
 
     public func addDurableApproval(command: String) async {
-        guard let name = Self.commandName(from: command) else { return }
+        guard let name = ExecApprovalGrantCommandName.durableGrantCommandName(from: command) else { return }
         await grantStore.add(commandName: name)
     }
 
@@ -69,16 +103,34 @@ public actor ExecApprovalStore {
         return true
     }
 
+    /// When `durable` is true, a persisted grant is stored only when a safe grant key
+    /// can be derived (interpreter/wrapper prefixes are peeled) and the pending request
+    /// allowed durable bypass (elevated/host exec does not persist grants). Unpeelable
+    /// interpreter commands still resolve as allow-always for the pending request but leave no grant.
     @discardableResult
     public func resolve(
         id: String,
+        scope: ExecApprovalScope,
+        strictTenancy: Bool,
+        ownerScope: UUID?,
         approved: Bool,
         durable: Bool = false,
         reason: String? = nil
     ) async -> ExecApprovalResolution? {
         guard await coordinator.isPending(id: id) else { return nil }
+        guard let pendingScope = scopesByID[id],
+              Self.scopeMatches(
+                  pending: pendingScope,
+                  resolver: scope,
+                  ownerScope: ownerScope,
+                  strictTenancy: strictTenancy
+              ) else {
+            return nil
+        }
         let command = commands.removeValue(forKey: id)
-        if approved, durable, let command {
+        scopesByID.removeValue(forKey: id)
+        let allowsDurableBypass = allowsDurableBypassByID.removeValue(forKey: id) ?? true
+        if approved, durable, allowsDurableBypass, let command {
             await addDurableApproval(command: command)
         }
         let decision: ApprovalDecision = approved ? (durable ? .allowAlways : .allowOnce) : .deny
@@ -98,6 +150,20 @@ public actor ExecApprovalStore {
         return Self.execResolution(from: outcome)
     }
 
+    static func scopeMatches(
+        pending: ExecApprovalScope,
+        resolver: ExecApprovalScope,
+        ownerScope: UUID?,
+        strictTenancy: Bool
+    ) -> Bool {
+        guard pending.conversationID == resolver.conversationID else { return false }
+        return ToolConversationAccessPolicy.isOwnerAccessible(
+            targetOwner: pending.ownerAccountID,
+            ownerScope: ownerScope,
+            strictTenancy: strictTenancy
+        )
+    }
+
     private static func execResolution(from outcome: ApprovalOutcome) -> ExecApprovalResolution {
         switch outcome.decision {
         case .allowAlways:
@@ -109,9 +175,8 @@ public actor ExecApprovalStore {
         }
     }
 
-    /// Extracts the command NAME (first executable token) from a full command
-    /// string. Leading environment assignments are out of scope.
+    /// Legacy first-token extraction without interpreter peeling.
     static func commandName(from command: String) -> String? {
-        command.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).first.map(String.init)
+        ExecApprovalGrantCommandName.commandName(from: command)
     }
 }

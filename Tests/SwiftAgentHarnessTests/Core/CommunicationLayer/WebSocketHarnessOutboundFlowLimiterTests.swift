@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 @testable import SwiftAgentHarness
 
+@Suite(.serialized)
 struct WebSocketHarnessOutboundFlowLimiterTests {
     private let cid = UUID(uuidString: "A22BBB58-8BF7-4DB8-BDD8-E44AF256FF68")!
     private var convEvents: String { ConversationTopicFormat.topic(conversationID: cid) }
@@ -212,6 +213,7 @@ struct WebSocketHarnessOutboundFlowLimiterTests {
     }
 }
 
+@Suite(.serialized)
 struct ServerConfigFlowControlDefaultsTests {
     @Test func defaultServerConfigEnablesOutboundFlowControl() {
         let config = ServerConfig()
@@ -226,6 +228,7 @@ struct ServerConfigFlowControlDefaultsTests {
     }
 }
 
+@Suite(.serialized)
 struct WebSocketHarnessOutboundFlowDefaultBackpressureTests {
     private let cid = UUID(uuidString: "A22BBB58-8BF7-4DB8-BDD8-E44AF256FF68")!
     private var convEvents: String { ConversationTopicFormat.topic(conversationID: cid) }

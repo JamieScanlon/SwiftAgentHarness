@@ -12,6 +12,7 @@ struct MockChannelListenerIntegrationTests {
             text: String,
             systemReminder: String?,
             inputTrustRaw: String?,
+            resolvedInputTrustClass: TrustPolicyClass?,
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
@@ -36,16 +37,18 @@ struct MockChannelListenerIntegrationTests {
             debounce: ChannelDebounceConfig(textMs: 0)
         )
         config.enabled = true
-        let listener = MockChannelListener(id: .slack, config: config, logger: Logger(label: "test"))
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: Logger(label: "test"))
         let service = ChannelListenerService(
             channel: .slack,
-            listener: listener,
+            bundle: bundle,
             dataDirectory: dir,
             mediaRoot: dir.appendingPathComponent("media", isDirectory: true),
             ingress: ingress,
+            dedupe: InMemoryTriggerDedupe(),
             logger: Logger(label: "test")
         )
         await service.start()
+        let listener = await service.listenerInstance() as! MockChannelListener
         listener.injectRawEvent(
             MockChannelRawEvent(
                 channel: .slack,
@@ -67,13 +70,13 @@ struct MockChannelListenerIntegrationTests {
         #expect(runtime.texts[0].contains("from mock"))
     }
 
-    @Test("output router sends via listener")
-    func outputRouter() async {
-        let listener = MockChannelListener(
-            id: .slack,
-            config: ChannelListenerConfig(platformIdentity: "mock"),
-            logger: Logger(label: "test")
-        )
+    @Test("output router sends via plugin outbound")
+    func outputRouter() async throws {
+        let config = ChannelListenerConfig(platformIdentity: "mock")
+        let logger = Logger(label: "test")
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: logger)
+        let listener = bundle.listener as! MockChannelListener
+        let plugin = bundle.plugin
         let router = TriggerOutputRouter()
         let trigger = HarnessTrigger(
             id: "slack:m1",
@@ -83,7 +86,7 @@ struct MockChannelListenerIntegrationTests {
             initiator: TriggerInitiator(kind: .external, id: "U1"),
             trust: .knownParty
         )
-        let result = await router.routeResponse(trigger: trigger, responseText: "pong", listener: listener)
+        let result = await router.routeResponse(trigger: trigger, responseText: "pong", plugin: plugin)
         if case .sent = result {
             #expect(Bool(true))
         } else {

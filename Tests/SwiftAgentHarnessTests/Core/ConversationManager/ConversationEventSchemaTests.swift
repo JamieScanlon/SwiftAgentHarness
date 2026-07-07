@@ -10,8 +10,7 @@ struct ConversationEventSchemaTests {
         let schema = HarnessPersistenceSchema.latest
         let names = Set(schema.entities.map(\.name))
         #expect(names == ["CachedSchemaAnchor"])
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        _ = try ModelContainer(for: schema, configurations: config)
+        _ = try HarnessTestModelContainer.makeInMemory()
     }
 }
 

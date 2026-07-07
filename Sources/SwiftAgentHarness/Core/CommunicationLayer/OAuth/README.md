@@ -15,6 +15,12 @@ We use SwiftAgentKit’s README: **Convenience (custom callback only)**—we use
 
 - Creates `OAuthCallbackDelivery`, passes `delivery.receiver` to `MCPOAuthHandler(callbackReceiver:)`, and sets the delivery on **APILayer** so the route can call `deliver(result:)`.
 
+## Concurrency and timeout safety
+
+- **One flow at a time:** A single `OAuthCallbackDelivery` instance (one per server lifecycle) allows at most one in-flight OAuth wait. If a second client calls `waitForCallback` while one is already waiting, it receives `"OAuth callback already in progress"`. This matches the single shared callback route (`GET /oauth/callback`).
+- **Stale timers:** Each wait registers a timeout task. A generation counter ensures a prior flow's timer cannot resume a later flow's continuation after the earlier flow completes via `deliver(result:)` or times out.
+- **CSRF (`state`):** SwiftAgentKit 0.20.0+ generates a random `state` per flow, includes it in the authorization URL, and verifies the echoed value after callback (`OAuthError.stateMismatch` on mismatch). Harness forwards callback `state` unchanged via `APILayer` → `OAuthCallbackDelivery`; no Harness-side validation is required.
+
 ## Verifying token exchange and headers
 
 After you complete the browser OAuth flow and see the "Authorization successful" page, the following happens in order:

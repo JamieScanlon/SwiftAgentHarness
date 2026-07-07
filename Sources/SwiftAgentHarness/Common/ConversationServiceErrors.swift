@@ -26,6 +26,8 @@ enum ConversationServiceError: Error, Sendable, Equatable {
     case conversationRunInProgress(conversationID: UUID, activeRunID: UUID)
     /// Interaction mode cannot change while this conversation has an active streaming run.
     case conversationModeChangeRunInProgress(conversationID: UUID, activeRunID: UUID)
+    /// Model or user prompt cannot change while this conversation has an active streaming run.
+    case conversationModelOrPromptChangeRunInProgress(conversationID: UUID, activeRunID: UUID)
     /// A configured mode transition hook id is unknown to the runtime hook registry.
     case modeTransitionHookUnavailable(hookID: String)
     /// ``cancelRun`` did not match the active run (or run already finished).
@@ -77,6 +79,13 @@ extension ConversationServiceError: APILayerRESTConflictRepresenting {
             return try? JSONEncoder().encode(
                 ConversationRunConflictBody(
                     modeChangeBlocked: conversationID,
+                    activeRunID: activeRunID
+                )
+            )
+        case let .conversationModelOrPromptChangeRunInProgress(conversationID, activeRunID):
+            return try? JSONEncoder().encode(
+                ConversationRunConflictBody(
+                    modelOrPromptChangeBlocked: conversationID,
                     activeRunID: activeRunID
                 )
             )

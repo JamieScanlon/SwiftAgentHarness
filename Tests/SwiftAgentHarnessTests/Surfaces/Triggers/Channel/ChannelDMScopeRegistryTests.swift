@@ -28,6 +28,7 @@ struct ChannelDMScopeRegistryTests {
         return ChannelListenerRegistry(
             dataDirectory: FileManager.default.temporaryDirectory,
             ingress: makeIngress(),
+            dedupe: ChannelTestDedupe(),
             logger: logger,
             enabled: false,
             channelsFile: channelsFile
@@ -89,6 +90,7 @@ struct DMScopeNoopRuntime: TriggerRuntimeDispatching {
         text: String,
         systemReminder: String?,
         inputTrustRaw: String?,
+        resolvedInputTrustClass: TrustPolicyClass?,
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,

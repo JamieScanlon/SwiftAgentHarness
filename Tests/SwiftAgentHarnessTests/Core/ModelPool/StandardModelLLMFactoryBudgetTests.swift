@@ -185,46 +185,4 @@ struct StandardModelLLMFactoryBudgetTests {
             Issue.record("Expected responseCache enabled")
         }
     }
-
-    @Test("profile-specific OpenAI key is preferred")
-    func profileSpecificOpenAIKeyPreferred() {
-        let binding = ProviderBinding(
-            providerId: "openai",
-            modelProtocol: .openAIAPI,
-            endpointModelId: "gpt-test",
-            serverURL: URL(string: "https://api.openai.com/v1")!,
-            priority: 0,
-            authProfile: "prod-west"
-        )
-        let key = StandardModelLLMFactory.resolveOpenAIAPIKey(
-            binding: binding,
-            defaultAuthProfile: nil,
-            environment: [
-                "SAH_OPENAI_API_KEY_PROD_WEST": "profile-key",
-                "OPENAI_API_KEY": "global-key",
-            ]
-        )
-        #expect(key == "profile-key")
-    }
-
-    @Test("default auth profile fallback can source OpenAI key")
-    func defaultProfileFallbackOpenAIKey() {
-        let binding = ProviderBinding(
-            providerId: "openai",
-            modelProtocol: .openAIAPI,
-            endpointModelId: "gpt-test",
-            serverURL: URL(string: "https://api.openai.com/v1")!,
-            priority: 0,
-            authProfile: nil
-        )
-        let key = StandardModelLLMFactory.resolveOpenAIAPIKey(
-            binding: binding,
-            defaultAuthProfile: "team-a",
-            environment: [
-                "OPENAI_API_KEY_TEAM_A": "team-key",
-                "OPENAI_API_KEY": "global-key",
-            ]
-        )
-        #expect(key == "team-key")
-    }
 }

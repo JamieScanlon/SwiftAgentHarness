@@ -1,0 +1,23 @@
+# Triggers
+
+The mechanisms by which something other than a live human user causes the agent to run. Time-based triggers (cron, one-shot, periodic), event-based triggers (webhooks, message-channel arrivals, file-event watchers), and the cross-cutting question of how non-user content is presented to the model so it isn't mistaken for the user's voice.
+
+The `interface/` topic covers the user-facing inbound channel — what the human types and how the harness renders responses back. This topic covers everything else that can put a turn into the agent's queue.
+
+Five of the six reference harnesses ship a scheduler; one ships a first-class webhook server; several use messaging-channel arrivals or filesystem events as their trigger surface. The shape varies, but the underlying pipeline — *external event arrives → adapter normalizes → policy gates → session routes → prompt builder constructs LLM input → output routes back* — is recoverable across all of them. This topic codifies that pipeline as the recommended architecture.
+
+## Pages
+
+- [triggers.md](./triggers.md) — Recommended architecture: the normalized `Trigger` shape, the five trust levels, the activation-policy gates, session routing, and the per-trust prompt-construction rules. Drafted 2026-04-26.
+- [scheduling.md](./scheduling.md) — Cron / one-shot / periodic scheduling: the three-axis task schema (schedule kind × payload kind × delivery), deterministic restart via `lastFiredAt ?? createdAt` anchoring, PID-based scheduler lock, per-kind missed-fire policy, jitter, age-out, durability, create-time validation. **Drafted 2026-06-13.**
+- [webhook-ingest.md](./webhook-ingest.md) — Inbound HTTP webhook receivers: the validate-then-normalize gate (body-size → signature → idempotency → rate limit), required secrets, prompt-template rendering, static vs dynamic routes, the `deliver_only` direct-delivery fast path, cross-platform delivery, and shared SSRF guard for outbound. **Drafted 2026-06-13**.
+- [channel-triggers.md](./channel-triggers.md) — Messaging-channel arrivals (Slack DM, Telegram message, email) treated as triggers. **Channel-listener architecture drafted 2026-04-26**: layered intake pipeline (transport → lock → parse → dedup → attachment download → authorization → mention gate → debounce → trust → Trigger), interface contract, configuration shape, lifecycle, and outbound paired surface. Other concerns (slash-command vs natural-language routing, reaction-as-trigger, ephemeral channel context) called out as still-open sub-topics.
+- [file-event-triggers.md](./file-event-triggers.md) — Filesystem-watcher triggers: the event-queue pattern (`workspace/events/` watcher) as the recommended internal transport vs the configuration-store pattern (the `HOOK.md` discovery), with debounce, watcher-error recovery, parse-retry, rename-on-read, per-type staleness rules, and the rule that the filesystem grants no trust by itself. **Drafted 2026-06-13.**
+- [input-provenance.md](./input-provenance.md) — How non-user content is fenced off so the model can tell what it is: the four complementary primitives (content envelope, create-time pre-flight scan, session-key provenance prefix, provenance system reminder) mapped to each trust level, plus the push for one shared wrapper across all external-content surfaces. **Drafted 2026-06-13**.
+
+## Open sub-topics (not yet drafted)
+
+- **Self-modification: when the agent registers its own triggers.** Every harness with cron lets the agent create cron jobs via a tool. A webhook-subscriptions skill is an extension of this pattern. The recommendation here is that *every* registration path goes through the same validation pipeline as user-registered triggers — no privileged escape hatch — so a malicious cron prompt can't bypass the scanner by writing the JSON file directly. A `permanent` flag is the right shape for distinguishing user-created from system-installed entries.
+- **Cost ceilings and budget gates.** None of the six implements a per-source spend cap. An attacker-controlled webhook source can otherwise burn the user's API credits with high-frequency POSTs that all clear HMAC. Worth treating as a first-class activation-policy stage, alongside rate limit and idempotency.
+- **Trigger replay for debugging.** A `webhook test` command for replaying triggers is the right debugging primitive. A captured `Trigger` should be replayable end-to-end so post-mortems can re-run a fired trigger against fixed code without contacting the original source.
+- **Cross-trigger correlation.** A webhook that sets up a one-shot follow-up is two trigger events for one logical workflow. None of the harnesses model this explicitly. Worth tracking as state on the originating `Trigger.id`.

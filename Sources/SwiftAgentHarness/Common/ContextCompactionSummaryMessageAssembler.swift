@@ -10,6 +10,9 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
     struct AssembledSummary: Sendable {
         let messages: [Message]
         let mergedIntoTail: Bool
+        let mergedTail: [Message]?
+        /// Standalone summary for checkpoint persistence when layout merges into the tail.
+        let persistenceSummary: Message?
     }
 
     static func assemble(
@@ -18,28 +21,31 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
     ) -> AssembledSummary {
         let trimmed = summaryBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return AssembledSummary(messages: [], mergedIntoTail: false)
+            return AssembledSummary(
+                messages: [],
+                mergedIntoTail: false,
+                mergedTail: nil,
+                persistenceSummary: nil
+            )
         }
         let framed = referenceOnlyPrefix + trimmed
         if tail.isEmpty {
-            let message = Message(
-                id: UUID(),
-                role: .user,
-                content: framed,
-                timestamp: Date(),
-                toolCalls: []
+            let message = standaloneSummaryMessage(role: .user, content: framed)
+            return AssembledSummary(
+                messages: [message],
+                mergedIntoTail: false,
+                mergedTail: nil,
+                persistenceSummary: message
             )
-            return AssembledSummary(messages: [message], mergedIntoTail: false)
         }
         if tail.first?.role == .user {
-            let message = Message(
-                id: UUID(),
-                role: .assistant,
-                content: framed,
-                timestamp: Date(),
-                toolCalls: []
+            let message = standaloneSummaryMessage(role: .assistant, content: framed)
+            return AssembledSummary(
+                messages: [message],
+                mergedIntoTail: false,
+                mergedTail: nil,
+                persistenceSummary: message
             )
-            return AssembledSummary(messages: [message], mergedIntoTail: false)
         }
         if tail.first?.role == .assistant {
             var merged = tail
@@ -52,15 +58,30 @@ enum ContextCompactionSummaryMessageAssembler: Sendable {
                 toolCalls: first.toolCalls,
                 toolCallId: first.toolCallId
             )
-            return AssembledSummary(messages: [], mergedIntoTail: true)
+            let persistenceSummary = standaloneSummaryMessage(role: .assistant, content: framed)
+            return AssembledSummary(
+                messages: [],
+                mergedIntoTail: true,
+                mergedTail: merged,
+                persistenceSummary: persistenceSummary
+            )
         }
-        let message = Message(
+        let message = standaloneSummaryMessage(role: .user, content: framed)
+        return AssembledSummary(
+            messages: [message],
+            mergedIntoTail: false,
+            mergedTail: nil,
+            persistenceSummary: message
+        )
+    }
+
+    private static func standaloneSummaryMessage(role: MessageRole, content: String) -> Message {
+        Message(
             id: UUID(),
-            role: .user,
-            content: framed,
+            role: role,
+            content: content,
             timestamp: Date(),
             toolCalls: []
         )
-        return AssembledSummary(messages: [message], mergedIntoTail: false)
     }
 }

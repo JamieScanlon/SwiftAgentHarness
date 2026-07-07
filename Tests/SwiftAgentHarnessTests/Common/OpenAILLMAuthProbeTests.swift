@@ -68,7 +68,8 @@ struct OpenAILLMAuthProbeTests {
                     headerFields: [:]
                 )!
                 return (Data(), response)
-            }
+            },
+            authProbePermissiveForEmptyToken: true
         )
         let result = await llm.validateAuth()
         #expect(result == true)

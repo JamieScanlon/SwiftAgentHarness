@@ -32,7 +32,10 @@ struct ChannelIntakePipelineTests {
         return ChannelIntakePipeline(
             channel: .slack,
             config: config,
+            security: DefaultChannelSecurityAdapter(config: config),
+            sessionGrammar: ChannelSessionGrammar(),
             mediaRoot: dir,
+            dedup: ChannelMessageDedup(dedupe: InMemoryTriggerDedupe(), ttlSeconds: config.dedupe.ttlSeconds),
             logger: Logger(label: "test"),
             emitTrigger: onEmit
         )

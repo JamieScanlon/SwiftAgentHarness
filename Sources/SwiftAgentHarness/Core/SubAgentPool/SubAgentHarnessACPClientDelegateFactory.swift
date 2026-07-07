@@ -8,7 +8,7 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
     let gateway: any ToolSystemGatewaying
     let subAgentPool: any SubAgentPooling
     let toolApproval: any ToolApprovalRuntimeServicing
-    let resolveChannelRegistry: @Sendable () -> (any ChannelListenerLooking)?
+    let resolveChannelRegistry: @Sendable () -> (any ChannelPluginLooking)?
     let resolveOrchestrator: @Sendable () async -> SwiftAgentKitOrchestrator?
     let resolveToolEntries: @Sendable () async -> [ToolRegistryEntry]
     let resolveModePolicyContext: @Sendable (ModelConversation) async -> ModePolicyContext
@@ -32,6 +32,10 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
         }
         let sessionKey = conversation.id.uuidString
         let approvalDelivery = await ExecApprovalDeliveryFactory.make(
+            scope: ExecApprovalScope(
+                conversationID: conversation.id,
+                ownerAccountID: conversation.ownerAccountID
+            ),
             channelRegistry: resolveChannelRegistry(),
             metadata: conversation.metadata
         )

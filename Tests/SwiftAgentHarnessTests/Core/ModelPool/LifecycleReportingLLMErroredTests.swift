@@ -33,6 +33,41 @@ private struct AlwaysFailingLLM: LLMProtocol {
     }
 }
 
+/// Yields one partial then loops until cancelled — drives mid-stream cancellation tests.
+private struct HangingStreamLLM: LLMProtocol {
+    nonisolated var currentState: LLMRuntimeState { .idle(.ready) }
+    nonisolated var stateUpdates: AsyncStream<LLMRuntimeState> {
+        AsyncStream { $0.finish() }
+    }
+    nonisolated func getModelName() -> String { "hanging" }
+    nonisolated func getCapabilities() -> [LLMCapability] { [.completion] }
+
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        LLMResponse(content: "ignored", toolCalls: [])
+    }
+
+    nonisolated func stream(
+        _ messages: [Message],
+        config: LLMRequestConfig
+    ) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.stream(LLMResponse(content: "partial", toolCalls: [])))
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        throw LLMError.unsupportedCapability(.imageGeneration)
+    }
+}
+
 @Suite("LifecycleReportingLLM .errored / .cancelled on terminal failure")
 struct LifecycleReportingLLMErroredTests {
 
@@ -123,6 +158,50 @@ struct LifecycleReportingLLMErroredTests {
         let phases = await recorder.phases
         #expect(phases.contains(.cancelled))
         #expect(!phases.contains(.errored))
+    }
+
+    /// FIXME: Flaky under full-suite load — cancellation timing can miss `.cancelled` in recorded phases.
+    /// Revisit with deterministic stream/cancellation synchronization before treating failures as regressions.
+    @Test("stream: consumer cancellation records .cancelled, not .errored")
+    func streamCancelledRecorded() async throws {
+        let recorder = PhaseRecorder()
+        let coordinator = ModelInvocationCoordinator { _, payload in
+            await recorder.append(payload.phase)
+        }
+        let modelID = UUID()
+        let lifecycle = LifecycleReportingLLM(
+            baseLLM: HangingStreamLLM(),
+            modelID: modelID,
+            coordinator: coordinator
+        )
+        let scheduled = SchedulingLLM(
+            baseLLM: lifecycle,
+            scheduler: NoOpModelCallScheduler(),
+            modelID: modelID,
+            coordinator: coordinator
+        )
+
+        let stream = scheduled.stream([], config: LLMRequestConfig())
+        let consumer = Task {
+            var receivedFirst = false
+            for try await result in stream {
+                if case .stream = result {
+                    receivedFirst = true
+                }
+                if receivedFirst {
+                    continue
+                }
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        consumer.cancel()
+        _ = try? await consumer.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let phases = await recorder.phases
+        #expect(phases.contains(.cancelled))
+        #expect(!phases.contains(.errored))
+        #expect(!phases.contains(.done))
     }
 
     // MARK: - Budget rejection integration

@@ -29,17 +29,22 @@ actor SSHWorkspaceSyncCache {
         control: SSHControlMaster,
         settings: SSHSandboxSettings,
         hostWorkspace: String,
-        remoteRoot: String
+        scopeKey: String
     ) async throws {
         try SSHHostTools.requireLocalRsync()
 
-        _ = try await runner.run(argv: SSHSandboxArgv.exec(
+        let prepareResult = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "mkdir -p \(remoteRoot)"
+            remoteCommand: SSHSandboxRemoteRoot.securePrepareCommand(scopeKey: scopeKey)
         ))
+        guard prepareResult.exitCode == 0 else {
+            throw SandboxBackendError.commandFailed(
+                "remote workspace prepare failed for scope \(scopeKey): workspace path may be squatted or inaccessible"
+            )
+        }
 
-        var entry = entries[remoteRoot] ?? Entry(
+        var entry = entries[scopeKey] ?? Entry(
             seeded: false,
             fileSync: FileSyncManager(),
             hostWorkspace: hostWorkspace,
@@ -47,31 +52,40 @@ actor SSHWorkspaceSyncCache {
         )
         entry.hostWorkspace = hostWorkspace
 
+        let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
         let markerCheck = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "test -f \(remoteRoot)/\(Self.seedMarker)"
+            remoteCommand: "test -f \(shellPath)/\(Self.seedMarker)"
         ))
         let remoteSeeded = markerCheck.exitCode == 0
 
         try await ensureRemoteRsync(control: control, settings: settings, entry: &entry)
 
+        let remoteSyncRoot = SSHSandboxRemoteRoot.rsyncRelativeRoot(scopeKey: scopeKey)
         if !remoteSeeded {
-            try await fullSeed(control: control, settings: settings, hostWorkspace: hostWorkspace, remoteRoot: remoteRoot, entry: &entry)
+            try await fullSeed(
+                control: control,
+                settings: settings,
+                hostWorkspace: hostWorkspace,
+                scopeKey: scopeKey,
+                remoteSyncRoot: remoteSyncRoot,
+                entry: &entry
+            )
         } else {
             entry.seeded = true
             if entry.fileSync.isEmpty {
-                entry.fileSync.trackTree(hostRoot: hostWorkspace, remoteRoot: remoteRoot)
+                entry.fileSync.trackTree(hostRoot: hostWorkspace, remoteRoot: remoteSyncRoot)
             } else {
                 try await incrementalSync(control: control, settings: settings, entry: &entry)
             }
         }
 
-        entries[remoteRoot] = entry
+        entries[scopeKey] = entry
     }
 
-    func remove(remoteRoot: String) {
-        entries.removeValue(forKey: remoteRoot)
+    func remove(scopeKey: String) {
+        entries.removeValue(forKey: scopeKey)
     }
 
     func resetForTesting() {
@@ -104,21 +118,23 @@ actor SSHWorkspaceSyncCache {
         control: SSHControlMaster,
         settings: SSHSandboxSettings,
         hostWorkspace: String,
-        remoteRoot: String,
+        scopeKey: String,
+        remoteSyncRoot: String,
         entry: inout Entry
     ) async throws {
         let transport = SSHSandboxArgv.rsyncTransport(control: control, settings: settings)
         let hostSource = hostWorkspace.hasSuffix("/") ? hostWorkspace : hostWorkspace + "/"
         try await runRsync(argv: [
             "rsync", "-az", "--delete", "-e", transport, hostSource,
-            "\(SSHSandboxArgv.destination(settings)):\(remoteRoot)/",
+            "\(SSHSandboxArgv.destination(settings)):\(SSHSandboxRemoteRoot.rsyncRelativePath(scopeKey: scopeKey))",
         ], settings: settings)
+        let shellPath = SSHSandboxRemoteRoot.shellPath(scopeKey: scopeKey)
         _ = try await runner.run(argv: SSHSandboxArgv.exec(
             control: control,
             settings: settings,
-            remoteCommand: "touch \(remoteRoot)/\(Self.seedMarker)"
+            remoteCommand: "touch \(shellPath)/\(Self.seedMarker)"
         ))
-        entry.fileSync.trackTree(hostRoot: hostWorkspace, remoteRoot: remoteRoot)
+        entry.fileSync.trackTree(hostRoot: hostWorkspace, remoteRoot: remoteSyncRoot)
         entry.seeded = true
     }
 

@@ -6,24 +6,36 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
     public var baseDelay: TimeInterval
     public var maxDelay: TimeInterval
     public var jitterFraction: Double
+    public var rotationStrategy: AuthProfileRotationStrategy
+    public var billingCooldown: TimeInterval
+    public var rateLimitCooldown: TimeInterval
 
     public static let specDefaults = ModelPoolFailoverConfiguration(
         maxRetries: 2,
         baseDelay: 0.25,
         maxDelay: 5.0,
-        jitterFraction: 0.25
+        jitterFraction: 0.25,
+        rotationStrategy: .fillFirst,
+        billingCooldown: 3600,
+        rateLimitCooldown: 900
     )
 
     public init(
         maxRetries: Int,
         baseDelay: TimeInterval,
         maxDelay: TimeInterval,
-        jitterFraction: Double
+        jitterFraction: Double,
+        rotationStrategy: AuthProfileRotationStrategy = .fillFirst,
+        billingCooldown: TimeInterval = 3600,
+        rateLimitCooldown: TimeInterval = 900
     ) {
         self.maxRetries = max(0, maxRetries)
         self.baseDelay = max(0, baseDelay)
         self.maxDelay = max(0, maxDelay)
         self.jitterFraction = max(0, min(1, jitterFraction))
+        self.rotationStrategy = rotationStrategy
+        self.billingCooldown = billingCooldown
+        self.rateLimitCooldown = rateLimitCooldown
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolFailoverConfiguration {
@@ -45,11 +57,17 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
         let baseDelay = parseDouble(raw["baseDelaySeconds"]) ?? specDefaults.baseDelay
         let maxDelay = parseDouble(raw["maxDelaySeconds"]) ?? specDefaults.maxDelay
         let jitter = parseDouble(raw["jitterFraction"]) ?? specDefaults.jitterFraction
+        let rotationStrategy = parseRotationStrategy(raw["rotationStrategy"]) ?? specDefaults.rotationStrategy
+        let billingCooldown = parseDouble(raw["billingCooldownSeconds"]) ?? specDefaults.billingCooldown
+        let rateLimitCooldown = parseDouble(raw["rateLimitCooldownSeconds"]) ?? specDefaults.rateLimitCooldown
         return ModelPoolFailoverConfiguration(
             maxRetries: maxRetries,
             baseDelay: baseDelay,
             maxDelay: maxDelay,
-            jitterFraction: jitter
+            jitterFraction: jitter,
+            rotationStrategy: rotationStrategy,
+            billingCooldown: billingCooldown,
+            rateLimitCooldown: rateLimitCooldown
         )
     }
 
@@ -72,8 +90,16 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
             maxRetries: maxRetries,
             baseDelay: baseDelay,
             maxDelay: maxDelay,
-            jitterFraction: jitterFraction
+            jitterFraction: jitterFraction,
+            rotationStrategy: rotationStrategy,
+            billingCooldown: billingCooldown,
+            rateLimitCooldown: rateLimitCooldown
         )
+    }
+
+    private static func parseRotationStrategy(_ raw: Any?) -> AuthProfileRotationStrategy? {
+        guard let value = raw as? String else { return nil }
+        return AuthProfileRotationStrategy(rawValue: value)
     }
 
     private static func parseInt(_ raw: Any?) -> Int? {

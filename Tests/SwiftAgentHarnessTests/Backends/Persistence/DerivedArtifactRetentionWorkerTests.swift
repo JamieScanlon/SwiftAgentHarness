@@ -7,9 +7,7 @@ import Testing
 @Suite("DerivedArtifactRetentionWorker")
 struct DerivedArtifactRetentionWorkerTests {
     private func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     private func makeModel(name: String = "retention:test") -> Model {
@@ -55,6 +53,7 @@ struct DerivedArtifactRetentionWorkerTests {
             conversationID: cid,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config,
             strategyRawValue: nil,
@@ -120,6 +119,7 @@ struct DerivedArtifactRetentionWorkerTests {
             conversationID: cid,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config,
             strategyRawValue: nil,
@@ -202,6 +202,7 @@ struct DerivedArtifactRetentionWorkerTests {
             conversationID: cid,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config,
             strategyRawValue: nil,
@@ -218,6 +219,7 @@ struct DerivedArtifactRetentionWorkerTests {
             conversationID: cid,
             rawMiddleMessageIDs: [coveredMessageID],
             compactedMiddleMessages: [compacted],
+            coveredRawMiddle: [Message(id: coveredMessageID, role: .user, content: "u", timestamp: Date(), toolCalls: [])],
             kind: .summarized,
             config: config,
             strategyRawValue: nil,

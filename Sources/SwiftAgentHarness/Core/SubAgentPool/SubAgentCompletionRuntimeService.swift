@@ -74,6 +74,12 @@ public actor SubAgentCompletionRuntimeService {
     func retryPendingCompletionAnnouncements() async {
         let pending = await subAgentCompletionService.pendingAnnouncements()
         for announce in pending {
+            guard await subAgentCompletionService.tryBeginDelivery(
+                delegateHandleID: announce.delegateHandleID,
+                toolCallID: announce.toolCallID
+            ) else {
+                continue
+            }
             let retries = await subAgentCompletionService.recordRetry(for: announce.announceID)
             if retries > completionAnnounceMaxRetryAttempts {
                 try? await deps.persistenceDomain.routingPersistCompletionAnnounceEventAsync(
@@ -187,10 +193,10 @@ public actor SubAgentCompletionRuntimeService {
             usage: sanitizedCompletionUsage(announce.usage),
             error: announce.error
         )
-        if await subAgentCompletionService.hasDelivered(
+        guard await subAgentCompletionService.tryBeginDelivery(
             delegateHandleID: normalizedAnnounce.delegateHandleID,
             toolCallID: normalizedAnnounce.toolCallID
-        ) {
+        ) else {
             return
         }
         if await hasPersistedCompletionAnnounceMarker(
@@ -276,7 +282,8 @@ public actor SubAgentCompletionRuntimeService {
         await delegateCostTracker.recordDelegateCompletion(
             conversationID: announce.conversationID,
             success: announce.status == .done,
-            settledCostUSD: settledCostUSD
+            settledCostUSD: settledCostUSD,
+            completionAnnounceID: announce.announceID
         )
         await messaging.persistDelegateSpendSnapshot(conversationID: announce.conversationID)
     }

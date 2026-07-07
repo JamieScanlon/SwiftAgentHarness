@@ -44,4 +44,70 @@ struct SubAgentCompletionServiceTests {
         await service.markDelivered(payload)
         #expect(await service.hasDelivered(delegateHandleID: payload.delegateHandleID, toolCallID: payload.toolCallID) == true)
     }
+
+    @Test("tryBeginDelivery allows only one concurrent reservation per correlation key")
+    func tryBeginDeliveryConcurrentReservation() async {
+        let service = SubAgentCompletionService()
+        let results = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            group.addTask {
+                await service.tryBeginDelivery(delegateHandleID: "handle-a", toolCallID: "tool-a")
+            }
+            group.addTask {
+                await service.tryBeginDelivery(delegateHandleID: "handle-a", toolCallID: "tool-a")
+            }
+            var collected: [Bool] = []
+            for await result in group {
+                collected.append(result)
+            }
+            return collected
+        }
+        #expect(results.filter { $0 }.count == 1)
+        #expect(results.filter { !$0 }.count == 1)
+    }
+
+    @Test("tryBeginDelivery can re-acquire after markPending")
+    func tryBeginDeliveryAfterMarkPending() async {
+        let service = SubAgentCompletionService()
+        let payload = CompletionAnnouncePayload(
+            delegateHandleID: "delegate-retry",
+            toolCallID: "tool-retry",
+            conversationID: UUID(),
+            lifecycleID: "lifecycle-retry",
+            status: .done,
+            completedAt: Date(),
+            source: "test"
+        )
+        #expect(await service.tryBeginDelivery(
+            delegateHandleID: payload.delegateHandleID,
+            toolCallID: payload.toolCallID
+        ) == true)
+        await service.markPending(payload)
+        #expect(await service.tryBeginDelivery(
+            delegateHandleID: payload.delegateHandleID,
+            toolCallID: payload.toolCallID
+        ) == true)
+    }
+
+    @Test("tryBeginDelivery rejects after markDelivered")
+    func tryBeginDeliveryAfterMarkDelivered() async {
+        let service = SubAgentCompletionService()
+        let payload = CompletionAnnouncePayload(
+            delegateHandleID: "delegate-delivered",
+            toolCallID: "tool-delivered",
+            conversationID: UUID(),
+            lifecycleID: "lifecycle-delivered",
+            status: .done,
+            completedAt: Date(),
+            source: "test"
+        )
+        #expect(await service.tryBeginDelivery(
+            delegateHandleID: payload.delegateHandleID,
+            toolCallID: payload.toolCallID
+        ) == true)
+        await service.markDelivered(payload)
+        #expect(await service.tryBeginDelivery(
+            delegateHandleID: payload.delegateHandleID,
+            toolCallID: payload.toolCallID
+        ) == false)
+    }
 }

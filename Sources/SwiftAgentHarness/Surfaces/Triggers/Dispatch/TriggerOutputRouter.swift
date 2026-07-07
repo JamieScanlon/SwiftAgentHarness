@@ -1,25 +1,23 @@
 import Foundation
 
 protocol TriggerOutputRouting: Sendable {
-    func routeResponse(trigger: HarnessTrigger, responseText: String, listener: any ChannelListener) async -> ChannelSendResult
+    func routeResponse(trigger: HarnessTrigger, responseText: String, plugin: ChannelPlugin) async -> ChannelSendResult
 }
 
 struct TriggerOutputRouter: TriggerOutputRouting {
     func routeResponse(
         trigger: HarnessTrigger,
         responseText: String,
-        listener: any ChannelListener
+        plugin: ChannelPlugin
     ) async -> ChannelSendResult {
-        let chatId = trigger.sourceMetadata["chatId"] ?? ""
-        let threadId = trigger.sourceMetadata["threadId"]
-        let replyTo = trigger.sourceMetadata["platformMessageId"]
-        return await listener.send(
-            ChannelOutboundMessage(
-                chatId: chatId,
-                threadId: threadId,
-                text: responseText,
-                replyToMessageId: replyTo
-            )
+        let target = ChannelDeliveryTarget(
+            chatId: trigger.sourceMetadata["chatId"] ?? "",
+            threadId: trigger.sourceMetadata["threadId"],
+            replyToMessageId: trigger.sourceMetadata["platformMessageId"]
         )
+        let payload = plugin.outbound.renderPresentation(
+            MessagePresentation(blocks: [.text(responseText)])
+        )
+        return await plugin.outbound.sendPayload(payload, target: target)
     }
 }

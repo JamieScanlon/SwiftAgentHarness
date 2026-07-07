@@ -40,6 +40,45 @@ struct DelegateCostLedgerTests {
         #expect(await ledger.projectedCostUSD(conversationID: conversationID) == 0.25)
     }
 
+    @Test("duplicate completion announce ID settles cost once")
+    func duplicateAnnounceIDSettlesOnce() async {
+        let ledger = DelegateCostLedger()
+        let conversationID = UUID()
+        let announceID = UUID()
+        await ledger.recordDelegateCompletion(
+            conversationID: conversationID,
+            success: true,
+            settledCostUSD: 0.05,
+            completionAnnounceID: announceID
+        )
+        await ledger.recordDelegateCompletion(
+            conversationID: conversationID,
+            success: true,
+            settledCostUSD: 0.05,
+            completionAnnounceID: announceID
+        )
+        #expect(await ledger.projectedCostUSD(conversationID: conversationID) == 0.05)
+    }
+
+    @Test("nil completion announce ID remains additive")
+    func nilAnnounceIDRemainsAdditive() async {
+        let ledger = DelegateCostLedger()
+        let conversationID = UUID()
+        await ledger.recordDelegateCompletion(
+            conversationID: conversationID,
+            success: true,
+            settledCostUSD: 0.03,
+            completionAnnounceID: nil
+        )
+        await ledger.recordDelegateCompletion(
+            conversationID: conversationID,
+            success: true,
+            settledCostUSD: 0.03,
+            completionAnnounceID: nil
+        )
+        #expect(await ledger.projectedCostUSD(conversationID: conversationID) == 0.06)
+    }
+
     @Test("authorize enforces per-call cap")
     func authorizeEnforcesPerCallCap() async {
         let ledger = DelegateCostLedger()

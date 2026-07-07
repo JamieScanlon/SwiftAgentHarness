@@ -17,6 +17,7 @@ public struct SlashCommandBase: Sendable, Equatable {
     public var hiddenKeywords: String
     public var isHidden: Bool
     public var source: SlashCommandSource
+    public var category: SlashCommandCategory
     public var ownerOnly: Bool
     public var bypassTier: SlashCommandBypassTier
     public var isEnabled: Bool
@@ -29,6 +30,7 @@ public struct SlashCommandBase: Sendable, Equatable {
         hiddenKeywords: String = "",
         isHidden: Bool = false,
         source: SlashCommandSource = .builtin,
+        category: SlashCommandCategory = .command,
         ownerOnly: Bool = false,
         bypassTier: SlashCommandBypassTier = .queued,
         isEnabled: Bool = true
@@ -40,6 +42,7 @@ public struct SlashCommandBase: Sendable, Equatable {
         self.hiddenKeywords = hiddenKeywords
         self.isHidden = isHidden
         self.source = source
+        self.category = category
         self.ownerOnly = ownerOnly
         self.bypassTier = bypassTier
         self.isEnabled = isEnabled

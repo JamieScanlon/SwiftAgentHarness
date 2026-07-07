@@ -190,9 +190,7 @@ struct SlashCommandToolDispatchApprovalTests {
 
 private enum HarnessRuntimeSessionSlashDispatchSupport {
     static func makeContainer() throws -> ModelContainer {
-        let schema = HarnessPersistenceSchema.latest
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: config)
+                return try HarnessTestModelContainer.makeInMemory()
     }
 
     static func makeModel(name: String = "slash:test") -> Model {

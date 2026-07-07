@@ -46,14 +46,6 @@ extension ContextCompactionSummarizing {
     }
 }
 
-protocol ToolResultSummarizing: Sendable {
-    func summarize(
-        toolCall: ToolCall,
-        rawResult: ToolResult,
-        conversation: ConversationTransformMetadata
-    ) async throws -> String
-}
-
 struct TurnSummaryDecision: Sendable {
     let succeeded: Bool
     let summary: String
@@ -68,7 +60,6 @@ protocol TurnSummarizing: Sendable {
 
 public struct ContextCompactionProviderBundle: Sendable {
     let summarizer: any ContextCompactionSummarizing
-    let toolResultSummarizer: any ToolResultSummarizing
     let turnSummarizer: any TurnSummarizing
 }
 
@@ -146,12 +137,10 @@ struct DefaultContextCompactionProviderFactory: ContextCompactionProviderFactori
             return nil
         case .none:
             let unavailable = ProviderUnavailableSummarizer(slot: slot.rawValue)
-            let unavailableTool = ProviderUnavailableToolResultSummarizer(slot: slot.rawValue)
             let unavailableTurn = ProviderUnavailableTurnSummarizer(slot: slot.rawValue)
             guard config.optionalCompactionProviderFallbackToOllama else {
                 return ContextCompactionProviderBundle(
                     summarizer: unavailable,
-                    toolResultSummarizer: unavailableTool,
                     turnSummarizer: unavailableTurn
                 )
             }
@@ -159,11 +148,6 @@ struct DefaultContextCompactionProviderFactory: ContextCompactionProviderFactori
                 summarizer: FallbackContextCompactionSummarizer(
                     primary: unavailable,
                     fallback: OllamaContextCompactionSummarizer(config: config, logger: logger, scheduling: scheduling),
-                    logger: logger
-                ),
-                toolResultSummarizer: FallbackToolResultSummarizer(
-                    primary: unavailableTool,
-                    fallback: OllamaToolResultSummarizer(config: config, logger: logger, scheduling: scheduling),
                     logger: logger
                 ),
                 turnSummarizer: FallbackTurnSummarizer(
@@ -184,18 +168,6 @@ struct ProviderUnavailableSummarizer: ContextCompactionSummarizing {
     let slot: String
 
     func summarizeMiddle(messages _: [Message], maxMessages _: Int, debugOutputPath _: String?) async throws -> [Message] {
-        throw ProviderUnavailableError(slot: slot)
-    }
-}
-
-struct ProviderUnavailableToolResultSummarizer: ToolResultSummarizing {
-    let slot: String
-
-    func summarize(
-        toolCall _: ToolCall,
-        rawResult _: ToolResult,
-        conversation _: ConversationTransformMetadata
-    ) async throws -> String {
         throw ProviderUnavailableError(slot: slot)
     }
 }
@@ -266,25 +238,6 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
     }
 }
 
-struct FallbackToolResultSummarizer: ToolResultSummarizing {
-    let primary: any ToolResultSummarizing
-    let fallback: any ToolResultSummarizing
-    let logger: Logger?
-
-    func summarize(
-        toolCall: ToolCall,
-        rawResult: ToolResult,
-        conversation: ConversationTransformMetadata
-    ) async throws -> String {
-        do {
-            return try await primary.summarize(toolCall: toolCall, rawResult: rawResult, conversation: conversation)
-        } catch {
-            logger?.warning("[ContextCompactionProvider] primary tool-result summarizer failed; falling back: \(error)")
-            return try await fallback.summarize(toolCall: toolCall, rawResult: rawResult, conversation: conversation)
-        }
-    }
-}
-
 struct FallbackTurnSummarizer: TurnSummarizing {
     let primary: any TurnSummarizing
     let fallback: any TurnSummarizing
@@ -308,7 +261,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
     private let toolResultFormattingConfiguration: ToolResultFormattingConfiguration
     private let logger: Logger?
     private let summarizer: any ContextCompactionSummarizing
-    private let toolResultSummarizer: any ToolResultSummarizing
     private let turnSummarizer: any TurnSummarizing
     private static let maxLoggedContentCharacters = 4_000
 
@@ -334,7 +286,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
                 toolResultFormattingConfiguration: toolResultFormattingConfiguration,
                 logger: logger,
                 summarizer: provider.summarizer,
-                toolResultSummarizer: provider.toolResultSummarizer,
                 turnSummarizer: provider.turnSummarizer
             )
         }
@@ -350,7 +301,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         toolResultFormattingConfiguration: ToolResultFormattingConfiguration = .default,
         logger: Logger? = nil,
         summarizer: (any ContextCompactionSummarizing)? = nil,
-        toolResultSummarizer: (any ToolResultSummarizing)? = nil,
         turnSummarizer: (any TurnSummarizing)? = nil,
         scheduling: ContextCompactionLLMScheduling? = nil
     ) {
@@ -358,7 +308,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         self.toolResultFormattingConfiguration = toolResultFormattingConfiguration
         self.logger = logger
         self.summarizer = summarizer ?? OllamaContextCompactionSummarizer(config: config, logger: logger, scheduling: scheduling)
-        self.toolResultSummarizer = toolResultSummarizer ?? OllamaToolResultSummarizer(config: config, logger: logger, scheduling: scheduling)
         self.turnSummarizer = turnSummarizer ?? OllamaTurnSummarizer(config: config, logger: logger, scheduling: scheduling)
     }
 
@@ -539,6 +488,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             head: head,
             middle: middleAfterMemorySwap,
             tail: tail,
+            skills: input.compactionReinjectableSkills,
             config: config
         )
         return summarizedOutput(
@@ -577,6 +527,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             head: head,
             middle: deterministicMiddle,
             tail: tail,
+            skills: input.compactionReinjectableSkills,
             config: config
         )
         return summarizedOutput(
@@ -605,33 +556,34 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             max(0, input.compactionCheckpointPrefixCount ?? 0),
             effectiveMiddle.count
         )
-        let strategyAdjusted = applyStrategyPolicy(
-            input: input,
-            head: head,
-            middle: effectiveMiddle
-        )
-        let prevSynth = Array(strategyAdjusted.prefix(prefixCount))
-        let newRawTail = Array(strategyAdjusted.dropFirst(prefixCount))
+        let prevSynth = Array(effectiveMiddle.prefix(prefixCount))
+        let newRawTail = Array(effectiveMiddle.dropFirst(prefixCount))
         if newRawTail.isEmpty {
-            return summarizedNoNewTailOutput(head: head, prevSynth: prevSynth, tail: tail)
+            let prevSynthWithBranch = branchAwareMiddleIfNeeded(input: input, middle: prevSynth)
+            return summarizedNoNewTailOutput(head: head, prevSynth: prevSynthWithBranch, tail: tail)
         }
         let deterministicNewTail = applyDeterministicPreCompactionHygiene(
             input: input,
             head: head,
             middle: newRawTail,
             toolCallNameResolutionContext: head + prevSynth + newRawTail,
-            includeToolResultPruning: true
+            includeToolResultPruning: true,
+            includeBranchContextMarker: false
         )
 
-        let composedMiddle = prevSynth + deterministicNewTail
+        let composedMiddle = branchAwareMiddleIfNeeded(
+            input: input,
+            middle: prevSynth + deterministicNewTail
+        )
         if prunedMiddleSatisfiesThreshold(input: input, head: head, prunedMiddle: composedMiddle, tail: tail) {
             // Per plan B.5: appended messages still carry tool-result content, so the kind is `.pruned`.
             return prunedShortCircuitOutput(head: head, prunedMiddle: composedMiddle, tail: tail)
         }
 
+        let summarizerMiddle = branchAwareMiddleIfNeeded(input: input, middle: deterministicNewTail)
         let summarizedNewTail = try await summarize(
             input: input,
-            middleForSummarizerLLM: deterministicNewTail,
+            middleForSummarizerLLM: summarizerMiddle,
             middleBudget: middleBudget
         )
         let mergedSynth = summarizedNewTail
@@ -639,6 +591,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             head: head,
             middle: composedMiddle,
             tail: tail,
+            skills: input.compactionReinjectableSkills,
             config: config
         )
         return summarizedOutput(
@@ -739,14 +692,18 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         }
         var effectiveTail = tail
         var summaryMessages = summarizedMiddle
+        var compactionPersistedMiddle: [Message]?
         if let summaryBody = summarizedMiddle.first?.content {
             let assembled = ContextCompactionSummaryMessageAssembler.assemble(
                 summaryBody: summaryBody,
                 tail: tail
             )
             summaryMessages = assembled.messages
-            if assembled.mergedIntoTail {
-                effectiveTail = tail
+            if let persistenceSummary = assembled.persistenceSummary {
+                compactionPersistedMiddle = [persistenceSummary]
+            }
+            if let mergedTail = assembled.mergedTail {
+                effectiveTail = mergedTail
                 summaryMessages = []
             }
         }
@@ -780,7 +737,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         return ContextTransformOutput(
             messages: compacted,
             diagnostics: Self.summarizedDiagnostic,
-            messageProvenance: provenance
+            messageProvenance: provenance,
+            compactionPersistedMiddle: compactionPersistedMiddle
         )
     }
 
@@ -846,13 +804,18 @@ public struct ContextCompactionTransformer: ConversationTransforming {
     private func applyStrategyPolicy(
         input: ContextTransformInput,
         head: [Message],
-        middle: [Message]
+        middle: [Message],
+        includeBranchContextMarker: Bool = true
     ) -> [Message] {
         switch input.compactionStrategy {
         case .default:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         case .iterativeDelta, .focused:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         case .turnPrefix:
             guard let lastUserIndex = middle.lastIndex(where: { $0.role == .user }) else {
                 return middle
@@ -861,7 +824,9 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             let prefix = Array(middle.prefix(through: lastUserIndex))
             return prefix.isEmpty ? middle : prefix
         case .branchAware:
-            return branchAwareMiddleIfNeeded(input: input, middle: middle)
+            return includeBranchContextMarker
+                ? branchAwareMiddleIfNeeded(input: input, middle: middle)
+                : middle
         }
     }
 
@@ -905,12 +870,14 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         head: [Message],
         middle: [Message],
         toolCallNameResolutionContext: [Message],
-        includeToolResultPruning: Bool
+        includeToolResultPruning: Bool,
+        includeBranchContextMarker: Bool = true
     ) -> [Message] {
         var staged = applyStrategyPolicy(
             input: input,
             head: head,
-            middle: middle
+            middle: middle,
+            includeBranchContextMarker: includeBranchContextMarker
         )
         staged = applyCacheAwarePruningIfConfigured(
             middle: staged,
@@ -931,7 +898,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
                 toolNamesToPrune: Set(config.compactionToolResultPruneNames),
                 maxRecentPerListedName: config.maxRecentPerNameToolResults,
                 maxRecentUnlistedToolResults: config.maxRecentToolResults,
-                toolCallNameResolutionContext: toolCallNameResolutionContext
+                toolCallNameResolutionContext: toolCallNameResolutionContext,
+                replacementMode: config.toolResultPruneReplacementMode
             )
     }
 
@@ -943,81 +911,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             messages: middle,
             policy: policy?.attachmentDocumentHygiene
         )
-    }
-
-    private func applyCompactionToolResultFormatting(_ result: ToolResult) -> ToolResult {
-        let compactionFormatting = ToolResultFormattingStack.compactionConfiguration(
-            base: toolResultFormattingConfiguration,
-            compactionMaxCharactersOverride: config.toolResultSummarizationCharacterThreshold,
-            compactionImagePlaceholderOverride: config.deterministicImagePlaceholder,
-            compactionTruncationMarkerOverride: nil
-        )
-        return ToolResultFormattingStack.apply(
-            result: result,
-            stage: .compaction,
-            configuration: compactionFormatting
-        )
-    }
-
-    public func transformToolResult(_ input: ToolResultTransformInput) async throws -> ToolResultTransformOutput {
-        logger?.debug(
-            "[ContextCompactionTransformer] transformToolResult input tool=\(input.toolCall.name) toolCallId=\(input.toolCall.id ?? "nil") resultChars=\(input.result.content.count)\n\(Self.describeToolResult(input.result))"
-        )
-        guard config.enabled else {
-            let output = ToolResultTransformOutput(
-                result: applyCompactionToolResultFormatting(input.result),
-                diagnostics: "tool_result_summary_disabled"
-            )
-            logToolResultOutput(output)
-            return output
-        }
-        guard input.result.content.count > config.toolResultSummarizationCharacterThreshold else {
-            let output = ToolResultTransformOutput(
-                result: applyCompactionToolResultFormatting(input.result),
-                diagnostics: "tool_result_summary_noop_under_threshold"
-            )
-            logToolResultOutput(output)
-            return output
-        }
-        do {
-            logger?.info(
-                "[ContextCompactionTransformer] LLM call: toolResultSummary tool=\(input.toolCall.name) resultChars=\(input.result.content.count) model=\(config.model)"
-            )
-            let preShapedRaw = applyCompactionToolResultFormatting(input.result)
-            let summary = try await toolResultSummarizer.summarize(
-                toolCall: input.toolCall,
-                rawResult: preShapedRaw,
-                conversation: input.conversation
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else {
-                let output = ToolResultTransformOutput(
-                    result: applyCompactionToolResultFormatting(input.result),
-                    diagnostics: "tool_result_summary_empty_output"
-                )
-                logToolResultOutput(output)
-                return output
-            }
-            let summarizedResult = ToolResult(
-                success: input.result.success,
-                content: summary,
-                metadata: input.result.metadata,
-                toolCallId: input.result.toolCallId
-            )
-            let output = ToolResultTransformOutput(
-                result: applyCompactionToolResultFormatting(summarizedResult),
-                diagnostics: "tool_result_summarized"
-            )
-            logToolResultOutput(output)
-            return output
-        } catch {
-            logger?.debug("[ContextCompactionTransformer] transformToolResult summarizer error: \(String(describing: error))")
-            let output = ToolResultTransformOutput(
-                result: applyCompactionToolResultFormatting(input.result),
-                diagnostics: "tool_result_summary_failed"
-            )
-            logToolResultOutput(output)
-            return output
-        }
     }
 
     public func transformTurnSummary(_ input: TurnSummaryTransformInput) async throws -> TurnSummaryTransformOutput {
@@ -1122,12 +1015,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         )
     }
 
-    private func logToolResultOutput(_ output: ToolResultTransformOutput) {
-        logger?.debug(
-            "[ContextCompactionTransformer] transformToolResult output diagnostics=\(output.diagnostics ?? "nil") resultChars=\(output.result.content.count)\n\(Self.describeToolResult(output.result))"
-        )
-    }
-
     private func logTurnSummaryOutput(_ output: TurnSummaryTransformOutput) {
         logger?.debug(
             "[ContextCompactionTransformer] transformTurnSummary output diagnostics=\(output.diagnostics ?? "nil")\n\(Self.describeMessages(output.replacementTurnMessages))"
@@ -1143,107 +1030,10 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         return lines.joined(separator: "\n")
     }
 
-    private static func describeToolResult(_ result: ToolResult) -> String {
-        let trimmed = result.content.replacingOccurrences(of: "\n", with: "\\n")
-        let preview = truncate(trimmed, maxCharacters: maxLoggedContentCharacters)
-        return "success=\(result.success) toolCallId=\(result.toolCallId ?? "nil") content=\"\(preview)\""
-    }
-
     private static func truncate(_ text: String, maxCharacters: Int) -> String {
         guard text.count > maxCharacters else { return text }
         let end = text.index(text.startIndex, offsetBy: maxCharacters)
         return "\(text[..<end])…(truncated)"
-    }
-}
-
-actor OllamaToolResultSummarizer: ToolResultSummarizing {
-    private let config: ContextCompactionConfiguration
-    private let logger: Logger?
-    private let scheduling: ContextCompactionLLMScheduling?
-    private var llm: (any LLMProtocol)?
-
-    init(config: ContextCompactionConfiguration, logger: Logger?, scheduling: ContextCompactionLLMScheduling? = nil) {
-        self.config = config
-        self.logger = logger
-        self.scheduling = scheduling
-    }
-
-    func summarize(
-        toolCall: ToolCall,
-        rawResult: ToolResult,
-        conversation: ConversationTransformMetadata
-    ) async throws -> String {
-        let llm = try await resolveLLM()
-        let intent = Self.toolIntentString(from: toolCall)
-        let prompt = Message(
-            id: UUID(),
-            role: .user,
-            content: """
-            ToolIntent:
-            \(intent)
-
-            ConversationContext:
-            - interactionMode: \(conversation.interactionMode.rawValue)
-            - modelName: \(conversation.modelName)
-
-            RawToolOutput:
-            \(rawResult.content)
-
-            Requirements:
-            - Summarize only what helps satisfy why this tool call was made.
-            - Preserve critical literals: IDs, URLs, file paths, error strings, and important numbers.
-            - Mark uncertainty explicitly if output is ambiguous or partial.
-            - Exclude irrelevant verbose detail.
-            - Return concise plain text only; no markdown wrappers.
-            """
-        )
-        let system = Message(
-            id: UUID(),
-            role: .system,
-            content: """
-            You are an intent-aware tool result summarizer.
-            Your summary should optimize usefulness for the next LLM step.
-            Do not invent details not present in ToolIntent or RawToolOutput.
-            """
-        )
-        let response = try await llm.send([system, prompt], config: .harnessTagged(.contextCompactionToolResult))
-        return response.content
-    }
-
-    private func resolveLLM() async throws -> any LLMProtocol {
-        if let llm {
-            return llm
-        }
-        let prompt = try await SystemPrompt(
-            includeCurrentDateTime: false,
-            includeAgentSkills: false,
-            skillLoader: nil,
-            skipConfigLoad: true,
-            logger: logger,
-            interactionMode: .chat
-        )
-        let base = OllamaLLM(
-            model: config.model,
-            serverURL: config.ollamaServerURL,
-            capabilities: [.completion],
-            systemPrompt: prompt,
-            logger: logger
-        )
-        let resolved = wrapCompactionLLMForScheduling(base, scheduling: scheduling)
-        llm = resolved
-        return resolved
-    }
-
-    private static func toolIntentString(from toolCall: ToolCall) -> String {
-        let args = toolCall.arguments
-        let argsString: String
-        if let data = try? JSONEncoder().encode(args),
-           let str = String(data: data, encoding: .utf8) {
-            argsString = str
-        } else {
-            argsString = "{}"
-        }
-        return "tool=\(toolCall.name)\narguments=\(argsString)"
     }
 }
 
