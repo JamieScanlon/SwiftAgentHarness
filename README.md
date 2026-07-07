@@ -59,4 +59,9 @@ The package name is `SwiftAgentHarness`, so the `package:` label in `.product` m
 import SwiftAgentHarness
 ```
 
-Then use the public APIs exported by the `SwiftAgentHarness` module.
+Start with the docs:
+
+- [Overview](./docs/OVERVIEW.md) — what SwiftAgentHarness is, the layer architecture, and the key entry-point types.
+- [Quickstart](./docs/QUICKSTART.md) — register providers, build the composition root, start the gateway, and run a first conversation.
+
+The design rationale for every layer lives in the [Agent Harness Best-Practice Template](./harness-template/README.md), included in this repository under [`harness-template/`](./harness-template/).
