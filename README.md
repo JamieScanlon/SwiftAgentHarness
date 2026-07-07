@@ -65,3 +65,14 @@ Start with the docs:
 - [Quickstart](./docs/QUICKSTART.md) — register providers, build the composition root, start the gateway, and run a first conversation.
 
 The design rationale for every layer lives in the [Agent Harness Best-Practice Template](./harness-template/README.md), included in this repository under [`harness-template/`](./harness-template/).
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md). All contributors must sign the [Contributor License Agreement](./CLA.md) (a one-time electronic signature on your first pull request), which enables the project's dual-licensing model.
+
+## License
+
+SwiftAgentHarness is dual-licensed:
+
+- **Open source:** [GNU Affero General Public License v3](./LICENSE) — free to use, modify, and distribute under the AGPL's terms, including its network-use provisions.
+- **Commercial:** for use cases the AGPL doesn't fit (e.g., proprietary products or services that cannot comply with AGPL obligations), commercial licenses are available from the project owner. Contact [jamie@tenthlettermade.com](mailto:jamie@tenthlettermade.com).
