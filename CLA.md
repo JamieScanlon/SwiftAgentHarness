@@ -58,4 +58,4 @@ This Agreement constitutes the entire agreement between You and the Owner concer
 
 ---
 
-*By signing this Agreement electronically — including by confirming through a CLA-signing service linked from a pull request — You certify that You have read and agree to its terms, and that the information You provide (name, email address, and GitHub username) is accurate.*
+*By signing this Agreement electronically — including by posting a pull-request comment stating that You have read this document and hereby sign it, or by confirming through a CLA-signing service linked from a pull request — You certify that You have read and agree to its terms, and that the information associated with Your signature (name, email address, and GitHub username) is accurate.*

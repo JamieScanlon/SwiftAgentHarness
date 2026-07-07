@@ -22,7 +22,7 @@ Add SwiftAgentHarness to the `dependencies` array in your `Package.swift`, then 
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/YourOrg/SwiftAgentHarness.git",
+        url: "https://github.com/JamieScanlon/SwiftAgentHarness.git",
         from: "0.0.1"
     ),
 ],

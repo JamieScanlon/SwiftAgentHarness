@@ -6,7 +6,11 @@ Thanks for your interest in contributing! Contributions of all kinds are welcome
 
 SwiftAgentHarness is **dual-licensed**: it is available under the [GNU AGPL v3](./LICENSE) and under commercial license terms from the project owner. To make dual licensing possible, all contributors must sign the [Individual Contributor License Agreement](./CLA.md) before their contributions can be accepted. The CLA grants the project owner the right to re-license your contributions (including commercially) while **you keep full ownership of your work** and can use it however you like.
 
-Signing is handled automatically: when you open your first pull request, the CLA Assistant check will prompt you to sign electronically by following a link and confirming. You only need to do this once; subsequent pull requests pass the check automatically. Pull requests cannot be merged until all commit authors have signed.
+Signing is handled automatically by a CLA Assistant workflow. When you open your first pull request, a bot comment will ask you to read the CLA and sign it by posting this exact comment on the pull request:
+
+> I have read the CLA Document and I hereby sign the CLA
+
+Your signature (GitHub username, timestamp, and CLA version) is then recorded in [`signatures/version1/cla.json`](./signatures/version1/cla.json) in this repository and the CLA status check turns green. You only need to sign once; subsequent pull requests pass automatically. Pull requests cannot be merged until all commit authors have signed. If the check doesn't update after signing, comment `recheck`.
 
 If you are contributing on behalf of your employer, make sure you have permission to do so (see section 5(c) of the CLA).
 
