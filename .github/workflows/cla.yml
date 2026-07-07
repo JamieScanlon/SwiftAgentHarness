@@ -28,7 +28,7 @@ jobs:
           # Signatures are committed to this branch, NOT main — the action pushes directly,
           # which branch protection on main would block. This branch must exist and stay unprotected.
           branch: "cla-signatures"
-          allowlist: JamieScanlon,dependabot[bot],bot*
+          allowlist: dependabot[bot],bot*
           custom-notsigned-prcomment: >-
             Thank you for your contribution to SwiftAgentHarness! Before we can accept it,
             we ask that you read our [Contributor License Agreement](https://github.com/JamieScanlon/SwiftAgentHarness/blob/main/CLA.md)
