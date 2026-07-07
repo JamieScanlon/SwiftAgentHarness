@@ -10,7 +10,7 @@ Signing is handled automatically by a CLA Assistant workflow. When you open your
 
 > I have read the CLA Document and I hereby sign the CLA
 
-Your signature (GitHub username, timestamp, and CLA version) is then recorded in [`signatures/version1/cla.json`](./signatures/version1/cla.json) in this repository and the CLA status check turns green. You only need to sign once; subsequent pull requests pass automatically. Pull requests cannot be merged until all commit authors have signed. If the check doesn't update after signing, comment `recheck`.
+Your signature (GitHub username, timestamp, and CLA version) is then recorded in [`signatures/version1/cla.json` on the `cla-signatures` branch](https://github.com/JamieScanlon/SwiftAgentHarness/blob/cla-signatures/signatures/version1/cla.json) of this repository and the CLA status check turns green. You only need to sign once; subsequent pull requests pass automatically. Pull requests cannot be merged until all commit authors have signed. If the check doesn't update after signing, comment `recheck`.
 
 If you are contributing on behalf of your employer, make sure you have permission to do so (see section 5(c) of the CLA).
 

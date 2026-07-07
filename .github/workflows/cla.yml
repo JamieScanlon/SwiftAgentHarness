@@ -25,7 +25,9 @@ jobs:
         with:
           path-to-signatures: "signatures/version1/cla.json"
           path-to-document: "https://github.com/JamieScanlon/SwiftAgentHarness/blob/main/CLA.md"
-          branch: "main"
+          # Signatures are committed to this branch, NOT main — the action pushes directly,
+          # which branch protection on main would block. This branch must exist and stay unprotected.
+          branch: "cla-signatures"
           allowlist: JamieScanlon,dependabot[bot],bot*
           custom-notsigned-prcomment: >-
             Thank you for your contribution to SwiftAgentHarness! Before we can accept it,
