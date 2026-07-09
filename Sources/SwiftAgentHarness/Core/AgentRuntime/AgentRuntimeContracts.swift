@@ -52,6 +52,8 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
     public var enableAgents: Bool
     public var allowEscalatedTools: Bool
     public var preApprovedToolNames: Set<String>
+    public var preApprovedCallBindings: Set<ToolCallApprovalBinding>
+    public var preApprovedToolRules: [ToolPolicyRule]
     public var expectedPreviousTailHarnessMessageID: UUID?
     public var inputTrustRaw: String?
     public var resolvedInputTrustClass: TrustPolicyClass?
@@ -60,12 +62,15 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
     public var originSenderID: String?
     public var turnThinkingOverride: ThinkingConfig?
     public var turnModelSlug: String?
+    public var runLaneOrigin: RunLaneOriginKind
 
     public init(
         enableTools: Bool = true,
         enableAgents: Bool = true,
         allowEscalatedTools: Bool = false,
         preApprovedToolNames: Set<String> = [],
+        preApprovedCallBindings: Set<ToolCallApprovalBinding> = [],
+        preApprovedToolRules: [ToolPolicyRule] = [],
         expectedPreviousTailHarnessMessageID: UUID? = nil,
         inputTrustRaw: String? = nil,
         resolvedInputTrustClass: TrustPolicyClass? = nil,
@@ -73,12 +78,15 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         originSurface: String? = nil,
         originSenderID: String? = nil,
         turnThinkingOverride: ThinkingConfig? = nil,
-        turnModelSlug: String? = nil
+        turnModelSlug: String? = nil,
+        runLaneOrigin: RunLaneOriginKind = .interactive
     ) {
         self.enableTools = enableTools
         self.enableAgents = enableAgents
         self.allowEscalatedTools = allowEscalatedTools
         self.preApprovedToolNames = preApprovedToolNames
+        self.preApprovedCallBindings = preApprovedCallBindings
+        self.preApprovedToolRules = preApprovedToolRules
         self.expectedPreviousTailHarnessMessageID = expectedPreviousTailHarnessMessageID
         self.inputTrustRaw = inputTrustRaw
         self.resolvedInputTrustClass = resolvedInputTrustClass
@@ -87,6 +95,7 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         self.originSenderID = originSenderID
         self.turnThinkingOverride = turnThinkingOverride
         self.turnModelSlug = turnModelSlug
+        self.runLaneOrigin = runLaneOrigin
     }
 }
 

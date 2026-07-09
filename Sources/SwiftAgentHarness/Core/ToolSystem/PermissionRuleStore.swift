@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 
 /// The scope of a persisted `allow-always` permission rule. Replaces the
@@ -7,6 +8,8 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
     case toolName(String)
     /// Owner-scoped durable tool grant (DEF-122 / SEC-011).
     case ownerToolName(ownerAccountID: UUID, toolName: String)
+    /// Full grammar durable grant (`bash(npm test)`, `group:fs`, etc.).
+    case toolRule(ToolPolicyRule, ownerAccountID: UUID?)
     case commandName(String)
     case exactCommand(String)
     case directory(String)
@@ -16,11 +19,13 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
         case value
         case ownerAccountID
         case toolName
+        case toolRule
     }
 
     private enum Kind: String, Codable {
         case toolName
         case ownerToolName
+        case toolRule
         case commandName
         case exactCommand
         case directory
@@ -32,6 +37,11 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
             return value
         case .ownerToolName(let ownerAccountID, let toolName):
             return "\(ownerAccountID.uuidString)|\(toolName)"
+        case .toolRule(let rule, let ownerAccountID):
+            if let ownerAccountID {
+                return "\(ownerAccountID.uuidString)|\(rule.rawToken)"
+            }
+            return rule.rawToken
         }
     }
 
@@ -46,6 +56,10 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
             let ownerAccountID = try container.decode(UUID.self, forKey: .ownerAccountID)
             let toolName = try container.decode(String.self, forKey: .toolName)
             self = .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+        case .toolRule:
+            let rule = try container.decode(ToolPolicyRule.self, forKey: .toolRule)
+            let ownerAccountID = try container.decodeIfPresent(UUID.self, forKey: .ownerAccountID)
+            self = .toolRule(rule, ownerAccountID: ownerAccountID)
         case .commandName:
             let value = try container.decode(String.self, forKey: .value)
             self = .commandName(value)
@@ -68,6 +82,10 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
             try container.encode(Kind.ownerToolName, forKey: .kind)
             try container.encode(ownerAccountID, forKey: .ownerAccountID)
             try container.encode(toolName, forKey: .toolName)
+        case .toolRule(let rule, let ownerAccountID):
+            try container.encode(Kind.toolRule, forKey: .kind)
+            try container.encode(rule, forKey: .toolRule)
+            try container.encodeIfPresent(ownerAccountID, forKey: .ownerAccountID)
         case .commandName(let value):
             try container.encode(Kind.commandName, forKey: .kind)
             try container.encode(value, forKey: .value)
@@ -78,6 +96,81 @@ public enum PermissionRuleScope: Sendable, Codable, Equatable, Hashable {
             try container.encode(Kind.directory, forKey: .kind)
             try container.encode(value, forKey: .value)
         }
+    }
+
+    /// Whether two tool-grant scopes match after canonical name resolution.
+    func matchesToolGrant(_ other: PermissionRuleScope) -> Bool {
+        switch (self, other) {
+        case (.toolName(let stored), .toolName(let requested)):
+            return ToolNamePolicyNormalization.canonical(stored)
+                == ToolNamePolicyNormalization.canonical(requested)
+        case (.ownerToolName(let ownerStored, let stored), .ownerToolName(let ownerRequested, let requested)):
+            return ownerStored == ownerRequested
+                && ToolNamePolicyNormalization.canonical(stored)
+                    == ToolNamePolicyNormalization.canonical(requested)
+        case (.toolRule(let storedRule, let ownerStored), .toolRule(let requestedRule, let ownerRequested)):
+            return ownerStored == ownerRequested && storedRule == requestedRule
+        default:
+            return self == other
+        }
+    }
+
+    /// Whether this scope matches a call via the full rule grammar.
+    func matchesCall(
+        entry: ToolRegistryEntry,
+        arguments: JSON,
+        groupIndex: ToolPolicyGroupIndex
+    ) -> Bool {
+        switch self {
+        case .toolRule(let rule, _):
+            return ToolPolicyCallMatcher.matches(
+                rule: rule,
+                entry: entry,
+                arguments: arguments,
+                groupIndex: groupIndex
+            )
+        case .toolName(let name):
+            return ToolNamePolicyNormalization.canonical(entry.name)
+                == ToolNamePolicyNormalization.canonical(name)
+        case .ownerToolName(_, let name):
+            return ToolNamePolicyNormalization.canonical(entry.name)
+                == ToolNamePolicyNormalization.canonical(name)
+        case .commandName(let commandName):
+            let values = ToolPolicyArgumentExtractor.extractedValues(
+                toolName: entry.name,
+                arguments: arguments
+            )
+            return values.contains { value in
+                if let grantName = ExecApprovalGrantCommandName.durableGrantCommandName(from: value) {
+                    return grantName == commandName
+                }
+                return value == commandName
+            }
+        case .exactCommand, .directory:
+            return false
+        }
+    }
+
+    /// Canonical tool name when this scope refers to a tool grant.
+    var canonicalToolName: String? {
+        switch self {
+        case .toolName(let name):
+            return ToolNamePolicyNormalization.canonical(name)
+        case .ownerToolName(_, let name):
+            return ToolNamePolicyNormalization.canonical(name)
+        case .toolRule(let rule, _):
+            return rule.canonicalToolName
+        case .commandName, .exactCommand, .directory:
+            return nil
+        }
+    }
+
+    /// Whether this scope matches another, using canonical resolution for tool grants.
+    func scopesMatch(_ other: PermissionRuleScope) -> Bool {
+        if canonicalToolName != nil || other.canonicalToolName != nil {
+            return matchesToolGrant(other)
+        }
+        return self == other
     }
 }
 
@@ -96,14 +189,15 @@ extension PermissionRuleStore {
         ownerAccountID: UUID?,
         strictTenancy: Bool
     ) -> PermissionRuleScope? {
+        let canonicalName = ToolNamePolicyNormalization.canonical(toolName)
         if strictTenancy {
             guard let ownerAccountID else { return nil }
-            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: canonicalName)
         }
         if let ownerAccountID {
-            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: toolName)
+            return .ownerToolName(ownerAccountID: ownerAccountID, toolName: canonicalName)
         }
-        return .toolName(toolName)
+        return .toolName(canonicalName)
     }
 
     /// Owner-scoped tool-name grants for merging into the run's pre-approved tool set.
@@ -114,14 +208,29 @@ extension PermissionRuleStore {
             case .toolName(let name):
                 if strictTenancy { return nil }
                 if ownerAccountID != nil { return nil }
-                return name
+                return ToolNamePolicyNormalization.canonical(name)
             case .ownerToolName(let owner, let name):
+                if strictTenancy {
+                    guard let ownerAccountID, owner == ownerAccountID else { return nil }
+                    return ToolNamePolicyNormalization.canonical(name)
+                }
+                if let ownerAccountID {
+                    return owner == ownerAccountID
+                        ? ToolNamePolicyNormalization.canonical(name)
+                        : nil
+                }
+                return nil
+            case .toolRule(let rule, let owner):
+                guard rule.isNameLevelRule, let name = rule.canonicalToolName else { return nil }
                 if strictTenancy {
                     guard let ownerAccountID, owner == ownerAccountID else { return nil }
                     return name
                 }
                 if let ownerAccountID {
                     return owner == ownerAccountID ? name : nil
+                }
+                if owner == nil, case .bareName = rule {
+                    return name
                 }
                 return nil
             case .commandName, .exactCommand, .directory:
@@ -147,6 +256,54 @@ extension PermissionRuleStore {
         ) else { return }
         await remove(scope)
     }
+
+    public func grantedToolRules(ownerAccountID: UUID?, strictTenancy: Bool) async -> [ToolPolicyRule] {
+        let scopes = await list()
+        return scopes.compactMap { scope -> ToolPolicyRule? in
+            switch scope {
+            case .toolRule(let rule, let owner):
+                if strictTenancy {
+                    guard let ownerAccountID, owner == ownerAccountID else { return nil }
+                    return rule
+                }
+                if let ownerAccountID {
+                    return owner == ownerAccountID ? rule : nil
+                }
+                return owner == nil ? rule : nil
+            case .commandName(let commandName):
+                return .argumentMatcher(toolName: "bash", pattern: commandName)
+            default:
+                return nil
+            }
+        }
+    }
+
+    public func addToolRuleGrant(
+        rule: ToolPolicyRule,
+        ownerAccountID: UUID?,
+        strictTenancy: Bool
+    ) async {
+        if strictTenancy {
+            guard let ownerAccountID else { return }
+            await add(.toolRule(rule, ownerAccountID: ownerAccountID))
+            return
+        }
+        await add(.toolRule(rule, ownerAccountID: ownerAccountID))
+    }
+}
+
+enum ToolPolicyDurableRuleFactory {
+    static func ruleFromApprovedCall(
+        toolName: String,
+        arguments: JSON
+    ) -> ToolPolicyRule {
+        let canonical = ToolNamePolicyNormalization.canonical(toolName)
+        let values = ToolPolicyArgumentExtractor.extractedValues(toolName: canonical, arguments: arguments)
+        if values.count == 1, !values[0].contains("&&"), !values[0].contains("|") {
+            return .argumentMatcher(toolName: canonical, pattern: values[0])
+        }
+        return .bareName(canonical)
+    }
 }
 
 /// Default in-memory permission rule store. Rules live for the process lifetime.
@@ -158,15 +315,22 @@ public actor InMemoryPermissionRuleStore: PermissionRuleStore {
     }
 
     public func isGranted(_ scope: PermissionRuleScope) async -> Bool {
-        rules.contains(scope)
+        rules.contains { $0.scopesMatch(scope) }
     }
 
     public func add(_ scope: PermissionRuleScope) async {
+        if scope.canonicalToolName != nil {
+            rules = rules.filter { !$0.matchesToolGrant(scope) }
+        }
         rules.insert(scope)
     }
 
     public func remove(_ scope: PermissionRuleScope) async {
-        rules.remove(scope)
+        if scope.canonicalToolName != nil {
+            rules = rules.filter { !$0.scopesMatch(scope) }
+        } else {
+            rules.remove(scope)
+        }
     }
 
     public func list() async -> [PermissionRuleScope] {
@@ -209,20 +373,28 @@ public actor FilePermissionRuleStore: PermissionRuleStore {
 
     public func isGranted(_ scope: PermissionRuleScope) async -> Bool {
         loadIfNeeded()
-        return rules.contains(scope)
+        return rules.contains { $0.scopesMatch(scope) }
     }
 
     public func add(_ scope: PermissionRuleScope) async {
         loadIfNeeded()
-        guard !rules.contains(scope) else { return }
+        if scope.canonicalToolName != nil {
+            rules = rules.filter { !$0.matchesToolGrant(scope) }
+        }
+        guard !rules.contains(where: { $0.scopesMatch(scope) }) else { return }
         rules.insert(scope)
         persist()
     }
 
     public func remove(_ scope: PermissionRuleScope) async {
         loadIfNeeded()
-        guard rules.contains(scope) else { return }
-        rules.remove(scope)
+        let hadMatch = rules.contains { $0.scopesMatch(scope) }
+        guard hadMatch else { return }
+        if scope.canonicalToolName != nil {
+            rules = rules.filter { !$0.scopesMatch(scope) }
+        } else {
+            rules.remove(scope)
+        }
         persist()
     }
 

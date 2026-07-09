@@ -163,16 +163,24 @@ struct TurnLoop {
                 compat: compat,
                 targetCapabilities: targetCapabilities
             )
-            let normalizedTools = ProviderRuntimeHooks.normalizeTools(
-                snapshot.effectiveTools,
-                binding: providerBinding
+            let normalizedBatch = ProviderRuntimeHooks.normalizeToolSchemaBatch(
+                entries: snapshot.effectiveEntries,
+                binding: providerBinding,
+                compat: compat
             )
+            ProviderRuntimeHooks.logToolSchemaDiagnostics(
+                normalizedBatch.diagnostics,
+                logger: ports.logger
+            )
+            let normalizedTools = normalizedBatch.tools
             do {
                 let stream = await ports.model.stream(
                     messages,
                     orchestrator: orchestrator,
                     handle: handle,
                     tools: normalizedTools,
+                    toolParameterSchemasByName: normalizedBatch.parameterSchemasByName,
+                    toolSchemaStrictByName: normalizedBatch.strictByName,
                     toolChoice: toolChoice,
                     temperatureOverride: temperatureOverride
                 )
@@ -338,20 +346,41 @@ struct TurnLoop {
             }
             var sawDispatchApprovalRequired = false
             let dispatchRuntimePolicy = await resolveRuntimePolicy(for: conv)
-            toolDispatchLoop: for (callIndex, call) in assistant.toolCalls.enumerated() {
-                let request = ToolCallRequest(id: call.id, name: call.name, arguments: call.arguments)
-                await lifecycleEmitter.emit(
-                    .toolCallStarted(
-                        iteration: iteration,
-                        modelID: handle.modelID,
-                        toolName: call.name,
-                        toolCallID: call.id
-                    ),
-                    conversationID: conversationID,
-                    runID: runID
+            let toolRequests = assistant.toolCalls.map {
+                ToolCallRequest(id: $0.id, name: $0.name, arguments: $0.arguments)
+            }
+            let preferBatch = toolRequests.count > 1
+            let requiresSerial: Bool
+            if preferBatch {
+                requiresSerial = await AgentLoopToolDispatch.batchRequiresSerialFallback(
+                    calls: toolRequests,
+                    snapshot: snapshot,
+                    configuration: configuration
                 )
-                let outcome = await ports.tools.dispatch(
-                    request,
+            } else {
+                requiresSerial = false
+            }
+            let useBatchDispatch = preferBatch && !requiresSerial
+
+            if useBatchDispatch {
+                for call in toolRequests {
+                    await lifecycleEmitter.emit(
+                        .toolCallStarted(
+                            iteration: iteration,
+                            modelID: handle.modelID,
+                            toolName: call.name,
+                            toolCallID: call.id
+                        ),
+                        conversationID: conversationID,
+                        runID: runID
+                    )
+                }
+            }
+
+            let batchOutcomes: [ToolDispatchOutcome]
+            if useBatchDispatch {
+                batchOutcomes = await ports.tools.dispatchBatch(
+                    toolRequests,
                     conversationID: conversationID,
                     runID: runID,
                     orchestrator: orchestrator,
@@ -362,12 +391,44 @@ struct TurnLoop {
                     runtimePolicy: dispatchRuntimePolicy,
                     lifecycleEmitter: lifecycleEmitter
                 )
+            } else {
+                batchOutcomes = []
+            }
+
+            toolDispatchLoop: for (callIndex, call) in toolRequests.enumerated() {
+                let outcome: ToolDispatchOutcome
+                if useBatchDispatch {
+                    guard callIndex < batchOutcomes.count else { break toolDispatchLoop }
+                    outcome = batchOutcomes[callIndex]
+                } else {
+                    await lifecycleEmitter.emit(
+                        .toolCallStarted(
+                            iteration: iteration,
+                            modelID: handle.modelID,
+                            toolName: call.name,
+                            toolCallID: call.id
+                        ),
+                        conversationID: conversationID,
+                        runID: runID
+                    )
+                    outcome = await ports.tools.dispatch(
+                        call,
+                        conversationID: conversationID,
+                        runID: runID,
+                        orchestrator: orchestrator,
+                        snapshot: snapshot,
+                        configuration: configuration,
+                        iteration: iteration,
+                        modelID: handle.modelID,
+                        runtimePolicy: dispatchRuntimePolicy,
+                        lifecycleEmitter: lifecycleEmitter
+                    )
+                }
                 switch outcome {
-                case .approvalRequired(let toolName, let toolCallID):
+                case .approvalRequired:
                     sawDispatchApprovalRequired = true
                     await ports.tools.handleDispatchApprovalRequired(
-                        toolName: toolName,
-                        toolCallID: toolCallID,
+                        call: call,
                         snapshot: snapshot,
                         conversationID: conversationID,
                         runID: runID,
@@ -384,12 +445,14 @@ struct TurnLoop {
                     break toolDispatchLoop
                 case .completed(let message), .pendingHandle(let message), .denied(let message):
                     try await ports.conversation.append(message, conversationID: conversationID, runID: runID)
+                    let resultTruncated = ToolResultSpillEnvelope.isSpillEnvelope(message.content)
                     await lifecycleEmitter.emit(
                         .toolCallCompleted(
                             iteration: iteration,
                             modelID: handle.modelID,
                             toolName: call.name,
-                            toolCallID: call.id
+                            toolCallID: call.id,
+                            resultTruncated: resultTruncated ? true : nil
                         ),
                         conversationID: conversationID,
                         runID: runID
@@ -828,10 +891,9 @@ struct TurnLoop {
         switch outcome {
         case .completed(let message), .pendingHandle(let message), .denied(let message):
             try? await ports.conversation.append(message, conversationID: conversationID, runID: runID)
-        case .approvalRequired(let toolName, let outcomeToolCallID):
+        case .approvalRequired:
             await ports.tools.handleDispatchApprovalRequired(
-                toolName: toolName,
-                toolCallID: outcomeToolCallID ?? toolCallID,
+                call: ToolCallRequest(id: toolCallID, name: thinkName, arguments: arguments),
                 snapshot: snapshot,
                 conversationID: conversationID,
                 runID: runID,
@@ -840,7 +902,7 @@ struct TurnLoop {
                 lifecycleEmitter: lifecycleEmitter
             )
             let pendingResult = AgentLoopToolDispatch.approvalPendingToolResultMessage(
-                toolCallId: outcomeToolCallID ?? toolCallID
+                toolCallId: toolCallID
             )
             try? await ports.conversation.append(pendingResult, conversationID: conversationID, runID: runID)
         }

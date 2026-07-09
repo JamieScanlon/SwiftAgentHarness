@@ -11,6 +11,25 @@ enum HarnessAsyncTestSupport {
         await drain(response.partialContent, timeout: timeout)
     }
 
+    /// Drains synthetic slash-command streams that finish immediately (no model round-trip).
+    static func collectSyntheticSlashPartials(
+        from response: ChatStreamResponse,
+        timeout: Duration = .milliseconds(500)
+    ) async -> [ChatStreamingPartial] {
+        await collectPartialContent(from: response, timeout: timeout)
+    }
+
+    static func surfaceIntents(
+        from response: ChatStreamResponse,
+        timeout: Duration = .milliseconds(500)
+    ) async -> [ClientSurfaceIntent] {
+        let partials = await collectSyntheticSlashPartials(from: response, timeout: timeout)
+        return partials.compactMap { partial in
+            if case .surfaceIntent(let intent) = partial { return intent }
+            return nil
+        }
+    }
+
     static func drain<T: Sendable>(
         _ stream: AsyncStream<T>,
         timeout: Duration = .seconds(5)

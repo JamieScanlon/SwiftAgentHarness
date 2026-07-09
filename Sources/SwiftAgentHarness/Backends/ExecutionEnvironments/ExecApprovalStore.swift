@@ -27,13 +27,16 @@ public actor ExecApprovalStore {
     private var scopesByID: [String: ExecApprovalScope] = [:]
     private var allowsDurableBypassByID: [String: Bool] = [:]
     private var grantStore: any ExecApprovalGrantStore
+    private var denialHygieneHandler: any ExecApprovalDenialHygieneHandling = NoOpExecApprovalDenialHygieneHandler.shared
 
     public init(
         grantStore: any ExecApprovalGrantStore = InMemoryExecApprovalGrantStore(),
-        coordinator: ApprovalCoordinator = ApprovalCoordinator()
+        coordinator: ApprovalCoordinator = ApprovalCoordinator(),
+        denialHygieneHandler: any ExecApprovalDenialHygieneHandling = NoOpExecApprovalDenialHygieneHandler.shared
     ) {
         self.grantStore = grantStore
         self.coordinator = coordinator
+        self.denialHygieneHandler = denialHygieneHandler
     }
 
     /// Swaps the backing grant store. Intended to be called once at host startup
@@ -42,12 +45,17 @@ public actor ExecApprovalStore {
         self.grantStore = grantStore
     }
 
+    public func configure(denialHygieneHandler: any ExecApprovalDenialHygieneHandling) {
+        self.denialHygieneHandler = denialHygieneHandler
+    }
+
     /// Resets pending exec approvals and grant state. Test-only isolation seam for `shared`.
     public func resetForTesting() async {
         commands.removeAll()
         scopesByID.removeAll()
         allowsDurableBypassByID.removeAll()
         grantStore = InMemoryExecApprovalGrantStore()
+        denialHygieneHandler = NoOpExecApprovalDenialHygieneHandler.shared
         await coordinator.resetForTesting()
     }
 
@@ -140,6 +148,13 @@ public actor ExecApprovalStore {
             source: "exec.resolve",
             reason: approved ? nil : (reason ?? "denied")
         ) else { return nil }
+        if !approved, let command {
+            await denialHygieneHandler.poisonPriorMatchingToolResults(
+                conversationID: pendingScope.conversationID,
+                deniedCommand: command,
+                excludingToolCallId: nil
+            )
+        }
         return Self.execResolution(from: outcome)
     }
 

@@ -21,44 +21,87 @@ enum ToolResultFormattingStack {
     static func apply(
         result: ToolResult,
         stage: ToolResultFormattingStage,
-        configuration: ToolResultFormattingConfiguration
+        configuration: ToolResultFormattingConfiguration,
+        spillContext: ToolResultFormattingSpillContext? = nil
     ) -> ToolResult {
         guard configuration.enabled else { return result }
-        let stagePolicy = stagePolicy(for: stage, configuration: configuration)
-        var content = result.content
-        var metadata = result.metadata
-        if configuration.sanitizeInlineImagePayloads {
-            content = sanitizeInlineImagePayloads(content, placeholder: stagePolicy.imagePayloadPlaceholder)
-            metadata = sanitizeInlineImagePayloads(
-                in: metadata,
-                placeholder: stagePolicy.imagePayloadPlaceholder
+        let spillOutcome = ToolResultSpillFormatter.applyIfNeeded(
+            result: result,
+            stage: stage,
+            configuration: configuration,
+            spillContext: spillContext
+        )
+        let working = spillOutcome.result
+        let entry = spillContext?.entry
+        let toolName = spillContext?.toolName ?? entry?.name ?? ""
+        let skipLossyTrim = spillOutcome.spilled
+            || ToolResultSpillEnvelope.isSpillEnvelope(working.content)
+            || ToolRegistryResultFormattingPolicy.skipsLossyContentTrim(
+                entry: entry,
+                toolName: toolName,
+                stage: stage
             )
-        }
-        content = trimToLineLimit(content, maxLines: configuration.maxLines)
-        content = trimToCharacterLimit(
-            content,
-            maxCharacters: stagePolicy.maxCharacters,
-            marker: stagePolicy.truncationMarker
-        )
-        content = trimToByteLimit(
-            content,
-            maxBytes: stagePolicy.maxBytes,
-            marker: stagePolicy.truncationMarker
-        )
-        metadata = trimMetadataToByteLimit(
-            metadata,
-            maxBytes: stagePolicy.maxMetadataBytes,
-            placeholder: stagePolicy.metadataPlaceholder,
+        let skipMetadataTrim = ToolRegistryResultFormattingPolicy.skipsMetadataTrim(
+            entry: entry,
+            toolName: toolName,
             stage: stage
         )
-        let metadataChanged = !jsonEqual(lhs: metadata, rhs: result.metadata)
-        guard content != result.content || metadataChanged else { return result }
+        let stagePolicy = stagePolicy(for: stage, configuration: configuration)
+        var content = working.content
+        var metadata = working.metadata
+        if configuration.sanitizeInlineImagePayloads {
+            let imagePolicy = inlineImagePolicy(
+                stage: stage,
+                configuration: configuration,
+                spillContext: spillContext
+            )
+            content = ToolResultInlineImageSanitizer.sanitizeString(
+                content,
+                policy: imagePolicy,
+                processor: spillContext?.imageProcessor ?? DefaultImageProcessor(),
+                logger: spillContext?.logger
+            )
+            metadata = ToolResultInlineImageSanitizer.sanitizeJSON(
+                metadata,
+                policy: imagePolicy,
+                processor: spillContext?.imageProcessor ?? DefaultImageProcessor(),
+                logger: spillContext?.logger
+            )
+        }
+        if !skipLossyTrim {
+            content = trimToLineLimit(
+                content,
+                maxLines: configuration.maxLines,
+                stage: stage,
+                constantMarker: stagePolicy.truncationMarker
+            )
+            content = trimToCharacterLimit(
+                content,
+                maxCharacters: stagePolicy.maxCharacters,
+                marker: stagePolicy.truncationMarker
+            )
+            content = trimToByteLimit(
+                content,
+                maxBytes: stagePolicy.maxBytes,
+                marker: stagePolicy.truncationMarker
+            )
+        }
+        if !skipMetadataTrim {
+            metadata = trimMetadataToByteLimit(
+                metadata,
+                maxBytes: stagePolicy.maxMetadataBytes,
+                placeholder: stagePolicy.metadataPlaceholder,
+                stage: stage
+            )
+        }
+        let metadataChanged = !jsonEqual(lhs: metadata, rhs: working.metadata)
+        guard content != working.content || metadataChanged else { return working }
         return ToolResult(
-            success: result.success,
+            success: working.success,
             content: content,
             metadata: metadata,
-            toolCallId: result.toolCallId,
-            error: result.error
+            toolCallId: working.toolCallId,
+            error: working.error
         )
     }
 
@@ -105,6 +148,9 @@ enum ToolResultFormattingStack {
     ) -> ToolResultFormattingConfiguration {
         ToolResultFormattingConfiguration(
             enabled: base.enabled,
+            spillEnabled: base.spillEnabled,
+            spillPreviewMaxBytes: base.spillPreviewMaxBytes,
+            defaultMaxResultSizeBeforeSpill: base.defaultMaxResultSizeBeforeSpill,
             runtimeMaxCharacters: base.runtimeMaxCharacters,
             persistenceMaxCharacters: base.persistenceMaxCharacters,
             compactionMaxCharacters: max(0, compactionMaxCharactersOverride),
@@ -116,6 +162,8 @@ enum ToolResultFormattingStack {
             compactionMetadataMaxBytes: base.compactionMetadataMaxBytes,
             maxLines: base.maxLines,
             sanitizeInlineImagePayloads: base.sanitizeInlineImagePayloads,
+            maxInlineImagePixelDimension: base.maxInlineImagePixelDimension,
+            maxInlineImageBytes: base.maxInlineImageBytes,
             imagePayloadPlaceholder: base.imagePayloadPlaceholder,
             compactionImagePayloadPlaceholder: compactionImagePlaceholderOverride ?? base.compactionImagePayloadPlaceholder,
             metadataPlaceholder: base.metadataPlaceholder,
@@ -125,37 +173,50 @@ enum ToolResultFormattingStack {
         )
     }
 
-    private static func sanitizeInlineImagePayloads(_ content: String, placeholder: String) -> String {
-        let pattern = #"data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return content }
-        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
-        return regex.stringByReplacingMatches(in: content, options: [], range: nsRange, withTemplate: placeholder)
-    }
-
-    private static func sanitizeInlineImagePayloads(in json: JSON, placeholder: String) -> JSON {
-        switch json {
-        case .string(let value):
-            return .string(sanitizeInlineImagePayloads(value, placeholder: placeholder))
-        case .array(let values):
-            return .array(values.map { sanitizeInlineImagePayloads(in: $0, placeholder: placeholder) })
-        case .object(let object):
-            var shaped: [String: JSON] = [:]
-            for (key, value) in object {
-                shaped[key] = sanitizeInlineImagePayloads(in: value, placeholder: placeholder)
-            }
-            return .object(shaped)
-        default:
-            return json
+    private static func inlineImagePolicy(
+        stage: ToolResultFormattingStage,
+        configuration: ToolResultFormattingConfiguration,
+        spillContext: ToolResultFormattingSpillContext?
+    ) -> ToolResultInlineImageSanitizer.Policy {
+        let placeholder: String
+        switch stage {
+        case .runtime, .persistence:
+            placeholder = configuration.imagePayloadPlaceholder
+        case .compaction:
+            placeholder = configuration.compactionImagePayloadPlaceholder
         }
+        let mode: ToolResultInlineImageSanitizer.Mode
+        switch stage {
+        case .compaction:
+            mode = .strip
+        case .runtime, .persistence:
+            mode = spillContext?.modelSupportsVision == true ? .sanitize : .strip
+        }
+        return ToolResultInlineImageSanitizer.Policy(
+            mode: mode,
+            maxPixelDimension: configuration.maxInlineImagePixelDimension,
+            maxBytes: configuration.maxInlineImageBytes,
+            placeholder: placeholder
+        )
     }
 
-    private static func trimToLineLimit(_ content: String, maxLines: Int) -> String {
+    private static func trimToLineLimit(
+        _ content: String,
+        maxLines: Int,
+        stage: ToolResultFormattingStage,
+        constantMarker: String
+    ) -> String {
         guard maxLines > 0 else { return content }
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.count > maxLines else { return content }
         let kept = lines.prefix(maxLines).joined(separator: "\n")
-        let dropped = lines.count - maxLines
-        return "\(kept)\n[tool result truncated: \(dropped) additional line(s) omitted]"
+        switch stage {
+        case .compaction:
+            return "\(kept)\n\(constantMarker)"
+        case .runtime, .persistence:
+            let dropped = lines.count - maxLines
+            return "\(kept)\n[tool result truncated: \(dropped) additional line(s) omitted]"
+        }
     }
 
     private static func trimToCharacterLimit(_ content: String, maxCharacters: Int, marker: String) -> String {
@@ -189,21 +250,29 @@ enum ToolResultFormattingStack {
         guard let encoded = try? JSONEncoder().encode(metadata), encoded.count > maxBytes else {
             return metadata
         }
-        let stageName: String
         switch stage {
-        case .runtime:
-            stageName = "runtime"
-        case .persistence:
-            stageName = "persistence"
         case .compaction:
-            stageName = "compaction"
+            return .object([
+                "status": .string("metadata_truncated"),
+                "placeholder": .string(placeholder),
+            ])
+        case .runtime, .persistence:
+            let stageName: String
+            switch stage {
+            case .runtime:
+                stageName = "runtime"
+            case .persistence:
+                stageName = "persistence"
+            case .compaction:
+                stageName = "compaction"
+            }
+            return .object([
+                "status": .string("metadata_truncated"),
+                "stage": .string(stageName),
+                "originalByteCount": .string(String(encoded.count)),
+                "placeholder": .string(placeholder),
+            ])
         }
-        return .object([
-            "status": .string("metadata_truncated"),
-            "stage": .string(stageName),
-            "originalByteCount": .string(String(encoded.count)),
-            "placeholder": .string(placeholder),
-        ])
     }
 
     private static func jsonEqual(lhs: JSON, rhs: JSON) -> Bool {

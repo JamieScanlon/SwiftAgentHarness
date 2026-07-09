@@ -214,7 +214,8 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
+        durable: Bool,
+        arguments: JSON? = nil
     ) async throws {
         try await mapConversationNotFound {
             try await backend.apiResolveToolApproval(
@@ -225,7 +226,8 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
                 status: status,
                 source: source,
                 reason: reason,
-                durable: durable
+                durable: durable,
+                arguments: arguments
             )
         }
     }

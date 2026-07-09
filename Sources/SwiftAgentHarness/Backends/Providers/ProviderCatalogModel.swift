@@ -8,16 +8,39 @@ public enum ProviderCacheTTLEligibility: String, Sendable, Codable, Hashable {
     case long
 }
 
+public enum ToolSchemaMode: String, Sendable, Codable, Hashable {
+    case permissive
+    case openAIStrict
+    case grammarConstrained
+    case googleStripped
+}
+
+public struct ToolSchemaCompatProfile: Sendable, Equatable, Hashable, Codable {
+    public var toolSchemaMode: ToolSchemaMode
+    public var stripKeywords: [String]?
+
+    public init(
+        toolSchemaMode: ToolSchemaMode = .permissive,
+        stripKeywords: [String]? = nil
+    ) {
+        self.toolSchemaMode = toolSchemaMode
+        self.stripKeywords = stripKeywords
+    }
+}
+
 public struct ProviderModelCompat: Sendable, Equatable, Hashable, Codable {
     public var supportsEagerToolInputStreaming: Bool?
     public var thinkingFormat: String?
+    public var toolSchemaProfile: ToolSchemaCompatProfile?
 
     public init(
         supportsEagerToolInputStreaming: Bool? = nil,
-        thinkingFormat: String? = nil
+        thinkingFormat: String? = nil,
+        toolSchemaProfile: ToolSchemaCompatProfile? = nil
     ) {
         self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
         self.thinkingFormat = thinkingFormat
+        self.toolSchemaProfile = toolSchemaProfile
     }
 }
 

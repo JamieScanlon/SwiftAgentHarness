@@ -334,7 +334,11 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
             }
         }
         
-        let tools: [JSON]? = (getCapabilities().contains(.tools) || getCapabilities().contains(.unknown)) ? config.availableTools.map({ $0.toOllamaJSON() }) : nil
+        let tools: [JSON]? = (getCapabilities().contains(.tools) || getCapabilities().contains(.unknown))
+            ? config.availableTools.map { tool in
+                tool.toOllamaJSON(parameterSchema: config.toolParameterSchemasByName[tool.name])
+            }
+            : nil
         // OllamaKit has no wire `tool_choice`; resolve only to clamp + warn-log when forcing is requested but unsupported.
         _ = ToolChoiceTranslation.effectivePolicy(
             config: config,
@@ -750,29 +754,33 @@ enum OllamaChatStreamSupport {
  */
 extension ToolDefinition {
     
-    func toOllamaJSON() -> JSON {
-        
-        let requiredValue: [JSON] = parameters.compactMap {
-            if $0.required {
-                return JSON.string($0.name)
-            } else {
-                return nil
+    func toOllamaJSON(parameterSchema: JSON? = nil) -> JSON {
+        let parametersValue: JSON
+        if let parameterSchema {
+            parametersValue = parameterSchema
+        } else {
+            let requiredValue: [JSON] = parameters.compactMap {
+                if $0.required {
+                    return JSON.string($0.name)
+                } else {
+                    return nil
+                }
             }
-        }
-        var temp: [String: JSON] = [:]
-        for param in parameters {
-            let tempValue: JSON = .object([
-                "type": JSON.string(param.type),
-                "description": JSON.string(param.description),
+            var temp: [String: JSON] = [:]
+            for param in parameters {
+                let tempValue: JSON = .object([
+                    "type": JSON.string(param.type),
+                    "description": JSON.string(param.description),
+                ])
+                temp[param.name] = tempValue
+            }
+            let propValue: JSON = .object(temp)
+            parametersValue = .object([
+                "type": JSON.string("object"),
+                "properties": propValue,
+                "required": JSON.array(requiredValue)
             ])
-            temp[param.name] = tempValue
         }
-        let propValue: JSON = .object(temp)
-        let parametersValue : JSON = .object([
-            "type": JSON.string("object"),
-            "properties": propValue,
-            "required": JSON.array(requiredValue)
-        ])
         let functionValue: JSON = .object([
             "name": JSON.string(name),
             "description": JSON.string(description),

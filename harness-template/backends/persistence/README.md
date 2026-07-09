@@ -577,6 +577,8 @@ _CHECKPOINT_EVERY_N_WRITES = 50
 
 **Transcript JSONL (per-file):** at most one writer at a time, but writers can come from *any process* (server, CLI client, scheduler, sub-agent runner, compaction job). Use a process-aware file lock.
 
+**SwiftAgentHarness implementation note (X4):** The production server is a **single writer per session store** — `ConversationPersistenceDomain` (actor) owns catalog + transcript mutations, and the runtime holds one active run per conversation. In that deployment the pid+starttime lockfile is **defense-in-depth**, not the primary correctness mechanism. It becomes **required** only when a second process (CLI alongside server, external repair) writes the same `SAH_SESSION_STORE_ROOT`. See [`Sources/SwiftAgentHarness/Backends/Persistence/README.md`](../../../Sources/SwiftAgentHarness/Backends/Persistence/README.md).
+
 The lock is:
 
 - **Process-aware** — payload includes `pid` and `starttime` (Linux clock ticks from `/proc/<pid>/stat` field 22). On acquire, check `isPidAlive(pid)` and verify start-time matches; if the holder process is gone or has been reused (PID recycled), the lock is stale and can be reaped. Without start-time, PID recycling masks dead holders.

@@ -29,6 +29,10 @@ public actor HarnessRuntimeSession {
         var allowEscalatedTools: Bool = false
         /// Per-run pre-approvals used by Tool System hide-from-model policy.
         var preApprovedToolNames: Set<String> = []
+        /// Run-scoped `allow-once` approvals bound to specific tool call arguments.
+        var preApprovedCallBindings: Set<ToolCallApprovalBinding> = []
+        /// Durable `allow-always` rules from the permission store (full grammar).
+        var preApprovedToolRules: [ToolPolicyRule] = []
         /// When set, ``saveMessage`` verifies the active transcript ends with this harness-visible message id before appending.
         var expectedPreviousTailHarnessMessageID: UUID? = nil
         /// Optional trust class for user input (SwiftAgentKit ``Message/inputTrustRaw`` / JSON `inputTrust`).
@@ -45,6 +49,8 @@ public actor HarnessRuntimeSession {
         var turnThinkingOverride: ThinkingConfig? = nil
         /// One-turn model slug hint from inline directives (not persisted).
         var turnModelSlug: String? = nil
+        /// Resolved global run-lane origin for admission (interactive, cron trigger, sub-agent, etc.).
+        var runLaneOrigin: RunLaneOriginKind = .interactive
     }
 
     typealias ToolAvailabilitySnapshot = RuntimeToolAvailabilitySnapshot
@@ -864,7 +870,7 @@ public actor HarnessRuntimeSession {
     internal func applyToolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
@@ -875,17 +881,19 @@ public actor HarnessRuntimeSession {
         iteration: Int? = nil,
         modelID: UUID? = nil,
         approvalSpec: ToolApprovalContractSpec? = nil,
-        lifecycleEmitter: AgentRuntimeLifecycleEmitter? = nil
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter? = nil,
+        decision: ApprovalDecision? = nil
     ) async {
         await toolApprovalRuntimeService.applyToolApprovalResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route,
             status: status,
             source: source,
             reason: reason,
             kind: kind,
+            decision: decision,
             policyReason: policyReason,
             publicationSource: publicationSource,
             iteration: iteration,

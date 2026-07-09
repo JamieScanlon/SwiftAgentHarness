@@ -60,7 +60,8 @@ extension HarnessRuntimeSession {
 
     static func toolPayloadProvenance(
         text: String,
-        redaction: String = "digestOnly"
+        redaction: String = "digestOnly",
+        truncated: Bool = false
     ) -> ToolPayloadProvenance? {
         let data = Data(text.utf8)
         guard !data.isEmpty else { return nil }
@@ -69,13 +70,14 @@ extension HarnessRuntimeSession {
             digest: digest,
             byteCount: data.count,
             redaction: redaction,
-            truncated: false
+            truncated: truncated || ToolResultSpillEnvelope.isSpillEnvelope(text)
         )
     }
 
     static func toolPayloadProvenance(
         json: JSON,
-        redaction: String = "digestOnly"
+        redaction: String = "digestOnly",
+        truncated: Bool = false
     ) -> ToolPayloadProvenance? {
         guard let encoded = try? JSONEncoder().encode(json), !encoded.isEmpty else {
             return nil
@@ -85,7 +87,7 @@ extension HarnessRuntimeSession {
             digest: digest,
             byteCount: encoded.count,
             redaction: redaction,
-            truncated: false
+            truncated: truncated
         )
     }
 

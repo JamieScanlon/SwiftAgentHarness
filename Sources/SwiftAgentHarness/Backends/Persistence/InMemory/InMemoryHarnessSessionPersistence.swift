@@ -632,6 +632,30 @@ final class InMemoryHarnessSessionPersistence: HarnessSessionPersistence, @unche
         }
     }
 
+    private func toolResultSpillStore() -> SessionToolResultSpillStore {
+        SessionToolResultSpillStore(root: layoutRoot, agentId: agentId)
+    }
+
+    func toolResultSpillDirectory(conversationID: UUID) -> URL? {
+        toolResultSpillStore().spillDirectoryURL(conversationId: conversationID)
+    }
+
+    func putToolResultSpillIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult? {
+        try toolResultSpillStore().putIfNeeded(
+            conversationId: conversationID,
+            toolCallId: toolCallId,
+            content: content
+        )
+    }
+
+    func isAllowlistedToolResultSpillPath(_ path: String, conversationID: UUID) -> Bool {
+        toolResultSpillStore().isAllowlistedSpillPath(path, conversationId: conversationID)
+    }
+
     func putBlob(
         data: Data,
         durability: SessionBlobDurability,

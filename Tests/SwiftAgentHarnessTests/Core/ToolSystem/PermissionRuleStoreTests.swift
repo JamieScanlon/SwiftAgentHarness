@@ -10,6 +10,7 @@ struct PermissionRuleStoreTests {
         let scopes: [PermissionRuleScope] = [
             .toolName("write_file"),
             .ownerToolName(ownerAccountID: owner, toolName: "edit_file"),
+            .toolRule(.argumentMatcher(toolName: "bash", pattern: "npm run *"), ownerAccountID: owner),
             .commandName("git"),
             .exactCommand("git push origin main"),
             .directory("/repo"),
@@ -73,6 +74,20 @@ struct PermissionRuleStoreTests {
         #expect(await store.isGranted(.ownerToolName(ownerAccountID: owner, toolName: "write_file")) == false)
     }
 
+    @Test("legacy stored grant matches canonical tool name at runtime")
+    func legacyStoredGrantMatchesCanonical() async {
+        let store = InMemoryPermissionRuleStore(rules: [.toolName("read")])
+        #expect(await store.isGranted(.toolName("read_file")))
+        #expect(await store.grantedToolNames(ownerAccountID: nil, strictTenancy: false) == ["read_file"])
+    }
+
+    @Test("addToolGrant persists canonical tool name")
+    func addToolGrantPersistsCanonical() async {
+        let store = InMemoryPermissionRuleStore()
+        await store.addToolGrant(toolName: "read", ownerAccountID: nil, strictTenancy: false)
+        #expect(await store.list() == [.toolName("read_file")])
+    }
+
     @Test("file-backed store persists rules across instances")
     func diskPersistence() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -125,5 +140,16 @@ struct PermissionRuleStoreTests {
         )
         #expect(await rules.isGranted(.commandName("git")))
         #expect(await store.isDurableApproved(command: "git status"))
+    }
+
+    @Test("grantedToolRules includes toolRule and legacy commandName bridge")
+    func grantedToolRulesBridge() async {
+        let owner = UUID()
+        let store = InMemoryPermissionRuleStore()
+        await store.add(.toolRule(.argumentMatcher(toolName: "bash", pattern: "npm run *"), ownerAccountID: owner))
+        await store.add(.commandName("git"))
+        let rules = await store.grantedToolRules(ownerAccountID: owner, strictTenancy: true)
+        #expect(rules.contains(.argumentMatcher(toolName: "bash", pattern: "npm run *")))
+        #expect(rules.contains(.argumentMatcher(toolName: "bash", pattern: "git")))
     }
 }

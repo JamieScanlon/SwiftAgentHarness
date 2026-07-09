@@ -260,7 +260,9 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                 [
                     "name": tool.name,
                     "description": tool.description,
-                    "input_schema": tool.toAnthropicInputSchema(),
+                    "input_schema": tool.toAnthropicInputSchema(
+                        parameterSchema: config.toolParameterSchemasByName[tool.name]
+                    ),
                 ] as [String: Any]
             }
             let policy = ToolChoiceTranslation.effectivePolicy(
@@ -520,7 +522,10 @@ enum AnthropicErrorMapping {
 }
 
 private extension ToolDefinition {
-    func toAnthropicInputSchema() -> [String: Any] {
+    func toAnthropicInputSchema(parameterSchema: JSON? = nil) -> [String: Any] {
+        if let parameterSchema {
+            return ToolSchemaWireCodec.anthropicInputSchema(from: parameterSchema)
+        }
         var properties: [String: Any] = [:]
         var required: [String] = []
         for param in parameters {

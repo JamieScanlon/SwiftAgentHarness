@@ -530,8 +530,8 @@ struct RunLifecycleDurabilityTests {
             runID: UUID(),
             toolCount: 4,
             toolNames: ["web_search", "web_fetch"],
-            summaryText: "Completed 4 tool calls across 2 tools.",
-            source: "runtime.summary"
+            summaryText: "Ran web_search ×2, web_fetch ×2",
+            source: "runtime.templateLabel"
         )
         await manager.runtimeLifecyclePublicationService.consumeRuntimeLifecycleEventForDerivedAudit(payload)
 
@@ -548,7 +548,8 @@ struct RunLifecycleDurabilityTests {
         )
         #expect(decoded.toolCount == 4)
         #expect(decoded.toolNames == ["web_search", "web_fetch"])
-        #expect(decoded.source == "runtime.summary")
+        #expect(decoded.summaryText == "Ran web_search ×2, web_fetch ×2")
+        #expect(decoded.source == "runtime.templateLabel")
     }
 
     @Test("runtime lifecycle model path preserves parity across topic trace and derived audit")

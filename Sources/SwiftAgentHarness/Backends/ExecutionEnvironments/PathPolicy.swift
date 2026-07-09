@@ -7,6 +7,7 @@ public enum WorkspaceFilesystemError: Error, Equatable {
     case symlinkLoop
     case writeDenied
     case invalidPath
+    case readWindowRequired(String)
 }
 
 public enum PathPolicy {

@@ -172,7 +172,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             case .auto:
                 return true
             case .askUser, .askParent:
-                return request.preApprovedToolNames.contains(toolName)
+                return ToolNamePolicyNormalization.setContains(request.preApprovedToolNames, name: toolName)
             }
         }
         let approvedSet = Set(approved)

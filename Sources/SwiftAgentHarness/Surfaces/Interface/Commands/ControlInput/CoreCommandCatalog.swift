@@ -98,11 +98,13 @@ public enum CoreCommandCatalog {
             ),
             row(
                 name: "tools",
-                description: "List available tools.",
-                hiddenKeywords: "tool registry",
+                description: "List or explain effective tools for this conversation.",
+                argumentHint: "explain [toolName]",
+                hiddenKeywords: "tool registry policy explain debug",
                 category: .command,
                 bypassTier: .sideEffectFree,
-                kind: .local
+                kind: .local,
+                ownerOnly: true
             ),
             row(
                 name: "help",

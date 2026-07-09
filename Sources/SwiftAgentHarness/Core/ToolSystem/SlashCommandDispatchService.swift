@@ -165,6 +165,11 @@ actor SlashCommandDispatchService {
                         conversationID: conversationID,
                         args: innerParsed.args
                     )
+                case "tools":
+                    return try await runSlashToolsCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
+                    )
                 default:
                     return nil
                 }

@@ -84,6 +84,10 @@ public enum SessionPersistenceConfiguration {
     }
 
     // MARK: - Transcript file lock (README `acquire_write_lock`; Gap 10)
+    //
+    // Production default: one server process per SAH_SESSION_STORE_ROOT (single-writer via
+    // ConversationPersistenceDomain actor). File locks defend multi-process writers (CLI + server).
+    // See Sources/SwiftAgentHarness/Backends/Persistence/README.md (X4).
 
     /// Max wait for `flock` (`timeout_ms` on harness Protocol). Env: `SAH_TRANSCRIPT_LOCK_TIMEOUT_MS`.
     static var transcriptLockAcquireTimeoutMs: Int {

@@ -28,14 +28,15 @@ A second framing that pays off: **the Tool System is to "things the model can do
 
 Detailed designs for each bullet below are sibling pages (or live elsewhere when noted). This README is the architectural framing.
 
-- **Tool registry entry shape.** Id, description (model-facing), JSON-Schema parameters, capability metadata (read-only vs mutating, parallelizable, sensitive), permission policy, transport binding. Mirror of the Model Pool / Sub-Agent Pool entry shape.
-- **One typed `registerTool(...)` plus per-capability registration helpers.** Single canonical surface; capability-specific helpers (`registerWebSearchProvider`, `registerImageGenerationProvider`) for tools that have stronger contracts than "function with JSON schema."
-- **Provider-aware schema normalization, centralized.** Some providers reject `anyOf`/discriminated unions in tool schemas. Normalize once at registration, not in every provider plugin..
-- **Permission gate as a structured pipeline.** `before_tool_call` returns `requireApproval: { title, description, severity, timeoutMs, timeoutBehavior, onResolution(decision) }`. Approvals deliver as native UI cards on the surface the user is on (Slack/Discord/MS Teams) with `/approve` as fallback. Elevated mode (`tools.elevated`) is an explicit per-tool sandbox-bypass path.
+- **Tool registry entry shape.** Id, description (model-facing), JSON-Schema parameters, capability metadata (read-only vs mutating, parallelizable, sensitive), permission policy, transport binding. Mirror of the Model Pool / Sub-Agent Pool entry shape. Full treatment: [schema-and-registration.md](./schema-and-registration.md).
+- **One typed `registerTool(...)` plus per-capability registration helpers.** Single canonical surface; capability-specific helpers (`registerWebSearchProvider`, `registerImageGenerationProvider`) for tools that have stronger contracts than "function with JSON schema." See [schema-and-registration.md](./schema-and-registration.md).
+- **Provider-aware schema normalization, centralized.** Some providers reject `anyOf`/discriminated unions in tool schemas. Normalize once at registration, not in every provider plugin. See [schema-and-registration.md](./schema-and-registration.md).
+- **Permission gate as a structured pipeline.** Full treatment: [permissions.md](./permissions.md). `before_tool_call` returns `requireApproval: { title, description, severity, timeoutMs, timeoutBehavior, onResolution(decision) }`. Approvals deliver as native UI cards on the surface the user is on (Slack/Discord/MS Teams) with `/approve` as fallback. Elevated mode (`tools.elevated`) is an explicit per-tool sandbox-bypass path.
 - **Tool policy lives at the Gateway, separate from the model's prompt.** Per-agent `tools.allow` / `tools.deny` lists block tool calls regardless of what `SOUL.md` / `AGENTS.md` says. Two layers — prompt-level guidance and Gateway-level hard enforcement — survive prompt injection.
-- **Tool-result middleware as a runtime-neutral seam.** `registerAgentToolResultMiddleware()` rewrites tool results after execution and before they're returned to the model. Distinct from `tool_result_persist` (which rewrites transcript writes). The split matters because runtime delivery and transcript persistence have different consistency requirements.
-- **Parallelism policy.** Per-session lane (one active run per session) plus a global lane (`main` defaults to 4, `subagent` to 8). Parallel batches require all-pure tools; any mutating tool serializes the batch. Transcript writes use a process-aware file-based lock with explicit reentrant opt-in.
-- **Result formatting.** Text vs structured payloads, image handling at multiple stages (sanitize before logging/emitting, preserve recent turns byte-for-byte, replace older processed images with markers to keep prompt-cache prefixes stable). `tokenjuice`-style compaction tools for noisy `exec`/`bash` outputs as a separate tool the agent can opt into.
+- **Tool-result middleware as a runtime-neutral seam.** `registerAgentToolResultMiddleware()` rewrites tool results after execution and before they're returned to the model. Distinct from `tool_result_persist` (which rewrites transcript writes). The split matters because runtime delivery and transcript persistence have different consistency requirements. See [parallel-execution.md](./parallel-execution.md).
+- **Parallelism policy.** Per-session lane (one active run per session) plus a global lane (`main` defaults to 4, `subagent` to 8). Within a batch: order-preserving partition of contiguous concurrency-safe calls, bounded fan-out; mutating calls serialize. Transcript writes are single-writer per conversation in the default server process (actor-isolated persistence); cross-process JSONL sharing uses a process-aware file lock — see [persistence README](../../backends/persistence/README.md). Full treatment: [parallel-execution.md](./parallel-execution.md).
+- **Result formatting.** Text vs structured payloads, image handling at multiple stages (sanitize before logging/emitting, preserve recent turns byte-for-byte, replace older processed images with markers to keep prompt-cache prefixes stable). Opt-in compaction middleware for noisy `exec`/`bash` outputs. Full treatment: [result-formatting.md](./result-formatting.md).
+- **Tool-use summaries.** ~30-char batch labels from a fast/cheap model, fire-and-forget, SDK-display-only. Full treatment: [tool-use-summaries.md](./tool-use-summaries.md).
 - **Tool-pair safety.** Compaction must never split `tool_use` from `tool_result`; the boundary moves to keep the pair together. Six-of-six invariant — see [../context-engine/compaction.md](../context-engine/compaction.md).
 - **Tool discovery and surfacing.** Deterministic ordering for registries / plugin lists / file-system results before payloads ever hit the model, to keep the prompt cache stable across runs.
 
@@ -60,17 +61,19 @@ Detailed designs for each bullet below are sibling pages (or live elsewhere when
 
 ---
 
-## Open design questions (not yet drafted as sibling pages)
+## Sibling pages
 
-These are the topics that need substantive treatment as sibling pages in this folder; the bullets here are the research-stage notes carried forward from before the architecture lock-in.
+All formerly-open design questions are now drafted:
 
-- **Tool schema and registration.** Declarative vs imperative APIs; JSON-Schema vs framework-specific shapes; how schemas are versioned.
-- **Permission models in detail.** Allow/deny lists, per-call user prompts, sandboxed defaults, escalation paths..
-- **Tool-result middleware split.** Runtime-neutral middleware vs transcript-write hooks.
-- **Parallel execution.** When to allow it, ordering guarantees, conflict handling..
-- **Result formatting and image sanitization.**.
-- **Tool-pair safety with compaction.** The invariant that compaction never splits `tool_use` from `tool_result`.
-- **Tool discovery and surfacing mid-session.** How new MCP-provided tools get announced; deterministic ordering rules.
-- **Tool-use summaries.** Short labels generated after each tool batch for SDK display. Some implementations use a fast/cheap model for git-commit-subject-style 3-5 word summaries of each tool batch.
+- [permissions.md](./permissions.md) — classification and policy: the two planes, layered allow/deny resolution, rule grammar, modes, escalation.
+- [schema-and-registration.md](./schema-and-registration.md) — the registry entry, `registerTool`, provider-aware schema normalization, versioning-by-names.
+- [parallel-execution.md](./parallel-execution.md) — lanes, order-preserving batch partition, locks, the tool-result middleware split.
+- [result-formatting.md](./result-formatting.md) — typed content blocks, three-stage size discipline, image sanitization.
+- [tool-use-summaries.md](./tool-use-summaries.md) — batch labels for SDK display.
+
+Resolved elsewhere — no sibling page needed, a pointer suffices:
+
+- **Tool-pair safety with compaction.** Fully drafted in [compaction.md](../context-engine/compaction.md) (the invariant plus its anti-patterns); cross-referenced from the recommendation bullet above.
+- **Tool discovery and surfacing mid-session.** Deterministic catalog ordering and mid-session capability deltas are drafted in [extensibility § MCP](../../cross-cutting/extensibility/README.md); the residual question (how new tools are announced to the model) belongs to that page's scope.
 
 ---

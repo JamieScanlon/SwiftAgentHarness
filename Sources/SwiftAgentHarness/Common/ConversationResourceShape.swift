@@ -82,7 +82,8 @@ public enum ConversationExplicitToolPolicy: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try c.decode(Kind.self, forKey: .kind)
-        let tools = try c.decode([String].self, forKey: .tools)
+        let rawTools = try c.decode([String].self, forKey: .tools)
+        let tools = ToolRegistryNameIndex.builtIn.normalizedPolicyList(rawTools)
         let skills = try c.decode([String].self, forKey: .skills)
         switch kind {
         case .denylist: self = .denylist(tools: tools, skills: skills)

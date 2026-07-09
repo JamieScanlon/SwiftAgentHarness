@@ -123,8 +123,7 @@ extension AgentRuntimeSessionService {
                     )
                 }
             }
-            let laneKey = await sessionLaneKey(conversationID: cid)
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: laneKey, runID: rid)
+            await releaseRunLane(runID: rid)
         }
         guard isCurrentGeneration || shouldClearStreamingLifecycleFromRunMatch else { return }
         if !isCurrentGeneration, shouldClearStreamingLifecycleFromRunMatch {

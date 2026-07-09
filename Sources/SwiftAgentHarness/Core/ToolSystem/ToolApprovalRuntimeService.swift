@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 
@@ -31,13 +32,30 @@ actor ToolApprovalRuntimeService {
 
     /// Persists an `allow-always` rule for a tool so future runs (and restarts when
     /// the store is disk-backed) auto-approve it for the conversation owner.
-    func grantDurableToolRule(toolName: String, conversationID: UUID) async {
+    func grantDurableToolRule(
+        toolName: String,
+        conversationID: UUID,
+        arguments: JSON? = nil
+    ) async {
         let ownerAccountID = await ownerAccountID(for: conversationID)
-        await permissionRules.addToolGrant(
-            toolName: toolName,
+        let rule: ToolPolicyRule
+        if let arguments {
+            rule = ToolPolicyDurableRuleFactory.ruleFromApprovedCall(toolName: toolName, arguments: arguments)
+        } else {
+            rule = .bareName(ToolNamePolicyNormalization.canonical(toolName))
+        }
+        await permissionRules.addToolRuleGrant(
+            rule: rule,
             ownerAccountID: ownerAccountID,
             strictTenancy: strictTenancy
         )
+        if rule.isNameLevelRule, let name = rule.canonicalToolName {
+            await permissionRules.addToolGrant(
+                toolName: name,
+                ownerAccountID: ownerAccountID,
+                strictTenancy: strictTenancy
+            )
+        }
     }
 
     /// Lists persisted durable tool-name grants for an owner, sorted ascending.
@@ -84,12 +102,20 @@ actor ToolApprovalRuntimeService {
     ) async -> HarnessRuntimeSession.Configuration {
         var out = configuration
         let route = await approvalRouteForConversation(conversationID: conversationID)
-        let storeApproved = await stateStore.approvedToolNames(
-            conversationID: conversationID,
-            runID: runID,
-            route: route
+        out.preApprovedCallBindings.formUnion(
+            await stateStore.approvedCallBindings(
+                conversationID: conversationID,
+                runID: runID,
+                route: route
+            )
         )
-        out.preApprovedToolNames.formUnion(storeApproved)
+        out.preApprovedToolNames.formUnion(
+            await stateStore.approvedToolNames(
+                conversationID: conversationID,
+                runID: runID,
+                route: route
+            )
+        )
         let ownerAccountID = await ownerAccountID(for: conversationID)
         out.preApprovedToolNames.formUnion(
             await permissionRules.grantedToolNames(
@@ -97,26 +123,37 @@ actor ToolApprovalRuntimeService {
                 strictTenancy: strictTenancy
             )
         )
+        out.preApprovedToolRules = await permissionRules.grantedToolRules(
+            ownerAccountID: ownerAccountID,
+            strictTenancy: strictTenancy
+        )
         return out
     }
 
     nonisolated func approvalContractSpec(
         toolName: String,
         route: ToolApprovalRoute,
-        isElevated: Bool
+        isElevated: Bool,
+        arguments: JSON? = nil
     ) -> ToolApprovalContractSpec {
         let severity = isElevated
             ? deps.toolPolicy.approvalElevatedSeverityDefault
             : deps.toolPolicy.approvalSeverityDefault
         let title = isElevated ? "Elevated Tool Approval Required" : "Tool Approval Required"
-        let description = "Approve \(toolName) for this run (route: \(route.rawValue))."
+        var description = "Approve \(toolName) for this call (route: \(route.rawValue))."
+        var contextLines = [
+            "Tool: \(toolName)",
+            "Route: \(route.rawValue)  Severity: \(severity)",
+            isElevated ? "This tool runs with elevated privileges." : "",
+        ]
+        if let arguments {
+            let binding = ToolCallApprovalBinding.from(toolName: toolName, arguments: arguments)
+            description += " Arguments fingerprint: \(binding.argumentsFingerprint.prefix(12))…"
+            contextLines.append("Arguments: \(Self.argumentsSummary(arguments))")
+        }
         let presentation = ApprovalPresentation.standard(
             title: title,
-            context: [
-                "Tool: \(toolName)",
-                "Route: \(route.rawValue)  Severity: \(severity)",
-                isElevated ? "This tool runs with elevated privileges." : "",
-            ]
+            context: contextLines
         )
         return ToolApprovalContractSpec(
             title: title,
@@ -132,7 +169,7 @@ actor ToolApprovalRuntimeService {
     func registerPendingToolApproval(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute,
         isElevated: Bool,
         requestedAt: Date = Date()
@@ -140,13 +177,38 @@ actor ToolApprovalRuntimeService {
         await stateStore.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route,
             requestedAt: requestedAt,
             spec: approvalContractSpec(
-                toolName: toolName,
+                toolName: binding.toolName,
                 route: route,
-                isElevated: isElevated
+                isElevated: isElevated,
+                arguments: nil
+            )
+        )
+    }
+
+    func registerPendingToolApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        requestedAt: Date = Date()
+    ) async -> Bool {
+        let binding = ToolCallApprovalBinding.from(call: call)
+        return await stateStore.registerPendingApproval(
+            conversationID: conversationID,
+            runID: runID,
+            binding: binding,
+            route: route,
+            requestedAt: requestedAt,
+            spec: approvalContractSpec(
+                toolName: binding.toolName,
+                route: route,
+                isElevated: isElevated,
+                arguments: call.arguments
             )
         )
     }
@@ -154,13 +216,13 @@ actor ToolApprovalRuntimeService {
     func toolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user
     ) async -> ToolApprovalResolution? {
         await stateStore.resolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
     }
@@ -168,13 +230,13 @@ actor ToolApprovalRuntimeService {
     func waitForToolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user
     ) async throws -> ToolApprovalResolution {
         try await stateStore.waitForResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
     }
@@ -187,20 +249,39 @@ actor ToolApprovalRuntimeService {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool = false
-    ) async {
+        durable: Bool = false,
+        arguments: JSON? = nil
+    ) async throws {
+        let binding = try await stateStore.resolveBindingForAPI(
+            conversationID: conversationID,
+            runID: runID,
+            toolName: toolName,
+            route: route,
+            arguments: arguments
+        )
+        let decision: ApprovalDecision? = switch status {
+        case .approved:
+            durable ? .allowAlways : .allowOnce
+        case .denied, .pending:
+            .deny
+        }
         if durable, status == .approved {
-            await grantDurableToolRule(toolName: toolName, conversationID: conversationID)
+            await grantDurableToolRule(
+                toolName: toolName,
+                conversationID: conversationID,
+                arguments: arguments
+            )
         }
         await applyToolApprovalResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route,
             status: status,
             source: source,
             reason: reason,
             kind: .manual,
+            decision: decision,
             policyReason: "approvalRequired",
             publicationSource: "api.toolApproval"
         )
@@ -221,12 +302,13 @@ actor ToolApprovalRuntimeService {
             await applyToolApprovalResolution(
                 conversationID: entry.conversationID,
                 runID: entry.runID,
-                toolName: entry.toolName,
+                binding: entry.binding,
                 route: entry.route,
                 status: entry.status,
                 source: entry.source,
                 reason: entry.reason,
                 kind: .timeoutDefault,
+                decision: entry.status == .approved ? .allowOnce : .deny,
                 policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
                 publicationSource: "runtime.approvalTimeout",
                 iteration: iteration,
@@ -240,12 +322,13 @@ actor ToolApprovalRuntimeService {
     func applyToolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute,
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
         kind: ToolApprovalResolutionKind,
+        decision: ApprovalDecision? = nil,
         policyReason: String,
         publicationSource: String,
         iteration: Int? = nil,
@@ -256,16 +339,17 @@ actor ToolApprovalRuntimeService {
         await stateStore.setResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route,
             status: status,
             source: source,
             reason: reason,
-            kind: kind
+            kind: kind,
+            decision: decision
         )
         await installedSubAgentSpawnService.applySubAgentTransportPermissionResolutionIfNeeded(
             conversationID: conversationID,
-            toolName: toolName,
+            toolName: binding.toolName,
             route: route,
             status: status,
             source: source
@@ -281,7 +365,7 @@ actor ToolApprovalRuntimeService {
                     ToolApprovalResolvedInfo(
                         iteration: iteration,
                         modelID: modelID,
-                        toolName: toolName,
+                        toolName: binding.toolName,
                         toolCallID: nil,
                         approvalState: approvalState,
                         policyReason: policyReason,
@@ -309,7 +393,7 @@ actor ToolApprovalRuntimeService {
             runID: runID,
             iteration: iteration,
             modelID: modelID,
-            toolName: toolName,
+            toolName: binding.toolName,
             approvalState: approvalState,
             policyReason: policyReason,
             approvalSource: source,
@@ -325,5 +409,34 @@ actor ToolApprovalRuntimeService {
             source: publicationSource
         )
         await topics.publishRuntimeLifecycleWithFanout(payload)
+    }
+
+    private nonisolated static func argumentsSummary(_ arguments: JSON) -> String {
+        switch arguments {
+        case .object(let fields):
+            if fields.isEmpty { return "{}" }
+            let pairs = fields.keys.sorted().prefix(4).compactMap { key -> String? in
+                guard let value = fields[key] else { return nil }
+                return "\(key)=\(Self.jsonScalarSummary(value))"
+            }
+            let suffix = fields.count > 4 ? ", …" : ""
+            return "{\(pairs.joined(separator: ", "))\(suffix)}"
+        default:
+            return Self.jsonScalarSummary(arguments)
+        }
+    }
+
+    private nonisolated static func jsonScalarSummary(_ json: JSON) -> String {
+        switch json {
+        case .boolean(let value): return value ? "true" : "false"
+        case .integer(let value): return String(value)
+        case .double(let value): return String(value)
+        case .string(let value):
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count <= 48 { return trimmed }
+            return String(trimmed.prefix(45)) + "…"
+        case .array(let values): return "[\(values.count) items]"
+        case .object(let fields): return "{\(fields.count) keys}"
+        }
     }
 }

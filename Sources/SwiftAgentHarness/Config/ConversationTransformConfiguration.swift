@@ -431,6 +431,9 @@ public struct SlashCommandConfiguration: Sendable, Equatable {
 
 public struct ToolResultFormattingConfiguration: Sendable, Equatable {
     public var enabled: Bool
+    public var spillEnabled: Bool
+    public var spillPreviewMaxBytes: Int
+    public var defaultMaxResultSizeBeforeSpill: Int
     public var runtimeMaxCharacters: Int
     public var persistenceMaxCharacters: Int
     public var compactionMaxCharacters: Int
@@ -442,6 +445,8 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
     public var compactionMetadataMaxBytes: Int
     public var maxLines: Int
     public var sanitizeInlineImagePayloads: Bool
+    public var maxInlineImagePixelDimension: Int
+    public var maxInlineImageBytes: Int
     public var imagePayloadPlaceholder: String
     public var compactionImagePayloadPlaceholder: String
     public var metadataPlaceholder: String
@@ -451,6 +456,9 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
 
     public static let `default` = ToolResultFormattingConfiguration(
         enabled: true,
+        spillEnabled: SessionPersistenceConfiguration.harnessOnDiskV2Configured,
+        spillPreviewMaxBytes: 2_048,
+        defaultMaxResultSizeBeforeSpill: 480_000,
         runtimeMaxCharacters: 120_000,
         persistenceMaxCharacters: 300_000,
         compactionMaxCharacters: 40_000,
@@ -462,6 +470,8 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
         compactionMetadataMaxBytes: 64_000,
         maxLines: 800,
         sanitizeInlineImagePayloads: true,
+        maxInlineImagePixelDimension: 1_200,
+        maxInlineImageBytes: 5_000_000,
         imagePayloadPlaceholder: "[inline image payload omitted]",
         compactionImagePayloadPlaceholder: "[old image payload replaced for compaction]",
         metadataPlaceholder: "[tool metadata omitted]",
@@ -472,6 +482,9 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
 
     public init(
         enabled: Bool = true,
+        spillEnabled: Bool = SessionPersistenceConfiguration.harnessOnDiskV2Configured,
+        spillPreviewMaxBytes: Int = 2_048,
+        defaultMaxResultSizeBeforeSpill: Int = 480_000,
         runtimeMaxCharacters: Int = 120_000,
         persistenceMaxCharacters: Int = 300_000,
         compactionMaxCharacters: Int = 40_000,
@@ -483,6 +496,8 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
         compactionMetadataMaxBytes: Int = 64_000,
         maxLines: Int = 800,
         sanitizeInlineImagePayloads: Bool = true,
+        maxInlineImagePixelDimension: Int = 1_200,
+        maxInlineImageBytes: Int = 5_000_000,
         imagePayloadPlaceholder: String = "[inline image payload omitted]",
         compactionImagePayloadPlaceholder: String = "[old image payload replaced for compaction]",
         metadataPlaceholder: String = "[tool metadata omitted]",
@@ -491,6 +506,9 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
         compactionTruncationMarker: String = "[old tool payload replaced for compaction]"
     ) {
         self.enabled = enabled
+        self.spillEnabled = spillEnabled
+        self.spillPreviewMaxBytes = max(0, spillPreviewMaxBytes)
+        self.defaultMaxResultSizeBeforeSpill = max(0, defaultMaxResultSizeBeforeSpill)
         self.runtimeMaxCharacters = max(0, runtimeMaxCharacters)
         self.persistenceMaxCharacters = max(0, persistenceMaxCharacters)
         self.compactionMaxCharacters = max(0, compactionMaxCharacters)
@@ -502,6 +520,8 @@ public struct ToolResultFormattingConfiguration: Sendable, Equatable {
         self.compactionMetadataMaxBytes = max(0, compactionMetadataMaxBytes)
         self.maxLines = max(0, maxLines)
         self.sanitizeInlineImagePayloads = sanitizeInlineImagePayloads
+        self.maxInlineImagePixelDimension = max(0, maxInlineImagePixelDimension)
+        self.maxInlineImageBytes = max(0, maxInlineImageBytes)
         self.imagePayloadPlaceholder = imagePayloadPlaceholder
         self.compactionImagePayloadPlaceholder = compactionImagePayloadPlaceholder
         self.metadataPlaceholder = metadataPlaceholder
@@ -1100,6 +1120,18 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
             let sanitizeInlineImagePayloads =
                 (payload["sanitizeInlineImagePayloads"] as? Bool)
                 ?? def.sanitizeInlineImagePayloads
+            let maxInlineImagePixelDimension: Int = {
+                if let value = payload["maxInlineImagePixelDimension"] as? Int {
+                    return Swift.min(16_384, Swift.max(0, value))
+                }
+                return def.maxInlineImagePixelDimension
+            }()
+            let maxInlineImageBytes: Int = {
+                if let value = payload["maxInlineImageBytes"] as? Int {
+                    return Swift.min(32_000_000, Swift.max(0, value))
+                }
+                return def.maxInlineImageBytes
+            }()
             let imagePayloadPlaceholder: String = {
                 if let value = payload["imagePayloadPlaceholder"] as? String {
                     return value
@@ -1136,8 +1168,24 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.compactionTruncationMarker
             }()
+            let spillEnabled = (payload["spillEnabled"] as? Bool) ?? def.spillEnabled
+            let spillPreviewMaxBytes: Int = {
+                if let value = payload["spillPreviewMaxBytes"] as? Int {
+                    return Swift.min(8_000_000, Swift.max(0, value))
+                }
+                return def.spillPreviewMaxBytes
+            }()
+            let defaultMaxResultSizeBeforeSpill: Int = {
+                if let value = payload["defaultMaxResultSizeBeforeSpill"] as? Int {
+                    return Swift.min(8_000_000, Swift.max(0, value))
+                }
+                return def.defaultMaxResultSizeBeforeSpill
+            }()
             return ToolResultFormattingConfiguration(
                 enabled: enabled,
+                spillEnabled: spillEnabled,
+                spillPreviewMaxBytes: spillPreviewMaxBytes,
+                defaultMaxResultSizeBeforeSpill: defaultMaxResultSizeBeforeSpill,
                 runtimeMaxCharacters: runtimeMaxCharacters,
                 persistenceMaxCharacters: persistenceMaxCharacters,
                 compactionMaxCharacters: compactionMaxCharacters,
@@ -1149,6 +1197,8 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 compactionMetadataMaxBytes: compactionMetadataMaxBytes,
                 maxLines: maxLines,
                 sanitizeInlineImagePayloads: sanitizeInlineImagePayloads,
+                maxInlineImagePixelDimension: maxInlineImagePixelDimension,
+                maxInlineImageBytes: maxInlineImageBytes,
                 imagePayloadPlaceholder: imagePayloadPlaceholder,
                 compactionImagePayloadPlaceholder: compactionImagePayloadPlaceholder,
                 metadataPlaceholder: metadataPlaceholder,

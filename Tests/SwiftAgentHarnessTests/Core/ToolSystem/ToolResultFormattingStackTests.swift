@@ -4,6 +4,24 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
+private struct MockFormattingImageProcessor: ImageProcessing {
+    func generateThumbnail(from data: Data, maxPixelSize: Int) -> Data? { nil }
+    func scaleImage(_ data: Data, maxPixelDimension: Int) -> Data? { data }
+    func scaleImageToFileSize(_ data: Data, maxFileSize: Int) -> Data? {
+        data.count <= maxFileSize ? data : nil
+    }
+}
+
+private struct NoOpToolResultSpillWriter: ToolResultSpillWriting {
+    func putIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult? {
+        nil
+    }
+}
+
 @Suite("Tool result formatting stack")
 struct ToolResultFormattingStackTests {
     @Test("runtime stage trims content and line count")
@@ -26,7 +44,7 @@ struct ToolResultFormattingStackTests {
         #expect(output.content.contains("[tool result truncated"))
     }
 
-    @Test("inline image payloads are sanitized")
+    @Test("inline image payloads are stripped for text-only models")
     func inlineImageSanitization() {
         let payload = "prefix data:image/png;base64,AAAAAABBBBBCCCCCC suffix"
         let result = ToolResult(
@@ -35,18 +53,57 @@ struct ToolResultFormattingStackTests {
             metadata: .object([:]),
             toolCallId: "call-2"
         )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: false
+        )
         let output = ToolResultFormattingStack.apply(
             result: result,
             stage: .persistence,
-            configuration: .default
+            configuration: .default,
+            spillContext: spillContext
         )
         #expect(output.content.contains("[inline image payload omitted]"))
         #expect(!output.content.contains("data:image/png;base64"))
     }
 
-    @Test("compaction stage uses compaction-specific image placeholder")
-    func compactionImagePlaceholder() {
-        let payload = "prefix data:image/png;base64,AAAAAABBBBBCCCCCC suffix"
+    @Test("inline image payloads are sanitized for vision models at runtime")
+    func visionModelPreservesSanitizedImage() {
+        let tinyPNG =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let payload = "prefix data:image/jpeg;base64,\(tinyPNG) suffix"
+        let result = ToolResult(
+            success: true,
+            content: payload,
+            metadata: .object([:]),
+            toolCallId: "call-vision"
+        )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: true,
+            imageProcessor: MockFormattingImageProcessor()
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: spillContext
+        )
+        #expect(output.content.contains("data:image/png;base64,"))
+        #expect(!output.content.contains("[inline image payload omitted]"))
+    }
+
+    @Test("compaction stage strips images even for vision models")
+    func compactionStripsVisionImages() {
+        let tinyPNG =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let payload = "prefix data:image/png;base64,\(tinyPNG) suffix"
         let result = ToolResult(
             success: true,
             content: payload,
@@ -57,10 +114,19 @@ struct ToolResultFormattingStackTests {
             sanitizeInlineImagePayloads: true,
             compactionImagePayloadPlaceholder: "[old image payload replaced for compaction]"
         )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: true,
+            imageProcessor: MockFormattingImageProcessor()
+        )
         let output = ToolResultFormattingStack.apply(
             result: result,
             stage: .compaction,
-            configuration: config
+            configuration: config,
+            spillContext: spillContext
         )
         #expect(output.content.contains("[old image payload replaced for compaction]"))
         #expect(!output.content.contains("data:image/png;base64"))
@@ -155,6 +221,73 @@ struct ToolResultFormattingStackTests {
         } else {
             Issue.record("Expected sanitized image string")
         }
+    }
+
+    @Test("compaction stage line trim uses constant marker without dropped-line count")
+    func compactionLineTrimUsesConstantMarker() {
+        let result = ToolResult(
+            success: true,
+            content: "a\nb\nc\nd\ne",
+            metadata: .object([:]),
+            toolCallId: "call-compact-lines"
+        )
+        let config = ToolResultFormattingConfiguration(
+            enabled: true,
+            runtimeMaxCharacters: 10_000,
+            persistenceMaxCharacters: 10_000,
+            compactionMaxCharacters: 10_000,
+            runtimeMaxBytes: 0,
+            persistenceMaxBytes: 0,
+            compactionMaxBytes: 0,
+            maxLines: 3,
+            sanitizeInlineImagePayloads: false,
+            compactionTruncationMarker: "[old tool payload replaced for compaction]"
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .compaction,
+            configuration: config
+        )
+        #expect(output.content.contains("[old tool payload replaced for compaction]"))
+        #expect(!output.content.contains("additional line(s) omitted"))
+    }
+
+    @Test("compaction metadata truncation uses constant placeholder without diagnostics")
+    func compactionMetadataUsesConstantPlaceholder() {
+        let oversizedMetadata: JSON = .object([
+            "payload": .string(String(repeating: "m", count: 4_000)),
+        ])
+        let result = ToolResult(
+            success: true,
+            content: "ok",
+            metadata: oversizedMetadata,
+            toolCallId: "call-compact-meta"
+        )
+        let config = ToolResultFormattingConfiguration(
+            compactionMetadataMaxBytes: 120,
+            compactionMetadataPlaceholder: "[old tool metadata replaced for compaction]"
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .compaction,
+            configuration: config
+        )
+        guard case .object(let object) = output.metadata else {
+            Issue.record("Expected object metadata after compaction shaping")
+            return
+        }
+        if case .string(let status) = object["status"] {
+            #expect(status == "metadata_truncated")
+        } else {
+            Issue.record("Expected metadata truncation status string")
+        }
+        if case .string(let placeholder) = object["placeholder"] {
+            #expect(placeholder == "[old tool metadata replaced for compaction]")
+        } else {
+            Issue.record("Expected placeholder string")
+        }
+        #expect(object["originalByteCount"] == nil)
+        #expect(object["stage"] == nil)
     }
 
     @Test("compaction helper preserves base settings and explicit overrides")

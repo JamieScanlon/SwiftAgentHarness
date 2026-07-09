@@ -23,6 +23,7 @@ struct RuntimeLaneCoordinatorTests {
                 sessionMaxConcurrentRuns: 1,
                 globalMainLaneLimit: 2,
                 globalSubagentLaneLimit: 8,
+                globalCronLaneLimit: 2,
                 maxChildrenPerAgent: 5
             )
         )
@@ -74,6 +75,128 @@ struct RuntimeLaneCoordinatorTests {
                 parentConversationID: parentConversationID,
                 runID: UUID()
             ) == .parentFanoutExceeded(limit: 1)
+        )
+    }
+
+    @Test("global cron lane cap is enforced independently of main lane")
+    func globalCronLaneCapIndependentOfMain() async {
+        let coordinator = RuntimeLaneCoordinator(
+            configuration: RuntimeLaneConfiguration(
+                sessionMaxConcurrentRuns: 1,
+                globalMainLaneLimit: 1,
+                globalSubagentLaneLimit: 8,
+                globalCronLaneLimit: 2,
+                maxChildrenPerAgent: 5
+            )
+        )
+        let mainRun = UUID()
+        let cronA = UUID()
+        let cronB = UUID()
+        let cronC = UUID()
+
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:main", runID: mainRun, origin: .interactive)
+                )
+            ) == nil
+        )
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-a", runID: cronA, origin: .trigger(.cron))
+                )
+            ) == nil
+        )
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-b", runID: cronB, origin: .trigger(.cron))
+                )
+            ) == nil
+        )
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-c", runID: cronC, origin: .trigger(.cron))
+                )
+            ) == .globalCronLaneAtCapacity(limit: 2)
+        )
+        #expect(
+            await coordinator.tryAcquireMainRun(sessionKey: "session:main-2", runID: UUID())
+            == .globalMainLaneAtCapacity(limit: 1)
+        )
+    }
+
+    @Test("cron and main lanes can both be at capacity without sharing counter")
+    func cronAndMainLanesSeparateCounters() async {
+        let coordinator = RuntimeLaneCoordinator(
+            configuration: RuntimeLaneConfiguration(
+                sessionMaxConcurrentRuns: 1,
+                globalMainLaneLimit: 1,
+                globalSubagentLaneLimit: 8,
+                globalCronLaneLimit: 1,
+                maxChildrenPerAgent: 5
+            )
+        )
+        let mainRun = UUID()
+        let cronRun = UUID()
+
+        #expect(
+            await coordinator.tryAcquireMainRun(sessionKey: "session:main", runID: mainRun) == nil
+        )
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron", runID: cronRun, origin: .trigger(.cron))
+                )
+            ) == nil
+        )
+        #expect(
+            await coordinator.tryAcquireMainRun(sessionKey: "session:main-2", runID: UUID())
+            == .globalMainLaneAtCapacity(limit: 1)
+        )
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-2", runID: UUID(), origin: .trigger(.cron))
+                )
+            ) == .globalCronLaneAtCapacity(limit: 1)
+        )
+    }
+
+    @Test("release by run ID uses stored admission context")
+    func releaseByRunIDUsesStoredContext() async {
+        let coordinator = RuntimeLaneCoordinator(
+            configuration: RuntimeLaneConfiguration(
+                sessionMaxConcurrentRuns: 1,
+                globalMainLaneLimit: 1,
+                globalSubagentLaneLimit: 8,
+                globalCronLaneLimit: 1,
+                maxChildrenPerAgent: 5
+            )
+        )
+        let cronRun = UUID()
+        let context = RunLaneResolver.resolve(
+            RunLaneOriginContext(sessionKey: "session:cron", runID: cronRun, origin: .trigger(.cron))
+        )
+        #expect(await coordinator.tryAcquire(context) == nil)
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-2", runID: UUID(), origin: .trigger(.cron))
+                )
+            ) == .globalCronLaneAtCapacity(limit: 1)
+        )
+
+        await coordinator.release(runID: cronRun)
+
+        #expect(
+            await coordinator.tryAcquire(
+                RunLaneResolver.resolve(
+                    RunLaneOriginContext(sessionKey: "session:cron-3", runID: UUID(), origin: .trigger(.cron))
+                )
+            ) == nil
         )
     }
 }

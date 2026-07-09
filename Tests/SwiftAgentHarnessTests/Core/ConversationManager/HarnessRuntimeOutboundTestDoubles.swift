@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 import SwiftAgentKitOrchestrator
@@ -20,12 +21,21 @@ enum HarnessRuntimeOutboundTestDoubles {
         func approvalContractSpec(
             toolName: String,
             route: ToolApprovalRoute,
-            isElevated: Bool
+            isElevated: Bool,
+            arguments: JSON?
         ) -> ToolApprovalContractSpec { unimplemented() }
         func registerPendingToolApproval(
             conversationID: UUID,
             runID: UUID?,
-            toolName: String,
+            binding: ToolCallApprovalBinding,
+            route: ToolApprovalRoute,
+            isElevated: Bool,
+            requestedAt: Date
+        ) async -> Bool { unimplemented() }
+        func registerPendingToolApproval(
+            conversationID: UUID,
+            runID: UUID?,
+            call: ToolCallRequest,
             route: ToolApprovalRoute,
             isElevated: Bool,
             requestedAt: Date
@@ -33,13 +43,13 @@ enum HarnessRuntimeOutboundTestDoubles {
         func toolApprovalResolution(
             conversationID: UUID,
             runID: UUID?,
-            toolName: String,
+            binding: ToolCallApprovalBinding,
             route: ToolApprovalRoute
         ) async -> ToolApprovalResolution? { unimplemented() }
         func waitForToolApprovalResolution(
             conversationID: UUID,
             runID: UUID?,
-            toolName: String,
+            binding: ToolCallApprovalBinding,
             route: ToolApprovalRoute
         ) async throws -> ToolApprovalResolution { unimplemented() }
     }

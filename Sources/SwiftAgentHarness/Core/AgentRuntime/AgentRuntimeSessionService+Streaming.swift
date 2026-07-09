@@ -123,10 +123,6 @@ extension AgentRuntimeSessionService {
                 for await event in runtimeExecution.events {
                     await streamTransportAdapter.consume(event)
                 }
-                await streamTransportAdapter.publishToolUsageSummaryIfNeeded(
-                    conversationID: sendingConversationID,
-                    runID: capturedRunID
-                )
             }
             let runtimeResult = await withTaskCancellationHandler {
                 await runtimeExecution.result.value

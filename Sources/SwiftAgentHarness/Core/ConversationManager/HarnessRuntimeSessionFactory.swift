@@ -96,6 +96,19 @@ public enum HarnessRuntimeSessionFactory {
             contextEngine: contextEngine,
             runtimeExecutorFactory: runtimeExecutorFactory
         )
+        let denialHygieneHandler = ExecDenialHygieneService(
+            persistenceDomain: persistenceDomain,
+            refreshProjection: { conversationID in
+                await services.conversationMessagingRuntimeService.refreshProjectedConversationMessages(
+                    conversationID: conversationID,
+                    baseMessagesOverride: nil
+                )
+            },
+            logger: logger
+        )
+        Task {
+            await ExecApprovalStore.shared.configure(denialHygieneHandler: denialHygieneHandler)
+        }
         return (session, services)
     }
 

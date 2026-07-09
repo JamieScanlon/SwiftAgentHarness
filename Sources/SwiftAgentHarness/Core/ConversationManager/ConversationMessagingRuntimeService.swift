@@ -79,7 +79,14 @@ actor ConversationMessagingRuntimeService {
         var messages: [Message] = []
         messages.reserveCapacity(inputMessages.count)
         var replayContext = updatedConversation.messages
-        let persistencePipeline = persistenceToolResultMiddlewarePipeline()
+        let spillWriter = HarnessSessionPersistenceSpillWriter(
+            persistence: await persistenceDomain.harnessSessionPersistence
+        )
+        let persistencePipeline = persistenceToolResultMiddlewarePipeline(
+            conversationID: conversationID,
+            spillWriter: spillWriter,
+            logger: logger
+        )
         for message in inputMessages {
             guard message.role == .tool else {
                 messages.append(message)
@@ -494,11 +501,21 @@ actor ConversationMessagingRuntimeService {
     func applyToolResultTransform(toolCall: ToolCall, result: ToolResult, conversationID: UUID? = nil) async -> ToolResult {
         guard let resolvedConversationID = await runtimeScopedConversationID(explicit: conversationID),
               let conversation = await persistenceDomain.modelConversation(id: resolvedConversationID) else {
-            return applyToolResultFormatting(result: result, stage: .runtime)
+            return await applyToolResultFormatting(
+                toolCall: toolCall,
+                result: result,
+                stage: .runtime,
+                conversationID: conversationID
+            )
         }
         guard deps.conversationTransformConfiguration.toggles(for: conversation.interactionMode).enableToolResultTransform,
               !agentToolResultMiddlewares.isEmpty else {
-            return applyToolResultFormatting(result: result, stage: .runtime)
+            return await applyToolResultFormatting(
+                toolCall: toolCall,
+                result: result,
+                stage: .runtime,
+                conversationID: resolvedConversationID
+            )
         }
         let ordered = agentToolResultMiddlewares.sorted {
             $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order
@@ -524,7 +541,12 @@ actor ConversationMessagingRuntimeService {
                 record: record
             )
         }
-        return applyToolResultFormatting(result: current, stage: .runtime)
+        return await applyToolResultFormatting(
+            toolCall: toolCall,
+            result: current,
+            stage: .runtime,
+            conversationID: resolvedConversationID
+        )
     }
 
     func applyTurnSummaryTransformIfNeeded(conversationID: UUID) async {
@@ -690,7 +712,35 @@ actor ConversationMessagingRuntimeService {
         )
     }
 
-    private func persistenceToolResultMiddlewarePipeline() -> ToolResultMiddlewarePipeline {
+    private func toolResultFormattingSpillContext(
+        conversationID: UUID,
+        toolName: String,
+        entry: ToolRegistryEntry?,
+        spillWriter: HarnessSessionPersistenceSpillWriter,
+        modelSupportsVision: Bool
+    ) -> ToolResultFormattingSpillContext {
+        ToolResultFormattingSpillContext(
+            conversationID: conversationID,
+            toolName: toolName,
+            entry: entry,
+            spillWriter: spillWriter,
+            logger: logger,
+            modelSupportsVision: modelSupportsVision
+        )
+    }
+
+    private func modelSupportsVision(conversationID: UUID) async -> Bool {
+        guard let conversation = await persistenceDomain.modelConversation(id: conversationID) else {
+            return false
+        }
+        return conversation.model.capabilities.contains(.vision)
+    }
+
+    private func persistenceToolResultMiddlewarePipeline(
+        conversationID: UUID,
+        spillWriter: HarnessSessionPersistenceSpillWriter,
+        logger: Logger?
+    ) -> ToolResultMiddlewarePipeline {
         let formatting = deps.conversationTransformConfiguration.toolResultFormatting
         return ToolResultMiddlewarePipeline(
             registrations: [
@@ -698,11 +748,21 @@ actor ConversationMessagingRuntimeService {
                     id: "tool-result-persist-stage",
                     stage: .persistence,
                     order: 100
-                ) { _, result in
-                    ToolResultFormattingStack.apply(
+                ) { toolCall, result in
+                    let entry = await self.toolEntryLookup.entry(named: toolCall.name)
+                    let supportsVision = await self.modelSupportsVision(conversationID: conversationID)
+                    let spillContext = await self.toolResultFormattingSpillContext(
+                        conversationID: conversationID,
+                        toolName: toolCall.name,
+                        entry: entry,
+                        spillWriter: spillWriter,
+                        modelSupportsVision: supportsVision
+                    )
+                    return ToolResultFormattingStack.apply(
                         result: result,
                         stage: .persistence,
-                        configuration: formatting
+                        configuration: formatting,
+                        spillContext: spillContext
                     )
                 },
             ]
@@ -710,13 +770,36 @@ actor ConversationMessagingRuntimeService {
     }
 
     private func applyToolResultFormatting(
+        toolCall: ToolCall,
         result: ToolResult,
-        stage: ToolResultFormattingStage
-    ) -> ToolResult {
-        ToolResultFormattingStack.apply(
+        stage: ToolResultFormattingStage,
+        conversationID: UUID?
+    ) async -> ToolResult {
+        let formatting = deps.conversationTransformConfiguration.toolResultFormatting
+        guard let conversationID else {
+            return ToolResultFormattingStack.apply(
+                result: result,
+                stage: stage,
+                configuration: formatting
+            )
+        }
+        let entry = await toolEntryLookup.entry(named: toolCall.name)
+        let spillWriter = HarnessSessionPersistenceSpillWriter(
+            persistence: await persistenceDomain.harnessSessionPersistence
+        )
+        let supportsVision = await modelSupportsVision(conversationID: conversationID)
+        let spillContext = toolResultFormattingSpillContext(
+            conversationID: conversationID,
+            toolName: toolCall.name,
+            entry: entry,
+            spillWriter: spillWriter,
+            modelSupportsVision: supportsVision
+        )
+        return ToolResultFormattingStack.apply(
             result: result,
             stage: stage,
-            configuration: deps.conversationTransformConfiguration.toolResultFormatting
+            configuration: formatting,
+            spillContext: spillContext
         )
     }
 

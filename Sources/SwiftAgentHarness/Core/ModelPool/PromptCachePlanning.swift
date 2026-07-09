@@ -253,6 +253,8 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
             temperature: config.temperature,
             topP: config.topP,
             availableTools: config.availableTools,
+            toolParameterSchemasByName: config.toolParameterSchemasByName,
+            toolSchemaStrictByName: config.toolSchemaStrictByName,
             additionalParameters: .object(object)
         )
     }

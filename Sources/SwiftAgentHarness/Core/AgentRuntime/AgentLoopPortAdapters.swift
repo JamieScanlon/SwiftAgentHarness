@@ -9,6 +9,8 @@ struct SessionRuntimeModelPort: RuntimeModelPort {
         [Message],
         SwiftAgentKitOrchestrator,
         [ToolDefinition],
+        [String: JSON],
+        [String: Bool],
         RuntimeToolChoicePosture,
         Double?
     ) async -> AsyncThrowingStream<ModelStreamEvent, Error>
@@ -23,11 +25,21 @@ struct SessionRuntimeModelPort: RuntimeModelPort {
         orchestrator: SwiftAgentKitOrchestrator,
         handle: ResolvedModelHandle,
         tools: [ToolDefinition],
+        toolParameterSchemasByName: [String: JSON],
+        toolSchemaStrictByName: [String: Bool],
         toolChoice: RuntimeToolChoicePosture,
         temperatureOverride: Double?
     ) async -> AsyncThrowingStream<ModelStreamEvent, Error> {
         let _ = handle
-        return await streamLLM(messages, orchestrator, tools, toolChoice, temperatureOverride)
+        return await streamLLM(
+            messages,
+            orchestrator,
+            tools,
+            toolParameterSchemasByName,
+            toolSchemaStrictByName,
+            toolChoice,
+            temperatureOverride
+        )
     }
 }
 
@@ -84,9 +96,20 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         ModeProfileRuntimeSlice,
         AgentRuntimeLifecycleEmitter
     ) async -> ToolDispatchOutcome
+    let dispatchBatchFn: (@Sendable (
+        [ToolCallRequest],
+        UUID,
+        UUID?,
+        SwiftAgentKitOrchestrator,
+        RuntimeToolTurnPolicySnapshot,
+        AgentRuntimeTurnConfiguration,
+        Int,
+        UUID,
+        ModeProfileRuntimeSlice,
+        AgentRuntimeLifecycleEmitter
+    ) async -> [ToolDispatchOutcome])?
     let dispatchApprovalFn: @Sendable (
-        String,
-        String?,
+        ToolCallRequest,
         RuntimeToolTurnPolicySnapshot,
         UUID,
         UUID?,
@@ -95,6 +118,58 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         AgentRuntimeLifecycleEmitter
     ) async -> Void
     let isHaltingFn: @Sendable (String, [ToolRegistryEntry]) async -> Bool
+
+    init(
+        consumeApprovalTimeoutsFn: @escaping @Sendable (
+            UUID,
+            UUID?,
+            Int,
+            UUID,
+            AgentRuntimeLifecycleEmitter
+        ) async -> Void,
+        effectiveToolsFn: @escaping @Sendable (UUID, UUID?, AgentRuntimeTurnConfiguration, SwiftAgentKitOrchestrator) async -> RuntimeToolTurnPolicySnapshot,
+        dispatchFn: @escaping @Sendable (
+            ToolCallRequest,
+            UUID,
+            UUID?,
+            SwiftAgentKitOrchestrator,
+            RuntimeToolTurnPolicySnapshot,
+            AgentRuntimeTurnConfiguration,
+            Int,
+            UUID,
+            ModeProfileRuntimeSlice,
+            AgentRuntimeLifecycleEmitter
+        ) async -> ToolDispatchOutcome,
+        dispatchBatchFn: (@Sendable (
+            [ToolCallRequest],
+            UUID,
+            UUID?,
+            SwiftAgentKitOrchestrator,
+            RuntimeToolTurnPolicySnapshot,
+            AgentRuntimeTurnConfiguration,
+            Int,
+            UUID,
+            ModeProfileRuntimeSlice,
+            AgentRuntimeLifecycleEmitter
+        ) async -> [ToolDispatchOutcome])? = nil,
+        dispatchApprovalFn: @escaping @Sendable (
+            ToolCallRequest,
+            RuntimeToolTurnPolicySnapshot,
+            UUID,
+            UUID?,
+            Int,
+            UUID,
+            AgentRuntimeLifecycleEmitter
+        ) async -> Void,
+        isHaltingFn: @escaping @Sendable (String, [ToolRegistryEntry]) async -> Bool
+    ) {
+        self.consumeApprovalTimeoutsFn = consumeApprovalTimeoutsFn
+        self.effectiveToolsFn = effectiveToolsFn
+        self.dispatchFn = dispatchFn
+        self.dispatchBatchFn = dispatchBatchFn
+        self.dispatchApprovalFn = dispatchApprovalFn
+        self.isHaltingFn = isHaltingFn
+    }
 
     func consumeApprovalTimeouts(
         conversationID: UUID,
@@ -141,9 +216,55 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         )
     }
 
+    func dispatchBatch(
+        _ calls: [ToolCallRequest],
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        iteration: Int,
+        modelID: UUID,
+        runtimePolicy: ModeProfileRuntimeSlice,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter
+    ) async -> [ToolDispatchOutcome] {
+        if let dispatchBatchFn {
+            return await dispatchBatchFn(
+                calls,
+                conversationID,
+                runID,
+                orchestrator,
+                snapshot,
+                configuration,
+                iteration,
+                modelID,
+                runtimePolicy,
+                lifecycleEmitter
+            )
+        }
+        var outcomes: [ToolDispatchOutcome] = []
+        outcomes.reserveCapacity(calls.count)
+        for call in calls {
+            outcomes.append(
+                await dispatch(
+                    call,
+                    conversationID: conversationID,
+                    runID: runID,
+                    orchestrator: orchestrator,
+                    snapshot: snapshot,
+                    configuration: configuration,
+                    iteration: iteration,
+                    modelID: modelID,
+                    runtimePolicy: runtimePolicy,
+                    lifecycleEmitter: lifecycleEmitter
+                )
+            )
+        }
+        return outcomes
+    }
+
     func handleDispatchApprovalRequired(
-        toolName: String,
-        toolCallID: String?,
+        call: ToolCallRequest,
         snapshot: RuntimeToolTurnPolicySnapshot,
         conversationID: UUID,
         runID: UUID?,
@@ -152,8 +273,7 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async {
         await dispatchApprovalFn(
-            toolName,
-            toolCallID,
+            call,
             snapshot,
             conversationID,
             runID,
@@ -164,7 +284,9 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
     }
 
     func isHaltSignal(_ toolName: String, in snapshot: RuntimeToolTurnPolicySnapshot) -> Bool {
-        snapshot.effectiveEntries.first(where: { $0.name == toolName })?.haltsLoop == true
+        snapshot.effectiveEntries.first { entry in
+            snapshot.nameIndex.matchesRegistryName(callName: toolName, entryName: entry.name)
+        }?.haltsLoop == true
     }
 }
 
@@ -223,6 +345,8 @@ enum AgentLoopLLMStreaming {
         messages: [Message],
         orchestrator: SwiftAgentKitOrchestrator,
         tools: [ToolDefinition],
+        toolParameterSchemasByName: [String: JSON],
+        toolSchemaStrictByName: [String: Bool],
         toolChoice: RuntimeToolChoicePosture,
         temperatureOverride: Double?
     ) async -> AsyncThrowingStream<ModelStreamEvent, Error> {
@@ -233,6 +357,8 @@ enum AgentLoopLLMStreaming {
             temperature: temperatureOverride ?? orchestratorConfig.temperature,
             topP: orchestratorConfig.topP,
             availableTools: tools,
+            toolParameterSchemasByName: toolParameterSchemasByName,
+            toolSchemaStrictByName: toolSchemaStrictByName,
             additionalParameters: orchestratorConfig.additionalParameters,
             toolInvocationPolicy: toolInvocationPolicy(for: toolChoice)
         )
@@ -308,7 +434,7 @@ enum AgentLoopToolDispatch {
         parentLookup: (@Sendable (UUID) async -> ModelConversation?)? = nil,
         tenancyPolicy: TenancyPolicySettings = .disabled
     ) async -> ToolDispatchOutcome {
-        guard snapshot.effectiveEntries.contains(where: { $0.name == call.name }) else {
+        guard snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries) != nil else {
             return .denied(
                 toolResultMessage(
                     toolCallId: call.id,
@@ -316,7 +442,25 @@ enum AgentLoopToolDispatch {
                 )
             )
         }
-        if let availability = snapshot.availabilitySnapshots.first(where: { $0.entry.name == call.name }) {
+        let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
+            call: call,
+            configuration: configuration
+        )
+        let durableNamePreApproved = ToolCallApprovalPolicy.isDurableNamePreApproved(
+            call: call,
+            configuration: configuration
+        )
+        let durableRulePreApproved = ToolCallApprovalPolicy.isDurableRulePreApproved(
+            call: call,
+            entry: snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
+            configuration: configuration,
+            groupIndex: snapshot.groupIndex,
+            nameIndex: snapshot.nameIndex
+        )
+        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+           let availability = snapshot.availabilitySnapshots.first(where: {
+               snapshot.nameIndex.matchesRegistryName(callName: call.name, entryName: $0.entry.name)
+           }) {
             if availability.decision.blockReason == .approvalRequired {
                 return .approvalRequired(toolName: call.name, toolCallID: call.id)
             }
@@ -330,11 +474,38 @@ enum AgentLoopToolDispatch {
                 )
             }
         }
-        if !configuration.preApprovedToolNames.contains(call.name),
+        let resolvedEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries)
+        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+           let gateway,
+           let conversation,
+           let entry = resolvedEntry {
+            let gatingDecision = gateway.evaluateCallGating(
+                entry: entry,
+                call: call,
+                conversation: conversation,
+                configuration: configuration,
+                toolPolicy: .unrestricted,
+                modePolicyContext: snapshot.modePolicyContext,
+                groupIndex: snapshot.groupIndex,
+                durableRules: configuration.preApprovedToolRules
+            )
+            switch gatingDecision.behavior {
+            case .deny:
+                return .denied(
+                    toolResultMessage(
+                        toolCallId: call.id,
+                        content: "Tool dispatch denied: call-level policy."
+                    )
+                )
+            case .ask, .allow:
+                break
+            }
+        }
+        if !bindingPreApproved && !durableRulePreApproved,
            let gateway,
            let conversation,
            let parentLookup,
-           let entry = snapshot.effectiveEntries.first(where: { $0.name == call.name }),
+           let entry = resolvedEntry,
            await gateway.evaluateCallApproval(
                entry: entry,
                call: call,
@@ -366,6 +537,274 @@ enum AgentLoopToolDispatch {
             return .denied(toolResultMessage(toolCallId: call.id, content: "Tool dispatch denied."))
         case .approvalRequired:
             return .approvalRequired(toolName: call.name, toolCallID: call.id)
+        }
+    }
+
+    /// Returns true when any call in the batch should force serial per-call dispatch
+    /// (approval-gated, deny-gated, or sub-agent delegate).
+    static func batchRequiresSerialFallback(
+        calls: [ToolCallRequest],
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        conversation: ModelConversation? = nil,
+        gateway: (any ToolSystemGatewaying)? = nil,
+        parentLookup: (@Sendable (UUID) async -> ModelConversation?)? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        spawnService: SubAgentSpawnService? = nil
+    ) async -> Bool {
+        for call in calls {
+            if let spawnService,
+               let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
+               spawnService.subAgentPool.isDelegateTool(entry: entry) {
+                return true
+            }
+            let preflight = await preflightOutcome(
+                call: call,
+                snapshot: snapshot,
+                configuration: configuration,
+                conversation: conversation,
+                gateway: gateway,
+                parentLookup: parentLookup,
+                tenancyPolicy: tenancyPolicy
+            )
+            switch preflight {
+            case .approvalRequired, .denied:
+                return true
+            case .ready:
+                continue
+            }
+        }
+        return false
+    }
+
+    static func dispatchBatch(
+        calls: [ToolCallRequest],
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(enableTools: true, enableAgents: true),
+        conversation: ModelConversation? = nil,
+        gateway: (any ToolSystemGatewaying)? = nil,
+        parentLookup: (@Sendable (UUID) async -> ModelConversation?)? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        spawnService: SubAgentSpawnService? = nil
+    ) async -> [ToolDispatchOutcome] {
+        guard !calls.isEmpty else { return [] }
+        if calls.count == 1 {
+            return [
+                await dispatch(
+                    call: calls[0],
+                    conversationID: conversationID,
+                    runID: runID,
+                    orchestrator: orchestrator,
+                    snapshot: snapshot,
+                    configuration: configuration,
+                    conversation: conversation,
+                    gateway: gateway,
+                    parentLookup: parentLookup,
+                    tenancyPolicy: tenancyPolicy,
+                    spawnService: spawnService
+                )
+            ]
+        }
+        if await batchRequiresSerialFallback(
+            calls: calls,
+            snapshot: snapshot,
+            configuration: configuration,
+            conversation: conversation,
+            gateway: gateway,
+            parentLookup: parentLookup,
+            tenancyPolicy: tenancyPolicy,
+            spawnService: spawnService
+        ) {
+            var serialOutcomes: [ToolDispatchOutcome] = []
+            serialOutcomes.reserveCapacity(calls.count)
+            for call in calls {
+                let outcome = await dispatch(
+                    call: call,
+                    conversationID: conversationID,
+                    runID: runID,
+                    orchestrator: orchestrator,
+                    snapshot: snapshot,
+                    configuration: configuration,
+                    conversation: conversation,
+                    gateway: gateway,
+                    parentLookup: parentLookup,
+                    tenancyPolicy: tenancyPolicy,
+                    spawnService: spawnService
+                )
+                serialOutcomes.append(outcome)
+                if case .approvalRequired = outcome {
+                    break
+                }
+            }
+            return serialOutcomes
+        }
+
+        let contract = snapshot.dispatchContract
+        let plannerMode = kitDispatchPlannerMode(contract.dispatchPlannerMode)
+        let requests: [ToolInvocationRequest] = calls.map { call in
+            ToolInvocationRequest(
+                toolName: call.name,
+                argumentsPayload: call.arguments,
+                toolCallID: call.id,
+                conversationID: conversationID.uuidString,
+                runID: runID?.uuidString,
+                source: .model
+            )
+        }
+        let batchRequest = ToolBatchInvocationRequest(
+            requests: requests,
+            plannerMode: plannerMode,
+            defaultTimeoutSeconds: contract.pendingToolTimeoutSeconds,
+            conversationID: conversationID.uuidString,
+            runID: runID?.uuidString,
+            source: .model,
+            parallelToolDispatchEnabled: contract.parallelDispatchEnabled
+        )
+        let batchOutcome = await orchestrator.invokeTools(batchRequest)
+        return zip(calls, batchOutcome.outcomes).map { call, outcome in
+            mapInvocationOutcome(outcome, fallbackCall: call)
+        }
+    }
+
+    static func kitDispatchPlannerMode(
+        _ mode: ToolPolicyConfiguration.DispatchPlannerMode?
+    ) -> ToolDispatchPlannerMode? {
+        guard let mode else { return nil }
+        switch mode {
+        case .serial:
+            return .serial
+        case .allParallel:
+            return .allParallel
+        case .mixedDeterministic:
+            return .mixedDeterministic
+        }
+    }
+
+    private enum PreflightResult: Sendable {
+        case ready
+        case denied(ToolDispatchOutcome)
+        case approvalRequired(ToolDispatchOutcome)
+    }
+
+    private static func preflightOutcome(
+        call: ToolCallRequest,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        conversation: ModelConversation?,
+        gateway: (any ToolSystemGatewaying)?,
+        parentLookup: (@Sendable (UUID) async -> ModelConversation?)?,
+        tenancyPolicy: TenancyPolicySettings
+    ) async -> PreflightResult {
+        guard snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries) != nil else {
+            return .denied(
+                .denied(
+                    toolResultMessage(
+                        toolCallId: call.id,
+                        content: "Tool dispatch denied: tool not in effective allow-list."
+                    )
+                )
+            )
+        }
+        let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
+            call: call,
+            configuration: configuration
+        )
+        let durableNamePreApproved = ToolCallApprovalPolicy.isDurableNamePreApproved(
+            call: call,
+            configuration: configuration
+        )
+        let durableRulePreApproved = ToolCallApprovalPolicy.isDurableRulePreApproved(
+            call: call,
+            entry: snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
+            configuration: configuration,
+            groupIndex: snapshot.groupIndex,
+            nameIndex: snapshot.nameIndex
+        )
+        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+           let availability = snapshot.availabilitySnapshots.first(where: {
+               snapshot.nameIndex.matchesRegistryName(callName: call.name, entryName: $0.entry.name)
+           }) {
+            if availability.decision.blockReason == .approvalRequired {
+                return .approvalRequired(.approvalRequired(toolName: call.name, toolCallID: call.id))
+            }
+            if !availability.decision.allowed {
+                let reason = availability.decision.blockReason.map { String(describing: $0) } ?? "blocked"
+                return .denied(
+                    .denied(
+                        toolResultMessage(
+                            toolCallId: call.id,
+                            content: "Tool dispatch denied: \(reason)."
+                        )
+                    )
+                )
+            }
+        }
+        let resolvedEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries)
+        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+           let gateway,
+           let conversation,
+           let entry = resolvedEntry {
+            let gatingDecision = gateway.evaluateCallGating(
+                entry: entry,
+                call: call,
+                conversation: conversation,
+                configuration: configuration,
+                toolPolicy: .unrestricted,
+                modePolicyContext: snapshot.modePolicyContext,
+                groupIndex: snapshot.groupIndex,
+                durableRules: configuration.preApprovedToolRules
+            )
+            switch gatingDecision.behavior {
+            case .deny:
+                return .denied(
+                    .denied(
+                        toolResultMessage(
+                            toolCallId: call.id,
+                            content: "Tool dispatch denied: call-level policy."
+                        )
+                    )
+                )
+            case .ask, .allow:
+                break
+            }
+        }
+        if !bindingPreApproved && !durableRulePreApproved,
+           let gateway,
+           let conversation,
+           let parentLookup,
+           let entry = resolvedEntry,
+           await gateway.evaluateCallApproval(
+               entry: entry,
+               call: call,
+               conversation: conversation,
+               configuration: configuration,
+               parentLookup: parentLookup,
+               tenancyPolicy: tenancyPolicy
+           ) {
+            return .approvalRequired(.approvalRequired(toolName: call.name, toolCallID: call.id))
+        }
+        return .ready
+    }
+
+    private static func mapInvocationOutcome(
+        _ outcome: ToolInvocationOutcome,
+        fallbackCall: ToolCallRequest
+    ) -> ToolDispatchOutcome {
+        switch outcome {
+        case .completed(let result, _):
+            let content = result.success ? result.content : (result.error ?? "Tool execution failed.")
+            return .completed(toolResultMessage(toolCallId: result.toolCallId ?? fallbackCall.id, content: content))
+        case .pending(let handle, _):
+            return .pendingHandle(
+                toolResultMessage(toolCallId: fallbackCall.id, content: "Pending tool handle: \(handle.handleID)")
+            )
+        case .denied:
+            return .denied(toolResultMessage(toolCallId: fallbackCall.id, content: "Tool dispatch denied."))
+        case .approvalRequired:
+            return .approvalRequired(toolName: fallbackCall.name, toolCallID: fallbackCall.id)
         }
     }
 }

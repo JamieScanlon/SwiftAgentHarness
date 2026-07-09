@@ -17,6 +17,7 @@ import Logging
 public struct ToolPolicyConfiguration: Sendable {
     public enum DispatchPlannerMode: String, Sendable, Codable, Equatable {
         case serial
+        /// Parsed for backward-compatible config reads only. Harness production paths remap to ``mixedDeterministic``.
         case allParallel
         case mixedDeterministic
     }
@@ -95,6 +96,11 @@ public struct ToolPolicyConfiguration: Sendable {
     private let approvalRequiredToolNames: Set<String>
     private let elevatedToolNames: Set<String>
     private let perCallElevatedToolNames: Set<String>
+    private let sensitiveToolRules: [ToolPolicyRule]
+    private let escalationRequiredToolRules: [ToolPolicyRule]
+    private let approvalRequiredToolRules: [ToolPolicyRule]
+    private let elevatedToolRules: [ToolPolicyRule]
+    private let perCallElevatedToolRules: [ToolPolicyRule]
     public let elevatedAllowFrom: ElevatedAllowlist
     private let subAgentHostingPolicyConfiguration: SubAgentHostingPolicyConfiguration
     public let descriptorValidationMode: DescriptorValidationMode
@@ -135,6 +141,11 @@ public struct ToolPolicyConfiguration: Sendable {
         self.approvalRequiredToolNames = approvalRequiredToolNames
         self.elevatedToolNames = elevatedToolNames
         self.perCallElevatedToolNames = perCallElevatedToolNames
+        self.sensitiveToolRules = ToolPolicyRulesCache.parseList(Array(sensitiveToolNames).sorted())
+        self.escalationRequiredToolRules = ToolPolicyRulesCache.parseList(Array(escalationRequiredToolNames).sorted())
+        self.approvalRequiredToolRules = ToolPolicyRulesCache.parseList(Array(approvalRequiredToolNames).sorted())
+        self.elevatedToolRules = ToolPolicyRulesCache.parseList(Array(elevatedToolNames).sorted())
+        self.perCallElevatedToolRules = ToolPolicyRulesCache.parseList(Array(perCallElevatedToolNames).sorted())
         self.elevatedAllowFrom = elevatedAllowFrom
         self.subAgentHostingPolicyConfiguration = subAgentHostingPolicyConfiguration
         self.descriptorValidationMode = descriptorValidationMode
@@ -267,12 +278,49 @@ public struct ToolPolicyConfiguration: Sendable {
         subAgentHostingPolicyConfiguration.policy(forHostPersonaID: hostPersonaID)
     }
 
+    func coherencePolicyLists() -> [ToolPolicyCoherencePolicyList] {
+        [
+            ToolPolicyCoherencePolicyList(scope: .promptConfigSensitive, rules: sensitiveToolRules),
+            ToolPolicyCoherencePolicyList(scope: .promptConfigRequireApproval, rules: approvalRequiredToolRules),
+            ToolPolicyCoherencePolicyList(scope: .promptConfigEscalationRequired, rules: escalationRequiredToolRules),
+            ToolPolicyCoherencePolicyList(scope: .promptConfigElevated, rules: elevatedToolRules),
+        ]
+    }
+
     public func isToolAllowed(name: String, context: ModePolicyContext) -> Bool {
-        return Self.profileToolsSliceAllows(context.resolvedProfile.tools, toolName: name)
+        isToolAllowed(name: name, context: context, groupIndex: .empty, entry: nil)
+    }
+
+    func isToolAllowed(
+        name: String,
+        context: ModePolicyContext,
+        groupIndex: ToolPolicyGroupIndex,
+        entry: ToolRegistryEntry?
+    ) -> Bool {
+        Self.profileToolsSliceAllows(
+            context.resolvedProfile.tools,
+            toolName: name,
+            groupIndex: groupIndex,
+            entry: entry
+        )
     }
 
     public func isToolDenied(name: String, context: ModePolicyContext) -> Bool {
-        Self.evalDenylist(context.resolvedProfile.tools.deny, toolName: name)
+        isToolDenied(name: name, context: context, groupIndex: .empty, entry: nil)
+    }
+
+    func isToolDenied(
+        name: String,
+        context: ModePolicyContext,
+        groupIndex: ToolPolicyGroupIndex,
+        entry: ToolRegistryEntry?
+    ) -> Bool {
+        Self.evalDenylist(
+            context.resolvedProfile.tools.deny,
+            toolName: name,
+            groupIndex: groupIndex,
+            entry: entry
+        )
     }
 
     /// Composes PromptConfig approval tags with ``ModeProfileToolsSlice/approvalPolicy`` (`modes.md`).
@@ -297,29 +345,75 @@ public struct ToolPolicyConfiguration: Sendable {
         return base || sliceAdds
     }
 
-    private static func profileToolsSliceAllows(_ slice: ModeProfileToolsSlice, toolName: String) -> Bool {
+    private static func profileToolsSliceAllows(
+        _ slice: ModeProfileToolsSlice,
+        toolName: String,
+        groupIndex: ToolPolicyGroupIndex,
+        entry: ToolRegistryEntry?
+    ) -> Bool {
         guard let allow = slice.allow else { return true }
-        return evalAllowlist(allow, toolName: toolName)
+        return evalAllowlist(allow, toolName: toolName, groupIndex: groupIndex, entry: entry)
     }
 
     public func isToolSensitive(name: String) -> Bool {
-        sensitiveToolNames.contains(name)
+        isToolSensitive(name: name, groupIndex: .empty)
+    }
+
+    func isToolSensitive(name: String, groupIndex: ToolPolicyGroupIndex) -> Bool {
+        ToolPolicyNameMatcher.listMatches(
+            rules: sensitiveToolRules,
+            toolName: name,
+            entry: nil,
+            groupIndex: groupIndex
+        )
     }
 
     public func requiresEscalation(name: String) -> Bool {
-        escalationRequiredToolNames.contains(name)
+        requiresEscalation(name: name, groupIndex: .empty)
+    }
+
+    func requiresEscalation(name: String, groupIndex: ToolPolicyGroupIndex) -> Bool {
+        ToolPolicyNameMatcher.listMatches(
+            rules: escalationRequiredToolRules,
+            toolName: name,
+            groupIndex: groupIndex
+        )
     }
 
     public func requiresApproval(name: String) -> Bool {
-        approvalRequiredToolNames.contains(name)
+        requiresApproval(name: name, groupIndex: .empty)
+    }
+
+    func requiresApproval(name: String, groupIndex: ToolPolicyGroupIndex) -> Bool {
+        ToolPolicyNameMatcher.listMatches(
+            rules: approvalRequiredToolRules,
+            toolName: name,
+            groupIndex: groupIndex
+        )
     }
 
     public func isElevatedTool(name: String) -> Bool {
-        elevatedToolNames.contains(name)
+        isElevatedTool(name: name, groupIndex: .empty)
+    }
+
+    func isElevatedTool(name: String, groupIndex: ToolPolicyGroupIndex) -> Bool {
+        ToolPolicyNameMatcher.listMatches(
+            rules: elevatedToolRules,
+            toolName: name,
+            groupIndex: groupIndex
+        )
     }
 
     public func isPerCallElevatedTool(name: String) -> Bool {
-        perCallElevatedToolNames.contains(name)
+        isPerCallElevatedTool(name: name, groupIndex: .empty)
+    }
+
+    func isPerCallElevatedTool(name: String, groupIndex: ToolPolicyGroupIndex) -> Bool {
+        ToolPolicyNameMatcher.listMatches(
+            rules: perCallElevatedToolRules,
+            toolName: name,
+            groupIndex: groupIndex
+        )
     }
 
     /// Per-call elevation mode for a tool: sandboxed by default, elevating only
@@ -364,18 +458,36 @@ public struct ToolPolicyConfiguration: Sendable {
         return executionEnvironmentPolicy.escalationRequiredAdapterIDs.contains(adapterID)
     }
 
-    private static func evalAllowlist(_ list: [String]?, toolName: String) -> Bool {
+    private static func evalAllowlist(
+        _ list: [String]?,
+        toolName: String,
+        groupIndex: ToolPolicyGroupIndex = .empty,
+        entry: ToolRegistryEntry? = nil
+    ) -> Bool {
         guard let list else { return true }
-        if list.isEmpty { return false }
-        if list.contains("*") { return true }
-        return list.contains(toolName)
+        let rules = ToolPolicyRulesCache.parseList(list)
+        return ToolPolicyNameMatcher.allowlistPermits(
+            rules: rules,
+            toolName: toolName,
+            entry: entry,
+            groupIndex: groupIndex
+        )
     }
 
-    private static func evalDenylist(_ list: [String]?, toolName: String) -> Bool {
+    private static func evalDenylist(
+        _ list: [String]?,
+        toolName: String,
+        groupIndex: ToolPolicyGroupIndex = .empty,
+        entry: ToolRegistryEntry? = nil
+    ) -> Bool {
         guard let list else { return false }
-        if list.isEmpty { return false }
-        if list.contains("*") { return true }
-        return list.contains(toolName)
+        let rules = ToolPolicyRulesCache.parseList(list)
+        return ToolPolicyNameMatcher.denylistBlocks(
+            rules: rules,
+            toolName: toolName,
+            entry: entry,
+            groupIndex: groupIndex
+        )
     }
 
     public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ToolPolicyConfiguration {
@@ -389,12 +501,18 @@ public struct ToolPolicyConfiguration: Sendable {
         guard let toolPolicy = json["toolPolicy"] as? [String: Any] else {
             return .unrestricted
         }
-        let sensitiveToolNames = Set((toolPolicy["sensitive"] as? [String]) ?? [])
-        let escalationRequiredToolNames = Set((toolPolicy["escalationRequired"] as? [String]) ?? [])
-        let approvalRequiredToolNames = Set(
-            (toolPolicy["requireApproval"] as? [String])
-                ?? (toolPolicy["approvalRequired"] as? [String])
-                ?? []
+        let sensitiveToolNames = ToolNamePolicyNormalization.normalizedPolicySet(
+            Set(((toolPolicy["sensitive"] as? [String]) ?? []).map(ToolPolicyRulesCache.preserveTokenForStorage))
+        )
+        let escalationRequiredToolNames = ToolNamePolicyNormalization.normalizedPolicySet(
+            Set(((toolPolicy["escalationRequired"] as? [String]) ?? []).map(ToolPolicyRulesCache.preserveTokenForStorage))
+        )
+        let approvalRequiredToolNames = ToolNamePolicyNormalization.normalizedPolicySet(
+            Set(
+                ((toolPolicy["requireApproval"] as? [String])
+                    ?? (toolPolicy["approvalRequired"] as? [String])
+                    ?? []).map(ToolPolicyRulesCache.preserveTokenForStorage)
+            )
         )
         let parsedElevated = Self.parseElevatedBlock(toolPolicy["elevated"])
         let subAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.fromPromptConfigRoot(json)
@@ -473,6 +591,13 @@ public struct ToolPolicyConfiguration: Sendable {
             )
         }()
         let dispatchPolicy = Self.parseDispatchPolicyBlock(toolPolicy["dispatch"] as? [String: Any])
+        if dispatchPolicy.dispatchPlannerMode == .allParallel {
+            ToolDispatchPlannerNormalization.warnIfAllParallelRemapped(
+                wasRemapped: true,
+                fingerprint: "promptConfig:allParallel",
+                logger: logger
+            )
+        }
         return ToolPolicyConfiguration(
             sensitiveToolNames: sensitiveToolNames,
             escalationRequiredToolNames: escalationRequiredToolNames,
@@ -502,13 +627,21 @@ public struct ToolPolicyConfiguration: Sendable {
 
     static func parseElevatedBlock(_ value: Any?) -> ParsedElevatedPolicy {
         if let names = value as? [String] {
-            return ParsedElevatedPolicy(tools: Set(names), perCall: [], allowFrom: .cliDefault)
+            return ParsedElevatedPolicy(
+                tools: ToolNamePolicyNormalization.normalizedPolicySet(Set(names)),
+                perCall: [],
+                allowFrom: .cliDefault
+            )
         }
         guard let block = value as? [String: Any] else {
             return ParsedElevatedPolicy(tools: [], perCall: [], allowFrom: .cliDefault)
         }
-        let tools = Set((block["tools"] as? [String]) ?? [])
-        let perCall = Set((block["perCall"] as? [String]) ?? [])
+        let tools = ToolNamePolicyNormalization.normalizedPolicySet(
+            Set((block["tools"] as? [String]) ?? [])
+        )
+        let perCall = ToolNamePolicyNormalization.normalizedPolicySet(
+            Set((block["perCall"] as? [String]) ?? [])
+        )
         var allowFrom: [String: Set<String>] = [:]
         if let raw = block["allowFrom"] as? [String: Any] {
             for (surface, idsValue) in raw {

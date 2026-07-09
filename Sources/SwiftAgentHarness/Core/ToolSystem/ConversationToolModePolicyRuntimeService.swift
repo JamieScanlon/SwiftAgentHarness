@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import Logging
 import SwiftAgentKit
@@ -183,9 +184,10 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool = false
-    ) async {
-        await toolApproval.resolveToolApprovalForAPI(
+        durable: Bool = false,
+        arguments: JSON? = nil
+    ) async throws {
+        try await toolApproval.resolveToolApprovalForAPI(
             conversationID: conversationID,
             runID: runID,
             toolName: toolName,
@@ -193,7 +195,8 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
             status: status,
             source: source,
             reason: reason,
-            durable: durable
+            durable: durable,
+            arguments: arguments
         )
     }
 }

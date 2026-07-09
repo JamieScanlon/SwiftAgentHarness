@@ -407,12 +407,18 @@ public actor OrchestratorRuntimeService {
             makePreDispatchPolicyEvaluator { nil }
         }
         let plannerMode = orchestratorDispatchPlannerMode(dispatchContract.dispatchPlannerMode)
+        let toolSchemaDispatch = toolSchemaDispatchMaps(
+            for: conversation,
+            effectiveEntries: effectiveEntriesForDispatch
+        )
         guard let conversation else {
             return OrchestratorInvocationOptions(
                 additionalParameters: additional,
                 parallelToolDispatchEnabled: parallelDispatchEnabled,
                 dispatchPlannerMode: plannerMode,
-                preDispatchPolicyEvaluator: preDispatchEvaluator
+                preDispatchPolicyEvaluator: preDispatchEvaluator,
+                toolParameterSchemasByName: toolSchemaDispatch.parameterSchemas,
+                toolSchemaStrictByName: toolSchemaDispatch.strictByName
             )
         }
         let resolved = await installedModePolicy.resolvedModeProfile(for: conversation)
@@ -446,7 +452,9 @@ public actor OrchestratorRuntimeService {
                 parallelToolDispatchEnabled: parallelDispatchEnabled,
                 dispatchPlannerMode: plannerMode,
                 preDispatchPolicyEvaluator: preDispatchEvaluator,
-                maxAgenticStepsPerUpdate: maxSteps
+                maxAgenticStepsPerUpdate: maxSteps,
+                toolParameterSchemasByName: toolSchemaDispatch.parameterSchemas,
+                toolSchemaStrictByName: toolSchemaDispatch.strictByName
             )
         }
         if forcedToolChoiceRequired {
@@ -462,7 +470,9 @@ public actor OrchestratorRuntimeService {
                 preDispatchPolicyEvaluator: preDispatchEvaluator,
                 maxAgenticStepsPerUpdate: maxSteps,
                 rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: true,
-                maxCorrectionRetries: deps.agentHarness.maxCorrectionRetries
+                maxCorrectionRetries: deps.agentHarness.maxCorrectionRetries,
+                toolParameterSchemasByName: toolSchemaDispatch.parameterSchemas,
+                toolSchemaStrictByName: toolSchemaDispatch.strictByName
             )
         }
         return OrchestratorInvocationOptions(
@@ -474,8 +484,33 @@ public actor OrchestratorRuntimeService {
             preDispatchPolicyEvaluator: preDispatchEvaluator,
             maxAgenticStepsPerUpdate: maxSteps,
             rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: deps.agentHarness.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable,
-            maxCorrectionRetries: deps.agentHarness.maxCorrectionRetries
+            maxCorrectionRetries: deps.agentHarness.maxCorrectionRetries,
+            toolParameterSchemasByName: toolSchemaDispatch.parameterSchemas,
+            toolSchemaStrictByName: toolSchemaDispatch.strictByName
         )
+    }
+
+    private func toolSchemaDispatchMaps(
+        for conversation: ModelConversation?,
+        effectiveEntries: [ToolRegistryEntry]
+    ) -> (parameterSchemas: [String: JSON], strictByName: [String: Bool]) {
+        guard let conversation, !effectiveEntries.isEmpty else {
+            return ([:], [:])
+        }
+        let binding = ProviderBinding(
+            providerId: conversation.model.modelProtocol.rawValue,
+            modelProtocol: conversation.model.modelProtocol,
+            endpointModelId: conversation.model.modelName,
+            serverURL: conversation.model.serverURL
+        )
+        let compat = ProviderRuntimeHooks.compatForBinding(binding)
+        let batch = ProviderRuntimeHooks.normalizeToolSchemaBatch(
+            entries: effectiveEntries,
+            binding: binding,
+            compat: compat
+        )
+        ProviderRuntimeHooks.logToolSchemaDiagnostics(batch.diagnostics, logger: logger)
+        return (batch.parameterSchemasByName, batch.strictByName)
     }
 
     private func buildToolManager(
@@ -656,7 +691,10 @@ public actor OrchestratorRuntimeService {
                             await memoryService.recordMemoryWrite(path: path, conversationID: conv.id)
                         }
                     },
-                    logger: logger
+                    logger: logger,
+                    sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
+                    sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,
+                    conversationID: conversationID
                 )
             )
             if let memoryDirectory {
@@ -675,9 +713,14 @@ public actor OrchestratorRuntimeService {
             let context = HarnessToolProviderContext(
                 conversation: activeConversation,
                 workspaceRoot: workspaceRoot.isEmpty ? nil : workspaceRoot,
-                logger: logger
+                logger: logger,
+                pluginGroupID: "plugins"
             )
-            providers.append(contentsOf: additionalToolProviderFactory(context))
+            let hostProviders = additionalToolProviderFactory(context)
+            providers.append(contentsOf: PluginGroupTaggingToolProvider.wrapHostProviders(
+                hostProviders,
+                pluginGroupID: context.pluginGroupID
+            ))
         }
         let runtimePipeline = await installedSessionCollaborator.runtimeToolResultMiddlewarePipeline()
         providers = providers.map { provider in
@@ -826,13 +869,19 @@ public actor OrchestratorRuntimeService {
     private func orchestratorDispatchPlannerMode(
         _ mode: ToolPolicyConfiguration.DispatchPlannerMode?
     ) -> ToolDispatchPlannerMode? {
-        guard let mode else { return nil }
-        switch mode {
+        let normalized = ToolDispatchPlannerNormalization.effectivePlannerMode(mode)
+        ToolDispatchPlannerNormalization.warnIfAllParallelRemapped(
+            wasRemapped: normalized.wasAllParallelRemapped,
+            fingerprint: "orchestrator:\(deps.toolPolicy.stableAllowlistSignature())",
+            logger: logger
+        )
+        guard let effective = normalized.mode else { return nil }
+        switch effective {
         case .serial:
             return .serial
-        case .allParallel:
-            return .allParallel
         case .mixedDeterministic:
+            return .mixedDeterministic
+        case .allParallel:
             return .mixedDeterministic
         }
     }

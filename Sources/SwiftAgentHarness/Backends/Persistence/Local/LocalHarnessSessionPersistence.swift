@@ -1,5 +1,6 @@
 //
-//  SQLite catalog + JSONL transcript (harness layout). Process-aware file lock per conversation.
+//  SQLite catalog + JSONL transcript (harness layout). Process-aware file lock per conversation
+//  when multiple OS processes share the store; single-process servers rely on actor-isolated writers.
 //
 
 import Foundation
@@ -926,6 +927,26 @@ final class LocalHarnessSessionPersistence: HarnessSessionPersistence, @unchecke
             .sorted()
     }
 
+    func toolResultSpillDirectory(conversationID: UUID) -> URL? {
+        toolResultSpillStore().spillDirectoryURL(conversationId: conversationID)
+    }
+
+    func putToolResultSpillIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult? {
+        try toolResultSpillStore().putIfNeeded(
+            conversationId: conversationID,
+            toolCallId: toolCallId,
+            content: content
+        )
+    }
+
+    func isAllowlistedToolResultSpillPath(_ path: String, conversationID: UUID) -> Bool {
+        toolResultSpillStore().isAllowlistedSpillPath(path, conversationId: conversationID)
+    }
+
     func putBlob(
         data: Data,
         durability: SessionBlobDurability,
@@ -1201,6 +1222,10 @@ final class LocalHarnessSessionPersistence: HarnessSessionPersistence, @unchecke
 
     func engineArtifactStore() -> SessionEngineArtifactStore {
         SessionEngineArtifactStore(root: root)
+    }
+
+    func toolResultSpillStore() -> SessionToolResultSpillStore {
+        SessionToolResultSpillStore(root: root, agentId: agentId)
     }
 
     func blobStore() -> SessionBlobStore {

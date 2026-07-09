@@ -16,8 +16,8 @@ private actor RuntimeStreamAdapterCapture {
 
 @Suite("Runtime turn stream transport adapter")
 struct RuntimeTurnStreamTransportAdapterTests {
-    @Test("publishes input events and emits tool usage summary after stream end")
-    func publishesEventsAndSummary() async {
+    @Test("publishes template summary on loop iteration completed")
+    func publishesTemplateSummaryOnIterationCompleted() async {
         let capture = RuntimeStreamAdapterCapture()
         let conversationID = UUID()
         let runID = UUID()
@@ -37,7 +37,8 @@ struct RuntimeTurnStreamTransportAdapterTests {
                 name: .toolCallCompleted,
                 conversationID: conversationID,
                 runID: runID,
-                toolName: "tool_alpha"
+                iteration: 1,
+                toolName: "alpha"
             )
         )
         await adapter.consume(
@@ -45,14 +46,54 @@ struct RuntimeTurnStreamTransportAdapterTests {
                 name: .toolCallCompleted,
                 conversationID: conversationID,
                 runID: runID,
-                toolName: "tool_beta"
+                iteration: 1,
+                toolName: "beta"
             )
         )
-        await adapter.publishToolUsageSummaryIfNeeded(conversationID: conversationID, runID: runID)
+        await adapter.consume(
+            RuntimeLifecycleEventPayload(
+                name: .loopIterationCompleted,
+                conversationID: conversationID,
+                runID: runID,
+                iteration: 1
+            )
+        )
 
         let payloads = await capture.all()
-        #expect(payloads.map(\.name) == [.turnStarted, .toolCallCompleted, .toolCallCompleted, .toolUsageSummary])
-        #expect(payloads.last?.toolCount == 2)
-        #expect(payloads.last?.toolNames == ["tool_alpha", "tool_beta"])
+        #expect(
+            payloads.map(\.name) == [
+                .turnStarted,
+                .toolCallCompleted,
+                .toolCallCompleted,
+                .toolUsageSummary,
+                .loopIterationCompleted,
+            ]
+        )
+        #expect(payloads[3].toolCount == 2)
+        #expect(payloads[3].toolNames == ["alpha", "beta"])
+        #expect(payloads[3].summaryText == "Ran alpha ×1, beta ×1")
+        #expect(payloads[3].source == "runtime.templateLabel")
+    }
+
+    @Test("skips summary when iteration had no completed tools")
+    func skipsSummaryWithoutTools() async {
+        let capture = RuntimeStreamAdapterCapture()
+        let conversationID = UUID()
+        let runID = UUID()
+        let adapter = RuntimeTurnStreamTransportAdapter { payload in
+            await capture.append(payload)
+        }
+
+        await adapter.consume(
+            RuntimeLifecycleEventPayload(
+                name: .loopIterationCompleted,
+                conversationID: conversationID,
+                runID: runID,
+                iteration: 1
+            )
+        )
+
+        let payloads = await capture.all()
+        #expect(payloads.map(\.name) == [.loopIterationCompleted])
     }
 }

@@ -82,10 +82,13 @@ This keeps durable run APIs and runtime terminal mapping aligned with harness-st
 
 SwiftAgentKit executes tool batches and now supports explicit dispatch policy (`serial` vs `parallel`) and pending-handle outcomes.
 
-- **Default remains conservative serial**: missing/unknown parallel-safety metadata resolves to serial.
+- **Default remains conservative serial**: missing/unknown parallel-safety metadata resolves to serial; host `parallelDispatchEnabled` defaults to **false**.
+- `TurnLoop` dispatches multi-tool turns via `RuntimeToolPort.dispatchBatch` → Kit `invokeTools`, mapping the per-turn `dispatchContract` (`parallelToolDispatchEnabled`, `plannerMode`). Single-tool and approval/delegate-gated batches fall back to serial per-call dispatch.
+- Transcript commits remain **in call order**; lifecycle `tool.callCompleted` is emitted after each commit.
 - The harness wires dispatch policy contract through `ToolPolicyConfiguration` (`toolPolicy.dispatch`) into orchestrator config/options.
 - `TransformingToolProvider` now forwards `executeToolOutcome`, `parallelSafety`, and pending cancellation hooks so middleware stays compatible with pending-first providers.
 - Pending completions are consumed from `SwiftAgentKitOrchestrator.pendingToolCompletions` and ingested back into the conversation transcript as tool messages.
+- Production opt-in guidance: [Tool System README — Production gate](../ToolSystem/README.md#production-gate-x2-batch-parallelism).
 
 ## Facade type (`AgentRuntimeExecuting`)
 
@@ -109,10 +112,11 @@ Runtime now publishes first-class conversation-topic lifecycle events (`semantic
 - `turn.started`
 - `loop.iterationStarted` -> `model.callStarted` -> `model.callCompleted`
 - optional `tool.callStarted` / `tool.callCompleted`
+- optional `tool.usageSummary` after each `loop.iterationCompleted` that had tool calls (deterministic template label such as `Ran read_file ×3, bash ×1`; display/audit only, never model context; consumers must not require it)
 - `loop.iterationCompleted`
 - terminal: `turn.completed` / `turn.cancelled` / `turn.bounded`
 
-Ordering is emitted deterministically by `runAgentBuildStreamingOrchestrationCore` (source ordering) and `startStreamingOrchestrationTask` now consumes `executeTurn.events` live as the single runtime transport input (including `toolUsageSummary` derivation) before teardown. `seq` remains the transport counter assigned by `ConversationEventsTopicHub`.
+Ordering is emitted deterministically by `runAgentBuildStreamingOrchestrationCore` (source ordering) and `startStreamingOrchestrationTask` consumes `executeTurn.events` live as the single runtime transport input (including per-iteration `tool.usageSummary` template labels) before teardown. `seq` remains the transport counter assigned by `ConversationEventsTopicHub`. Intent-aware cheap-model batch labels remain template-optional future work.
 
 ## Error policy matrix
 

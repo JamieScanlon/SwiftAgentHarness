@@ -61,7 +61,10 @@ struct PersistingActivatedSkillsToolProvider: ToolProvider {
     }
 
     func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
-        await inner.policyTags(for: definition)
+        if definition.name == SkillsToolProvider.activateToolName {
+            return [ToolRegistryResultFormattingPolicy.exactContentObservationPolicyTag()]
+        }
+        return await inner.policyTags(for: definition)
     }
 
     func rawSchema(for definition: ToolDefinition) async -> JSON? {

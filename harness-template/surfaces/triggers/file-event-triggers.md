@@ -46,7 +46,7 @@ The three types map one-to-one onto the schedule kinds in [scheduling.md](./sche
 
 ### Debounce per filename
 
-A single editor save emits multiple filesystem events (write, rename, attribute change) — 3 to 10 is typical. Without debounce the trigger pipeline fires that many times for one logical drop. `mom` uses a **100ms per-filename debounce** (`DEBOUNCE_MS` in `events.ts`). Key the debounce on the *filename*, not the directory, so two unrelated event files landing in the same window still fire independently.
+A single editor save emits multiple filesystem events (write, rename, attribute change) — 3 to 10 is typical. Without debounce the trigger pipeline fires that many times for one logical drop. A **100ms per-filename debounce** is the proven setting. Key the debounce on the *filename*, not the directory, so two unrelated event files landing in the same window still fire independently.
 
 ### Watcher-error recovery
 
@@ -54,7 +54,7 @@ A single editor save emits multiple filesystem events (write, rename, attribute 
 
 ### Parse-retry with backoff
 
-Some programs (and some editors) write a file in two stages, so an early read sees a truncated, invalid-JSON file. Don't drop it on first parse failure: retry with exponential backoff — `mom`'s pattern is **100ms → 200ms → 400ms**, then log and skip after max retries. A skip must not block the rest of the queue; one malformed file should never wedge the watcher.
+Some programs (and some editors) write a file in two stages, so an early read sees a truncated, invalid-JSON file. Don't drop it on first parse failure: retry with exponential backoff — **100ms → 200ms → 400ms** is a proven ladder — then log and skip after max retries. A skip must not block the rest of the queue; one malformed file should never wedge the watcher.
 
 ### Rename-on-read to avoid the deletion race
 
@@ -94,7 +94,7 @@ A real broker (Redis Streams, NATS, SQS) or an inbound HTTP server gives you bac
 
 ### inotify/FSEvents directly (vs Node `fs.watch`)
 
-`fs.watch` is portable but lossy — it coalesces events, behaves differently across platforms, and is the reason debounce and watcher-recovery are mandatory. Binding directly to `inotify` (Linux) or `FSEvents` (macOS) gives finer-grained, more reliable events at the cost of portability and a native dependency. Worth it only if you've measured `fs.watch` losing events under your load; for most harnesses the `fs.watch` + debounce + recovery stack is the pragmatic choice, and it's what `mom` ships.
+`fs.watch` is portable but lossy — it coalesces events, behaves differently across platforms, and is the reason debounce and watcher-recovery are mandatory. Binding directly to `inotify` (Linux) or `FSEvents` (macOS) gives finer-grained, more reliable events at the cost of portability and a native dependency. Worth it only if you've measured `fs.watch` losing events under your load; for most harnesses the `fs.watch` + debounce + recovery stack is the pragmatic choice, and it's what the studied file-event implementation ships.
 
 ### Polling the directory (vs watching it)
 

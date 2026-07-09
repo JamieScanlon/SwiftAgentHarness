@@ -35,7 +35,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
         maxRecentPerListedName: Int = 5,
         maxRecentUnlistedToolResults: Int = 5,
         toolCallNameResolutionContext: [Message] = [],
-        replacementMode: ToolResultPruneReplacementMode = .blankMarker
+        replacementMode: ToolResultPruneReplacementMode = .blankMarker,
+        toolNamesProtectedFromPruning: Set<String> = []
     ) -> [Message] {
         let toolCallIdToCall = buildToolCallIdToCall(
             resolutionContext: toolCallNameResolutionContext,
@@ -46,14 +47,16 @@ public enum ContextCompactionToolResultPruning: Sendable {
             toolNamesToPrune: toolNamesToPrune,
             maxKeep: max(0, maxRecentPerListedName),
             toolCallIdToCall: toolCallIdToCall,
-            replacementMode: replacementMode
+            replacementMode: replacementMode,
+            toolNamesProtectedFromPruning: toolNamesProtectedFromPruning
         )
         return applyUnlistedRecencyCap(
             messages: afterListed,
             toolNamesToPrune: toolNamesToPrune,
             maxKeep: max(0, maxRecentUnlistedToolResults),
             toolCallIdToCall: toolCallIdToCall,
-            replacementMode: replacementMode
+            replacementMode: replacementMode,
+            toolNamesProtectedFromPruning: toolNamesProtectedFromPruning
         )
     }
 
@@ -82,7 +85,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
         toolNamesToPrune: Set<String>,
         maxKeep: Int,
         toolCallIdToCall: [String: ToolCall],
-        replacementMode: ToolResultPruneReplacementMode
+        replacementMode: ToolResultPruneReplacementMode,
+        toolNamesProtectedFromPruning: Set<String>
     ) -> [Message] {
         guard !toolNamesToPrune.isEmpty else { return messages }
         var indicesByName: [String: [Int]] = [:]
@@ -90,7 +94,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
             guard m.content != Self.clearedToolResultContentPlaceholder,
                   let tid = m.toolCallId, !tid.isEmpty,
                   let name = toolCallIdToCall[tid]?.name,
-                  toolNamesToPrune.contains(name)
+                  toolNamesToPrune.contains(name),
+                  !isProtectedFromPruning(toolName: name, configuredProtectedNames: toolNamesProtectedFromPruning)
             else { continue }
             indicesByName[name, default: []].append(i)
         }
@@ -115,7 +120,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
         toolNamesToPrune: Set<String>,
         maxKeep: Int,
         toolCallIdToCall: [String: ToolCall],
-        replacementMode: ToolResultPruneReplacementMode
+        replacementMode: ToolResultPruneReplacementMode,
+        toolNamesProtectedFromPruning: Set<String>
     ) -> [Message] {
         let placeholder = Self.clearedToolResultContentPlaceholder
         var indices: [Int] = []
@@ -123,7 +129,8 @@ public enum ContextCompactionToolResultPruning: Sendable {
             guard m.content != placeholder,
                   let tid = m.toolCallId, !tid.isEmpty,
                   let name = toolCallIdToCall[tid]?.name,
-                  !toolNamesToPrune.contains(name)
+                  !toolNamesToPrune.contains(name),
+                  !isProtectedFromPruning(toolName: name, configuredProtectedNames: toolNamesProtectedFromPruning)
             else { continue }
             indices.append(i)
         }
@@ -173,6 +180,16 @@ public enum ContextCompactionToolResultPruning: Sendable {
             toolCalls: m.toolCalls,
             toolCallId: m.toolCallId,
             responseFormat: m.responseFormat
+        )
+    }
+
+    private static func isProtectedFromPruning(
+        toolName: String,
+        configuredProtectedNames: Set<String>
+    ) -> Bool {
+        ToolRegistryResultFormattingPolicy.isCompactionProtectedForPruning(
+            toolName: toolName,
+            configuredProtectedNames: configuredProtectedNames
         )
     }
 }

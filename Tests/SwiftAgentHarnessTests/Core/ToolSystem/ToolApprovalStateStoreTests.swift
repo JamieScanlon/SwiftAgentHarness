@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import Testing
 @testable import SwiftAgentHarness
@@ -17,30 +18,34 @@ struct ToolApprovalStateStoreTests {
         )
     }
 
+    private func binding(_ toolName: String, args: JSON = .object([:])) -> ToolCallApprovalBinding {
+        ToolCallApprovalBinding.from(toolName: toolName, arguments: args)
+    }
+
     @Test("waitForResolution resumes when approval is granted")
     func waitForResolutionResumesOnApprove() async throws {
         let store = ToolApprovalStateStore()
         let conversationID = UUID()
         let runID = UUID()
-        let toolName = "test_tool"
+        let callBinding = binding("test_tool")
         _ = await store.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             spec: makeSpec(timeoutMs: 60_000_000)
         )
         let waitTask = Task {
             try await store.waitForResolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             )
         }
         try await Task.sleep(nanoseconds: 20_000_000)
         await store.setResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             status: .approved,
             source: "test",
             reason: nil,
@@ -54,18 +59,18 @@ struct ToolApprovalStateStoreTests {
         let store = ToolApprovalStateStore()
         let conversationID = UUID()
         let runID = UUID()
-        let toolName = "cancel_tool"
+        let callBinding = binding("cancel_tool")
         _ = await store.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             spec: makeSpec(timeoutMs: 60_000_000)
         )
         let waitTask = Task {
             try await store.waitForResolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             )
         }
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -74,7 +79,7 @@ struct ToolApprovalStateStoreTests {
             if let resolved = await store.resolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             ), resolved.status == .denied {
                 #expect(resolved.reason == "denied-cancelled")
                 return
@@ -89,28 +94,31 @@ struct ToolApprovalStateStoreTests {
         let store = ToolApprovalStateStore()
         let conversationID = UUID()
         let runID = UUID()
-        let toolName = "no_timeout_tool"
+        let callBinding = binding("no_timeout_tool")
         _ = await store.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             spec: makeSpec(timeoutMs: nil)
         )
         let waitTask = Task {
             try await store.waitForResolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             )
         }
-        // Well past any finite default; must still be pending (no auto-resolve).
         try await Task.sleep(nanoseconds: 50_000_000)
-        let pending = await store.resolution(conversationID: conversationID, runID: runID, toolName: toolName)
+        let pending = await store.resolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: callBinding
+        )
         #expect(pending?.status == .pending)
         await store.setResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             status: .approved,
             source: "test",
             reason: nil,
@@ -124,18 +132,18 @@ struct ToolApprovalStateStoreTests {
         let store = ToolApprovalStateStore()
         let conversationID = UUID()
         let runID = UUID()
-        let toolName = "no_timeout_cancel_tool"
+        let callBinding = binding("no_timeout_cancel_tool")
         _ = await store.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             spec: makeSpec(timeoutMs: nil)
         )
         let waitTask = Task {
             try await store.waitForResolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             )
         }
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -144,7 +152,7 @@ struct ToolApprovalStateStoreTests {
             if let resolved = await store.resolution(
                 conversationID: conversationID,
                 runID: runID,
-                toolName: toolName
+                binding: callBinding
             ), resolved.status == .denied {
                 #expect(resolved.reason == "denied-cancelled")
                 return
@@ -162,17 +170,19 @@ struct ToolApprovalStateStoreTests {
         let conversationB = UUID()
         let runB = UUID()
         let past = Date().addingTimeInterval(-10)
+        let bindingA = binding("tool_a")
+        let bindingB = binding("tool_b")
         _ = await store.registerPendingApproval(
             conversationID: conversationA,
             runID: runA,
-            toolName: "tool_a",
+            binding: bindingA,
             requestedAt: past,
             spec: makeSpec(timeoutMs: 1000)
         )
         _ = await store.registerPendingApproval(
             conversationID: conversationB,
             runID: runB,
-            toolName: "tool_b",
+            binding: bindingB,
             requestedAt: past,
             spec: makeSpec(timeoutMs: 1000)
         )
@@ -189,7 +199,7 @@ struct ToolApprovalStateStoreTests {
         let resolutionA = await store.resolution(
             conversationID: conversationA,
             runID: runA,
-            toolName: "tool_a"
+            binding: bindingA
         )
         #expect(resolutionA?.status == .denied)
         #expect(resolutionA?.kind == .timeoutDefault)
@@ -197,7 +207,7 @@ struct ToolApprovalStateStoreTests {
         let resolutionB = await store.resolution(
             conversationID: conversationB,
             runID: runB,
-            toolName: "tool_b"
+            binding: bindingB
         )
         #expect(resolutionB?.status == .pending)
 
@@ -210,7 +220,7 @@ struct ToolApprovalStateStoreTests {
         let resolvedB = await store.resolution(
             conversationID: conversationB,
             runID: runB,
-            toolName: "tool_b"
+            binding: bindingB
         )
         #expect(resolvedB?.status == .denied)
         #expect(resolvedB?.kind == .timeoutDefault)
@@ -221,19 +231,100 @@ struct ToolApprovalStateStoreTests {
         let store = ToolApprovalStateStore()
         let conversationID = UUID()
         let runID = UUID()
-        let toolName = "finite_timeout_tool"
+        let callBinding = binding("finite_timeout_tool")
         _ = await store.registerPendingApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: callBinding,
             spec: makeSpec(timeoutMs: 20)
         )
         let resolution = try await store.waitForResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName
+            binding: callBinding
         )
         #expect(resolution.status == .denied)
         #expect(resolution.kind == .timeoutDefault)
+    }
+
+    @Test("two concurrent pendings for same tool with different args resolve independently")
+    func concurrentPendingsDifferentArgs() async throws {
+        let store = ToolApprovalStateStore()
+        let conversationID = UUID()
+        let runID = UUID()
+        let bindingA = binding("write_file", args: .object(["path": .string("/a")]))
+        let bindingB = binding("write_file", args: .object(["path": .string("/b")]))
+        _ = await store.registerPendingApproval(
+            conversationID: conversationID,
+            runID: runID,
+            binding: bindingA,
+            spec: makeSpec(timeoutMs: 60_000_000)
+        )
+        _ = await store.registerPendingApproval(
+            conversationID: conversationID,
+            runID: runID,
+            binding: bindingB,
+            spec: makeSpec(timeoutMs: 60_000_000)
+        )
+        await store.setResolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: bindingA,
+            status: .approved,
+            source: "test",
+            reason: nil,
+            kind: .manual
+        )
+        let resolvedA = await store.resolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: bindingA
+        )
+        let pendingB = await store.resolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: bindingB
+        )
+        #expect(resolvedA?.status == .approved)
+        #expect(pendingB?.status == .pending)
+    }
+
+    @Test("approvedCallBindings exports allow-once only; approvedToolNames exports allow-always only")
+    func approvedExportsSplitByDecision() async {
+        let store = ToolApprovalStateStore()
+        let conversationID = UUID()
+        let runID = UUID()
+        let onceBinding = binding("write_file", args: .object(["path": .string("/a")]))
+        let alwaysBinding = binding("delete_file", args: .object(["path": .string("/x")]))
+        await store.setResolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: onceBinding,
+            status: .approved,
+            source: "test",
+            kind: .manual,
+            decision: .allowOnce
+        )
+        await store.setResolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: alwaysBinding,
+            status: .approved,
+            source: "test",
+            kind: .manual,
+            decision: .allowAlways
+        )
+        let bindings = await store.approvedCallBindings(
+            conversationID: conversationID,
+            runID: runID
+        )
+        let names = await store.approvedToolNames(
+            conversationID: conversationID,
+            runID: runID
+        )
+        #expect(bindings.contains(onceBinding))
+        #expect(bindings.contains(alwaysBinding) == false)
+        #expect(names.contains("delete_file"))
+        #expect(names.contains("write_file") == false)
     }
 }

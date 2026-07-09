@@ -572,7 +572,9 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     function: LMStudioFunction(
                         name: tool.name,
                         description: tool.description,
-                        parameters: tool.toLMStudioParameters()
+                        parameters: tool.toLMStudioParameters(
+                            parameterSchema: config.toolParameterSchemasByName[tool.name]
+                        )
                     )
                 )
             }
@@ -1043,7 +1045,33 @@ private struct LMStudioUsage: Codable {
 // MARK: - Extension for ToolDefinition
 
 extension ToolDefinition {
-    fileprivate func toLMStudioParameters() -> LMStudioParameters {
+    fileprivate func toLMStudioParameters(parameterSchema: JSON? = nil) -> LMStudioParameters {
+        if let parameterSchema,
+           case .object(let root) = parameterSchema,
+           case .object(let props) = root["properties"] ?? .object([:]) {
+            var properties: [String: LMStudioProperty] = [:]
+            for (name, value) in props {
+                guard case .object(let field) = value else { continue }
+                let type: String
+                if case .string(let typeString) = field["type"] {
+                    type = typeString
+                } else {
+                    type = "string"
+                }
+                let description: String
+                if case .string(let descriptionString) = field["description"] {
+                    description = descriptionString
+                } else {
+                    description = ""
+                }
+                properties[name] = LMStudioProperty(type: type, description: description)
+            }
+            let required = (root["required"] ?? .array([])).arrayElements.compactMap { value in
+                if case .string(let name) = value { return name }
+                return nil
+            }
+            return LMStudioParameters(type: "object", properties: properties, required: required)
+        }
         var properties: [String: LMStudioProperty] = [:]
         var required: [String] = []
         
@@ -1062,5 +1090,12 @@ extension ToolDefinition {
             properties: properties,
             required: required
         )
+    }
+}
+
+private extension JSON {
+    var arrayElements: [JSON] {
+        if case .array(let values) = self { return values }
+        return []
     }
 }

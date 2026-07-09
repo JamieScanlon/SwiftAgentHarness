@@ -12,7 +12,35 @@ This folder implements the harness **Tool System** spec. Model-driven tool visib
 - **`ToolRegistryEntry`** is the typed registry row used by the gateway (tool definition + source + effect/parallel/policy metadata + explicit execution-environment descriptor + normalized schema summary/fingerprint/version fields for API/WS contracts).
 - Execution environment contract: each entry resolves deterministic `executionEnvironment` (`kind`, `adapterID`, `isolationLevel`) from canonical descriptor projection, then runs through one adapter seam (`ToolExecutionEnvironmentAdapting`) before gateway/policy consumers read it.
 - Canonicalization invariant: `ToolRegistryEntry(descriptor:)` is a pure projection; Tool System no longer applies name-based fallback metadata inference or app-layer descriptor reconstruction from raw `ToolDefinition`.
-- Parallel dispatch matrix invariant: host parallel execution is enabled only when every effective entry is `readOnly + parallelizable`; any mutating/serial/unknown metadata keeps dispatch conservative.
+- Parallel dispatch matrix invariant: host parallel execution is enabled when `toolPolicy.parallelDispatchEnabled` is true and no effective entry has unknown static capability metadata; per-call `parallelSafety(for:)` predicates (via `ToolCallCapabilityClassifier` for polymorphic tools like `bash` and `process`) drive `mixedDeterministic` batch planning in SwiftAgentKit. Static registration metadata remains fail-closed for polymorphic tools; call-time classification determines read fan-out and call-level approval severity.
+
+### Production gate (X2 batch parallelism)
+
+Batch-level parallelism is **opt-in**. Defaults remain conservative:
+
+- `toolPolicy.dispatch.parallelEnabled` defaults to **`false`**
+- `toolPolicy.dispatch.plannerMode` defaults to **unset** (`nil` → serial unless parallel is enabled, in which case the gateway defaults planner to `mixedDeterministic`)
+
+When enabling in PromptConfig:
+
+```json
+"toolPolicy": {
+  "dispatch": {
+    "parallelEnabled": true,
+    "plannerMode": "mixedDeterministic"
+  }
+}
+```
+
+`TurnLoop` routes multi-tool turns through Kit `invokeTools` with the per-turn `dispatchContract` (`parallelToolDispatchEnabled` + `plannerMode`). Approval-gated, deny-gated, or sub-agent delegate calls force **serial fallback** for that batch.
+
+**Supported planner modes for hosts:** `serial` and `mixedDeterministic` (partition semantics — order-preserving groups of contiguous concurrency-safe calls). `allParallel` is **deprecated and ignored**: it still parses from PromptConfig for backward compatibility but is always remapped to `mixedDeterministic` at the harness dispatch boundary with a structured warning. No model-turn batch reaches Kit with `plannerMode: allParallel`. See [parallel-execution.md](../../../../harness-template/core/tool-system/parallel-execution.md) for floor vs partition semantics.
+
+## Description change control (S4)
+
+Tool `description` strings are **behavioral surface**, not documentation polish. They are sent to the model in the tool block and can change tool-selection behavior with no test failure. Treat edits like system-prompt changes: review for scope, safety, and confusion with sibling tools. MCP/A2A descriptions are third-party passthrough unless the harness explicitly overrides them.
+
+Process: [docs/process/tool-description-change-control.md](../../../../docs/process/tool-description-change-control.md) (author/reviewer checklists, changelog rule, file inventory).
 
 ## Boundary: SwiftAgentKit vs harness
 
@@ -71,7 +99,11 @@ At boot, the host app typically:
 - Correlation contract for tool lifecycle fanout is normalized across topic + trace + derived audit sinks (`runID`, `toolName`, `toolCallID`, optional `delegateHandleID` / `completionAnnounceID`) so operational joins are deterministic across model, slash, and pending-completion surfaces.
 - Model turns build one authoritative per-turn Tool System snapshot (availability decisions + advertised tool set + dispatch contract from fully-allowed entries) and install a live pre-dispatch evaluator at orchestrator bootstrap.
 - `ToolResultFormattingStack` applies stage-aware shaping with one canonical policy source: character + byte caps, metadata byte caps, deterministic metadata placeholders, and runtime/persistence/compaction-specific image/marker behavior.
-- Inline image payload sanitization applies consistently to both result content and structured metadata before runtime delivery, persistence, and compaction summarization stages.
+- **Oversized tool results (R1):** when `toolResultFormatting.spillEnabled` and on-disk session store are present, runtime delivery **spills** full output to `agents/<agentId>/sessions/<conversationId>/tool-results/<toolCallId>.txt` and returns a bounded preview envelope (~2KB) plus recoverable path. `read_file` allowlists the conversation spill directory. Lossy `[tool result truncated]` markers are fallback only when spill is disabled or unavailable. `read_file` / `glob` / `grep` are **spill-exempt**.
+- **Exact-content observations (R2):** registry entries tagged `exact-content-observation` bypass lossy line/char/byte and metadata trim at **runtime + persistence** only (`read_file`, `activate_skill`, `get_plan`, `ask_user`, sub-agent delegates). `read_file` self-bounds via optional `offset`/`limit` (256KB cap per call). **Compaction-protected** entries (sub-agent delegates) are never cleared by compaction hygiene; re-derivable reads stay compactable.
+- Inline image payload handling is **vision-gated**: vision-capable conversations run canonicalize → magic-byte MIME inference → resize/recompress at **runtime + persistence**; text-only conversations strip inline `data:image/...;base64,...` payloads to placeholders. **Compaction** formatting always strips to compaction placeholders regardless of vision. Caps default to ~1200px / ~5MB (`maxInlineImagePixelDimension`, `maxInlineImageBytes`). Failures degrade to `[inline image payload omitted: <reason>]` without failing the tool call.
+- **Truncation markers (R4):** runtime/persistence line trim may include a dropped-line count (deterministic per input); compaction formatting uses **strictly constant** markers for line/char/byte/metadata trims (`compactionTruncationMarker`, `compactionMetadataPlaceholder`, etc.) to preserve prompt-cache prefix stability. History aging via `ContextCompactionToolResultPruning` uses a separate fixed `[Old tool result content cleared]` marker.
+- **Tool-use summary floor:** after each loop iteration with completed tools, runtime publishes `tool.usageSummary` on the lifecycle stream with a deterministic template label (`Ran {tool} ×{count}, …`). Display/audit only — not transcript content, not model context, non-load-bearing. Cheap-model labeler deferred until a mobile/SDK surface needs intent-aware labels.
 - Compaction path keeps deterministic recency behavior through existing pruning/hygiene policy while using explicit compaction-stage placeholders for older payload/image content, and cache-aware TTL pruning preserves assistant/tool rows to avoid breaking tool-pair integrity.
 
 ## Tool list ordering (discovery)

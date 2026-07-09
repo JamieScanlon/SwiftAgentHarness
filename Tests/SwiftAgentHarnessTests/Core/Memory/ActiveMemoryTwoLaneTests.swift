@@ -345,7 +345,7 @@ struct TurnLoopRecallNonFatalTests {
                 resolveCallCount.withLock { $0 += 1 }
                 return conv.model.id
             },
-            streamLLM: { messages, _, _, _, _ in
+            streamLLM: { messages, _, _, _, _, _, _ in
                 await capture.record(messages)
                 return AsyncThrowingStream { continuation in
                     continuation.yield(.complete(LLMResponse(content: "done", toolCalls: [])))

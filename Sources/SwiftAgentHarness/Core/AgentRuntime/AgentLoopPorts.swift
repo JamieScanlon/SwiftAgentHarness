@@ -47,6 +47,8 @@ protocol RuntimeModelPort: Sendable {
         orchestrator: SwiftAgentKitOrchestrator,
         handle: ResolvedModelHandle,
         tools: [ToolDefinition],
+        toolParameterSchemasByName: [String: JSON],
+        toolSchemaStrictByName: [String: Bool],
         toolChoice: RuntimeToolChoicePosture,
         temperatureOverride: Double?
     ) async -> AsyncThrowingStream<ModelStreamEvent, Error>
@@ -91,9 +93,21 @@ protocol RuntimeToolPort: Sendable {
         runtimePolicy: ModeProfileRuntimeSlice,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async -> ToolDispatchOutcome
+    /// Dispatches an ordered batch via Kit `invokeTools` when eligible; otherwise falls back to per-call `dispatch`.
+    func dispatchBatch(
+        _ calls: [ToolCallRequest],
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        iteration: Int,
+        modelID: UUID,
+        runtimePolicy: ModeProfileRuntimeSlice,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter
+    ) async -> [ToolDispatchOutcome]
     func handleDispatchApprovalRequired(
-        toolName: String,
-        toolCallID: String?,
+        call: ToolCallRequest,
         snapshot: RuntimeToolTurnPolicySnapshot,
         conversationID: UUID,
         runID: UUID?,

@@ -105,7 +105,7 @@ struct ModeRegistryModesTemplateTests {
         #expect(agent.tools.allow?.contains("think") == true)
         #expect(agent.tools.allow?.contains("finish") == true)
         #expect(agent.tools.allow?.contains("ask_user") == true)
-        #expect(agent.tools.allow?.contains("Coding Agent") == true)
+        #expect(ToolNamePolicyNormalization.listContains(agent.tools.allow ?? [], name: "Coding Agent"))
     }
 
     @Test("built-in mode profiles seed canonical runtime slices")

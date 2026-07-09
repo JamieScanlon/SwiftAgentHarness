@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 import SwiftAgentKitOrchestrator
@@ -64,22 +65,28 @@ extension AgentRuntimeSessionService {
     func approvalContractSpec(
         toolName: String,
         route: ToolApprovalRoute,
-        isElevated: Bool
+        isElevated: Bool,
+        arguments: JSON? = nil
     ) async -> ToolApprovalContractSpec {
-        toolApproval.approvalContractSpec(toolName: toolName, route: route, isElevated: isElevated)
+        toolApproval.approvalContractSpec(
+            toolName: toolName,
+            route: route,
+            isElevated: isElevated,
+            arguments: arguments
+        )
     }
 
     func registerPendingToolApproval(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        call: ToolCallRequest,
         route: ToolApprovalRoute,
         isElevated: Bool
     ) async -> Bool {
         await toolApproval.registerPendingToolApproval(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            call: call,
             route: route,
             isElevated: isElevated,
             requestedAt: Date()
@@ -89,13 +96,13 @@ extension AgentRuntimeSessionService {
     func waitForToolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute
     ) async throws -> ToolApprovalResolution {
         try await toolApproval.waitForToolApprovalResolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
     }
@@ -354,14 +361,15 @@ extension AgentRuntimeSessionService {
                 _ = await self.registerPendingToolApproval(
                     conversationID: conversationID,
                     runID: runID,
-                    toolName: toolName,
+                    call: call,
                     route: route,
                     isElevated: isElevated
                 )
                 let spec = await self.approvalContractSpec(
                     toolName: toolName,
                     route: route,
-                    isElevated: isElevated
+                    isElevated: isElevated,
+                    arguments: call.arguments
                 )
                 await lifecycleEmitter.emit(
                     .toolApprovalRequired(
@@ -384,12 +392,13 @@ extension AgentRuntimeSessionService {
                     conversationID: conversationID,
                     runID: runID
                 )
+                let binding = ToolCallApprovalBinding.from(call: call)
                 let resolution: ToolApprovalResolution
                 do {
                     resolution = try await self.waitForToolApprovalResolution(
                         conversationID: conversationID,
                         runID: runID,
-                        toolName: toolName,
+                        binding: binding,
                         route: route
                     )
                 } catch {
@@ -479,21 +488,41 @@ extension AgentRuntimeSessionService {
                     )
                 }
             },
-            dispatchApprovalFn: { [self] toolName, toolCallID, snapshot, conversationID, runID, iteration, modelID, lifecycleEmitter in
+            dispatchBatchFn: { [self] calls, conversationID, runID, orchestrator, snapshot, configuration, _, _, _, _ in
+                let conversation = await self.runtimeConversation(id: conversationID)
+                return await AgentLoopToolDispatch.dispatchBatch(
+                    calls: calls,
+                    conversationID: conversationID,
+                    runID: runID,
+                    orchestrator: orchestrator,
+                    snapshot: snapshot,
+                    configuration: configuration,
+                    conversation: conversation,
+                    gateway: DefaultToolSystemGateway(),
+                    parentLookup: { [deps = self.deps] id in
+                        await deps.persistenceDomain.modelConversation(id: id)
+                    },
+                    spawnService: self.subAgentSpawnServiceForRuntime()
+                )
+            },
+            dispatchApprovalFn: { [self] call, snapshot, conversationID, runID, iteration, modelID, lifecycleEmitter in
+                let toolName = call.name
+                let toolCallID = call.id
                 let evaluation = snapshot.availabilitySnapshots.first(where: { $0.entry.name == toolName })
                 let route = evaluation?.decision.approvalRoute ?? .user
                 let isElevated = evaluation?.decision.isElevated ?? false
                 _ = await self.registerPendingToolApproval(
                     conversationID: conversationID,
                     runID: runID,
-                    toolName: toolName,
+                    call: call,
                     route: route,
                     isElevated: isElevated
                 )
                 let spec = await self.approvalContractSpec(
                     toolName: toolName,
                     route: route,
-                    isElevated: isElevated
+                    isElevated: isElevated,
+                    arguments: call.arguments
                 )
                 await lifecycleEmitter.emit(
                     .toolApprovalRequired(

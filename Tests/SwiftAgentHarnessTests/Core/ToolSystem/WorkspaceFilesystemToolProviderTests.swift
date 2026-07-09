@@ -113,6 +113,48 @@ struct WorkspaceFilesystemToolProviderTests {
         return ToolCall(name: WorkspaceFilesystemToolProvider.bashToolName, arguments: .object(args), id: id)
     }
 
+    private func callWithJSON(_ name: String, args: [String: JSON], id: String = "call-1") -> ToolCall {
+        ToolCall(name: name, arguments: .object(args), id: id)
+    }
+
+    @Test("read_file rejects oversized file without offset and limit")
+    func readFileRejectsOversizedWithoutWindow() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let big = String(repeating: "x", count: ReadFileWindowing.maxReadBytes + 1)
+        try big.write(
+            to: fixture.workspace.appendingPathComponent("big.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = try await provider(workspace: fixture.workspace, memory: fixture.memory)
+            .executeTool(call(WorkspaceFilesystemToolProvider.readFileToolName, args: ["file_path": "big.txt"]))
+        #expect(result.success == false)
+        #expect(result.error?.contains("offset") == true)
+    }
+
+    @Test("read_file offset and limit return a bounded window")
+    func readFileOffsetLimitWindow() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        try "line1\nline2\nline3\nline4".write(
+            to: fixture.workspace.appendingPathComponent("lines.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = try await provider(workspace: fixture.workspace, memory: fixture.memory)
+            .executeTool(callWithJSON(
+                WorkspaceFilesystemToolProvider.readFileToolName,
+                args: [
+                    "file_path": .string("lines.txt"),
+                    "offset": .integer(2),
+                    "limit": .integer(2),
+                ]
+            ))
+        #expect(result.success == true)
+        #expect(result.content == "line2\nline3")
+    }
+
     @Test("read_file rejects absolute path outside workspace")
     func readFileRejectsOutside() async throws {
         let fixture = try makeFixture()
@@ -380,6 +422,46 @@ struct WorkspaceFilesystemToolProviderTests {
         #expect(hits[1].contains("b.txt:1:beta match"))
     }
     #endif
+
+    @Test("bash parallelSafety is input-dependent")
+    func bashParallelSafetyInputDependent() async {
+        let provider = provider(
+            workspace: URL(fileURLWithPath: "/tmp/ws"),
+            memory: URL(fileURLWithPath: "/tmp/mem")
+        )
+        let ls = ToolCall(
+            name: WorkspaceFilesystemToolProvider.bashToolName,
+            arguments: .object(["command": .string("ls")]),
+            id: "1"
+        )
+        let rm = ToolCall(
+            name: WorkspaceFilesystemToolProvider.bashToolName,
+            arguments: .object(["command": .string("rm x")]),
+            id: "2"
+        )
+        #expect(await provider.parallelSafety(for: ls) == .parallelSafe)
+        #expect(await provider.parallelSafety(for: rm) == .mutating)
+    }
+
+    @Test("process parallelSafety treats poll as parallel-safe")
+    func processParallelSafetyPoll() async {
+        let provider = provider(
+            workspace: URL(fileURLWithPath: "/tmp/ws"),
+            memory: URL(fileURLWithPath: "/tmp/mem")
+        )
+        let poll = ToolCall(
+            name: WorkspaceFilesystemToolProvider.processToolName,
+            arguments: .object(["task_id": .string("t1"), "action": .string("poll")]),
+            id: "1"
+        )
+        let kill = ToolCall(
+            name: WorkspaceFilesystemToolProvider.processToolName,
+            arguments: .object(["task_id": .string("t1"), "action": .string("kill")]),
+            id: "2"
+        )
+        #expect(await provider.parallelSafety(for: poll) == .parallelSafe)
+        #expect(await provider.parallelSafety(for: kill) == .mutating)
+    }
 
     @Test("bash is tagged mutating in descriptor hints")
     func bashIsMutating() async {

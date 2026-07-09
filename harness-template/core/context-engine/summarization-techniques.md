@@ -134,7 +134,7 @@ Three summarization use-cases from the harnesses are covered elsewhere because t
 
 - **Away summary** — a 1-3 sentence recap for users returning to a session. Covered under [Interface](../../surfaces/interface/README.md).
 - **Agent progress summary** — a 3-5 word background label generated every ~30s for coordinator-mode sub-agents. Covered under [Agent Orchestration](../sub-agent-pool/agent-orchestration.md).
-- **Tool-use summary** — a ~30-character batch label generated after each tool group for SDK clients. Covered under [Tool System](../tool-system/README.md).
+- **Tool-use summary** — a ~30-character batch label generated after each tool group for SDK clients. Covered under [Tool System](../tool-system/tool-use-summaries.md).
 
 All three are separate LLM call sites with their own prompts, their own model selection, and no shared code path with compaction. The architectural lesson is that summarization requirements diverge enough by use case (token budget, output shape, latency sensitivity, model choice) that a shared abstraction rarely makes sense — each use case earns its own implementation.
 
