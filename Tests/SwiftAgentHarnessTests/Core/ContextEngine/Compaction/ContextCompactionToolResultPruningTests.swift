@@ -789,4 +789,74 @@ struct ContextCompactionToolResultPruningTests {
         #expect(messages.filter { $0.role == .tool }.map(\.content) == originalToolContents)
         #expect(messages.allSatisfy { $0.role != .tool || $0.content == String(repeating: "Z", count: 100) })
     }
+
+    @Test("read_file listed for pruning is still cleared when aged")
+    func readFileStillCompactable() {
+        var messages: [Message] = []
+        for i in 0..<4 {
+            let tid = "rf-\(i)"
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .assistant,
+                    content: "a",
+                    timestamp: Date(),
+                    toolCalls: [ToolCall(name: "read_file", arguments: .object([:]), id: tid)]
+                )
+            )
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .tool,
+                    content: "FILE-\(i)",
+                    timestamp: Date(),
+                    toolCalls: [],
+                    toolCallId: tid
+                )
+            )
+        }
+        let out = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["read_file"],
+            maxRecentPerListedName: 1
+        )
+        let ph = ContextCompactionToolResultPruning.clearedToolResultContentPlaceholder
+        let toolContents = out.filter { $0.role == .tool }.map(\.content)
+        #expect(toolContents == [ph, ph, ph, "FILE-3"])
+    }
+
+    @Test("delegate tools are never cleared by compaction hygiene")
+    func delegateToolsProtectedFromPruning() {
+        var messages: [Message] = []
+        for i in 0..<4 {
+            let tid = "dg-\(i)"
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .assistant,
+                    content: "a",
+                    timestamp: Date(),
+                    toolCalls: [ToolCall(name: "delegate_worker", arguments: .object([:]), id: tid)]
+                )
+            )
+            messages.append(
+                Message(
+                    id: UUID(),
+                    role: .tool,
+                    content: "WORK-\(i)",
+                    timestamp: Date(),
+                    toolCalls: [],
+                    toolCallId: tid
+                )
+            )
+        }
+        let out = ContextCompactionToolResultPruning.applyingToolResultContentPruningForCompactionLLM(
+            messages: messages,
+            toolNamesToPrune: ["delegate_worker"],
+            maxRecentPerListedName: 0,
+            maxRecentUnlistedToolResults: 0
+        )
+        let toolContents = out.filter { $0.role == .tool }.map(\.content)
+        #expect(toolContents == ["WORK-0", "WORK-1", "WORK-2", "WORK-3"])
+    }
 }

@@ -66,6 +66,11 @@ public struct AgentPlanToolProvider: ToolProvider, ToolDescriptorHinting {
         )
     }
 
+    public func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
+        guard definition.name == Self.getPlanToolName else { return [] }
+        return [ToolRegistryResultFormattingPolicy.exactContentObservationPolicyTag()]
+    }
+
     public func availableTools() async -> [ToolDefinition] {
         let tasksParamDescription =
             "JSON array of objects: [{\"id\":\"<uuid>\",\"description\":\"<string>\",\"status\":\"not-started|in-progress|complete|blocked\"}, ...]"

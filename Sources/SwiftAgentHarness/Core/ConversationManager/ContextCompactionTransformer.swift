@@ -899,7 +899,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
                 maxRecentPerListedName: config.maxRecentPerNameToolResults,
                 maxRecentUnlistedToolResults: config.maxRecentToolResults,
                 toolCallNameResolutionContext: toolCallNameResolutionContext,
-                replacementMode: config.toolResultPruneReplacementMode
+                replacementMode: config.toolResultPruneReplacementMode,
+                toolNamesProtectedFromPruning: input.compactionProtectedToolNames
             )
     }
 

@@ -68,6 +68,11 @@ public struct TerminationToolProvider: ToolProvider, ToolDescriptorHinting {
         ]
     }
 
+    public func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
+        guard definition.name == Self.askUserToolName else { return [] }
+        return [ToolRegistryResultFormattingPolicy.exactContentObservationPolicyTag()]
+    }
+
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         switch toolCall.name {
         case Self.finishToolName:

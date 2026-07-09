@@ -109,9 +109,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         [
             ToolDefinition(
                 name: Self.readFileToolName,
-                description: "Read a file from the workspace.",
+                description: "Read a file from the workspace. Returns at most 256KB per call; use offset (1-based line) and limit (max lines) to read larger files in windows.",
                 parameters: [
                     .init(name: "file_path", description: "Absolute or workspace-relative path", type: "string", required: true),
+                    .init(name: "offset", description: "Optional 1-based line number to start reading from", type: "integer", required: false),
+                    .init(name: "limit", description: "Optional maximum number of lines to return", type: "integer", required: false),
                 ],
                 type: .function
             ),
@@ -184,6 +186,9 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     }
 
     public func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
+        if definition.name == Self.readFileToolName {
+            return [ToolRegistryResultFormattingPolicy.exactContentObservationPolicyTag()]
+        }
         guard definition.name == Self.bashToolName else { return [] }
         return [ToolPolicyTag(rawValue: Self.bashSandboxAdapterTag)]
     }
@@ -234,20 +239,56 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private func readFile(_ toolCall: ToolCall) async -> ToolResult {
         do {
             let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
-            if let spillContent = try readAllowlistedSpillFile(raw: raw) {
+            let offsetLine = extractInt(from: toolCall.arguments, key: "offset")
+            let limitLines = extractInt(from: toolCall.arguments, key: "limit")
+            if let spillContent = try readAllowlistedSpillFile(
+                raw: raw,
+                offsetLine: offsetLine,
+                limitLines: limitLines
+            ) {
                 return ok(toolCall, spillContent)
             }
             let bridge = try await execRuntime.fsBridge(context: runtimeContext)
             _ = try resolveToolPath(raw: raw, requireExists: true)
             let data = try await bridge.readFile(path: raw)
-            let content = String(data: data, encoding: .utf8) ?? ""
-            return ok(toolCall, content)
+            let fullContent = String(data: data, encoding: .utf8) ?? ""
+            return formatReadFileContent(
+                toolCall: toolCall,
+                fullContent: fullContent,
+                offsetLine: offsetLine,
+                limitLines: limitLines
+            )
         } catch {
             return err(toolCall, pathErrorMessage(error))
         }
     }
 
-    private func readAllowlistedSpillFile(raw: String) throws -> String? {
+    private func formatReadFileContent(
+        toolCall: ToolCall,
+        fullContent: String,
+        offsetLine: Int?,
+        limitLines: Int?
+    ) -> ToolResult {
+        if ReadFileWindowing.requiresWindowing(
+            content: fullContent,
+            offsetLine: offsetLine,
+            limitLines: limitLines
+        ) {
+            return err(toolCall, ReadFileWindowing.exceedsCapGuidance)
+        }
+        let content = ReadFileWindowing.sliceLines(
+            content: fullContent,
+            offsetLine: offsetLine,
+            limitLines: limitLines
+        )
+        return ok(toolCall, content)
+    }
+
+    private func readAllowlistedSpillFile(
+        raw: String,
+        offsetLine: Int?,
+        limitLines: Int?
+    ) throws -> String? {
         guard let sessionStoreRoot,
               let conversationID else {
             return nil
@@ -260,7 +301,19 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         }
         let url = URL(fileURLWithPath: trimmed, isDirectory: false).standardizedFileURL
         let data = try Data(contentsOf: url)
-        return String(data: data, encoding: .utf8) ?? ""
+        let fullContent = String(data: data, encoding: .utf8) ?? ""
+        if ReadFileWindowing.requiresWindowing(
+            content: fullContent,
+            offsetLine: offsetLine,
+            limitLines: limitLines
+        ) {
+            throw WorkspaceFilesystemError.readWindowRequired(ReadFileWindowing.exceedsCapGuidance)
+        }
+        return ReadFileWindowing.sliceLines(
+            content: fullContent,
+            offsetLine: offsetLine,
+            limitLines: limitLines
+        )
     }
 
     private func writeFile(_ toolCall: ToolCall) async -> ToolResult {
@@ -543,6 +596,18 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         return nil
     }
 
+    private func extractInt(from arguments: JSON, key: String) -> Int? {
+        guard case .object(let dict) = arguments, let value = dict[key] else { return nil }
+        switch value {
+        case .integer(let i):
+            return i
+        case .string(let s):
+            return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
     private func notifyMemoryWrite(_ path: String) async {
         guard let memoryDirectory = runtimeContext.memoryDirectory,
               AgentMemoryPathResolver.isPathInsideMemoryDirectory(path, memoryDirectory: URL(fileURLWithPath: memoryDirectory)) else {
@@ -565,6 +630,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             return "Invalid path"
         case WorkspaceFilesystemError.notFound(let path):
             return "File not found: \(path)"
+        case WorkspaceFilesystemError.readWindowRequired(let message):
+            return message
         case SandboxBackendError.pathEscapes:
             return "Path escapes workspace boundary"
         default:

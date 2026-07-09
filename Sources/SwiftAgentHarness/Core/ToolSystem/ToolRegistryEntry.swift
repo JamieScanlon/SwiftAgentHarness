@@ -28,6 +28,8 @@ struct ToolRegistryEntry: Sendable {
         case sensitive
         case requiresApproval
         case elevated
+        case exactContentObservation = "exact-content-observation"
+        case compactionProtected = "compaction-protected"
     }
 
     enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable {
@@ -104,7 +106,6 @@ struct ToolRegistryEntry: Sendable {
         self.transportKind = transportKind
         self.effectClass = effectClass
         self.parallelHint = parallelHint
-        self.policyTags = policyTags
         self.groupPolicyTags = groupPolicyTags
         self.haltsLoop = haltsLoop ?? Self.defaultHaltsLoop(for: definition.name)
         self.executionEnvironment = executionEnvironment
@@ -118,6 +119,12 @@ struct ToolRegistryEntry: Sendable {
         self.aliases = Self.normalizedAliases(aliases ?? ToolBuiltinAliases.aliases(forCanonicalName: definition.name))
         self.maxResultSizeBeforeSpill = maxResultSizeBeforeSpill
         self.spillExempt = spillExempt ?? ToolRegistrySpillPolicy.isSpillExempt(toolName: definition.name)
+        self.policyTags = Self.augmentedPolicyTags(
+            policyTags,
+            definition: definition,
+            transportKind: transportKind,
+            source: source
+        )
     }
 
     init(
@@ -206,9 +213,15 @@ struct ToolRegistryEntry: Sendable {
         case .unknown:
             parallelHint = .unknown
         }
-        let policyTags = Set(descriptor.policyTags.compactMap { tag in
+        var policyTags = Set(descriptor.policyTags.compactMap { tag in
             PolicyTag(rawValue: tag.rawValue)
         })
+        policyTags = Self.augmentedPolicyTags(
+            policyTags,
+            definition: descriptor.definition,
+            transportKind: transportKind,
+            source: source
+        )
         let groupPolicyTags = Set(
             descriptor.policyTags
                 .map(\.rawValue)
@@ -279,6 +292,26 @@ struct ToolRegistryEntry: Sendable {
             guard !normalized.isEmpty, seen.insert(normalized).inserted else { return nil }
             return normalized
         }
+    }
+
+    private static func augmentedPolicyTags(
+        _ policyTags: Set<PolicyTag>,
+        definition: ToolDefinition,
+        transportKind: TransportKind,
+        source: ToolListingSource
+    ) -> Set<PolicyTag> {
+        var resolved = policyTags
+        if transportKind == .a2a || source == .a2a || definition.type == .a2aAgent {
+            resolved.insert(.exactContentObservation)
+            resolved.insert(.compactionProtected)
+        } else if transportKind == .acp || definition.type == .acpAgent {
+            resolved.insert(.exactContentObservation)
+            resolved.insert(.compactionProtected)
+        } else if ToolRegistryResultFormattingPolicy.isDelegateToolName(definition.name) {
+            resolved.insert(.exactContentObservation)
+            resolved.insert(.compactionProtected)
+        }
+        return resolved
     }
 
     var availableToolInfo: AvailableToolInfo {

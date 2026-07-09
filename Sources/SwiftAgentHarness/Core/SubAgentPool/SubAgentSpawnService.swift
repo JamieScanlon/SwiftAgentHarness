@@ -1141,7 +1141,9 @@ public actor SubAgentSpawnService {
                 await applySubAgentDelegateEvent(terminal)
                 switch terminal.phase {
                 case .done:
-                    let content = terminal.completionSource ?? "Delegate completed."
+                    let content = SubAgentDelegateResultBounds.boundContent(
+                        terminal.completionSource ?? "Delegate completed."
+                    )
                     return .completed(
                         AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: content)
                     )

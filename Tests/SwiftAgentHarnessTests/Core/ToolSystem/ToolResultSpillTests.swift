@@ -114,7 +114,8 @@ struct ToolResultSpillTests {
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local,
-            effectClass: .readOnly
+            effectClass: .readOnly,
+            policyTags: [.exactContentObservation]
         )
         let content = String(repeating: "z", count: 500)
         let result = ToolResult(success: true, content: content, metadata: .object([:]), toolCallId: "call-read")
@@ -130,7 +131,8 @@ struct ToolResultSpillTests {
             spillContext: spillContext(conversationID: conversationID, persistence: harness, entry: entry)
         )
         #expect(!output.content.contains(ToolResultSpillEnvelope.marker))
-        #expect(output.content.contains("[tool result truncated]"))
+        #expect(output.content == content)
+        #expect(!output.content.contains("[tool result truncated]"))
     }
 
     @Test("read_file can recover spilled output path")

@@ -708,11 +708,14 @@ actor SubAgentCompletionHandoffOwner: SubAgentCompletionHandoffOwning {
         deliveredHandleIDs.insert(completion.handleID)
 
         let content: String = {
+            let raw: String
             if completion.result.success {
-                return completion.result.content
+                raw = completion.result.content
+            } else {
+                let base = completion.result.error ?? "Tool execution failed"
+                raw = "\(base) Please try another tool or approach."
             }
-            let base = completion.result.error ?? "Tool execution failed"
-            return "\(base) Please try another tool or approach."
+            return SubAgentDelegateResultBounds.boundContent(raw)
         }()
         let toolMessage = Message(
             id: UUID(),

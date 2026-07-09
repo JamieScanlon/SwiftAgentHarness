@@ -31,8 +31,21 @@ enum ToolResultFormattingStack {
             configuration: configuration,
             spillContext: spillContext
         )
-        var working = spillOutcome.result
-        let skipLossyTrim = spillOutcome.spilled || ToolResultSpillEnvelope.isSpillEnvelope(working.content)
+        let working = spillOutcome.result
+        let entry = spillContext?.entry
+        let toolName = spillContext?.toolName ?? entry?.name ?? ""
+        let skipLossyTrim = spillOutcome.spilled
+            || ToolResultSpillEnvelope.isSpillEnvelope(working.content)
+            || ToolRegistryResultFormattingPolicy.skipsLossyContentTrim(
+                entry: entry,
+                toolName: toolName,
+                stage: stage
+            )
+        let skipMetadataTrim = ToolRegistryResultFormattingPolicy.skipsMetadataTrim(
+            entry: entry,
+            toolName: toolName,
+            stage: stage
+        )
         let stagePolicy = stagePolicy(for: stage, configuration: configuration)
         var content = working.content
         var metadata = working.metadata
@@ -43,8 +56,8 @@ enum ToolResultFormattingStack {
                 placeholder: stagePolicy.imagePayloadPlaceholder
             )
         }
-        content = trimToLineLimit(content, maxLines: configuration.maxLines)
         if !skipLossyTrim {
+            content = trimToLineLimit(content, maxLines: configuration.maxLines)
             content = trimToCharacterLimit(
                 content,
                 maxCharacters: stagePolicy.maxCharacters,
@@ -56,12 +69,14 @@ enum ToolResultFormattingStack {
                 marker: stagePolicy.truncationMarker
             )
         }
-        metadata = trimMetadataToByteLimit(
-            metadata,
-            maxBytes: stagePolicy.maxMetadataBytes,
-            placeholder: stagePolicy.metadataPlaceholder,
-            stage: stage
-        )
+        if !skipMetadataTrim {
+            metadata = trimMetadataToByteLimit(
+                metadata,
+                maxBytes: stagePolicy.maxMetadataBytes,
+                placeholder: stagePolicy.metadataPlaceholder,
+                stage: stage
+            )
+        }
         let metadataChanged = !jsonEqual(lhs: metadata, rhs: working.metadata)
         guard content != working.content || metadataChanged else { return working }
         return ToolResult(

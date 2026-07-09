@@ -113,6 +113,48 @@ struct WorkspaceFilesystemToolProviderTests {
         return ToolCall(name: WorkspaceFilesystemToolProvider.bashToolName, arguments: .object(args), id: id)
     }
 
+    private func callWithJSON(_ name: String, args: [String: JSON], id: String = "call-1") -> ToolCall {
+        ToolCall(name: name, arguments: .object(args), id: id)
+    }
+
+    @Test("read_file rejects oversized file without offset and limit")
+    func readFileRejectsOversizedWithoutWindow() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let big = String(repeating: "x", count: ReadFileWindowing.maxReadBytes + 1)
+        try big.write(
+            to: fixture.workspace.appendingPathComponent("big.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = try await provider(workspace: fixture.workspace, memory: fixture.memory)
+            .executeTool(call(WorkspaceFilesystemToolProvider.readFileToolName, args: ["file_path": "big.txt"]))
+        #expect(result.success == false)
+        #expect(result.error?.contains("offset") == true)
+    }
+
+    @Test("read_file offset and limit return a bounded window")
+    func readFileOffsetLimitWindow() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        try "line1\nline2\nline3\nline4".write(
+            to: fixture.workspace.appendingPathComponent("lines.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = try await provider(workspace: fixture.workspace, memory: fixture.memory)
+            .executeTool(callWithJSON(
+                WorkspaceFilesystemToolProvider.readFileToolName,
+                args: [
+                    "file_path": .string("lines.txt"),
+                    "offset": .integer(2),
+                    "limit": .integer(2),
+                ]
+            ))
+        #expect(result.success == true)
+        #expect(result.content == "line2\nline3")
+    }
+
     @Test("read_file rejects absolute path outside workspace")
     func readFileRejectsOutside() async throws {
         let fixture = try makeFixture()
