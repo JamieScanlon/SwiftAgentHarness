@@ -712,6 +712,30 @@ actor ConversationMessagingRuntimeService {
         )
     }
 
+    private func toolResultFormattingSpillContext(
+        conversationID: UUID,
+        toolName: String,
+        entry: ToolRegistryEntry?,
+        spillWriter: HarnessSessionPersistenceSpillWriter,
+        modelSupportsVision: Bool
+    ) -> ToolResultFormattingSpillContext {
+        ToolResultFormattingSpillContext(
+            conversationID: conversationID,
+            toolName: toolName,
+            entry: entry,
+            spillWriter: spillWriter,
+            logger: logger,
+            modelSupportsVision: modelSupportsVision
+        )
+    }
+
+    private func modelSupportsVision(conversationID: UUID) async -> Bool {
+        guard let conversation = await persistenceDomain.modelConversation(id: conversationID) else {
+            return false
+        }
+        return conversation.model.capabilities.contains(.vision)
+    }
+
     private func persistenceToolResultMiddlewarePipeline(
         conversationID: UUID,
         spillWriter: HarnessSessionPersistenceSpillWriter,
@@ -726,12 +750,13 @@ actor ConversationMessagingRuntimeService {
                     order: 100
                 ) { toolCall, result in
                     let entry = await self.toolEntryLookup.entry(named: toolCall.name)
-                    let spillContext = ToolResultFormattingSpillContext(
+                    let supportsVision = await self.modelSupportsVision(conversationID: conversationID)
+                    let spillContext = await self.toolResultFormattingSpillContext(
                         conversationID: conversationID,
                         toolName: toolCall.name,
                         entry: entry,
                         spillWriter: spillWriter,
-                        logger: logger
+                        modelSupportsVision: supportsVision
                     )
                     return ToolResultFormattingStack.apply(
                         result: result,
@@ -762,12 +787,13 @@ actor ConversationMessagingRuntimeService {
         let spillWriter = HarnessSessionPersistenceSpillWriter(
             persistence: await persistenceDomain.harnessSessionPersistence
         )
-        let spillContext = ToolResultFormattingSpillContext(
+        let supportsVision = await modelSupportsVision(conversationID: conversationID)
+        let spillContext = toolResultFormattingSpillContext(
             conversationID: conversationID,
             toolName: toolCall.name,
             entry: entry,
             spillWriter: spillWriter,
-            logger: logger
+            modelSupportsVision: supportsVision
         )
         return ToolResultFormattingStack.apply(
             result: result,

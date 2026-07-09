@@ -4,6 +4,24 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
+private struct MockFormattingImageProcessor: ImageProcessing {
+    func generateThumbnail(from data: Data, maxPixelSize: Int) -> Data? { nil }
+    func scaleImage(_ data: Data, maxPixelDimension: Int) -> Data? { data }
+    func scaleImageToFileSize(_ data: Data, maxFileSize: Int) -> Data? {
+        data.count <= maxFileSize ? data : nil
+    }
+}
+
+private struct NoOpToolResultSpillWriter: ToolResultSpillWriting {
+    func putIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult? {
+        nil
+    }
+}
+
 @Suite("Tool result formatting stack")
 struct ToolResultFormattingStackTests {
     @Test("runtime stage trims content and line count")
@@ -26,7 +44,7 @@ struct ToolResultFormattingStackTests {
         #expect(output.content.contains("[tool result truncated"))
     }
 
-    @Test("inline image payloads are sanitized")
+    @Test("inline image payloads are stripped for text-only models")
     func inlineImageSanitization() {
         let payload = "prefix data:image/png;base64,AAAAAABBBBBCCCCCC suffix"
         let result = ToolResult(
@@ -35,18 +53,57 @@ struct ToolResultFormattingStackTests {
             metadata: .object([:]),
             toolCallId: "call-2"
         )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: false
+        )
         let output = ToolResultFormattingStack.apply(
             result: result,
             stage: .persistence,
-            configuration: .default
+            configuration: .default,
+            spillContext: spillContext
         )
         #expect(output.content.contains("[inline image payload omitted]"))
         #expect(!output.content.contains("data:image/png;base64"))
     }
 
-    @Test("compaction stage uses compaction-specific image placeholder")
-    func compactionImagePlaceholder() {
-        let payload = "prefix data:image/png;base64,AAAAAABBBBBCCCCCC suffix"
+    @Test("inline image payloads are sanitized for vision models at runtime")
+    func visionModelPreservesSanitizedImage() {
+        let tinyPNG =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let payload = "prefix data:image/jpeg;base64,\(tinyPNG) suffix"
+        let result = ToolResult(
+            success: true,
+            content: payload,
+            metadata: .object([:]),
+            toolCallId: "call-vision"
+        )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: true,
+            imageProcessor: MockFormattingImageProcessor()
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: spillContext
+        )
+        #expect(output.content.contains("data:image/png;base64,"))
+        #expect(!output.content.contains("[inline image payload omitted]"))
+    }
+
+    @Test("compaction stage strips images even for vision models")
+    func compactionStripsVisionImages() {
+        let tinyPNG =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let payload = "prefix data:image/png;base64,\(tinyPNG) suffix"
         let result = ToolResult(
             success: true,
             content: payload,
@@ -57,10 +114,19 @@ struct ToolResultFormattingStackTests {
             sanitizeInlineImagePayloads: true,
             compactionImagePayloadPlaceholder: "[old image payload replaced for compaction]"
         )
+        let spillContext = ToolResultFormattingSpillContext(
+            conversationID: UUID(),
+            toolName: "screenshot",
+            entry: nil,
+            spillWriter: NoOpToolResultSpillWriter(),
+            modelSupportsVision: true,
+            imageProcessor: MockFormattingImageProcessor()
+        )
         let output = ToolResultFormattingStack.apply(
             result: result,
             stage: .compaction,
-            configuration: config
+            configuration: config,
+            spillContext: spillContext
         )
         #expect(output.content.contains("[old image payload replaced for compaction]"))
         #expect(!output.content.contains("data:image/png;base64"))

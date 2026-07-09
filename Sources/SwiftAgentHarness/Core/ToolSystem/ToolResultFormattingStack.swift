@@ -50,10 +50,22 @@ enum ToolResultFormattingStack {
         var content = working.content
         var metadata = working.metadata
         if configuration.sanitizeInlineImagePayloads {
-            content = sanitizeInlineImagePayloads(content, placeholder: stagePolicy.imagePayloadPlaceholder)
-            metadata = sanitizeInlineImagePayloads(
-                in: metadata,
-                placeholder: stagePolicy.imagePayloadPlaceholder
+            let imagePolicy = inlineImagePolicy(
+                stage: stage,
+                configuration: configuration,
+                spillContext: spillContext
+            )
+            content = ToolResultInlineImageSanitizer.sanitizeString(
+                content,
+                policy: imagePolicy,
+                processor: spillContext?.imageProcessor ?? DefaultImageProcessor(),
+                logger: spillContext?.logger
+            )
+            metadata = ToolResultInlineImageSanitizer.sanitizeJSON(
+                metadata,
+                policy: imagePolicy,
+                processor: spillContext?.imageProcessor ?? DefaultImageProcessor(),
+                logger: spillContext?.logger
             )
         }
         if !skipLossyTrim {
@@ -145,6 +157,8 @@ enum ToolResultFormattingStack {
             compactionMetadataMaxBytes: base.compactionMetadataMaxBytes,
             maxLines: base.maxLines,
             sanitizeInlineImagePayloads: base.sanitizeInlineImagePayloads,
+            maxInlineImagePixelDimension: base.maxInlineImagePixelDimension,
+            maxInlineImageBytes: base.maxInlineImageBytes,
             imagePayloadPlaceholder: base.imagePayloadPlaceholder,
             compactionImagePayloadPlaceholder: compactionImagePlaceholderOverride ?? base.compactionImagePayloadPlaceholder,
             metadataPlaceholder: base.metadataPlaceholder,
@@ -154,28 +168,31 @@ enum ToolResultFormattingStack {
         )
     }
 
-    private static func sanitizeInlineImagePayloads(_ content: String, placeholder: String) -> String {
-        let pattern = #"data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return content }
-        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
-        return regex.stringByReplacingMatches(in: content, options: [], range: nsRange, withTemplate: placeholder)
-    }
-
-    private static func sanitizeInlineImagePayloads(in json: JSON, placeholder: String) -> JSON {
-        switch json {
-        case .string(let value):
-            return .string(sanitizeInlineImagePayloads(value, placeholder: placeholder))
-        case .array(let values):
-            return .array(values.map { sanitizeInlineImagePayloads(in: $0, placeholder: placeholder) })
-        case .object(let object):
-            var shaped: [String: JSON] = [:]
-            for (key, value) in object {
-                shaped[key] = sanitizeInlineImagePayloads(in: value, placeholder: placeholder)
-            }
-            return .object(shaped)
-        default:
-            return json
+    private static func inlineImagePolicy(
+        stage: ToolResultFormattingStage,
+        configuration: ToolResultFormattingConfiguration,
+        spillContext: ToolResultFormattingSpillContext?
+    ) -> ToolResultInlineImageSanitizer.Policy {
+        let placeholder: String
+        switch stage {
+        case .runtime, .persistence:
+            placeholder = configuration.imagePayloadPlaceholder
+        case .compaction:
+            placeholder = configuration.compactionImagePayloadPlaceholder
         }
+        let mode: ToolResultInlineImageSanitizer.Mode
+        switch stage {
+        case .compaction:
+            mode = .strip
+        case .runtime, .persistence:
+            mode = spillContext?.modelSupportsVision == true ? .sanitize : .strip
+        }
+        return ToolResultInlineImageSanitizer.Policy(
+            mode: mode,
+            maxPixelDimension: configuration.maxInlineImagePixelDimension,
+            maxBytes: configuration.maxInlineImageBytes,
+            placeholder: placeholder
+        )
     }
 
     private static func trimToLineLimit(_ content: String, maxLines: Int) -> String {

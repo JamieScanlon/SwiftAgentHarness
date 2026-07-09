@@ -73,19 +73,25 @@ struct ToolResultFormattingSpillContext: Sendable {
     let entry: ToolRegistryEntry?
     let spillWriter: any ToolResultSpillWriting
     let logger: Logger?
+    let modelSupportsVision: Bool
+    let imageProcessor: ImageProcessing
 
     init(
         conversationID: UUID,
         toolName: String,
         entry: ToolRegistryEntry?,
         spillWriter: any ToolResultSpillWriting,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        modelSupportsVision: Bool = false,
+        imageProcessor: ImageProcessing = DefaultImageProcessor()
     ) {
         self.conversationID = conversationID
         self.toolName = toolName
         self.entry = entry
         self.spillWriter = spillWriter
         self.logger = logger
+        self.modelSupportsVision = modelSupportsVision
+        self.imageProcessor = imageProcessor
     }
 }
 
