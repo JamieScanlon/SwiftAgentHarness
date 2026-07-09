@@ -22,7 +22,7 @@
 #### Hanging Tests
 We frequently encounter hanging tests due to the complexity of the project and the amount of shared state. Under normal conditions all tests should run in under a minute. If it's taking longer than a minute there is a good change that the tests have hung. Also if you encounter the message:
 ```
-Another instance of SwiftPM (PID: XXXXX) is already running using '/Users/marvinscanlon/Projects/sileniaAI/SileniaAIServer/.build', waiting until that process has finished execution...
+Another instance of SwiftPM (PID: XXXXX) is already running using '/Path/To/Project/.build', waiting until that process has finished execution...
 ```
 That is a good indication that a former test run wan hung and not killed correctly. If you encounter these conditions, kill all of the SwiftPM test instances before running. Try to identify and fix the hanging test.
 
