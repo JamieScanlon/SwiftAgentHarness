@@ -223,6 +223,73 @@ struct ToolResultFormattingStackTests {
         }
     }
 
+    @Test("compaction stage line trim uses constant marker without dropped-line count")
+    func compactionLineTrimUsesConstantMarker() {
+        let result = ToolResult(
+            success: true,
+            content: "a\nb\nc\nd\ne",
+            metadata: .object([:]),
+            toolCallId: "call-compact-lines"
+        )
+        let config = ToolResultFormattingConfiguration(
+            enabled: true,
+            runtimeMaxCharacters: 10_000,
+            persistenceMaxCharacters: 10_000,
+            compactionMaxCharacters: 10_000,
+            runtimeMaxBytes: 0,
+            persistenceMaxBytes: 0,
+            compactionMaxBytes: 0,
+            maxLines: 3,
+            sanitizeInlineImagePayloads: false,
+            compactionTruncationMarker: "[old tool payload replaced for compaction]"
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .compaction,
+            configuration: config
+        )
+        #expect(output.content.contains("[old tool payload replaced for compaction]"))
+        #expect(!output.content.contains("additional line(s) omitted"))
+    }
+
+    @Test("compaction metadata truncation uses constant placeholder without diagnostics")
+    func compactionMetadataUsesConstantPlaceholder() {
+        let oversizedMetadata: JSON = .object([
+            "payload": .string(String(repeating: "m", count: 4_000)),
+        ])
+        let result = ToolResult(
+            success: true,
+            content: "ok",
+            metadata: oversizedMetadata,
+            toolCallId: "call-compact-meta"
+        )
+        let config = ToolResultFormattingConfiguration(
+            compactionMetadataMaxBytes: 120,
+            compactionMetadataPlaceholder: "[old tool metadata replaced for compaction]"
+        )
+        let output = ToolResultFormattingStack.apply(
+            result: result,
+            stage: .compaction,
+            configuration: config
+        )
+        guard case .object(let object) = output.metadata else {
+            Issue.record("Expected object metadata after compaction shaping")
+            return
+        }
+        if case .string(let status) = object["status"] {
+            #expect(status == "metadata_truncated")
+        } else {
+            Issue.record("Expected metadata truncation status string")
+        }
+        if case .string(let placeholder) = object["placeholder"] {
+            #expect(placeholder == "[old tool metadata replaced for compaction]")
+        } else {
+            Issue.record("Expected placeholder string")
+        }
+        #expect(object["originalByteCount"] == nil)
+        #expect(object["stage"] == nil)
+    }
+
     @Test("compaction helper preserves base settings and explicit overrides")
     func compactionConfigurationOverrideHelper() {
         let base = ToolResultFormattingConfiguration(

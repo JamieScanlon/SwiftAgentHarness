@@ -69,7 +69,12 @@ enum ToolResultFormattingStack {
             )
         }
         if !skipLossyTrim {
-            content = trimToLineLimit(content, maxLines: configuration.maxLines)
+            content = trimToLineLimit(
+                content,
+                maxLines: configuration.maxLines,
+                stage: stage,
+                constantMarker: stagePolicy.truncationMarker
+            )
             content = trimToCharacterLimit(
                 content,
                 maxCharacters: stagePolicy.maxCharacters,
@@ -195,13 +200,23 @@ enum ToolResultFormattingStack {
         )
     }
 
-    private static func trimToLineLimit(_ content: String, maxLines: Int) -> String {
+    private static func trimToLineLimit(
+        _ content: String,
+        maxLines: Int,
+        stage: ToolResultFormattingStage,
+        constantMarker: String
+    ) -> String {
         guard maxLines > 0 else { return content }
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.count > maxLines else { return content }
         let kept = lines.prefix(maxLines).joined(separator: "\n")
-        let dropped = lines.count - maxLines
-        return "\(kept)\n[tool result truncated: \(dropped) additional line(s) omitted]"
+        switch stage {
+        case .compaction:
+            return "\(kept)\n\(constantMarker)"
+        case .runtime, .persistence:
+            let dropped = lines.count - maxLines
+            return "\(kept)\n[tool result truncated: \(dropped) additional line(s) omitted]"
+        }
     }
 
     private static func trimToCharacterLimit(_ content: String, maxCharacters: Int, marker: String) -> String {
@@ -235,21 +250,29 @@ enum ToolResultFormattingStack {
         guard let encoded = try? JSONEncoder().encode(metadata), encoded.count > maxBytes else {
             return metadata
         }
-        let stageName: String
         switch stage {
-        case .runtime:
-            stageName = "runtime"
-        case .persistence:
-            stageName = "persistence"
         case .compaction:
-            stageName = "compaction"
+            return .object([
+                "status": .string("metadata_truncated"),
+                "placeholder": .string(placeholder),
+            ])
+        case .runtime, .persistence:
+            let stageName: String
+            switch stage {
+            case .runtime:
+                stageName = "runtime"
+            case .persistence:
+                stageName = "persistence"
+            case .compaction:
+                stageName = "compaction"
+            }
+            return .object([
+                "status": .string("metadata_truncated"),
+                "stage": .string(stageName),
+                "originalByteCount": .string(String(encoded.count)),
+                "placeholder": .string(placeholder),
+            ])
         }
-        return .object([
-            "status": .string("metadata_truncated"),
-            "stage": .string(stageName),
-            "originalByteCount": .string(String(encoded.count)),
-            "placeholder": .string(placeholder),
-        ])
     }
 
     private static func jsonEqual(lhs: JSON, rhs: JSON) -> Bool {
