@@ -3,6 +3,7 @@ import AppKit
 #elseif canImport(UIKit)
 import UIKit
 #endif
+import EasyJSON
 import Foundation
 import Logging
 import SwiftAgentKit
@@ -123,6 +124,7 @@ struct APILayerRouteDependencies: Sendable {
 private struct ToolApprovalResolutionRequest: Content {
     let runID: UUID?
     let toolName: String
+    let toolCallID: String?
     let route: ToolApprovalRoute?
     let status: ToolApprovalResolutionStatus
     let source: String?
@@ -130,6 +132,7 @@ private struct ToolApprovalResolutionRequest: Content {
     /// When true on an `approved` resolution, persists an allow-always tool rule so
     /// future runs auto-approve this tool.
     let durable: Bool?
+    let arguments: JSON?
 }
 
 private struct ActiveSubAgentInvocationListResponse: Content {
@@ -1381,10 +1384,23 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                     status: body.status,
                     source: body.source ?? "api.rest",
                     reason: body.reason,
-                    durable: body.durable ?? false
+                    durable: body.durable ?? false,
+                    arguments: body.arguments
                 )
                 await dependencies.notifyConversationStateChanged(conversationID)
                 return Response(status: .ok)
+            } catch let error as ToolApprovalResolutionError {
+                let message: String = switch error {
+                case .ambiguousPendingApproval(let toolName, let pendingCount):
+                    "ambiguous pending approval for \(toolName); supply arguments (\(pendingCount) pending)"
+                case .pendingApprovalNotFound(let toolName):
+                    "no pending approval found for \(toolName)"
+                }
+                let data = try! JSONSerialization.data(withJSONObject: [
+                    "type": "error",
+                    "message": message,
+                ])
+                return Response(status: .badRequest, body: .init(data: data))
             } catch is APILayerConversationAPIError {
                 let data = try! JSONSerialization.data(withJSONObject: [
                     "type": "error",

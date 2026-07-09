@@ -314,6 +314,33 @@ extension ConversationPersistenceDomain {
             transcriptRunID: wire.transcriptRunID,
             finishReason: finishReason
         )
+        try updateTranscriptEntryPayload(conversationID: conversationID, entry: entry)
+    }
+
+    func updateTranscriptMessagePayload(
+        conversationID: UUID,
+        message: Message
+    ) throws {
+        let harness = stack.conversationManager.harnessSessionPersistence
+        let entries = try harness.readTranscriptEntries(conversationID: conversationID, request: .full)
+        guard var entry = entries.first(where: { entry in
+            guard entry.type == .message || entry.type == .system else { return false }
+            guard let payload = try? MessageTranscriptPayloadCodec.decode(entry.payloadJSON) else { return false }
+            return payload.id == message.id
+        }) else {
+            throw SessionPersistenceError.transcriptPayloadInvalid(reason: "message entry not found for payload update")
+        }
+        let wire = try MessageTranscriptPayloadCodec.decode(entry.payloadJSON)
+        entry.payloadJSON = try MessageTranscriptPayloadCodec.encodePayloadJSON(
+            from: message,
+            transcriptRunID: wire.transcriptRunID,
+            finishReason: wire.finishReason
+        )
+        try updateTranscriptEntryPayload(conversationID: conversationID, entry: entry)
+    }
+
+    private func updateTranscriptEntryPayload(conversationID: UUID, entry: SessionTranscriptEntry) throws {
+        let harness = stack.conversationManager.harnessSessionPersistence
         switch harness {
         case let local as LocalHarnessSessionPersistence:
             try local.updateTranscriptEntryPayload(conversationID: conversationID, entry: entry)
@@ -322,6 +349,38 @@ extension ConversationPersistenceDomain {
         default:
             return
         }
+    }
+
+    func conversationEventsWithFrontier(conversationID: UUID) -> ([CachedConversationEvent], Int) {
+        stack.conversationManager.loadConversationEventsWithFrontier(conversationID: conversationID)
+    }
+
+    func activeTranscriptMessages(conversationID: UUID) throws -> [Message] {
+        try ConversationTranscriptLineage.activeMessages(
+            conversationID: conversationID,
+            harness: stack.conversationManager.harnessSessionPersistence
+        )
+    }
+
+    func recordExecDenialHygieneSideEffects(
+        conversationID: UUID,
+        coveredMessageIDs: [UUID],
+        trimmedToolCallIDs: [String],
+        logger: Logger?
+    ) throws {
+        persistToolResultTrimCheckpointIfNeeded(
+            conversationID: conversationID,
+            coveredMessageIDs: coveredMessageIDs,
+            trimmedToolCallIDs: trimmedToolCallIDs,
+            logger: logger
+        )
+        try stack.appendCheckpointInvalidation(
+            conversationID: conversationID,
+            kinds: [
+                HarnessCheckpointInvalidationKind.contextCompaction,
+                HarnessCheckpointInvalidationKind.toolResultTrim,
+            ]
+        )
     }
 
     func hydrateBlobImages(in messages: [Message], conversationID: UUID) -> [Message] {

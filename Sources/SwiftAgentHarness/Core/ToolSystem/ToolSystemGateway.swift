@@ -117,6 +117,20 @@ protocol ToolSystemGatewaying: Sendable {
         effectiveEntries: [ToolRegistryEntry]
     ) -> AgentRuntimeToolDispatchContract
 
+    func callIsReadOnly(entry: ToolRegistryEntry, arguments: JSON) -> Bool
+
+    func evaluateCallAvailability(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        modePolicyContext: ModePolicyContext,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        trustPolicy: TrustPolicyConfiguration,
+        subAgentToolClassifier: (any SubAgentToolClassifying)?,
+        groupIndex: ToolPolicyGroupIndex
+    ) -> ToolAvailabilityDecision
+
     func evaluateAvailability(
         entry: ToolRegistryEntry,
         conversation: ModelConversation,
@@ -124,13 +138,25 @@ protocol ToolSystemGatewaying: Sendable {
         configuration: AgentRuntimeTurnConfiguration,
         toolPolicy: ToolPolicyConfiguration,
         trustPolicy: TrustPolicyConfiguration,
-        subAgentToolClassifier: (any SubAgentToolClassifying)?
+        subAgentToolClassifier: (any SubAgentToolClassifying)?,
+        groupIndex: ToolPolicyGroupIndex
     ) -> ToolAvailabilityDecision
 
     func isHaltingToolCall(
         toolName: String,
         effectiveEntries: [ToolRegistryEntry]
     ) -> Bool
+
+    func evaluateCallGating(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        modePolicyContext: ModePolicyContext,
+        groupIndex: ToolPolicyGroupIndex,
+        durableRules: [ToolPolicyRule]
+    ) -> ToolPolicyGatingDecision
 
     func evaluateCallApproval(
         entry: ToolRegistryEntry,
@@ -143,6 +169,48 @@ protocol ToolSystemGatewaying: Sendable {
 }
 
 extension ToolSystemGatewaying {
+    func evaluateAvailability(
+        entry: ToolRegistryEntry,
+        conversation: ModelConversation,
+        modePolicyContext: ModePolicyContext,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        trustPolicy: TrustPolicyConfiguration,
+        subAgentToolClassifier: (any SubAgentToolClassifying)?
+    ) -> ToolAvailabilityDecision {
+        evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: modePolicyContext,
+            configuration: configuration,
+            toolPolicy: toolPolicy,
+            trustPolicy: trustPolicy,
+            subAgentToolClassifier: subAgentToolClassifier,
+            groupIndex: .empty
+        )
+    }
+
+    func evaluateCallGating(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        modePolicyContext: ModePolicyContext,
+        durableRules: [ToolPolicyRule]
+    ) -> ToolPolicyGatingDecision {
+        evaluateCallGating(
+            entry: entry,
+            call: call,
+            conversation: conversation,
+            configuration: configuration,
+            toolPolicy: toolPolicy,
+            modePolicyContext: modePolicyContext,
+            groupIndex: .empty,
+            durableRules: durableRules
+        )
+    }
+
     func evaluateCallApproval(
         entry: ToolRegistryEntry,
         call: ToolCallRequest,
@@ -217,6 +285,7 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             return []
         }
         guard configuration.enableTools else { return [] }
+        let groupIndex = ToolPolicyGroupIndex.build(from: entries)
         return entries.filter { entry in
             let decision = evaluateAvailability(
                 entry: entry,
@@ -225,7 +294,8 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                 configuration: configuration,
                 toolPolicy: toolPolicy,
                 trustPolicy: trustPolicy,
-                subAgentToolClassifier: subAgentToolClassifier
+                subAgentToolClassifier: subAgentToolClassifier,
+                groupIndex: groupIndex
             )
             return decision.isAdvertisedToModel
         }.sorted { $0.name < $1.name }
@@ -261,13 +331,107 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             parallelDispatchEnabled = false
         } else if effectiveEntries.isEmpty {
             parallelDispatchEnabled = false
+        } else if effectiveEntries.contains(where: Self.hasUnknownStaticCapabilityMetadata(_:)) {
+            parallelDispatchEnabled = false
         } else {
-            parallelDispatchEnabled = effectiveEntries.allSatisfy(Self.isParallelSafeEntry(_:))
+            parallelDispatchEnabled = true
         }
+        let resolvedPlannerMode: ToolPolicyConfiguration.DispatchPlannerMode?
+        if let configured = toolPolicy.dispatchPlannerMode {
+            resolvedPlannerMode = configured
+        } else if parallelDispatchEnabled {
+            resolvedPlannerMode = .mixedDeterministic
+        } else {
+            resolvedPlannerMode = nil
+        }
+        let normalizedPlanner = ToolDispatchPlannerNormalization.effectivePlannerMode(resolvedPlannerMode)
+        ToolDispatchPlannerNormalization.warnIfAllParallelRemapped(
+            wasRemapped: normalizedPlanner.wasAllParallelRemapped,
+            fingerprint: "dispatchContract:\(toolPolicy.stableAllowlistSignature())"
+        )
         return AgentRuntimeToolDispatchContract(
             parallelDispatchEnabled: parallelDispatchEnabled,
-            dispatchPlannerMode: toolPolicy.dispatchPlannerMode,
+            dispatchPlannerMode: normalizedPlanner.mode,
             pendingToolTimeoutSeconds: toolPolicy.pendingToolTimeoutSeconds
+        )
+    }
+
+    func callIsReadOnly(entry: ToolRegistryEntry, arguments: JSON) -> Bool {
+        ToolCallCapabilityClassifier.callIsReadOnly(entry: entry, arguments: arguments)
+    }
+
+    func evaluateCallAvailability(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        modePolicyContext: ModePolicyContext,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        trustPolicy: TrustPolicyConfiguration,
+        subAgentToolClassifier: (any SubAgentToolClassifying)?,
+        groupIndex: ToolPolicyGroupIndex
+    ) -> ToolAvailabilityDecision {
+        let turnDecision = evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: modePolicyContext,
+            configuration: configuration,
+            toolPolicy: toolPolicy,
+            trustPolicy: trustPolicy,
+            subAgentToolClassifier: subAgentToolClassifier,
+            groupIndex: groupIndex
+        )
+        guard ToolCallCapabilityClassifier.isPolymorphic(entry.name) else {
+            return turnDecision
+        }
+        if !turnDecision.allowed, turnDecision.blockReason != .approvalRequired {
+            return turnDecision
+        }
+        let executionEnvironmentKind = ToolPolicyConfiguration.ExecutionEnvironmentKind(
+            rawValue: entry.executionEnvironment.kind.rawValue
+        ) ?? .unknown
+        let executionEnvironmentAdapterID = entry.executionEnvironment.adapterID
+        let callIsReadOnly = callIsReadOnly(entry: entry, arguments: call.arguments)
+        let callRequiresApproval = toolPolicy.requiresApproval(
+            toolName: entry.name,
+            context: modePolicyContext,
+            toolIsReadOnly: callIsReadOnly,
+            entryRequiresApprovalTag: entry.policyTags.contains(.requiresApproval)
+        ) || toolPolicy.requiresExecutionEnvironmentApproval(kind: executionEnvironmentKind)
+            || toolPolicy.requiresExecutionEnvironmentAdapterApproval(adapterID: executionEnvironmentAdapterID)
+        let approvalRequiredFinal = callRequiresApproval || turnDecision.isElevated
+            || (turnDecision.delegationPermissionPolicy != nil && turnDecision.delegationPermissionPolicy != .auto)
+        let approvalGranted = turnDecision.approvalGranted
+            || ToolCallApprovalPolicy.isBindingPreApproved(call: call, configuration: configuration)
+        if approvalRequiredFinal, !approvalGranted {
+            return .blocked(
+                .approvalRequired,
+                facts: AvailabilityFacts(
+                    isSensitive: turnDecision.isSensitive,
+                    requiresEscalation: turnDecision.requiresEscalation,
+                    requiresApproval: true,
+                    isElevated: turnDecision.isElevated,
+                    approvalGranted: false,
+                    approvalRoute: turnDecision.approvalRoute,
+                    delegationPermissionPolicy: turnDecision.delegationPermissionPolicy,
+                    delegationTrustLevel: turnDecision.delegationTrustLevel
+                )
+            )
+        }
+        if turnDecision.allowed {
+            return turnDecision
+        }
+        return .allowed(
+            AvailabilityFacts(
+                isSensitive: turnDecision.isSensitive,
+                requiresEscalation: turnDecision.requiresEscalation,
+                requiresApproval: approvalRequiredFinal,
+                isElevated: turnDecision.isElevated,
+                approvalGranted: approvalGranted,
+                approvalRoute: turnDecision.approvalRoute,
+                delegationPermissionPolicy: turnDecision.delegationPermissionPolicy,
+                delegationTrustLevel: turnDecision.delegationTrustLevel
+            )
         )
     }
 
@@ -278,7 +442,8 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         configuration: AgentRuntimeTurnConfiguration,
         toolPolicy: ToolPolicyConfiguration,
         trustPolicy: TrustPolicyConfiguration,
-        subAgentToolClassifier: (any SubAgentToolClassifying)?
+        subAgentToolClassifier: (any SubAgentToolClassifying)?,
+        groupIndex: ToolPolicyGroupIndex
     ) -> ToolAvailabilityDecision {
         let executionEnvironmentKind = ToolPolicyConfiguration.ExecutionEnvironmentKind(
             rawValue: entry.executionEnvironment.kind.rawValue
@@ -297,7 +462,8 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                     modePolicyContext: modePolicyContext,
                     toolPolicy: toolPolicy,
                     executionEnvironmentKind: executionEnvironmentKind,
-                    executionEnvironmentAdapterID: executionEnvironmentAdapterID
+                    executionEnvironmentAdapterID: executionEnvironmentAdapterID,
+                    groupIndex: groupIndex
                 )
             )
         }
@@ -309,7 +475,8 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                     modePolicyContext: modePolicyContext,
                     toolPolicy: toolPolicy,
                     executionEnvironmentKind: executionEnvironmentKind,
-                    executionEnvironmentAdapterID: executionEnvironmentAdapterID
+                    executionEnvironmentAdapterID: executionEnvironmentAdapterID,
+                    groupIndex: groupIndex
                 )
             )
         }
@@ -322,15 +489,16 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                     modePolicyContext: modePolicyContext,
                     toolPolicy: toolPolicy,
                     executionEnvironmentKind: executionEnvironmentKind,
-                    executionEnvironmentAdapterID: executionEnvironmentAdapterID
+                    executionEnvironmentAdapterID: executionEnvironmentAdapterID,
+                    groupIndex: groupIndex
                 )
             )
         }
-        let isSensitive = toolPolicy.isToolSensitive(name: entry.name)
-        let escalationRequired = toolPolicy.requiresEscalation(name: entry.name)
+        let isSensitive = toolPolicy.isToolSensitive(name: entry.name, groupIndex: groupIndex)
+        let escalationRequired = toolPolicy.requiresEscalation(name: entry.name, groupIndex: groupIndex)
             || toolPolicy.requiresExecutionEnvironmentEscalation(kind: executionEnvironmentKind)
             || toolPolicy.requiresExecutionEnvironmentAdapterEscalation(adapterID: executionEnvironmentAdapterID)
-        let toolIsReadOnly = entry.effectClass == .readOnly
+        let toolIsReadOnly = Self.toolIsReadOnlyForTurnLevelApproval(entry: entry)
         let requiresApproval = toolPolicy.requiresApproval(
             toolName: entry.name,
             context: modePolicyContext,
@@ -338,9 +506,9 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entryRequiresApprovalTag: entry.policyTags.contains(.requiresApproval)
         ) || toolPolicy.requiresExecutionEnvironmentApproval(kind: executionEnvironmentKind)
             || toolPolicy.requiresExecutionEnvironmentAdapterApproval(adapterID: executionEnvironmentAdapterID)
-        let isElevated = (toolPolicy.isElevatedTool(name: entry.name)
+        let isElevated = (toolPolicy.isElevatedTool(name: entry.name, groupIndex: groupIndex)
             || entry.policyTags.contains(.elevated))
-            && !toolPolicy.isPerCallElevatedTool(name: entry.name)
+            && !toolPolicy.isPerCallElevatedTool(name: entry.name, groupIndex: groupIndex)
         let approvalRequiredByPolicy = requiresApproval || isElevated
         let isDelegateTool = subAgentToolClassifier?.isDelegateTool(entry: entry) ?? (entry.source == .a2a)
         let delegatePermissionPolicy = isDelegateTool ? (subAgentToolClassifier?.permissionPolicy(for: entry) ?? .askUser) : nil
@@ -358,7 +526,10 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         }()
         let approvalRequiredByDelegationRoute = isDelegateTool && delegatePermissionPolicy != .auto
         let approvalRequiredFinal = approvalRequiredByPolicy || approvalRequiredByDelegationRoute
-        let approvalGranted = configuration.preApprovedToolNames.contains(entry.name)
+        let approvalGranted = ToolNamePolicyNormalization.setContains(
+            configuration.preApprovedToolNames,
+            name: entry.name
+        )
         let facts = AvailabilityFacts(
             isSensitive: isSensitive,
             requiresEscalation: escalationRequired,
@@ -382,13 +553,16 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                 toolName: entry.name,
                 conversation: conversation,
                 toolPolicy: toolPolicy,
-                modePolicyContext: modePolicyContext
+                modePolicyContext: modePolicyContext,
+                groupIndex: groupIndex
            ) {
             return .blocked(.hostingRoutingPolicyDenied, facts: facts)
         }
         if toolPolicy.isToolDenied(
             name: entry.name,
-            context: modePolicyContext
+            context: modePolicyContext,
+            groupIndex: groupIndex,
+            entry: entry
         ) {
             return .blocked(.promptConfigDenylist, facts: facts)
         }
@@ -400,17 +574,53 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         }
         if !toolPolicy.isToolAllowed(
             name: entry.name,
-            context: modePolicyContext
+            context: modePolicyContext,
+            groupIndex: groupIndex,
+            entry: entry
         ) {
             return .blocked(.promptConfigAllowlist, facts: facts)
         }
         if !isAllowedByRoutingToolPolicy(
             toolName: entry.name,
-            conversation: conversation
+            conversation: conversation,
+            groupIndex: groupIndex,
+            entry: entry
         ) {
             return .blocked(.routingToolWhitelist, facts: facts)
         }
         return .allowed(facts)
+    }
+
+    func evaluateCallGating(
+        entry: ToolRegistryEntry,
+        call: ToolCallRequest,
+        conversation: ModelConversation,
+        configuration: AgentRuntimeTurnConfiguration,
+        toolPolicy: ToolPolicyConfiguration,
+        modePolicyContext: ModePolicyContext,
+        groupIndex: ToolPolicyGroupIndex,
+        durableRules: [ToolPolicyRule]
+    ) -> ToolPolicyGatingDecision {
+        let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
+            call: call,
+            configuration: configuration
+        )
+        let modeDeny = ToolPolicyRulesCache.parseList(modePolicyContext.resolvedProfile.tools.deny)
+        let modeAllow = modePolicyContext.resolvedProfile.tools.allow.flatMap {
+            ToolPolicyRulesCache.parseList($0)
+        }
+        let scopes = [
+            ToolPolicyGatingScope(name: "durable", autoAllowRules: durableRules),
+            ToolPolicyGatingScope(name: "mode-deny", denyRules: modeDeny),
+            ToolPolicyGatingScope(name: "mode-allow", allowRules: modeAllow),
+        ]
+        return ToolPolicyGatingEvaluator.evaluate(
+            entry: entry,
+            arguments: call.arguments,
+            groupIndex: groupIndex,
+            scopes: scopes,
+            bindingPreApproved: bindingPreApproved
+        )
     }
 
     func isHaltingToolCall(
@@ -419,7 +629,10 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
     ) -> Bool {
         effectiveEntries.contains { entry in
             entry.haltsLoop
-                && entry.name.caseInsensitiveCompare(toolName) == .orderedSame
+                && ToolNamePolicyNormalization.matchesRegistryName(
+                    callName: toolName,
+                    entryName: entry.name
+                )
         }
     }
 
@@ -445,9 +658,10 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         modePolicyContext: ModePolicyContext,
         toolPolicy: ToolPolicyConfiguration,
         executionEnvironmentKind: ToolPolicyConfiguration.ExecutionEnvironmentKind,
-        executionEnvironmentAdapterID: String
+        executionEnvironmentAdapterID: String,
+        groupIndex: ToolPolicyGroupIndex
     ) -> AvailabilityFacts {
-        let toolIsReadOnly = entry.effectClass == .readOnly
+        let toolIsReadOnly = Self.toolIsReadOnlyForTurnLevelApproval(entry: entry)
         let requiresApproval = toolPolicy.requiresApproval(
             toolName: entry.name,
             context: modePolicyContext,
@@ -455,12 +669,12 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entryRequiresApprovalTag: entry.policyTags.contains(.requiresApproval)
         ) || toolPolicy.requiresExecutionEnvironmentApproval(kind: executionEnvironmentKind)
             || toolPolicy.requiresExecutionEnvironmentAdapterApproval(adapterID: executionEnvironmentAdapterID)
-        let isElevated = (toolPolicy.isElevatedTool(name: entry.name)
+        let isElevated = (toolPolicy.isElevatedTool(name: entry.name, groupIndex: groupIndex)
             || entry.policyTags.contains(.elevated))
-            && !toolPolicy.isPerCallElevatedTool(name: entry.name)
+            && !toolPolicy.isPerCallElevatedTool(name: entry.name, groupIndex: groupIndex)
         return AvailabilityFacts(
-            isSensitive: toolPolicy.isToolSensitive(name: entry.name),
-            requiresEscalation: toolPolicy.requiresEscalation(name: entry.name)
+            isSensitive: toolPolicy.isToolSensitive(name: entry.name, groupIndex: groupIndex),
+            requiresEscalation: toolPolicy.requiresEscalation(name: entry.name, groupIndex: groupIndex)
                 || toolPolicy.requiresExecutionEnvironmentEscalation(kind: executionEnvironmentKind)
                 || toolPolicy.requiresExecutionEnvironmentAdapterEscalation(adapterID: executionEnvironmentAdapterID),
             requiresApproval: requiresApproval,
@@ -495,11 +709,13 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         toolName: String,
         conversation: ModelConversation,
         toolPolicy: ToolPolicyConfiguration,
-        modePolicyContext: ModePolicyContext
+        modePolicyContext: ModePolicyContext,
+        groupIndex: ToolPolicyGroupIndex
     ) -> Bool {
         if !isAllowedByModeSubAgentAllowList(
             toolName: toolName,
-            modeAllowList: modePolicyContext.resolvedProfile.subAgents.allow
+            modeAllowList: modePolicyContext.resolvedProfile.subAgents.allow,
+            groupIndex: groupIndex
         ) {
             return false
         }
@@ -543,19 +759,23 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
 
     private func isAllowedByModeSubAgentAllowList(
         toolName: String,
-        modeAllowList: [String]?
+        modeAllowList: [String]?,
+        groupIndex: ToolPolicyGroupIndex
     ) -> Bool {
         guard let modeAllowList else { return true }
-        let normalized = Set(modeAllowList.map { $0.lowercased() })
-        if normalized.contains("*") {
-            return true
-        }
-        return normalized.contains(toolName.lowercased())
+        let rules = ToolPolicyRulesCache.parseList(modeAllowList)
+        return ToolPolicyNameMatcher.allowlistPermits(
+            rules: rules,
+            toolName: toolName,
+            groupIndex: groupIndex
+        )
     }
 
     private func isAllowedByRoutingToolPolicy(
         toolName: String,
-        conversation: ModelConversation
+        conversation: ModelConversation,
+        groupIndex: ToolPolicyGroupIndex,
+        entry: ToolRegistryEntry?
     ) -> Bool {
         guard let routingPrefs = conversation.routingPrefs,
               let policy = routingPrefs.explicitToolPolicy else {
@@ -564,17 +784,34 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         switch policy {
         case .allowlist(let tools, _):
             if tools.isEmpty { return false }
-            if tools.contains("*") { return true }
-            return tools.contains(toolName)
+            let rules = ToolPolicyRulesCache.parseList(tools)
+            return ToolPolicyNameMatcher.allowlistPermits(
+                rules: rules,
+                toolName: toolName,
+                entry: entry,
+                groupIndex: groupIndex
+            )
         case .denylist(let tools, _):
             if tools.isEmpty { return true }
-            if tools.contains("*") { return false }
-            return !tools.contains(toolName)
+            let rules = ToolPolicyRulesCache.parseList(tools)
+            return !ToolPolicyNameMatcher.denylistBlocks(
+                rules: rules,
+                toolName: toolName,
+                entry: entry,
+                groupIndex: groupIndex
+            )
         }
     }
 
-    private static func isParallelSafeEntry(_ entry: ToolRegistryEntry) -> Bool {
-        entry.effectClass == .readOnly && entry.parallelHint == .parallelizable
+    private static func hasUnknownStaticCapabilityMetadata(_ entry: ToolRegistryEntry) -> Bool {
+        entry.effectClass == .unknown || entry.parallelHint == .unknown
+    }
+
+    private static func toolIsReadOnlyForTurnLevelApproval(entry: ToolRegistryEntry) -> Bool {
+        if ToolCallCapabilityClassifier.isPolymorphic(entry.name) {
+            return true
+        }
+        return entry.effectClass == .readOnly
     }
 }
 

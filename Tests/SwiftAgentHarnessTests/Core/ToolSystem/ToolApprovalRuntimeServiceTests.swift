@@ -8,7 +8,6 @@ import Testing
 @Suite("ToolApprovalRuntimeService")
 struct ToolApprovalRuntimeServiceTests {
     private func makeDependencies(container: ModelContainer) -> ConversationRuntimeDependencies {
-        let stack = ConversationPersistenceStack.makeForTesting(container: container, logger: nil)
         let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
         return ConversationRuntimeDependencies(
             persistenceDomain: domain,
@@ -39,7 +38,7 @@ struct ToolApprovalRuntimeServiceTests {
 
     @Test("approvalRouteForConversation returns user for root conversation")
     func approvalRouteUserForRoot() async throws {
-                let container = try HarnessTestModelContainer.makeInMemory()
+        let container = try HarnessTestModelContainer.makeInMemory()
         let deps = makeDependencies(container: container)
         let services = HarnessRuntimeSessionFactory.makeServices(
             deps: deps,
@@ -52,9 +51,9 @@ struct ToolApprovalRuntimeServiceTests {
         #expect(route == .user)
     }
 
-    @Test("configurationApplyingToolApprovals unions store and caller pre-approvals")
+    @Test("configurationApplyingToolApprovals unions bindings for allow-once and names for allow-always")
     func configurationApplyingToolApprovalsUnionsPreApprovals() async throws {
-                let container = try HarnessTestModelContainer.makeInMemory()
+        let container = try HarnessTestModelContainer.makeInMemory()
         let deps = makeDependencies(container: container)
         let services = HarnessRuntimeSessionFactory.makeServices(
             deps: deps,
@@ -64,15 +63,33 @@ struct ToolApprovalRuntimeServiceTests {
         let conversationID = UUID()
         var configuration = HarnessRuntimeSession.Configuration()
         configuration.preApprovedToolNames = ["caller_tool"]
+        let onceBinding = ToolCallApprovalBinding.from(
+            toolName: "store_tool",
+            arguments: .object(["path": .string("/a")])
+        )
         await service.applyToolApprovalResolution(
             conversationID: conversationID,
             runID: nil,
-            toolName: "store_tool",
+            binding: onceBinding,
             route: .user,
             status: .approved,
             source: "test",
             reason: nil,
             kind: .manual,
+            decision: .allowOnce,
+            policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
+            publicationSource: "test"
+        )
+        await service.applyToolApprovalResolution(
+            conversationID: conversationID,
+            runID: nil,
+            binding: ToolCallApprovalBinding.from(toolName: "durable_tool", arguments: .object([:])),
+            route: .user,
+            status: .approved,
+            source: "test",
+            reason: nil,
+            kind: .manual,
+            decision: .allowAlways,
             policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
             publicationSource: "test"
         )
@@ -82,6 +99,8 @@ struct ToolApprovalRuntimeServiceTests {
             runID: nil
         )
         #expect(merged.preApprovedToolNames.contains("caller_tool"))
-        #expect(merged.preApprovedToolNames.contains("store_tool"))
+        #expect(merged.preApprovedToolNames.contains("durable_tool"))
+        #expect(merged.preApprovedToolNames.contains("store_tool") == false)
+        #expect(merged.preApprovedCallBindings.contains(onceBinding))
     }
 }

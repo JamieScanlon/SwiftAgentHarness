@@ -232,7 +232,11 @@ public actor AgentRuntimeSessionService {
 
         let runID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: conversation.id)
-        if let admission = await deps.runtimeLaneCoordinator.tryAcquireMainRun(sessionKey: sessionLaneKey, runID: runID) {
+        if let admission = await acquireRunLane(
+            sessionKey: sessionLaneKey,
+            runID: runID,
+            origin: effectiveConfiguration.runLaneOrigin
+        ) {
             throw await runtimeSessionError(for: admission, conversationID: conversation.id, fallbackRunID: runID)
         }
 
@@ -314,7 +318,7 @@ public actor AgentRuntimeSessionService {
                 messageID: newMessage.id
             )
         } catch {
-            await releasePreGenerationStreamingRun(runID: runID, sessionLaneKey: sessionLaneKey)
+            await releasePreGenerationStreamingRun(runID: runID)
             throw error
         }
     }
@@ -348,7 +352,11 @@ public actor AgentRuntimeSessionService {
         let sendingConversationID = conversation.id
         let revertRunID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: sendingConversationID)
-        if let admission = await deps.runtimeLaneCoordinator.tryAcquireMainRun(sessionKey: sessionLaneKey, runID: revertRunID) {
+        if let admission = await acquireRunLane(
+            sessionKey: sessionLaneKey,
+            runID: revertRunID,
+            origin: .interactive
+        ) {
             throw await runtimeSessionError(for: admission, conversationID: sendingConversationID, fallbackRunID: revertRunID)
         }
 
@@ -435,7 +443,7 @@ public actor AgentRuntimeSessionService {
                 runID: revertRunID
             )
         } catch {
-            await releasePreGenerationStreamingRun(runID: revertRunID, sessionLaneKey: sessionLaneKey)
+            await releasePreGenerationStreamingRun(runID: revertRunID)
             throw error
         }
     }
@@ -529,7 +537,7 @@ public actor AgentRuntimeSessionService {
                 runID: splitRunID
             )
         } catch {
-            await releasePreGenerationStreamingRun(runID: splitRunID, sessionLaneKey: nil)
+            await releasePreGenerationStreamingRun(runID: splitRunID)
             throw error
         }
     }
@@ -576,11 +584,10 @@ public actor AgentRuntimeSessionService {
             }
         }
         if !hadTask {
-            if let activeConversationID = runtimeLifecycle.activeStreamingConversationID,
+            if runtimeLifecycle.activeStreamingConversationID != nil,
                let activeRunID = runtimeLifecycle.currentStreamingRunID {
-                let sessionLaneKey = await sessionLaneKey(conversationID: activeConversationID)
                 Task { [runtimeLaneCoordinator = deps.runtimeLaneCoordinator] in
-                    await runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: activeRunID)
+                    await runtimeLaneCoordinator.release(runID: activeRunID)
                 }
             }
             if let conversationID {
@@ -605,14 +612,9 @@ public actor AgentRuntimeSessionService {
         await channelRegistryForLifecycle?.drainSessionLifecycle(conversationID: conversationID)
     }
 
-    private func releasePreGenerationStreamingRun(
-        runID: UUID,
-        sessionLaneKey: String?
-    ) async {
+    private func releasePreGenerationStreamingRun(runID: UUID) async {
         await releaseRunOrchestrator(runID: runID)
-        if let sessionLaneKey {
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
-        }
+        await releaseRunLane(runID: runID)
     }
 
     func releaseRunOrchestrator(runID: UUID) async {

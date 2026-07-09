@@ -107,6 +107,22 @@ enum ModeProfileJSONParsing {
         return []
     }
 
+    static func normalizedToolPolicyAllowList(
+        raw: JSON?,
+        profileID: String,
+        fieldPath: String,
+        diagnostics: inout [String]
+    ) -> [String] {
+        let parsed = normalizedProfileAllowList(
+            raw: raw,
+            profileID: profileID,
+            fieldPath: fieldPath,
+            diagnostics: &diagnostics
+        )
+        if parsed == ["*"] { return parsed }
+        return Array(Set(parsed.map(ToolPolicyRulesCache.preserveTokenForStorage))).sorted()
+    }
+
     static func normalizedSubAgentAllowList(
         raw: JSON?,
         profileID: String,

@@ -13,7 +13,7 @@ The prescriptive shape:
 5. **Filesystem confinement at the runtime seam, not at every call site** — a `path-policy` module rewrites every tool-supplied path into a relative workspace path or rejects it; symlink/hardlink escapes resolve to deepest existing ancestor and re-check. 
 6. **A single supervised process registry for background work** — `bash-process-registry` tracks long-running PIDs with TTL, log buffer, exit notification, abort token. Foreground vs background is a flag on the bash tool, not two tools.
 7. **Escape hatches as a typed concept, not an env-var override** — *elevated mode* runs a sandboxed agent's exec on the host via a configured `escape path` (`gateway` by default, `node` for paired node hosts), with allowlist gating per surface. 
-8. **Approval gates live at the exec layer, not in the tool runner** — `bash-tools.exec-approval-request.ts` and `bash-tools.exec-approval-followup.ts` implement the loop; approvals can defer to native UI cards (Slack/Discord/Teams) and fall back to `/approve`. (See also [Tool System permission model](../../core/tool-system/).)
+8. **Approval gates live at the exec layer, not in the tool runner** — a request/followup module pair at the exec boundary implements the loop; approvals can defer to native UI cards (Slack/Discord/Teams) and fall back to `/approve`. (See also [Tool System permissions](../../core/tool-system/permissions.md).)
 
 This is the recommended design. The right programming model: one abstract base with `_run_bash()` + `cleanup()`, concrete implementations per backend, a uniform `execute()` wrapper that handles snapshot-sourcing, CWD persistence, and interrupt handling. The right registration shape: typed plugin manifest, factory function, optional manager, registered by name. The right minimal seam: three callbacks (exec, readFile, writeFile) any extension can stub to delegate to anywhere. A single-binary single-host design is the *non-default* — it works for an IDE-coupled coding agent but breaks the moment you want multi-tenancy, untrusted code, or remote execution. Delegating the sandbox primitive to an Anthropic-supplied tool is a viable point on the design space — at the cost of inheriting that tool's capabilities.
 
@@ -310,7 +310,7 @@ The anti-pattern: leaving the sandbox via env-var override (`SANDBOX_DISABLED=1`
 
 Approvals belong at the exec boundary, not in the tool runner. Wire three pieces together at the exec boundary:
 
-1. **`requireApproval` classification** by `exec-approvals.ts` — given a command, security level, and ask mode, returns whether approval is needed (and what kind).
+1. **`requireApproval` classification** by the exec-approvals module — given a command, security level, and ask mode, returns whether approval is needed (and what kind). Policy detail: [Tool System permissions](../../core/tool-system/permissions.md).
 2. **Native-UI deferral** — if the trigger is a Slack message, the approval card renders in Slack with Approve/Deny buttons. If Discord, Discord buttons. If Teams, an Adaptive Card. If headless (cron), the request fails with a *headless denial* error message that names the missing approval.
 3. **Fallback to `/approve`** — when native UI isn't available, the user types `/approve <id>` in the next turn. The approval state is durable (`addDurableCommandApproval`), so the same command issued again is pre-approved.
 

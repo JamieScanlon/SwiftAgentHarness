@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftData
 import SwiftAgentKit
@@ -1635,11 +1636,22 @@ struct APILayerConversationsRouteTests {
         let runtimeSession = APILayerRESTRouteTestSupport.makeChatManager(container: container)
         try await runtimeSession.createConversation(with: model, userSystemPrompt: "tool approval route")
         let conversationID = try #require(await runtimeSession.currentConversationID)
+        let toolName = "delegate_remote_research"
+        let arguments = JSON.object(["target": .string("research")])
+        let binding = ToolCallApprovalBinding.from(toolName: toolName, arguments: arguments)
+        _ = await runtimeSession.toolApprovalRuntimeService.registerPendingToolApproval(
+            conversationID: conversationID,
+            runID: nil,
+            binding: binding,
+            route: .user,
+            isElevated: false
+        )
         let request: [String: Any] = [
-            "toolName": "delegate_remote_research",
+            "toolName": toolName,
             "status": "approved",
             "source": "test.rest",
-            "reason": "approved in REST coverage"
+            "reason": "approved in REST coverage",
+            "arguments": ["target": "research"],
         ]
         let body = try JSONSerialization.data(withJSONObject: request)
         let api = APILayer(port: 0)
@@ -1663,7 +1675,7 @@ struct APILayerConversationsRouteTests {
         let resolution = await runtimeSession.toolApprovalRuntimeService.toolApprovalResolution(
             conversationID: conversationID,
             runID: nil,
-            toolName: "delegate_remote_research",
+            binding: binding,
             route: .user
         )
         #expect(resolution?.status == .approved)

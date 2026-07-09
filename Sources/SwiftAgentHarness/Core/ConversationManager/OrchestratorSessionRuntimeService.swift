@@ -501,7 +501,14 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         guard conversation.interactionMode == .agent else { return }
         let runID = UUID()
         let sessionLaneKey = await selection.runtimeSessionLaneKey(conversationID: conversationID)
-        if let admission = await deps.runtimeLaneCoordinator.tryAcquireMainRun(sessionKey: sessionLaneKey, runID: runID) {
+        let admissionContext = RunLaneResolver.resolve(
+            RunLaneOriginContext(
+                sessionKey: sessionLaneKey,
+                runID: runID,
+                origin: .pendingCompletionResume
+            )
+        )
+        if let admission = await deps.runtimeLaneCoordinator.tryAcquire(admissionContext) {
             let admissionError = await selection.runtimeSessionError(
                 for: admission,
                 conversationID: conversationID,
@@ -529,7 +536,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
             model: conversation.model
         ) else {
             logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
+            await deps.runtimeLaneCoordinator.release(runID: runID)
             return
         }
         await agentRuntime.storeRunOrchestratorHandle(runID: runID, handle: acquisition.handle)
@@ -537,7 +544,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else {
             logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
             await agentRuntime.releaseRunOrchestrator(runID: runID)
-            await deps.runtimeLaneCoordinator.releaseMainRun(sessionKey: sessionLaneKey, runID: runID)
+            await deps.runtimeLaneCoordinator.release(runID: runID)
             return
         }
         await agentRuntime.startStreamingOrchestrationTask(

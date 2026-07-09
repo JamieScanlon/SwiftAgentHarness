@@ -12,6 +12,13 @@
 - TDD is preferred: write or update tests first, then implement.
 - Add unit and integration tests as appropriate for the behavior being introduced.
 
+#### Running the Test Suite
+- Do **not** pipe `swift test` through `tail` or `head` when monitoring progress or diagnosing hangs. Those commands buffer output until the run finishes, which can make a healthy multi-minute suite look stuck.
+- Prefer streaming output: `swift test` or `swift test -v`.
+- To keep a log while still seeing live output, use `tee`: `swift test 2>&1 | tee /tmp/swift-test.log`.
+- For focused work, filter first: `swift test --filter 'SomeTestSuite'`.
+- A likely hang is **no new output for >60s and ~0% CPU** on the test runner. Silence alone often just means buffered or piped output.
+
 #### Hanging Tests
 We frequently encounter hanging tests due to the complexity of the project and the amount of shared state. Under normal conditions all tests should run in under a minute. If it's taking longer than a minute there is a good change that the tests have hung. Also if you encounter the message:
 ```
@@ -33,6 +40,7 @@ In order to avoid flaky tests it is important that tests do not depend on shared
 - Follow Swift 6 strict concurrency
 - Use Swift @Observable over ObservableObject
 - Use code comments sparingly and only for non obvious implementations, gotchas, etc. (SwiftDoc-style documentation are the exception). Never referece plans or other non-code documents in code comments.
+- **Tool descriptions** — Treat `ToolDefinition.description` and model-facing parameter `description` fields as prompt text. Do not reword for style without stating behavioral intent. When changing descriptions, document affected tool names and rationale in the PR/commit message and follow [docs/process/tool-description-change-control.md](./docs/process/tool-description-change-control.md). Update [CHANGELOG.md](./CHANGELOG.md) for non-typo behavioral edits.
 
 ## Antipatterns
 

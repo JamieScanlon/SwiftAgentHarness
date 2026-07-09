@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 import SwiftData
@@ -105,7 +106,8 @@ struct APILayerConversationAdapterTests {
             status: .approved,
             source: "tests.adapter",
             reason: nil,
-            durable: false
+            durable: false,
+            arguments: .object([:])
         )
     }
 }

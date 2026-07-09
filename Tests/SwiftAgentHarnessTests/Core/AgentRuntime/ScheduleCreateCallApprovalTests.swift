@@ -58,8 +58,8 @@ struct ScheduleCreateCallApprovalTests {
         #expect(toolName == "schedule_create")
     }
 
-    @Test("pre-approved schedule_create bypasses cross-conversation approval gate")
-    func preApprovedBypassesApproval() async {
+    @Test("binding-specific preApprovedCallBindings bypasses cross-conversation approval gate")
+    func bindingPreApprovedBypassesApproval() async {
         let owner = UUID()
         let root = makeConversation(ownerAccountID: owner)
         let branch = makeConversation(
@@ -87,6 +87,60 @@ struct ScheduleCreateCallApprovalTests {
                 "conversationID": .string(branch.id.uuidString),
             ])
         )
+        let binding = ToolCallApprovalBinding.from(call: call)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: StubTurnLoopLLM(),
+            config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+        )
+        let outcome = await AgentLoopToolDispatch.dispatch(
+            call: call,
+            conversationID: root.id,
+            runID: nil,
+            orchestrator: orchestrator,
+            snapshot: snapshot,
+            configuration: AgentRuntimeTurnConfiguration(
+                enableTools: true,
+                enableAgents: true,
+                preApprovedCallBindings: [binding]
+            ),
+            conversation: root,
+            gateway: DefaultToolSystemGateway(),
+            parentLookup: { id in await catalog.getConversation(id: id) }
+        )
+        if case .approvalRequired = outcome {
+            Issue.record("Expected dispatch to proceed past approval gate")
+        }
+    }
+
+    @Test("name-only preApprovedToolNames no longer bypasses cross-conversation schedule_create gate")
+    func nameOnlyPreApprovalDoesNotBypass() async {
+        let owner = UUID()
+        let root = makeConversation(ownerAccountID: owner)
+        let branch = makeConversation(
+            ownerAccountID: owner,
+            parentConversationID: root.id,
+            lineageKind: .branch
+        )
+        let catalog = CallApprovalStubCatalog(conversations: [root.id: root, branch.id: branch])
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "schedule_create", description: "create", parameters: [], type: .function),
+            source: .local
+        )
+        let snapshot = RuntimeToolTurnPolicySnapshot(
+            availabilitySnapshots: [
+                RuntimeToolAvailabilitySnapshot(entry: entry, decision: .allowedDefault),
+            ],
+            effectiveEntries: [entry],
+            dispatchContract: .conservativeDefault
+        )
+        let call = ToolCallRequest(
+            id: "call-approval-3",
+            name: "schedule_create",
+            arguments: .object([
+                "payloadKind": .string("agentTurn"),
+                "conversationID": .string(branch.id.uuidString),
+            ])
+        )
         let orchestrator = SwiftAgentKitOrchestrator(
             llm: StubTurnLoopLLM(),
             config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
@@ -106,9 +160,11 @@ struct ScheduleCreateCallApprovalTests {
             gateway: DefaultToolSystemGateway(),
             parentLookup: { id in await catalog.getConversation(id: id) }
         )
-        if case .approvalRequired = outcome {
-            Issue.record("Expected dispatch to proceed past approval gate")
+        guard case .approvalRequired(let toolName, _) = outcome else {
+            Issue.record("Expected approvalRequired, got \(outcome)")
+            return
         }
+        #expect(toolName == "schedule_create")
     }
 
     private func makeConversation(

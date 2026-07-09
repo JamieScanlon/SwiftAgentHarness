@@ -37,6 +37,25 @@ extension AgentRuntimeSessionService {
         await selection.runtimeSessionLaneKey(conversationID: conversationID)
     }
 
+    func acquireRunLane(
+        sessionKey: String,
+        runID: UUID,
+        origin: RunLaneOriginKind
+    ) async -> RuntimeLaneAdmissionError? {
+        let context = RunLaneResolver.resolve(
+            RunLaneOriginContext(
+                sessionKey: sessionKey,
+                runID: runID,
+                origin: origin
+            )
+        )
+        return await deps.runtimeLaneCoordinator.tryAcquire(context)
+    }
+
+    func releaseRunLane(runID: UUID) async {
+        await deps.runtimeLaneCoordinator.release(runID: runID)
+    }
+
     func runtimeSessionError(
         for admissionError: RuntimeLaneAdmissionError,
         conversationID: UUID,

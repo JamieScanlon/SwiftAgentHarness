@@ -25,12 +25,13 @@ struct ProviderCatalogLoaderTests {
         }
     }
 
-    @Test("OpenAI gpt-4o row carries compat metadata")
+    @Test("OpenAI gpt-4o row carries strict tool schema compat")
     func openAICompat() throws {
         prepare()
         let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: "openai")
         let gpt4o = try #require(entries.first { $0.endpointModelId == "gpt-4o" })
         #expect(gpt4o.compat?.supportsEagerToolInputStreaming == true)
+        #expect(gpt4o.compat?.toolSchemaProfile?.toolSchemaMode == .openAIStrict)
     }
 
     @Test("Anthropic sonnet row carries thinking compat")

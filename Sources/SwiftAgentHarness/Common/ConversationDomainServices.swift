@@ -198,8 +198,9 @@ protocol ConversationToolModePolicyServicing: Sendable {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
-    ) async
+        durable: Bool,
+        arguments: JSON?
+    ) async throws
 }
 
 protocol ConversationToolModePolicyOwning: Sendable {
@@ -218,8 +219,9 @@ protocol ConversationToolModePolicyOwning: Sendable {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
-    ) async
+        durable: Bool,
+        arguments: JSON?
+    ) async throws
 }
 
 struct ConversationToolModePolicyService: ConversationToolModePolicyServicing {
@@ -261,9 +263,10 @@ struct ConversationToolModePolicyService: ConversationToolModePolicyServicing {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
-    ) async {
-        await owner.resolveToolApprovalForAPI(
+        durable: Bool,
+        arguments: JSON? = nil
+    ) async throws {
+        try await owner.resolveToolApprovalForAPI(
             conversationID: conversationID,
             runID: runID,
             toolName: toolName,
@@ -271,7 +274,8 @@ struct ConversationToolModePolicyService: ConversationToolModePolicyServicing {
             status: status,
             source: source,
             reason: reason,
-            durable: durable
+            durable: durable,
+            arguments: arguments
         )
     }
 }

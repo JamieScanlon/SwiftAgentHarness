@@ -173,6 +173,26 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         return [ToolPolicyTag(rawValue: Self.bashSandboxAdapterTag)]
     }
 
+    public func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        switch toolCall.name {
+        case Self.bashToolName, Self.processToolName:
+            return ToolCallCapabilityClassifier.parallelSafety(for: toolCall.name, arguments: toolCall.arguments)
+        default:
+            guard let hints = descriptorHintsByToolName[toolCall.name] else { return .unknown }
+            if let parallelSafety = hints.parallelSafety {
+                return parallelSafety
+            }
+            switch hints.parallelHint {
+            case .parallelizable:
+                return .parallelSafe
+            case .serialOnly:
+                return .mutating
+            case .unknown:
+                return .unknown
+            }
+        }
+    }
+
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         switch toolCall.name {
         case Self.readFileToolName:

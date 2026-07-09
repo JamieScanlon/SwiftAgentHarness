@@ -4,6 +4,50 @@ import SwiftAgentKit
 
 /// Runtime hooks invoked by the Model Pool at dispatch time.
 public enum ProviderRuntimeHooks {
+    public static func toolSchemaCompatProfile(
+        binding: ProviderBinding,
+        compat: ProviderModelCompat? = nil
+    ) -> ToolSchemaCompatProfile {
+        if let profile = compat?.toolSchemaProfile {
+            return profile
+        }
+        switch binding.providerId {
+        case "openai":
+            if openAIModelSupportsStrictTools(binding.endpointModelId) {
+                return ToolSchemaCompatProfile(toolSchemaMode: .openAIStrict)
+            }
+            return ToolSchemaCompatProfile(toolSchemaMode: .permissive)
+        case "ollama", "lmstudio":
+            return ToolSchemaCompatProfile(toolSchemaMode: .grammarConstrained)
+        default:
+            return ToolSchemaCompatProfile(toolSchemaMode: .permissive)
+        }
+    }
+
+    static func normalizeToolSchemaBatch(
+        entries: [ToolRegistryEntry],
+        binding: ProviderBinding?,
+        compat: ProviderModelCompat? = nil
+    ) -> ProviderToolSchemaBatchResult {
+        guard let binding else { return .empty }
+        let profile = toolSchemaCompatProfile(binding: binding, compat: compat ?? compatForBinding(binding))
+        return ProviderToolSchemaTransform.normalize(entries: entries, profile: profile)
+    }
+
+    public static func logToolSchemaDiagnostics(
+        _ diagnostics: [ToolSchemaNormalizationDiagnostic],
+        logger: Logger?
+    ) {
+        for diagnostic in diagnostics {
+            switch diagnostic.severity {
+            case .warning:
+                logger?.warning("[ProviderRuntimeHooks] \(diagnostic.logLine)")
+            case .error:
+                logger?.error("[ProviderRuntimeHooks] \(diagnostic.logLine)")
+            }
+        }
+    }
+
     public static func normalizeTools(
         _ tools: [ToolDefinition],
         binding: ProviderBinding?,
@@ -50,6 +94,12 @@ public enum ProviderRuntimeHooks {
             return provider.failoverError(error)
         }
         return DefaultProviderFailoverClassifier.classify(error)
+    }
+
+    private static func openAIModelSupportsStrictTools(_ modelId: String) -> Bool {
+        let normalized = modelId.lowercased()
+        let prefixes = ["gpt-4.1", "gpt-4o", "o1", "o3", "o4"]
+        return prefixes.contains { normalized.hasPrefix($0) }
     }
 
     public static func compatForBinding(_ binding: ProviderBinding) -> ProviderModelCompat? {

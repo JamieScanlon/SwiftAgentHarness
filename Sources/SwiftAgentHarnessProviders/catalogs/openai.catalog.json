@@ -16,7 +16,8 @@
         "cachedInputPer1MUSD": 1.25
       },
       "compat": {
-        "supportsEagerToolInputStreaming": true
+        "supportsEagerToolInputStreaming": true,
+        "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
     },
     {
@@ -33,7 +34,8 @@
         "cachedInputPer1MUSD": 0.5
       },
       "compat": {
-        "supportsEagerToolInputStreaming": true
+        "supportsEagerToolInputStreaming": true,
+        "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
     },
     {
@@ -50,7 +52,8 @@
         "cachedInputPer1MUSD": 0.1
       },
       "compat": {
-        "supportsEagerToolInputStreaming": true
+        "supportsEagerToolInputStreaming": true,
+        "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
     },
     {
@@ -70,7 +73,8 @@
         "reasoningEfforts": ["low", "medium", "high"]
       },
       "compat": {
-        "supportsEagerToolInputStreaming": true
+        "supportsEagerToolInputStreaming": true,
+        "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
     },
     {
@@ -90,7 +94,8 @@
         "reasoningEfforts": ["low", "medium", "high"]
       },
       "compat": {
-        "supportsEagerToolInputStreaming": true
+        "supportsEagerToolInputStreaming": true,
+        "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
     }
   ]

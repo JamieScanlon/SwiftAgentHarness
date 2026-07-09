@@ -406,8 +406,10 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         includeStreamUsage: Bool
     ) -> ChatQuery {
         let tools = config.availableTools.isEmpty ? nil : config.availableTools.map { tool in
-            ChatQuery.ChatCompletionToolParam(
-                function: tool.toOpenAIFunction()
+            let schema = config.toolParameterSchemasByName[tool.name]
+            let strict = config.toolSchemaStrictByName[tool.name] ?? false
+            return ChatQuery.ChatCompletionToolParam(
+                function: tool.toOpenAIFunction(parameterSchema: schema, strict: strict)
             )
         }
         let streamOptions = stream && includeStreamUsage ? ChatQuery.StreamOptions(includeUsage: true) : nil
@@ -603,9 +605,12 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
 // MARK: - Extension for OpenAI
 
 extension ToolDefinition {
-    func toOpenAIFunction() -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
+    func toOpenAIFunction(parameterSchema: JSON? = nil, strict: Bool = false) -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
         var params: JSONSchema?
-        if parameters.isEmpty == false {
+        if let parameterSchema,
+           let schema = ToolSchemaWireCodec.openAIJSONSchema(from: parameterSchema) {
+            params = schema
+        } else if parameters.isEmpty == false {
             var props: Dictionary<String, AnyJSONDocument> = Dictionary<String, AnyJSONDocument>()
             for p in parameters {
                 props[p.name] = .init(["type": p.type])
@@ -629,7 +634,7 @@ extension ToolDefinition {
             name: name,
             description: description,
             parameters: params,
-            strict: false
+            strict: strict
         )
     }
 }

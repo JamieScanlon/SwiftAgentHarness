@@ -71,7 +71,8 @@ Link `SwiftAgentHarnessProviders` and call `registerDefaults()`. Built-in plugin
 - **`StandardModelLLMFactory.makeBindingAdapter`** delegates adapter construction to `ProviderRegistry`.
 - **`ModelManager.syncRegistryFromDiscovery`** merges entries from registered (opt-in) text-inference plugins only.
 - **`BindingFailoverClassifier`** consults provider `failoverError` before generic classification.
-- **`TurnLoop`** normalizes tools via `ProviderRuntimeHooks.normalizeTools`.
+- **`TurnLoop`** normalizes tools via `ProviderRuntimeHooks.normalizeToolSchemaBatch` (canonical schema from `ToolRegistryEntry.canonicalParametersSchema` + provider compat profile) and passes `toolParameterSchemasByName` / `toolSchemaStrictByName` through `LLMRequestConfig`.
+- **`OrchestratorRuntimeService.orchestratorInvocationOptions`** fills the same schema maps for orchestrator `updateConversation` paths.
 - **`ProviderAdapterContext.compat`** carries per-model streaming dialect (`supportsEagerToolInputStreaming`, `thinkingFormat`). Adapters project the full **normalized event set** through `NormalizedStreamEmitter`; eager vs buffered tool-argument streaming follows `compat.supportsEagerToolInputStreaming`.
 - **`transformMessages` / `replayPolicy` / `validateReplayTurns`** on `TextInferenceProviding` reshape assistant turns for the target provider before dispatch (cross-provider thinking-block replay). `ProviderRuntimeHooks` delegates from TurnLoop after `RenderableMessageInvariant.sanitizeForDispatch`.
 - **`prepareDynamicModel` / `preferRuntimeResolvedModel`** support lazy dynamic catalog resolution in `ModelManager.resolve(.slug)` (OpenRouter prefers runtime `/models` overlay; Ollama defers `modelInfo` to prepare).

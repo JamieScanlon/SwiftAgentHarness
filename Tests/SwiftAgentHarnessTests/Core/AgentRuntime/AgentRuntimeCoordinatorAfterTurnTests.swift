@@ -136,7 +136,7 @@ struct AgentRuntimeCoordinatorAfterTurnTests {
         )
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: { conv, _ in conv.model.id },
-            streamLLM: { _, _, _, _, _ in
+            streamLLM: { _, _, _, _, _, _, _ in
                 AsyncThrowingStream { $0.finish() }
             }
         )
@@ -154,7 +154,7 @@ struct AgentRuntimeCoordinatorAfterTurnTests {
                     )
                 )
             },
-            dispatchApprovalFn: { _, _, _, _, _, _, _, _ in },
+            dispatchApprovalFn: { _, _, _, _, _, _, _ in },
             isHaltingFn: { _, _ in false }
         )
         return AgentLoopPorts(

@@ -12,7 +12,35 @@ This folder implements the harness **Tool System** spec. Model-driven tool visib
 - **`ToolRegistryEntry`** is the typed registry row used by the gateway (tool definition + source + effect/parallel/policy metadata + explicit execution-environment descriptor + normalized schema summary/fingerprint/version fields for API/WS contracts).
 - Execution environment contract: each entry resolves deterministic `executionEnvironment` (`kind`, `adapterID`, `isolationLevel`) from canonical descriptor projection, then runs through one adapter seam (`ToolExecutionEnvironmentAdapting`) before gateway/policy consumers read it.
 - Canonicalization invariant: `ToolRegistryEntry(descriptor:)` is a pure projection; Tool System no longer applies name-based fallback metadata inference or app-layer descriptor reconstruction from raw `ToolDefinition`.
-- Parallel dispatch matrix invariant: host parallel execution is enabled only when every effective entry is `readOnly + parallelizable`; any mutating/serial/unknown metadata keeps dispatch conservative.
+- Parallel dispatch matrix invariant: host parallel execution is enabled when `toolPolicy.parallelDispatchEnabled` is true and no effective entry has unknown static capability metadata; per-call `parallelSafety(for:)` predicates (via `ToolCallCapabilityClassifier` for polymorphic tools like `bash` and `process`) drive `mixedDeterministic` batch planning in SwiftAgentKit. Static registration metadata remains fail-closed for polymorphic tools; call-time classification determines read fan-out and call-level approval severity.
+
+### Production gate (X2 batch parallelism)
+
+Batch-level parallelism is **opt-in**. Defaults remain conservative:
+
+- `toolPolicy.dispatch.parallelEnabled` defaults to **`false`**
+- `toolPolicy.dispatch.plannerMode` defaults to **unset** (`nil` → serial unless parallel is enabled, in which case the gateway defaults planner to `mixedDeterministic`)
+
+When enabling in PromptConfig:
+
+```json
+"toolPolicy": {
+  "dispatch": {
+    "parallelEnabled": true,
+    "plannerMode": "mixedDeterministic"
+  }
+}
+```
+
+`TurnLoop` routes multi-tool turns through Kit `invokeTools` with the per-turn `dispatchContract` (`parallelToolDispatchEnabled` + `plannerMode`). Approval-gated, deny-gated, or sub-agent delegate calls force **serial fallback** for that batch.
+
+**Supported planner modes for hosts:** `serial` and `mixedDeterministic` (partition semantics — order-preserving groups of contiguous concurrency-safe calls). `allParallel` is **deprecated and ignored**: it still parses from PromptConfig for backward compatibility but is always remapped to `mixedDeterministic` at the harness dispatch boundary with a structured warning. No model-turn batch reaches Kit with `plannerMode: allParallel`. See [parallel-execution.md](../../../../harness-template/core/tool-system/parallel-execution.md) for floor vs partition semantics.
+
+## Description change control (S4)
+
+Tool `description` strings are **behavioral surface**, not documentation polish. They are sent to the model in the tool block and can change tool-selection behavior with no test failure. Treat edits like system-prompt changes: review for scope, safety, and confusion with sibling tools. MCP/A2A descriptions are third-party passthrough unless the harness explicitly overrides them.
+
+Process: [docs/process/tool-description-change-control.md](../../../../docs/process/tool-description-change-control.md) (author/reviewer checklists, changelog rule, file inventory).
 
 ## Boundary: SwiftAgentKit vs harness
 

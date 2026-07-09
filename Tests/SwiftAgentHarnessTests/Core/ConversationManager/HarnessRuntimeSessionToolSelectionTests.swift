@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftData
 import SwiftAgentKit
@@ -454,12 +455,13 @@ struct HarnessRuntimeSessionToolSelectionTests {
         await runtimeSession.toolApprovalRuntimeService.applyToolApprovalResolution(
             conversationID: conversationID,
             runID: nil,
-            toolName: toolName,
+            binding: ToolCallApprovalBinding.from(toolName: toolName, arguments: .object([:])),
             route: .user,
             status: .approved,
             source: "test",
             reason: nil,
             kind: .manual,
+            decision: .allowAlways,
             policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
             publicationSource: "test"
         )
@@ -468,6 +470,49 @@ struct HarnessRuntimeSessionToolSelectionTests {
             ToolPreDispatchPolicyContext(
                 request: ToolInvocationRequest(
                     toolName: toolName,
+                    conversationID: conversationID.uuidString,
+                    source: .model
+                ),
+                descriptor: nil
+            )
+        )
+        #expect(decision.decision == .allow)
+    }
+
+    @Test("live pre-dispatch evaluator allows after allow-once binding approval")
+    func livePreDispatchEvaluatorAllowsAfterAllowOnceBinding() async throws {
+        let container = try makeContainer()
+        let toolName = ConversationsToolProvider.listConversationsToolName
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            toolPolicy: ToolPolicyConfiguration(approvalRequiredToolNames: [toolName]),
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let model = makeModel()
+        try await runtimeSession.createConversation(with: model, userSystemPrompt: "s", topic: nil, description: nil)
+        let conversationID = try #require(await runtimeSession.currentConversationID)
+        let conversation = try #require(await runtimeSession.modelConversation(id: conversationID))
+        await runtimeSession.orchestratorSessionRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        let binding = ToolCallApprovalBinding.from(toolName: toolName, arguments: .object([:]))
+        await runtimeSession.toolApprovalRuntimeService.applyToolApprovalResolution(
+            conversationID: conversationID,
+            runID: nil,
+            binding: binding,
+            route: .user,
+            status: .approved,
+            source: "test",
+            reason: nil,
+            kind: .manual,
+            decision: .allowOnce,
+            policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
+            publicationSource: "test"
+        )
+        let evaluator = await runtimeSession.orchestratorRuntimeService.livePreDispatchPolicyEvaluator(conversationID: conversationID)
+        let decision = await evaluator.decide(
+            ToolPreDispatchPolicyContext(
+                request: ToolInvocationRequest(
+                    toolName: toolName,
+                    argumentsPayload: .object([:]),
                     conversationID: conversationID.uuidString,
                     source: .model
                 ),
@@ -494,12 +539,13 @@ struct HarnessRuntimeSessionToolSelectionTests {
         await runtimeSession.toolApprovalRuntimeService.applyToolApprovalResolution(
             conversationID: conversationID,
             runID: nil,
-            toolName: toolName,
+            binding: ToolCallApprovalBinding.from(toolName: toolName, arguments: .object([:])),
             route: .user,
             status: .approved,
             source: "test",
             reason: nil,
             kind: .manual,
+            decision: .allowAlways,
             policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
             publicationSource: "test"
         )
@@ -638,6 +684,39 @@ struct HarnessRuntimeSessionToolSelectionTests {
         #expect(snapshot.availabilitySnapshots.count == 2)
         #expect(snapshot.effectiveEntries.map(\.name) == ["read_tool", "unknown_tool"])
         #expect(snapshot.dispatchContract.parallelDispatchEnabled == false)
+    }
+
+    @Test("buildToolTurnPolicySnapshot enables parallel dispatch when bash is in catalog")
+    func buildToolTurnPolicySnapshotParallelWithBash() async throws {
+        let container = try makeContainer()
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            toolPolicy: ToolPolicyConfiguration(
+                parallelDispatchEnabled: true
+            )
+        )
+        let conversation = ModelConversation(id: UUID(), model: makeModel(), systemPrompt: "s")
+        let entries: [ToolRegistryEntry] = [
+            ToolRegistryEntry(
+                definition: ToolDefinition(name: "read_file", description: "d", parameters: [], type: .function),
+                source: .local,
+                effectClass: .readOnly,
+                parallelHint: .parallelizable
+            ),
+            ToolRegistryEntry(
+                definition: ToolDefinition(name: "bash", description: "d", parameters: [], type: .function),
+                source: .local,
+                effectClass: .mutating,
+                parallelHint: .serialOnly
+            ),
+        ]
+        let snapshot = await runtimeSession.orchestratorRuntimeService.buildToolTurnPolicySnapshot(
+            allEntries: entries,
+            conversation: conversation,
+            configuration: .init(enableTools: true, enableAgents: true)
+        )
+        #expect(snapshot.dispatchContract.parallelDispatchEnabled == true)
+        #expect(snapshot.dispatchContract.dispatchPlannerMode == .mixedDeterministic)
     }
 
     @Test("buildToolTurnPolicySnapshot advertises approval-gated tools separately from dispatch contract")

@@ -63,12 +63,14 @@ public actor SubAgentSpawnService {
                 await self?.applySubAgentDelegateEvent(event)
             },
             registerPendingApproval: { conversationID, runID, toolName, route, _, _ in
+                let binding = ToolCallApprovalBinding.from(toolName: toolName, arguments: .object([:]))
                 _ = await toolApproval.registerPendingToolApproval(
                     conversationID: conversationID,
                     runID: runID,
-                    toolName: toolName,
+                    binding: binding,
                     route: route,
-                    isElevated: false
+                    isElevated: false,
+                    requestedAt: Date()
                 )
             }
         )
@@ -1021,7 +1023,7 @@ public actor SubAgentSpawnService {
         orchestrator: SwiftAgentKitOrchestrator,
         snapshot: RuntimeToolTurnPolicySnapshot
     ) async -> ToolDispatchOutcome {
-        guard let toolEntry = snapshot.effectiveEntries.first(where: { $0.name == call.name }),
+        guard let toolEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
               subAgentPool.isDelegateTool(entry: toolEntry) else {
             return .denied(
                 AgentLoopToolDispatch.toolResultMessage(

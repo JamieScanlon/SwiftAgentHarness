@@ -62,6 +62,30 @@ struct ToolPolicyConfigurationTests {
         #expect(policy.isToolDenied(name: "blocked_build", context: agentContext))
     }
 
+    @Test("denylist blocks mixed-case MCP tool names")
+    func denylistBlocksMixedCase() async throws {
+        let policy = ToolPolicyConfiguration.unrestricted
+        var profile = try await ModeRegistryTestSupport.makeService(seedingBuiltIns: true).resolve(modeId: InteractionMode.agent.rawValue)
+        profile.tools = ModeProfileToolsSlice(allow: ["*"], deny: ["filesystem_write"], approvalPolicy: nil)
+        let context = ModePolicyContext(interactionMode: .agent, resolvedProfile: profile)
+        #expect(policy.isToolDenied(name: "Filesystem_Write", context: context))
+    }
+
+    @Test("denylist legacy alias blocks canonical tool name")
+    func denylistLegacyAliasBlocksCanonical() async throws {
+        let policy = ToolPolicyConfiguration.unrestricted
+        var profile = try await ModeRegistryTestSupport.makeService(seedingBuiltIns: true).resolve(modeId: InteractionMode.agent.rawValue)
+        profile.tools = ModeProfileToolsSlice(allow: ["*"], deny: ["terminal"], approvalPolicy: nil)
+        let context = ModePolicyContext(interactionMode: .agent, resolvedProfile: profile)
+        #expect(policy.isToolDenied(name: "bash", context: context))
+    }
+
+    @Test("sensitive tag set matches case-insensitive tool names")
+    func sensitiveTagSetCaseInsensitive() {
+        let policy = ToolPolicyConfiguration(sensitiveToolNames: ["Bash"])
+        #expect(policy.isToolSensitive(name: "bash"))
+    }
+
     @Test("execution environment policy metadata is exposed")
     func executionEnvironmentPolicyMetadata() {
         let policy = ToolPolicyConfiguration(
@@ -93,6 +117,16 @@ struct ToolPolicyConfigurationTests {
         #expect(parsed.parallelDispatchEnabled == true)
         #expect(parsed.dispatchPlannerMode == .mixedDeterministic)
         #expect(parsed.pendingToolTimeoutSeconds == 12)
+    }
+
+    @Test("dispatch parser still accepts allParallel for backward compatibility")
+    func dispatchParserAcceptsAllParallel() {
+        let parsed = ToolPolicyConfiguration.parseDispatchPolicyBlock([
+            "parallelEnabled": true,
+            "plannerMode": "allParallel",
+        ])
+        #expect(parsed.parallelDispatchEnabled == true)
+        #expect(parsed.dispatchPlannerMode == .allParallel)
     }
 
     @Test("dispatch parser rejects malformed planner and non-positive timeout")

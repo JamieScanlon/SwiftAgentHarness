@@ -283,4 +283,26 @@ struct HarnessRuntimeSessionSlashCommandDispatchTests {
             })
         }
     }
+
+    @Test("/tools explain returns policy scope diagnostics")
+    func toolsExplainSlashCommand() async throws {
+        let container = try HarnessRuntimeSessionSlashDispatchSupport.makeContainer()
+        let manager = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let model = HarnessRuntimeSessionSlashDispatchSupport.makeModel(name: "slash:tools-explain")
+        try await manager.createConversation(with: model, userSystemPrompt: "sys")
+        let cid = try #require(await manager.currentConversationID)
+
+        let response = try await manager.testing_runSlashCommandIfNeeded("/tools explain", conversationID: cid)
+        #expect(response != nil)
+
+        let messages = try await manager.listCurrentMessages()
+        let assistant = try #require(messages.last { $0.role == .assistant })
+        #expect(assistant.content.contains("Tool policy explain"))
+        #expect(assistant.content.contains("Summary:"))
+        #expect(assistant.content.contains("mode profile:"))
+        #expect(assistant.content.contains("Policy coherence:"))
+    }
 }

@@ -16,7 +16,11 @@ extension SlashCommandDispatchService {
             )
         }
         let context = try memoryService.makeSessionContext(conversationID: conversationID, cwd: cwd)
-        _ = try await memoryService.bootstrapSession(context: context)
+        if await memoryService.currentSnapshotGeneration(conversationID: conversationID) == 0 {
+            _ = try await memoryService.bootstrapSession(context: context)
+        } else {
+            try AgentMemoryStore(memoryDirectory: context.memoryDirectory).ensureLayout()
+        }
         let resolvedFilename = (filename?.isEmpty == false) ? filename! : "MEMORY.md"
         let targetPath: String
         do {

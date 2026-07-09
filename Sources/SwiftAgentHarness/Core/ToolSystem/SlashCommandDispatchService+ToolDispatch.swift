@@ -202,12 +202,18 @@ extension SlashCommandDispatchService {
         let spec = toolApproval.approvalContractSpec(
             toolName: toolName,
             route: route,
-            isElevated: decision.isElevated
+            isElevated: decision.isElevated,
+            arguments: invocationRequest.argumentsPayload
+        )
+        let approvalCall = ToolCallRequest(
+            id: invocationRequest.toolCallID,
+            name: toolName,
+            arguments: ToolCallApprovalBinding.orchestratorPolicyArguments(for: invocationRequest)
         )
         _ = await toolApproval.registerPendingToolApproval(
             conversationID: conversationID,
             runID: conversation.currentRunID,
-            toolName: toolName,
+            call: approvalCall,
             route: route,
             isElevated: decision.isElevated
         )
@@ -236,12 +242,13 @@ extension SlashCommandDispatchService {
                 source: "slash.toolDispatch"
             )
         )
+        let binding = ToolCallApprovalBinding.from(call: approvalCall)
         let resolution: ToolApprovalResolution
         do {
             resolution = try await toolApproval.waitForToolApprovalResolution(
                 conversationID: conversationID,
                 runID: conversation.currentRunID,
-                toolName: toolName,
+                binding: binding,
                 route: route
             )
         } catch {
@@ -298,7 +305,11 @@ extension SlashCommandDispatchService {
                 trustPolicy: deps.trustPolicyConfiguration,
                 subAgentToolClassifier: subAgentPool
             )
-            guard refreshedDecision.allowed else {
+            let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
+                call: approvalCall,
+                configuration: approvedRuntimeConfiguration
+            )
+            guard refreshedDecision.allowed || bindingPreApproved else {
                 let reason = refreshedDecision.blockReason?.rawValue ?? "blocked"
                 return try await deliverSyntheticSlashAssistantResponse(
                     conversationID: conversationID,
@@ -672,7 +683,7 @@ extension SlashCommandDispatchService {
         )
     }
 
-    private func modePolicyContext(for conversation: ModelConversation) async -> ModePolicyContext {
+    func modePolicyContext(for conversation: ModelConversation) async -> ModePolicyContext {
         let profile = await ContextEngineProjectionPolicyBuilder.resolvedModeProfile(
             for: conversation,
             modeRegistry: deps.modeRegistry,
@@ -681,7 +692,7 @@ extension SlashCommandDispatchService {
         return ModePolicyContext(conversation: conversation, resolvedProfile: profile)
     }
 
-    private func configurationApplyingTrustPolicy(
+    func configurationApplyingTrustPolicy(
         _ configuration: HarnessRuntimeSession.Configuration
     ) -> HarnessRuntimeSession.Configuration {
         var out = configuration

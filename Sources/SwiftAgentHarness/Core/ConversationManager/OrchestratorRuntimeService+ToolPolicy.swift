@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import Logging
 import SwiftAgentKit
@@ -71,38 +72,92 @@ extension OrchestratorRuntimeService {
             let runtimeConfiguration = AgentRuntimeTurnConfiguration(managerConfiguration: policyConfiguration)
             let modeCtx = await modePolicy.modePolicyContext(for: conversation)
             let entry: ToolRegistryEntry
+            let turnEntries: [ToolRegistryEntry]
             if let orchestrator = await resolveOrchestrator() {
-                let entries = await gateway.allRegisteredToolsForTurn(
+                turnEntries = await gateway.allRegisteredToolsForTurn(
                     orchestrator: orchestrator,
                     dataProvider: await resolveToolData(),
                     logger: logger
                 )
-                guard let resolved = entries.first(where: { $0.name.caseInsensitiveCompare(requestedName) == .orderedSame }) else {
+                guard let resolved = turnEntries.first(where: { $0.name.caseInsensitiveCompare(requestedName) == .orderedSame }) else {
                     return Self.unavailableDecision()
                 }
                 entry = resolved
             } else if let descriptor = context.descriptor {
+                turnEntries = []
                 entry = ToolRegistryEntry(descriptor: descriptor)
             } else {
                 return Self.unavailableDecision()
             }
-            let decision = gateway.evaluateAvailability(
+            let groupIndex = ToolPolicyGroupIndex.build(from: turnEntries.isEmpty ? [entry] : turnEntries)
+            let callArguments = context.request.argumentsPayload ?? .object([:])
+            let call = ToolCallRequest(
+                id: context.request.toolCallID,
+                name: requestedName,
+                arguments: callArguments
+            )
+            let decision = gateway.evaluateCallAvailability(
                 entry: entry,
+                call: call,
                 conversation: conversation,
                 modePolicyContext: modeCtx,
                 configuration: runtimeConfiguration,
                 toolPolicy: deps.toolPolicy,
                 trustPolicy: deps.trustPolicyConfiguration,
-                subAgentToolClassifier: subAgentPool
+                subAgentToolClassifier: subAgentPool,
+                groupIndex: groupIndex
             )
+            let gatingDecision = gateway.evaluateCallGating(
+                entry: entry,
+                call: call,
+                conversation: conversation,
+                configuration: runtimeConfiguration,
+                toolPolicy: deps.toolPolicy,
+                modePolicyContext: modeCtx,
+                groupIndex: groupIndex,
+                durableRules: runtimeConfiguration.preApprovedToolRules
+            )
+            if gatingDecision.behavior == .deny {
+                return ToolPreDispatchPolicyDecision(
+                    decision: .deny,
+                    reasonCode: "tool_policy_gating_denied",
+                    reasonText: "Tool blocked by call-level policy."
+                )
+            }
+            let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
+                call: ToolCallRequest(
+                    id: context.request.toolCallID,
+                    name: requestedName,
+                    arguments: callArguments
+                ),
+                configuration: runtimeConfiguration
+            )
+            let effectiveDecision: ToolAvailabilityDecision
+            if bindingPreApproved, decision.blockReason == .approvalRequired {
+                effectiveDecision = ToolAvailabilityDecision(
+                    allowed: true,
+                    blockReason: nil,
+                    isSensitive: decision.isSensitive,
+                    requiresEscalation: decision.requiresEscalation,
+                    requiresApproval: decision.requiresApproval,
+                    isElevated: decision.isElevated,
+                    approvalGranted: true,
+                    approvalRoute: decision.approvalRoute,
+                    delegationPermissionPolicy: decision.delegationPermissionPolicy,
+                    delegationTrustLevel: decision.delegationTrustLevel
+                )
+            } else {
+                effectiveDecision = decision
+            }
             return Self.mapAvailabilityDecision(
-                decision,
+                effectiveDecision,
                 dispatchContext: OrchestratorRuntimeService.executionDispatchContext(for: entry),
                 elevatedExecutionPolicy: deps.toolPolicy.elevatedExecutionPolicy,
                 approvalContractSpec: toolApproval.approvalContractSpec(
                     toolName: entry.name,
-                    route: decision.approvalRoute ?? .user,
-                    isElevated: decision.isElevated
+                    route: effectiveDecision.approvalRoute ?? .user,
+                    isElevated: effectiveDecision.isElevated,
+                    arguments: callArguments
                 )
             )
         }
@@ -168,9 +223,15 @@ extension OrchestratorRuntimeService {
     func approvalContractSpec(
         toolName: String,
         route: ToolApprovalRoute,
-        isElevated: Bool
+        isElevated: Bool,
+        arguments: JSON? = nil
     ) async -> ToolApprovalContractSpec {
-        installedToolApproval.approvalContractSpec(toolName: toolName, route: route, isElevated: isElevated)
+        installedToolApproval.approvalContractSpec(
+            toolName: toolName,
+            route: route,
+            isElevated: isElevated,
+            arguments: arguments
+        )
     }
 
     func effectiveAvailableToolEntries(
@@ -198,6 +259,7 @@ extension OrchestratorRuntimeService {
     ) async -> [RuntimeToolAvailabilitySnapshot] {
         let modeCtx = await installedModePolicy.modePolicyContext(for: conversation)
         let runtimeConfiguration = AgentRuntimeTurnConfiguration(managerConfiguration: configuration)
+        let groupIndex = ToolPolicyGroupIndex.build(from: allEntries)
         return allEntries
             .map { entry in
                 RuntimeToolAvailabilitySnapshot(
@@ -209,7 +271,8 @@ extension OrchestratorRuntimeService {
                         configuration: runtimeConfiguration,
                         toolPolicy: deps.toolPolicy,
                         trustPolicy: deps.trustPolicyConfiguration,
-                        subAgentToolClassifier: subAgentPool
+                        subAgentToolClassifier: subAgentPool,
+                        groupIndex: groupIndex
                     )
                 )
             }
@@ -221,6 +284,7 @@ extension OrchestratorRuntimeService {
         conversation: ModelConversation,
         configuration: HarnessRuntimeSession.Configuration
     ) async -> RuntimeToolTurnPolicySnapshot {
+        let modeCtx = await installedModePolicy.modePolicyContext(for: conversation)
         let availabilitySnapshots = await toolAvailabilitySnapshots(
             allEntries: allEntries,
             conversation: conversation,
@@ -239,10 +303,31 @@ extension OrchestratorRuntimeService {
             effectiveEntries: allowedEntries
         )
         await installTurnToolRegistryEntriesForRuntimeMiddleware(effectiveEntries)
+        let coherenceReport = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: allEntries,
+            modePolicyContext: modeCtx,
+            toolPolicy: deps.toolPolicy,
+            conversation: conversation
+        )
+        await ToolPolicyCoherenceDiagnostics.shared.log(
+            report: coherenceReport,
+            catalogFingerprint: ToolPolicyCoherenceAnalyzer.catalogFingerprint(from: allEntries),
+            logger: deps.logger
+        )
+        let nameIndexBuild = ToolRegistryNameIndex.buildWithDiagnostics(entries: allEntries)
+        for dropped in nameIndexBuild.diagnostics.droppedAliases {
+            deps.logger?.warning(
+                "[ToolPolicy] Dropped alias '\(dropped.alias)' → '\(dropped.requestedCanonical)': \(dropped.reason)"
+            )
+        }
         return RuntimeToolTurnPolicySnapshot(
             availabilitySnapshots: availabilitySnapshots,
             effectiveEntries: effectiveEntries,
-            dispatchContract: dispatchContract
+            dispatchContract: dispatchContract,
+            groupIndex: ToolPolicyGroupIndex.build(from: allEntries),
+            nameIndex: nameIndexBuild.index,
+            modePolicyContext: modeCtx,
+            catalogEntriesForNameIndex: allEntries
         )
     }
 }

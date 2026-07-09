@@ -192,7 +192,23 @@ enum TurnLoopTestPorts {
         stopRequestedFn: (@Sendable (UUID) async -> Bool)? = nil
     ) -> AgentLoopPorts {
         let emptySnapshot = RuntimeToolTurnPolicySnapshot(
-            availabilitySnapshots: [],
+            availabilitySnapshots: effectiveToolEntries.map {
+                RuntimeToolAvailabilitySnapshot(
+                    entry: $0,
+                    decision: ToolAvailabilityDecision(
+                        allowed: true,
+                        blockReason: nil,
+                        isSensitive: false,
+                        requiresEscalation: false,
+                        requiresApproval: false,
+                        isElevated: false,
+                        approvalGranted: false,
+                        approvalRoute: nil,
+                        delegationPermissionPolicy: nil,
+                        delegationTrustLevel: nil
+                    )
+                )
+            },
             effectiveEntries: effectiveToolEntries,
             dispatchContract: .conservativeDefault
         )
@@ -243,7 +259,7 @@ enum TurnLoopTestPorts {
         }
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: ensureBoundFn ?? { conv, _ in conv.model.id },
-            streamLLM: { _, _, _, _, temperatureOverride in
+            streamLLM: { _, _, _, _, _, _, temperatureOverride in
                 if let temperatureRecorder {
                     await temperatureRecorder.record(temperatureOverride)
                 }
@@ -260,7 +276,19 @@ enum TurnLoopTestPorts {
                 }
                 return dispatchQueue.next()
             },
-            dispatchApprovalFn: { _, _, _, _, _, _, _, _ in },
+            dispatchBatchFn: { calls, _, _, _, _, _, _, _, _, _ in
+                if let slowDispatchGate, !calls.isEmpty {
+                    await slowDispatchGate.markDispatchEntered()
+                    await slowDispatchGate.waitForRelease()
+                }
+                var outcomes: [ToolDispatchOutcome] = []
+                outcomes.reserveCapacity(calls.count)
+                for _ in calls {
+                    outcomes.append(dispatchQueue.next())
+                }
+                return outcomes
+            },
+            dispatchApprovalFn: { _, _, _, _, _, _, _ in },
             isHaltingFn: { _, _ in false }
         )
         let contextPort = SessionRuntimeContextPort(

@@ -1,6 +1,8 @@
+import EasyJSON
 import Foundation
 import SwiftData
 import SwiftAgentKit
+import SwiftAgentKitOrchestrator
 import Testing
 @testable import SwiftAgentHarness
 
@@ -79,15 +81,18 @@ struct SlashCommandToolDispatchApprovalTests {
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        let conversation = try #require(await manager.modelConversation(id: cid))
+        let slashBinding = slashApprovalBinding(toolName: toolName, rawText: "/queue list all")
         await manager.toolApprovalRuntimeService.applyToolApprovalResolution(
             conversationID: cid,
-            runID: nil,
-            toolName: toolName,
+            runID: conversation.currentRunID,
+            binding: slashBinding,
             route: .user,
             status: .approved,
             source: "test",
             reason: nil,
             kind: .manual,
+            decision: .allowOnce,
             policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
             publicationSource: "test"
         )
@@ -106,6 +111,7 @@ struct SlashCommandToolDispatchApprovalTests {
         let messages = try await manager.listCurrentMessages()
         #expect(messages.contains { $0.role == .assistant && !$0.content.contains("Tool dispatch denied") })
         #expect(!messages.contains { $0.role == .assistant && $0.content.contains("Tool dispatch blocked by policy") })
+        #expect(!messages.contains { $0.role == .assistant && $0.content.contains("requires approval before execution") })
     }
 
     @Test("denied approval prevents slash tool execution")
@@ -139,10 +145,11 @@ struct SlashCommandToolDispatchApprovalTests {
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        let conversation = try #require(await manager.modelConversation(id: cid))
         await manager.toolApprovalRuntimeService.applyToolApprovalResolution(
             conversationID: cid,
-            runID: nil,
-            toolName: toolName,
+            runID: conversation.currentRunID,
+            binding: slashApprovalBinding(toolName: toolName, rawText: "/queue list all"),
             route: .user,
             status: .denied,
             source: "test",
@@ -186,6 +193,27 @@ struct SlashCommandToolDispatchApprovalTests {
         #expect(!lifecycle.contains { $0.name == .toolApprovalRequired })
         #expect(lifecycle.contains { $0.name == .toolCallCompleted && $0.toolName == toolName })
     }
+}
+
+private func slashApprovalBinding(toolName: String, rawText: String) -> ToolCallApprovalBinding {
+    let parsedName = rawText.split(separator: " ").first.map(String.init)?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? "queue"
+    let argsText = rawText.split(separator: " ", maxSplits: 1).dropFirst().joined(separator: " ")
+    let envelope = RawToolCommandEnvelope(
+        envelopeVersion: "1",
+        rawText: rawText,
+        commandToken: "/\(parsedName)",
+        commandName: parsedName,
+        argsText: argsText,
+        parsedTokens: argsText.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    )
+    let request = ToolInvocationRequest(
+        toolName: toolName,
+        argumentsPayload: .object([:]),
+        argumentMode: .raw,
+        rawEnvelope: envelope,
+        source: .command
+    )
+    return ToolCallApprovalBinding.from(invocation: request)
 }
 
 private enum HarnessRuntimeSessionSlashDispatchSupport {

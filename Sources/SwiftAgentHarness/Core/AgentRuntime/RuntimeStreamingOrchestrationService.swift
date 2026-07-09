@@ -42,13 +42,17 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         originSenderID: String? = nil
     ) async throws -> ChatStreamResponse {
         let harness = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        let runLaneOrigin = RunLaneResolver.runLaneOrigin(originSurface: originSurface)
         let base = AgentRuntimeTurnConfiguration(
             enableTools: enableTools,
             enableAgents: enableAgents,
             expectedPreviousTailHarnessMessageID: expectedPreviousTailHarnessMessageID,
             inputTrustRaw: inputTrustRaw,
             resolvedInputTrustClass: resolvedInputTrustClass,
-            ephemeralSystemReminder: systemReminder
+            ephemeralSystemReminder: systemReminder,
+            originSurface: originSurface,
+            originSenderID: originSenderID,
+            runLaneOrigin: runLaneOrigin
         )
         let configuration: AgentRuntimeTurnConfiguration
         if let originSurface, !originSurface.isEmpty {

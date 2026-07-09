@@ -105,7 +105,8 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
+        durable: Bool,
+        arguments: JSON?
     ) async throws
     func apiListAvailableSkills() async throws -> [AvailableSkillInfo]
     func apiListAvailableSkills(conversationID: UUID) async throws -> [AvailableSkillInfo]
@@ -517,9 +518,10 @@ extension APILayerConversationManaging {
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String?,
-        durable: Bool
+        durable: Bool,
+        arguments: JSON?
     ) async throws {
-        let _ = (conversationID, runID, toolName, route, status, source, reason, durable)
+        let _ = (conversationID, runID, toolName, route, status, source, reason, durable, arguments)
         throw APILayerConversationAPIError.unsupported
     }
 }

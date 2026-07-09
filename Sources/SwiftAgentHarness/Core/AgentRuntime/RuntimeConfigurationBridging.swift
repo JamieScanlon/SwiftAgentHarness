@@ -7,6 +7,8 @@ extension AgentRuntimeTurnConfiguration {
             enableAgents: managerConfiguration.enableAgents,
             allowEscalatedTools: managerConfiguration.allowEscalatedTools,
             preApprovedToolNames: managerConfiguration.preApprovedToolNames,
+            preApprovedCallBindings: managerConfiguration.preApprovedCallBindings,
+            preApprovedToolRules: managerConfiguration.preApprovedToolRules,
             expectedPreviousTailHarnessMessageID: managerConfiguration.expectedPreviousTailHarnessMessageID,
             inputTrustRaw: managerConfiguration.inputTrustRaw,
             resolvedInputTrustClass: managerConfiguration.resolvedInputTrustClass,
@@ -14,7 +16,8 @@ extension AgentRuntimeTurnConfiguration {
             originSurface: managerConfiguration.originSurface,
             originSenderID: managerConfiguration.originSenderID,
             turnThinkingOverride: managerConfiguration.turnThinkingOverride,
-            turnModelSlug: managerConfiguration.turnModelSlug
+            turnModelSlug: managerConfiguration.turnModelSlug,
+            runLaneOrigin: managerConfiguration.runLaneOrigin
         )
     }
 }
@@ -26,6 +29,8 @@ extension HarnessRuntimeSession.Configuration {
             enableAgents: runtimeConfiguration.enableAgents,
             allowEscalatedTools: runtimeConfiguration.allowEscalatedTools,
             preApprovedToolNames: runtimeConfiguration.preApprovedToolNames,
+            preApprovedCallBindings: runtimeConfiguration.preApprovedCallBindings,
+            preApprovedToolRules: runtimeConfiguration.preApprovedToolRules,
             expectedPreviousTailHarnessMessageID: runtimeConfiguration.expectedPreviousTailHarnessMessageID,
             inputTrustRaw: runtimeConfiguration.inputTrustRaw,
             resolvedInputTrustClass: runtimeConfiguration.resolvedInputTrustClass,
@@ -33,7 +38,8 @@ extension HarnessRuntimeSession.Configuration {
             originSurface: runtimeConfiguration.originSurface,
             originSenderID: runtimeConfiguration.originSenderID,
             turnThinkingOverride: runtimeConfiguration.turnThinkingOverride,
-            turnModelSlug: runtimeConfiguration.turnModelSlug
+            turnModelSlug: runtimeConfiguration.turnModelSlug,
+            runLaneOrigin: runtimeConfiguration.runLaneOrigin
         )
     }
 }

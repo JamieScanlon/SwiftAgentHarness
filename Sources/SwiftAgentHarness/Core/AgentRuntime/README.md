@@ -82,10 +82,13 @@ This keeps durable run APIs and runtime terminal mapping aligned with harness-st
 
 SwiftAgentKit executes tool batches and now supports explicit dispatch policy (`serial` vs `parallel`) and pending-handle outcomes.
 
-- **Default remains conservative serial**: missing/unknown parallel-safety metadata resolves to serial.
+- **Default remains conservative serial**: missing/unknown parallel-safety metadata resolves to serial; host `parallelDispatchEnabled` defaults to **false**.
+- `TurnLoop` dispatches multi-tool turns via `RuntimeToolPort.dispatchBatch` → Kit `invokeTools`, mapping the per-turn `dispatchContract` (`parallelToolDispatchEnabled`, `plannerMode`). Single-tool and approval/delegate-gated batches fall back to serial per-call dispatch.
+- Transcript commits remain **in call order**; lifecycle `tool.callCompleted` is emitted after each commit.
 - The harness wires dispatch policy contract through `ToolPolicyConfiguration` (`toolPolicy.dispatch`) into orchestrator config/options.
 - `TransformingToolProvider` now forwards `executeToolOutcome`, `parallelSafety`, and pending cancellation hooks so middleware stays compatible with pending-first providers.
 - Pending completions are consumed from `SwiftAgentKitOrchestrator.pendingToolCompletions` and ingested back into the conversation transcript as tool messages.
+- Production opt-in guidance: [Tool System README — Production gate](../ToolSystem/README.md#production-gate-x2-batch-parallelism).
 
 ## Facade type (`AgentRuntimeExecuting`)
 

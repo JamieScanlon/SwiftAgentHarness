@@ -11,10 +11,12 @@ actor RuntimeLaneSubAgentRunScheduler: SubAgentRunScheduling {
 
     func acquire(reservation: SubAgentRunReservation) async throws -> SubAgentRunAcquisition {
         let runID = UUID()
+        let sessionKey = "subagent:\(reservation.parentConversationID.uuidString.lowercased())"
         if let admission = await runtimeLaneCoordinator.tryAcquireSubagentRun(
             parentRunID: reservation.parentRunID,
             parentConversationID: reservation.parentConversationID,
-            runID: runID
+            runID: runID,
+            sessionKey: sessionKey
         ) {
             throw admission
         }

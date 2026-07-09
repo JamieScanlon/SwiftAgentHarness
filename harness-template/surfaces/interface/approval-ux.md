@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-When a tool call needs human sign-off, two questions arise and they belong to different layers: **what** needs approving (and the rich data that justifies it) is decided once, at the [Tool System](../../core/tool-system/) / [exec](../../backends/execution-environments/) layer; **how** the approval is asked is a per-surface capability. This page goes deeper than the [interface README](./README.md) (§ Rec 6–7) on the delivery half.
+When a tool call needs human sign-off, two questions arise and they belong to different layers: **what** needs approving (and the rich data that justifies it) is decided once, at the [Tool System](../../core/tool-system/permissions.md) / [exec](../../backends/execution-environments/) layer; **how** the approval is asked is a per-surface capability. This page goes deeper than the [interface README](./README.md) (§ Rec 6–7) on the delivery half.
 
 The prescriptive shape:
 
@@ -23,7 +23,7 @@ This split is the whole architecture, so it's worth stating precisely who owns w
 
 | Concern | Owner | Example |
 |---|---|---|
-| *Whether* a call needs approval | [Tool System](../../core/tool-system/) / [exec](../../backends/execution-environments/) | "this `bash` runs outside the sandbox" → needs approval |
+| *Whether* a call needs approval | [Tool System](../../core/tool-system/permissions.md) / [exec](../../backends/execution-environments/) | "this `bash` runs outside the sandbox" → needs approval |
 | The *rich justification* data | classifier (same layer) | the exact command; a unified diff; a destructive-flag; a severity |
 | Packaging that into a portable request | classifier → core | a `MessagePresentation` (title + description + diff blocks + buttons) |
 | *How* it's asked on this surface | **Interface (this page)** | Slack interactive card / terminal overlay / `/approve` line |
@@ -87,7 +87,7 @@ This keeps a new surface cheap: implement render + deliver + report-decision, in
 Normalize every surface's input to one set of outcomes:
 
 - `allow-once` — permit this call only.
-- `allow-always` — permit and **persist a permission rule** so future matching calls auto-approve (scope it: this exact command, this tool, this directory — the rule shape lives at the [Tool System](../../core/tool-system/) layer).
+- `allow-always` — permit and **persist a permission rule** so future matching calls auto-approve (scope it: this exact command, this tool, this directory — the rule shape lives at the [Tool System](../../core/tool-system/permissions.md) layer).
 - `deny` — reject this call; the model gets a tool error it can react to.
 - `timeout` — no answer within `timeoutMs`; resolved by `timeoutBehavior` (`allow` or `deny`, declared per request — default `deny` for anything destructive).
 - `cancelled` — the turn was cancelled out from under the request.
@@ -143,7 +143,7 @@ The thin alternative: instead of per-tool components or an approval capability, 
 ## Cross-references
 
 - [Interface README](./README.md) — § Rec 6–7 (classification vs delivery), the `MessagePresentation` vocabulary (`buttons` block), `presentationCapabilities`, core-owned text fallback.
-- [Tool System](../../core/tool-system/) — where approval is *classified* and where persisted permission rules (`allow-always`) live.
+- [Tool System permissions](../../core/tool-system/permissions.md) — where approval is *classified* and where persisted permission rules (`allow-always`) live.
 - [Execution Environments](../../backends/execution-environments/) — the exec-approval argument this page's split mirrors.
 - [channels.md](./channels.md) — the `approvalCapability` slot, native card delivery, and the `/approve` floor.
 - [tui.md](./tui.md) — approval as a terminal overlay.

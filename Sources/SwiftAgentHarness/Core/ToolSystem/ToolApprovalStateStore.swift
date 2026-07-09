@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 
 enum ToolApprovalResolutionStatus: String, Sendable, Codable {
@@ -18,6 +19,23 @@ struct ToolApprovalResolution: Sendable, Codable, Equatable {
     let source: String
     let reason: String?
     let kind: ToolApprovalResolutionKind
+    let decision: ApprovalDecision?
+
+    init(
+        status: ToolApprovalResolutionStatus,
+        decidedAt: Date,
+        source: String,
+        reason: String?,
+        kind: ToolApprovalResolutionKind,
+        decision: ApprovalDecision? = nil
+    ) {
+        self.status = status
+        self.decidedAt = decidedAt
+        self.source = source
+        self.reason = reason
+        self.kind = kind
+        self.decision = decision
+    }
 }
 
 struct ToolApprovalContractSpec: Sendable, Codable, Equatable {
@@ -50,6 +68,7 @@ struct ToolApprovalTimedOutResolution: Sendable, Equatable {
     let conversationID: UUID
     let runID: UUID?
     let toolName: String
+    let binding: ToolCallApprovalBinding
     let route: ToolApprovalRoute
     let status: ToolApprovalResolutionStatus
     let source: String
@@ -61,12 +80,14 @@ struct ToolApprovalTimedOutResolution: Sendable, Equatable {
 private struct ToolApprovalStateKey: Hashable, Sendable {
     let conversationID: UUID
     let runID: UUID?
-    let toolName: String
+    let binding: ToolCallApprovalBinding
     let route: ToolApprovalRoute
+
+    var toolName: String { binding.toolName }
 
     /// A stable string id for the shared `ApprovalCoordinator` lifecycle engine.
     var coordinatorID: String {
-        "tool|\(conversationID.uuidString)|\(runID?.uuidString ?? "-")|\(toolName)|\(route.rawValue)"
+        "tool|\(conversationID.uuidString)|\(runID?.uuidString ?? "-")|\(binding.toolName)|\(binding.argumentsFingerprint)|\(route.rawValue)"
     }
 }
 
@@ -77,7 +98,7 @@ enum ToolApprovalWaitError: Error, Sendable {
 /// Tool-path façade over the core-owned `ApprovalCoordinator`. The coordinator owns
 /// pending registration, dedupe, expiry/timeout, waiter resume, and cancellation;
 /// this store keeps the tuple-indexed resolution map the runtime queries
-/// (conversation-wide fallback, approved-tool-name set) and the per-key contract
+/// (conversation-wide fallback, approved call bindings) and the per-key contract
 /// specs needed to report timeouts.
 actor ToolApprovalStateStore {
     private let coordinator: ApprovalCoordinator
@@ -92,32 +113,40 @@ actor ToolApprovalStateStore {
     func setResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user,
         status: ToolApprovalResolutionStatus,
         source: String,
         reason: String? = nil,
         kind: ToolApprovalResolutionKind = .manual,
+        decision: ApprovalDecision? = nil,
         decidedAt: Date = Date()
     ) async {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
+        let resolvedDecision: ApprovalDecision? = switch status {
+        case .approved:
+            decision ?? .allowOnce
+        case .denied, .pending:
+            decision
+        }
         let resolution = ToolApprovalResolution(
             status: status,
             decidedAt: decidedAt,
             source: source,
             reason: reason,
-            kind: kind
+            kind: kind,
+            decision: resolvedDecision
         )
         resolutions[key] = resolution
         guard status != .pending else { return }
         _ = await coordinator.resolve(
             id: key.coordinatorID,
-            decision: status == .approved ? .allowOnce : .deny,
+            decision: status == .approved ? (resolvedDecision ?? .allowOnce) : .deny,
             source: source,
             reason: reason,
             kind: kind.rawValue,
@@ -128,19 +157,19 @@ actor ToolApprovalStateStore {
     func waitForResolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user
     ) async throws -> ToolApprovalResolution {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
         if let existing = resolution(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         ), existing.status != .pending {
             return existing
@@ -170,33 +199,79 @@ actor ToolApprovalStateStore {
     func resolution(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user
     ) -> ToolApprovalResolution? {
         let scoped = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
         if let exact = resolutions[scoped] {
             return exact
         }
-        // Fallback for approvals not tied to a specific run.
         let conversationWide = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: nil,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
         return resolutions[conversationWide]
+    }
+
+    func pendingBindings(
+        conversationID: UUID,
+        runID: UUID?,
+        toolName: String,
+        route: ToolApprovalRoute? = nil
+    ) -> [ToolCallApprovalBinding] {
+        let canonicalToolName = ToolNamePolicyNormalization.canonical(toolName)
+        return resolutions.compactMap { key, value -> ToolCallApprovalBinding? in
+            guard key.conversationID == conversationID,
+                  key.runID == runID || key.runID == nil,
+                  key.binding.toolName == canonicalToolName,
+                  route == nil || key.route == route,
+                  value.status == .pending
+            else { return nil }
+            return key.binding
+        }
+    }
+
+    func resolveBindingForAPI(
+        conversationID: UUID,
+        runID: UUID?,
+        toolName: String,
+        route: ToolApprovalRoute,
+        arguments: JSON?
+    ) throws -> ToolCallApprovalBinding {
+        if let arguments {
+            return ToolCallApprovalBinding.from(toolName: toolName, arguments: arguments)
+        }
+        let pending = pendingBindings(
+            conversationID: conversationID,
+            runID: runID,
+            toolName: toolName,
+            route: route
+        )
+        switch pending.count {
+        case 0:
+            throw ToolApprovalResolutionError.pendingApprovalNotFound(toolName: toolName)
+        case 1:
+            return pending[0]
+        default:
+            throw ToolApprovalResolutionError.ambiguousPendingApproval(
+                toolName: toolName,
+                pendingCount: pending.count
+            )
+        }
     }
 
     @discardableResult
     func registerPendingApproval(
         conversationID: UUID,
         runID: UUID?,
-        toolName: String,
+        binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user,
         requestedAt: Date = Date(),
         spec: ToolApprovalContractSpec
@@ -204,7 +279,7 @@ actor ToolApprovalStateStore {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
             runID: runID,
-            toolName: toolName,
+            binding: binding,
             route: route
         )
         if let existing = resolutions[key], existing.status != .pending {
@@ -228,7 +303,8 @@ actor ToolApprovalStateStore {
             decidedAt: requestedAt,
             source: "runtime.approvalPending",
             reason: "awaiting_approval",
-            kind: .runtimeAuto
+            kind: .runtimeAuto,
+            decision: nil
         )
         return true
     }
@@ -255,13 +331,15 @@ actor ToolApprovalStateStore {
                 decidedAt: entry.outcome.decidedAt,
                 source: entry.outcome.source,
                 reason: reason,
-                kind: .timeoutDefault
+                kind: .timeoutDefault,
+                decision: entry.outcome.decision
             )
             out.append(
                 ToolApprovalTimedOutResolution(
                     conversationID: key.conversationID,
                     runID: key.runID,
                     toolName: key.toolName,
+                    binding: key.binding,
                     route: key.route,
                     status: status,
                     source: entry.outcome.source,
@@ -274,6 +352,26 @@ actor ToolApprovalStateStore {
         return out
     }
 
+    func approvedCallBindings(
+        conversationID: UUID,
+        runID: UUID?,
+        route: ToolApprovalRoute? = nil
+    ) -> Set<ToolCallApprovalBinding> {
+        Set(
+            resolutions.compactMap { key, value -> ToolCallApprovalBinding? in
+                guard key.conversationID == conversationID,
+                      route == nil || key.route == route,
+                      value.status == .approved,
+                      value.decision != .allowAlways
+                else { return nil }
+                if let runID, let keyRunID = key.runID, keyRunID != runID {
+                    return nil
+                }
+                return key.binding
+            }
+        )
+    }
+
     func approvedToolNames(
         conversationID: UUID,
         runID: UUID?,
@@ -283,7 +381,8 @@ actor ToolApprovalStateStore {
             guard key.conversationID == conversationID,
                   key.runID == runID,
                   (route == nil || key.route == route),
-                  value.status == .approved
+                  value.status == .approved,
+                  value.decision == .allowAlways
             else { return nil }
             return key.toolName
         }
@@ -291,7 +390,8 @@ actor ToolApprovalStateStore {
             guard key.conversationID == conversationID,
                   key.runID == nil,
                   (route == nil || key.route == route),
-                  value.status == .approved
+                  value.status == .approved,
+                  value.decision == .allowAlways
             else { return nil }
             return key.toolName
         }
@@ -304,7 +404,8 @@ actor ToolApprovalStateStore {
             decidedAt: outcome.decidedAt,
             source: outcome.source,
             reason: outcome.reason,
-            kind: ToolApprovalResolutionKind(rawValue: outcome.kind ?? "") ?? .manual
+            kind: ToolApprovalResolutionKind(rawValue: outcome.kind ?? "") ?? .manual,
+            decision: outcome.decision
         )
         resolutions[key] = resolution
         return resolution
@@ -317,7 +418,8 @@ actor ToolApprovalStateStore {
             decidedAt: Date(),
             source: "runtime.cancelled",
             reason: "denied-cancelled",
-            kind: .runtimeAuto
+            kind: .runtimeAuto,
+            decision: .cancelled
         )
     }
 
@@ -327,7 +429,8 @@ actor ToolApprovalStateStore {
             decidedAt: Date(),
             source: "runtime.cancelled",
             reason: "denied-cancelled",
-            kind: .runtimeAuto
+            kind: .runtimeAuto,
+            decision: .cancelled
         )
         resolutions[key] = resolution
         Task { [coordinator] in

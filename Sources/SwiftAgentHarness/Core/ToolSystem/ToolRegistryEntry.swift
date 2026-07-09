@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 
@@ -57,6 +58,8 @@ struct ToolRegistryEntry: Sendable {
     let effectClass: EffectClass
     let parallelHint: ParallelHint
     let policyTags: Set<PolicyTag>
+    /// Custom `group:*` tags from descriptor policy tags for registry-backed group aliases.
+    let groupPolicyTags: Set<String>
     let haltsLoop: Bool
     let executionEnvironment: ExecutionEnvironmentDescriptor
     let normalizedSchemaFingerprint: String?
@@ -64,6 +67,10 @@ struct ToolRegistryEntry: Sendable {
     let normalizedTopLevelType: String?
     let normalizedRequiredCount: Int?
     let normalizedPropertyCount: Int?
+    /// Canonical registration-time parameters schema (provider-agnostic).
+    let canonicalParametersSchema: JSON?
+    /// Legacy names that resolve to this entry's canonical `name` (normalized at init).
+    let aliases: [String]
 
     var name: String { definition.name }
     var description: String { definition.description }
@@ -75,13 +82,16 @@ struct ToolRegistryEntry: Sendable {
         effectClass: EffectClass = .unknown,
         parallelHint: ParallelHint = .unknown,
         policyTags: Set<PolicyTag> = [],
+        groupPolicyTags: Set<String> = [],
         haltsLoop: Bool? = nil,
         executionEnvironment: ExecutionEnvironmentDescriptor? = nil,
         normalizedSchemaFingerprint: String? = nil,
         normalizedSchemaVersion: String? = nil,
         normalizedTopLevelType: String? = nil,
         normalizedRequiredCount: Int? = nil,
-        normalizedPropertyCount: Int? = nil
+        normalizedPropertyCount: Int? = nil,
+        canonicalParametersSchema: JSON? = nil,
+        aliases: [String]? = nil
     ) {
         self.definition = definition
         self.source = source
@@ -89,6 +99,7 @@ struct ToolRegistryEntry: Sendable {
         self.effectClass = effectClass
         self.parallelHint = parallelHint
         self.policyTags = policyTags
+        self.groupPolicyTags = groupPolicyTags
         self.haltsLoop = haltsLoop ?? Self.defaultHaltsLoop(for: definition.name)
         self.executionEnvironment = executionEnvironment
             ?? Self.defaultExecutionEnvironmentDescriptor(transportKind: transportKind)
@@ -97,6 +108,8 @@ struct ToolRegistryEntry: Sendable {
         self.normalizedTopLevelType = normalizedTopLevelType
         self.normalizedRequiredCount = normalizedRequiredCount
         self.normalizedPropertyCount = normalizedPropertyCount
+        self.canonicalParametersSchema = canonicalParametersSchema
+        self.aliases = Self.normalizedAliases(aliases ?? ToolBuiltinAliases.aliases(forCanonicalName: definition.name))
     }
 
     init(
@@ -105,13 +118,16 @@ struct ToolRegistryEntry: Sendable {
         effectClass: EffectClass = .unknown,
         parallelHint: ParallelHint = .unknown,
         policyTags: Set<PolicyTag> = [],
+        groupPolicyTags: Set<String> = [],
         haltsLoop: Bool? = nil,
         executionEnvironment: ExecutionEnvironmentDescriptor? = nil,
         normalizedSchemaFingerprint: String? = nil,
         normalizedSchemaVersion: String? = nil,
         normalizedTopLevelType: String? = nil,
         normalizedRequiredCount: Int? = nil,
-        normalizedPropertyCount: Int? = nil
+        normalizedPropertyCount: Int? = nil,
+        canonicalParametersSchema: JSON? = nil,
+        aliases: [String]? = nil
     ) {
         let transportKind: TransportKind
         switch source {
@@ -131,13 +147,16 @@ struct ToolRegistryEntry: Sendable {
             effectClass: effectClass,
             parallelHint: parallelHint,
             policyTags: policyTags,
+            groupPolicyTags: groupPolicyTags,
             haltsLoop: haltsLoop,
             executionEnvironment: executionEnvironment,
             normalizedSchemaFingerprint: normalizedSchemaFingerprint,
             normalizedSchemaVersion: normalizedSchemaVersion,
             normalizedTopLevelType: normalizedTopLevelType,
             normalizedRequiredCount: normalizedRequiredCount,
-            normalizedPropertyCount: normalizedPropertyCount
+            normalizedPropertyCount: normalizedPropertyCount,
+            canonicalParametersSchema: canonicalParametersSchema,
+            aliases: aliases
         )
     }
 
@@ -182,10 +201,22 @@ struct ToolRegistryEntry: Sendable {
         let policyTags = Set(descriptor.policyTags.compactMap { tag in
             PolicyTag(rawValue: tag.rawValue)
         })
+        let groupPolicyTags = Set(
+            descriptor.policyTags
+                .map(\.rawValue)
+                .filter { $0.lowercased().hasPrefix("group:") }
+        )
         let executionEnvironment = Self.executionEnvironmentDescriptor(
             from: descriptor,
             transportKind: transportKind
         )
+        let aliases: [String]
+        switch source {
+        case .local:
+            aliases = ToolBuiltinAliases.aliases(forCanonicalName: descriptor.definition.name)
+        default:
+            aliases = []
+        }
         self.init(
             definition: descriptor.definition,
             source: source,
@@ -193,13 +224,16 @@ struct ToolRegistryEntry: Sendable {
             effectClass: effectClass,
             parallelHint: parallelHint,
             policyTags: policyTags,
+            groupPolicyTags: groupPolicyTags,
             haltsLoop: Self.defaultHaltsLoop(for: descriptor.definition.name),
             executionEnvironment: executionEnvironment,
             normalizedSchemaFingerprint: descriptor.normalizedSchemaFingerprint,
             normalizedSchemaVersion: descriptor.normalizedSchemaVersion,
             normalizedTopLevelType: descriptor.schemaSummary.topLevelType,
             normalizedRequiredCount: descriptor.schemaSummary.requiredCount,
-            normalizedPropertyCount: descriptor.schemaSummary.propertyCount
+            normalizedPropertyCount: descriptor.schemaSummary.propertyCount,
+            canonicalParametersSchema: descriptor.normalizedSchema.schema,
+            aliases: aliases
         )
     }
 
@@ -213,14 +247,26 @@ struct ToolRegistryEntry: Sendable {
             effectClass: effectClass,
             parallelHint: parallelHint,
             policyTags: policyTags,
+            groupPolicyTags: groupPolicyTags,
             haltsLoop: haltsLoop,
             executionEnvironment: executionEnvironment,
             normalizedSchemaFingerprint: normalizedSchemaFingerprint,
             normalizedSchemaVersion: normalizedSchemaVersion,
             normalizedTopLevelType: normalizedTopLevelType,
             normalizedRequiredCount: normalizedRequiredCount,
-            normalizedPropertyCount: normalizedPropertyCount
+            normalizedPropertyCount: normalizedPropertyCount,
+            canonicalParametersSchema: canonicalParametersSchema,
+            aliases: aliases
         )
+    }
+
+    private static func normalizedAliases(_ aliases: [String]) -> [String] {
+        var seen: Set<String> = []
+        return aliases.compactMap { alias in
+            let normalized = ToolRegistryNameIndex.normalizeToken(alias)
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { return nil }
+            return normalized
+        }
     }
 
     var availableToolInfo: AvailableToolInfo {

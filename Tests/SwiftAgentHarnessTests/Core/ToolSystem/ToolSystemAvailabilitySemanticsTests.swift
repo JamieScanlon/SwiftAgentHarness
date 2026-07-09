@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import SwiftAgentKit
 import Testing
@@ -101,6 +102,14 @@ struct ToolSystemAvailabilitySemanticsTests {
         }
         #expect(gateway.isHaltingToolCall(toolName: AgentPlanToolProvider.getPlanToolName, effectiveEntries: [nonHaltingEntry]) == false)
         #expect(gateway.isHaltingToolCall(toolName: TerminationToolProvider.thinkToolName, effectiveEntries: [thinkEntry]) == false)
+        #expect(
+            gateway.isHaltingToolCall(
+                toolName: "Finish",
+                effectiveEntries: haltingEntries.filter {
+                    $0.name == TerminationToolProvider.finishToolName
+                }
+            )
+        )
     }
 
     @Test("registry entries preserve descriptor planner metadata")
@@ -742,7 +751,7 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(decision.blockReason == .hostingRoutingPolicyDenied)
     }
 
-    @Test("dispatch contract planner disables parallel for unknown or mutating entries")
+    @Test("dispatch contract disables parallel only for unknown static metadata")
     func dispatchPlannerConservativeFallback() {
         let gateway = DefaultToolSystemGateway()
         let policy = ToolPolicyConfiguration(
@@ -760,6 +769,12 @@ struct ToolSystemAvailabilitySemanticsTests {
             effectClass: .mutating,
             parallelHint: .serialOnly
         )
+        let bashEntry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
+            source: .local,
+            effectClass: .mutating,
+            parallelHint: .serialOnly
+        )
         let unknownEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "remote_dynamic", description: "", parameters: [], type: .function),
             source: .mcp,
@@ -768,8 +783,12 @@ struct ToolSystemAvailabilitySemanticsTests {
         )
         let pureContract = gateway.dispatchContract(from: policy, effectiveEntries: [readOnlyEntry])
         #expect(pureContract.parallelDispatchEnabled == true)
+        #expect(pureContract.dispatchPlannerMode == .mixedDeterministic)
         let mutatingContract = gateway.dispatchContract(from: policy, effectiveEntries: [readOnlyEntry, mutatingEntry])
-        #expect(mutatingContract.parallelDispatchEnabled == false)
+        #expect(mutatingContract.parallelDispatchEnabled == true)
+        #expect(mutatingContract.dispatchPlannerMode == .mixedDeterministic)
+        let bashContract = gateway.dispatchContract(from: policy, effectiveEntries: [readOnlyEntry, bashEntry])
+        #expect(bashContract.parallelDispatchEnabled == true)
         let unknownContract = gateway.dispatchContract(from: policy, effectiveEntries: [readOnlyEntry, unknownEntry])
         #expect(unknownContract.parallelDispatchEnabled == false)
     }
@@ -860,6 +879,70 @@ struct ToolSystemAvailabilitySemanticsTests {
             subAgentToolClassifier: nil
         )
         #expect(decision.allowed == true)
+    }
+
+    @Test("routing allowlist permits legacy alias for canonical tool")
+    func gatewayRoutingAllowlistLegacyAlias() {
+        let model = makeToolsModel()
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: model,
+            systemPrompt: "sys",
+            interactionMode: .agent,
+            routingPrefs: ConversationRoutingPrefs(
+                explicitToolPolicy: .allowlist(tools: ["read"], skills: [])
+            )
+        )
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let decision = gateway.evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(
+                for: conversation,
+                tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
+            ),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.allowed == true)
+    }
+
+    @Test("preApproved legacy grant approves canonical tool name")
+    func preApprovedLegacyGrantApprovesCanonical() {
+        let model = makeToolsModel()
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: model,
+            systemPrompt: "sys",
+            interactionMode: .chat
+        )
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let policy = ToolPolicyConfiguration(approvalRequiredToolNames: ["read_file"])
+        let decision = gateway.evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(for: conversation),
+            configuration: .init(
+                enableTools: true,
+                enableAgents: true,
+                preApprovedToolNames: ["read"]
+            ),
+            toolPolicy: policy,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.allowed == true)
+        #expect(decision.approvalGranted == true)
     }
 
     @Test("routing tool denylist blocks listed tools")
@@ -991,7 +1074,7 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(decision.blockReason == .routingToolWhitelist)
     }
 
-    @Test("dispatch contract matrix enforces pure-only parallel entries")
+    @Test("dispatch contract matrix enables parallel unless static metadata is unknown")
     func dispatchContractPureOnlyMatrix() {
         let gateway = DefaultToolSystemGateway()
         let policy = ToolPolicyConfiguration(
@@ -999,10 +1082,10 @@ struct ToolSystemAvailabilitySemanticsTests {
         )
         let tuples: [(ToolRegistryEntry.EffectClass, ToolRegistryEntry.ParallelHint, Bool)] = [
             (.readOnly, .parallelizable, true),
-            (.readOnly, .serialOnly, false),
+            (.readOnly, .serialOnly, true),
             (.readOnly, .unknown, false),
-            (.mutating, .parallelizable, false),
-            (.mutating, .serialOnly, false),
+            (.mutating, .parallelizable, true),
+            (.mutating, .serialOnly, true),
             (.mutating, .unknown, false),
             (.unknown, .parallelizable, false),
             (.unknown, .serialOnly, false),
@@ -1027,6 +1110,72 @@ struct ToolSystemAvailabilitySemanticsTests {
                 "unexpected parallel eligibility for \(effectClass.rawValue)/\(parallelHint.rawValue)"
             )
         }
+    }
+
+    @Test("evaluateCallAvailability defers sideEffects approval for read-only bash")
+    func evaluateCallAvailabilityReadOnlyBash() {
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
+            source: .local,
+            effectClass: .mutating,
+            parallelHint: .serialOnly
+        )
+        let conversation = ModelConversation(id: UUID(), model: makeToolsModel(), systemPrompt: "s")
+        let context = testModePolicyContext(
+            for: conversation,
+            tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: .sideEffects)
+        )
+        let call = ToolCallRequest(
+            id: "c1",
+            name: "bash",
+            arguments: .object(["command": .string("ls")])
+        )
+        let decision = gateway.evaluateCallAvailability(
+            entry: entry,
+            call: call,
+            conversation: conversation,
+            modePolicyContext: context,
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil,
+            groupIndex: .empty
+        )
+        #expect(decision.allowed)
+    }
+
+    @Test("evaluateCallAvailability requires approval for mutating bash under sideEffects")
+    func evaluateCallAvailabilityMutatingBashRequiresApproval() {
+        let gateway = DefaultToolSystemGateway()
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
+            source: .local,
+            effectClass: .mutating,
+            parallelHint: .serialOnly
+        )
+        let conversation = ModelConversation(id: UUID(), model: makeToolsModel(), systemPrompt: "s")
+        let context = testModePolicyContext(
+            for: conversation,
+            tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: .sideEffects)
+        )
+        let call = ToolCallRequest(
+            id: "c1",
+            name: "bash",
+            arguments: .object(["command": .string("rm x")])
+        )
+        let decision = gateway.evaluateCallAvailability(
+            entry: entry,
+            call: call,
+            conversation: conversation,
+            modePolicyContext: context,
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil,
+            groupIndex: .empty
+        )
+        #expect(decision.blockReason == .approvalRequired)
     }
 
     private func testModePolicyContext(

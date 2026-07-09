@@ -23,6 +23,15 @@ If you are contributing on behalf of your employer, make sure you have permissio
 5. **Run the full test suite** (`swift test`) before opening the pull request. A feature is not complete unless all tests pass.
 6. **Open a pull request** with a clear description of what changed and why. Sign the CLA when prompted.
 
+### Tool descriptions are prompt text
+
+Edits to `ToolDefinition.description` (or parameter description fields in tool schemas) are **behavioral changes**, not documentation polish. They alter what the model sees in the tool block and can change agent behavior without failing tests.
+
+- Follow [docs/process/tool-description-change-control.md](./docs/process/tool-description-change-control.md) when authoring or reviewing description changes.
+- In the PR body, use the **Behavioral / prompt surface** section (see [.github/pull_request_template.md](./.github/pull_request_template.md)): call out affected tool names and intent (`Behavioral: tool descriptions changed for …`).
+- Non-typo behavioral description changes require an entry in [CHANGELOG.md](./CHANGELOG.md) under `### Changed (behavioral / prompt surface)`.
+- Description-only PRs are **not** exempt from careful review.
+
 ## Questions
 
 Open an issue, or start a discussion on the repository.

@@ -315,7 +315,7 @@ public actor ModeRegistryService {
         guard let overlay, let o = overlay.objectFields else { return parent }
         var allow = parent.allow
         if o.keys.contains("allow") {
-            allow = ModeProfileJSONParsing.normalizedProfileAllowList(
+            allow = ModeProfileJSONParsing.normalizedToolPolicyAllowList(
                 raw: o["allow"],
                 profileID: profileID,
                 fieldPath: "tools.allow",

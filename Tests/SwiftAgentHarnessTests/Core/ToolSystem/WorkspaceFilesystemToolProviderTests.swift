@@ -381,6 +381,46 @@ struct WorkspaceFilesystemToolProviderTests {
     }
     #endif
 
+    @Test("bash parallelSafety is input-dependent")
+    func bashParallelSafetyInputDependent() async {
+        let provider = provider(
+            workspace: URL(fileURLWithPath: "/tmp/ws"),
+            memory: URL(fileURLWithPath: "/tmp/mem")
+        )
+        let ls = ToolCall(
+            name: WorkspaceFilesystemToolProvider.bashToolName,
+            arguments: .object(["command": .string("ls")]),
+            id: "1"
+        )
+        let rm = ToolCall(
+            name: WorkspaceFilesystemToolProvider.bashToolName,
+            arguments: .object(["command": .string("rm x")]),
+            id: "2"
+        )
+        #expect(await provider.parallelSafety(for: ls) == .parallelSafe)
+        #expect(await provider.parallelSafety(for: rm) == .mutating)
+    }
+
+    @Test("process parallelSafety treats poll as parallel-safe")
+    func processParallelSafetyPoll() async {
+        let provider = provider(
+            workspace: URL(fileURLWithPath: "/tmp/ws"),
+            memory: URL(fileURLWithPath: "/tmp/mem")
+        )
+        let poll = ToolCall(
+            name: WorkspaceFilesystemToolProvider.processToolName,
+            arguments: .object(["task_id": .string("t1"), "action": .string("poll")]),
+            id: "1"
+        )
+        let kill = ToolCall(
+            name: WorkspaceFilesystemToolProvider.processToolName,
+            arguments: .object(["task_id": .string("t1"), "action": .string("kill")]),
+            id: "2"
+        )
+        #expect(await provider.parallelSafety(for: poll) == .parallelSafe)
+        #expect(await provider.parallelSafety(for: kill) == .mutating)
+    }
+
     @Test("bash is tagged mutating in descriptor hints")
     func bashIsMutating() async {
         let provider = provider(

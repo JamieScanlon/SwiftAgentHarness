@@ -2287,6 +2287,9 @@ components:
           format: uuid
         toolName:
           type: string
+        toolCallID:
+          type: string
+          description: Optional correlation id for the pending tool call (UI only).
         route:
           $ref: "#/components/schemas/ToolApprovalRoute"
         status:
@@ -2298,6 +2301,10 @@ components:
         durable:
           type: boolean
           description: When true and status is `approved`, persists an allow-always tool rule so future runs auto-approve this tool.
+        arguments:
+          type: object
+          additionalProperties: true
+          description: Tool call arguments used to identify the pending approval binding. Required when multiple pending approvals exist for the same tool name.
 
     ConversationCheckpointInvalidateRequest:
       type: object

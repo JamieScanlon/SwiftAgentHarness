@@ -11,7 +11,7 @@ enum SubAgentDelegateInvocationService {
         snapshot: RuntimeToolTurnPolicySnapshot,
         spawnService: SubAgentSpawnService
     ) async -> ToolDispatchOutcome? {
-        guard let entry = snapshot.effectiveEntries.first(where: { $0.name == call.name }),
+        guard let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
               spawnService.subAgentPool.isDelegateTool(entry: entry) else {
             return nil
         }

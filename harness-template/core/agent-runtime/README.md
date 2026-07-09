@@ -216,9 +216,9 @@ When the model emits multiple tool calls in one assistant message:
 
 - **Sequential by default.** Dispatch in order, await each, append result before dispatching the next. Predictable, simple to reason about.
 - **Parallel if all tools are pure / commutative.** Some tools are read-only (file reads, search, capability queries) and have no ordering dependencies. The Tool System (not the runtime) decides which tools are parallelizable; the runtime asks "may I dispatch these in parallel" and gets a yes/no per pair.
-- **Serial if any tool is mutating.** As soon as a tool that mutates state is in the batch, fall back to sequential for the whole batch. Don't try to be clever about partial parallelism; the bug surface is high.
+- **Serial around any mutating tool.** The conservative floor is whole-batch serialization the moment a mutating tool appears; the refined (and equally sound) policy is an *order-preserving partition* — contiguous safe calls fan out, each unsafe call is a singleton serial group. What's never sound is reordering calls across safety classes. The full policy, including ordering guarantees and conflict handling, is [tool-system/parallel-execution.md](../tool-system/parallel-execution.md).
 
-This is one of the few places where the runtime makes a real decision rather than delegating; even so, the *policy* (which tools are parallelizable) belongs to the Tool System, not the runtime.
+This is one of the few places where the runtime makes a real decision rather than delegating; even so, the *policy* (which tools are parallelizable, and in what grouping) belongs to the Tool System, not the runtime.
 
 ### Sub-agent invocation as ordinary tool calls
 

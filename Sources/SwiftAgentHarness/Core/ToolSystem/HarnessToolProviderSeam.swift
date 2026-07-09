@@ -7,11 +7,19 @@ public struct HarnessToolProviderContext: Sendable {
     public let conversation: ModelConversation?
     public let workspaceRoot: String?
     public let logger: Logger?
+    /// When set, tools from this provider are tagged with `group:<pluginGroupID>` for policy matching.
+    public let pluginGroupID: String?
 
-    public init(conversation: ModelConversation?, workspaceRoot: String?, logger: Logger?) {
+    public init(
+        conversation: ModelConversation?,
+        workspaceRoot: String?,
+        logger: Logger?,
+        pluginGroupID: String? = nil
+    ) {
         self.conversation = conversation
         self.workspaceRoot = workspaceRoot
         self.logger = logger
+        self.pluginGroupID = pluginGroupID
     }
 }
 
