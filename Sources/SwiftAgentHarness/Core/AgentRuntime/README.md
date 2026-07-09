@@ -112,10 +112,11 @@ Runtime now publishes first-class conversation-topic lifecycle events (`semantic
 - `turn.started`
 - `loop.iterationStarted` -> `model.callStarted` -> `model.callCompleted`
 - optional `tool.callStarted` / `tool.callCompleted`
+- optional `tool.usageSummary` after each `loop.iterationCompleted` that had tool calls (deterministic template label such as `Ran read_file ×3, bash ×1`; display/audit only, never model context; consumers must not require it)
 - `loop.iterationCompleted`
 - terminal: `turn.completed` / `turn.cancelled` / `turn.bounded`
 
-Ordering is emitted deterministically by `runAgentBuildStreamingOrchestrationCore` (source ordering) and `startStreamingOrchestrationTask` now consumes `executeTurn.events` live as the single runtime transport input (including `toolUsageSummary` derivation) before teardown. `seq` remains the transport counter assigned by `ConversationEventsTopicHub`.
+Ordering is emitted deterministically by `runAgentBuildStreamingOrchestrationCore` (source ordering) and `startStreamingOrchestrationTask` consumes `executeTurn.events` live as the single runtime transport input (including per-iteration `tool.usageSummary` template labels) before teardown. `seq` remains the transport counter assigned by `ConversationEventsTopicHub`. Intent-aware cheap-model batch labels remain template-optional future work.
 
 ## Error policy matrix
 
