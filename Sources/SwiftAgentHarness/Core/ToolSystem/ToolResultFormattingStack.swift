@@ -21,12 +21,21 @@ enum ToolResultFormattingStack {
     static func apply(
         result: ToolResult,
         stage: ToolResultFormattingStage,
-        configuration: ToolResultFormattingConfiguration
+        configuration: ToolResultFormattingConfiguration,
+        spillContext: ToolResultFormattingSpillContext? = nil
     ) -> ToolResult {
         guard configuration.enabled else { return result }
+        let spillOutcome = ToolResultSpillFormatter.applyIfNeeded(
+            result: result,
+            stage: stage,
+            configuration: configuration,
+            spillContext: spillContext
+        )
+        var working = spillOutcome.result
+        let skipLossyTrim = spillOutcome.spilled || ToolResultSpillEnvelope.isSpillEnvelope(working.content)
         let stagePolicy = stagePolicy(for: stage, configuration: configuration)
-        var content = result.content
-        var metadata = result.metadata
+        var content = working.content
+        var metadata = working.metadata
         if configuration.sanitizeInlineImagePayloads {
             content = sanitizeInlineImagePayloads(content, placeholder: stagePolicy.imagePayloadPlaceholder)
             metadata = sanitizeInlineImagePayloads(
@@ -35,30 +44,32 @@ enum ToolResultFormattingStack {
             )
         }
         content = trimToLineLimit(content, maxLines: configuration.maxLines)
-        content = trimToCharacterLimit(
-            content,
-            maxCharacters: stagePolicy.maxCharacters,
-            marker: stagePolicy.truncationMarker
-        )
-        content = trimToByteLimit(
-            content,
-            maxBytes: stagePolicy.maxBytes,
-            marker: stagePolicy.truncationMarker
-        )
+        if !skipLossyTrim {
+            content = trimToCharacterLimit(
+                content,
+                maxCharacters: stagePolicy.maxCharacters,
+                marker: stagePolicy.truncationMarker
+            )
+            content = trimToByteLimit(
+                content,
+                maxBytes: stagePolicy.maxBytes,
+                marker: stagePolicy.truncationMarker
+            )
+        }
         metadata = trimMetadataToByteLimit(
             metadata,
             maxBytes: stagePolicy.maxMetadataBytes,
             placeholder: stagePolicy.metadataPlaceholder,
             stage: stage
         )
-        let metadataChanged = !jsonEqual(lhs: metadata, rhs: result.metadata)
-        guard content != result.content || metadataChanged else { return result }
+        let metadataChanged = !jsonEqual(lhs: metadata, rhs: working.metadata)
+        guard content != working.content || metadataChanged else { return working }
         return ToolResult(
-            success: result.success,
+            success: working.success,
             content: content,
             metadata: metadata,
-            toolCallId: result.toolCallId,
-            error: result.error
+            toolCallId: working.toolCallId,
+            error: working.error
         )
     }
 
@@ -105,6 +116,9 @@ enum ToolResultFormattingStack {
     ) -> ToolResultFormattingConfiguration {
         ToolResultFormattingConfiguration(
             enabled: base.enabled,
+            spillEnabled: base.spillEnabled,
+            spillPreviewMaxBytes: base.spillPreviewMaxBytes,
+            defaultMaxResultSizeBeforeSpill: base.defaultMaxResultSizeBeforeSpill,
             runtimeMaxCharacters: base.runtimeMaxCharacters,
             persistenceMaxCharacters: base.persistenceMaxCharacters,
             compactionMaxCharacters: max(0, compactionMaxCharactersOverride),

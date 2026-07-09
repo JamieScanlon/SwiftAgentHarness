@@ -691,7 +691,10 @@ public actor OrchestratorRuntimeService {
                             await memoryService.recordMemoryWrite(path: path, conversationID: conv.id)
                         }
                     },
-                    logger: logger
+                    logger: logger,
+                    sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
+                    sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,
+                    conversationID: conversationID
                 )
             )
             if let memoryDirectory {

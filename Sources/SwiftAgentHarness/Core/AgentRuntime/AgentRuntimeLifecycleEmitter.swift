@@ -43,7 +43,13 @@ enum AgentRuntimeLifecycleEmit: Sendable {
     case modelCallStarted(iteration: Int, modelID: UUID)
     case modelCallCompleted(iteration: Int, modelID: UUID)
     case toolCallStarted(iteration: Int, modelID: UUID, toolName: String, toolCallID: String?)
-    case toolCallCompleted(iteration: Int, modelID: UUID, toolName: String, toolCallID: String?)
+    case toolCallCompleted(
+        iteration: Int,
+        modelID: UUID,
+        toolName: String,
+        toolCallID: String?,
+        resultTruncated: Bool? = nil
+    )
     case toolApprovalRequired(ToolApprovalRequiredInfo)
     case toolApprovalResolved(ToolApprovalResolvedInfo)
     case turnTerminal(ConversationRunTerminalReason)
@@ -131,7 +137,7 @@ struct AgentRuntimeLifecycleEmitter {
                     source: source
                 )
             )
-        case .toolCallCompleted(let iteration, let modelID, let toolName, let toolCallID):
+        case .toolCallCompleted(let iteration, let modelID, let toolName, let toolCallID, let resultTruncated):
             await publishPayload(
                 RuntimeLifecycleEventPayload(
                     name: .toolCallCompleted,
@@ -141,6 +147,7 @@ struct AgentRuntimeLifecycleEmitter {
                     modelID: modelID,
                     toolName: toolName,
                     toolCallID: toolCallID,
+                    resultTruncated: resultTruncated,
                     source: source
                 )
             )

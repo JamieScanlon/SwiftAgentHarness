@@ -16,6 +16,10 @@ Persistence is DB-backed (SQLite catalog + JSONL transcript index) and reached o
 
 Under this assumption, the **pid + starttime process-aware lockfile** (`<conversationId>.jsonl.lock`) is **not what provides correctness** for normal server operation. Actor routing and per-conversation lock ordering are. The on-disk lock machinery remains implemented for spec parity and for the multi-process case below.
 
+### Tool result spill files (R1)
+
+Oversized tool outputs spill to `agents/<agentId>/sessions/<conversationId>/tool-results/<toolCallId>.txt` (atomic write per file). These are session-scoped, recoverable via `read_file` allowlist, and independent of JSONL transcript locks (per-`toolCallId` create/replace).
+
 ### Caveat: second process on the same store
 
 The file lock **is required** when more than one OS process can mutate the same `SAH_SESSION_STORE_ROOT`, for example:

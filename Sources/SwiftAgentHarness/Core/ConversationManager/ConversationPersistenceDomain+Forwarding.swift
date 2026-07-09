@@ -29,6 +29,10 @@ extension ConversationPersistenceDomain {
         stack.conversationManager.mostRecentConversation()
     }
 
+    var harnessSessionPersistence: any HarnessSessionPersistence {
+        stack.harnessSessionPersistence
+    }
+
     func firstConversation(excluding conversationID: UUID) -> ModelConversation? {
         stack.conversationManager.firstConversation(excluding: conversationID)
     }

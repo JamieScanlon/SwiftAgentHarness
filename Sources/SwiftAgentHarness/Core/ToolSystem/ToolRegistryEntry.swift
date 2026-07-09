@@ -71,6 +71,10 @@ struct ToolRegistryEntry: Sendable {
     let canonicalParametersSchema: JSON?
     /// Legacy names that resolve to this entry's canonical `name` (normalized at init).
     let aliases: [String]
+    /// Bytes past which runtime delivery spills to disk instead of lossy truncation; `nil` uses global default.
+    let maxResultSizeBeforeSpill: Int?
+    /// When true, oversized results are not spilled (self-bounding read tools).
+    let spillExempt: Bool
 
     var name: String { definition.name }
     var description: String { definition.description }
@@ -91,7 +95,9 @@ struct ToolRegistryEntry: Sendable {
         normalizedRequiredCount: Int? = nil,
         normalizedPropertyCount: Int? = nil,
         canonicalParametersSchema: JSON? = nil,
-        aliases: [String]? = nil
+        aliases: [String]? = nil,
+        maxResultSizeBeforeSpill: Int? = nil,
+        spillExempt: Bool? = nil
     ) {
         self.definition = definition
         self.source = source
@@ -110,6 +116,8 @@ struct ToolRegistryEntry: Sendable {
         self.normalizedPropertyCount = normalizedPropertyCount
         self.canonicalParametersSchema = canonicalParametersSchema
         self.aliases = Self.normalizedAliases(aliases ?? ToolBuiltinAliases.aliases(forCanonicalName: definition.name))
+        self.maxResultSizeBeforeSpill = maxResultSizeBeforeSpill
+        self.spillExempt = spillExempt ?? ToolRegistrySpillPolicy.isSpillExempt(toolName: definition.name)
     }
 
     init(
@@ -233,7 +241,9 @@ struct ToolRegistryEntry: Sendable {
             normalizedRequiredCount: descriptor.schemaSummary.requiredCount,
             normalizedPropertyCount: descriptor.schemaSummary.propertyCount,
             canonicalParametersSchema: descriptor.normalizedSchema.schema,
-            aliases: aliases
+            aliases: aliases,
+            maxResultSizeBeforeSpill: nil,
+            spillExempt: ToolRegistrySpillPolicy.isSpillExempt(toolName: descriptor.definition.name)
         )
     }
 
@@ -256,7 +266,9 @@ struct ToolRegistryEntry: Sendable {
             normalizedRequiredCount: normalizedRequiredCount,
             normalizedPropertyCount: normalizedPropertyCount,
             canonicalParametersSchema: canonicalParametersSchema,
-            aliases: aliases
+            aliases: aliases,
+            maxResultSizeBeforeSpill: maxResultSizeBeforeSpill,
+            spillExempt: spillExempt
         )
     }
 

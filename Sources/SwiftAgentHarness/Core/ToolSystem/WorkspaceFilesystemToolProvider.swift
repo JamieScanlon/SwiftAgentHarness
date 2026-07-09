@@ -24,6 +24,9 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let logger: Logger?
     private let bashRunnerFactory: @Sendable (ExecRuntimeContext) -> any BashShellRunning
     private let grepForceInProcess: Bool
+    private let sessionStoreRoot: URL?
+    private let sessionAgentId: String
+    private let conversationID: UUID?
 
     public var name: String { "WorkspaceFilesystem" }
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
@@ -48,7 +51,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
         logger: Logger? = nil,
-        grepForceInProcess: Bool = false
+        grepForceInProcess: Bool = false,
+        sessionStoreRoot: URL? = SessionPersistenceConfiguration.sessionStoreRoot,
+        sessionAgentId: String = SessionPersistenceConfiguration.sessionAgentId,
+        conversationID: UUID? = nil
     ) {
         self.init(
             workspaceRoot: workspaceRoot,
@@ -60,7 +66,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             onMemoryWrite: onMemoryWrite,
             logger: logger,
             bashRunnerFactory: nil,
-            grepForceInProcess: grepForceInProcess
+            grepForceInProcess: grepForceInProcess,
+            sessionStoreRoot: sessionStoreRoot,
+            sessionAgentId: sessionAgentId,
+            conversationID: conversationID
         )
     }
 
@@ -74,7 +83,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
         logger: Logger? = nil,
         bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?,
-        grepForceInProcess: Bool = false
+        grepForceInProcess: Bool = false,
+        sessionStoreRoot: URL? = SessionPersistenceConfiguration.sessionStoreRoot,
+        sessionAgentId: String = SessionPersistenceConfiguration.sessionAgentId,
+        conversationID: UUID? = nil
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(workspaceRoot)
         self.execRuntime = execRuntime
@@ -85,6 +97,9 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.onMemoryWrite = onMemoryWrite
         self.logger = logger
         self.grepForceInProcess = grepForceInProcess
+        self.sessionStoreRoot = sessionStoreRoot
+        self.sessionAgentId = sessionAgentId
+        self.conversationID = conversationID
         self.bashRunnerFactory = bashRunnerFactory ?? { context in
             LocalSandboxBashExecutor(execRuntime: execRuntime, runtimeContext: context)
         }
@@ -218,8 +233,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func readFile(_ toolCall: ToolCall) async -> ToolResult {
         do {
-            let bridge = try await execRuntime.fsBridge(context: runtimeContext)
             let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
+            if let spillContent = try readAllowlistedSpillFile(raw: raw) {
+                return ok(toolCall, spillContent)
+            }
+            let bridge = try await execRuntime.fsBridge(context: runtimeContext)
             _ = try resolveToolPath(raw: raw, requireExists: true)
             let data = try await bridge.readFile(path: raw)
             let content = String(data: data, encoding: .utf8) ?? ""
@@ -227,6 +245,22 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         } catch {
             return err(toolCall, pathErrorMessage(error))
         }
+    }
+
+    private func readAllowlistedSpillFile(raw: String) throws -> String? {
+        guard let sessionStoreRoot,
+              let conversationID else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let spillStore = SessionToolResultSpillStore(root: sessionStoreRoot, agentId: sessionAgentId)
+        guard spillStore.isAllowlistedSpillPath(trimmed, conversationId: conversationID) else {
+            return nil
+        }
+        let url = URL(fileURLWithPath: trimmed, isDirectory: false).standardizedFileURL
+        let data = try Data(contentsOf: url)
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     private func writeFile(_ toolCall: ToolCall) async -> ToolResult {

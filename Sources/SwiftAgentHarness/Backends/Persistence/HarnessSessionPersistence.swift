@@ -96,6 +96,21 @@ protocol HarnessSessionPersistence: CatalogPersistence, TranscriptPersistence {
     /// Lists opaque cache keys under ``SessionPersistenceLayout/engineArtifactsDirectory`` when the v2 artifact store is present.
     func listEngineArtifactKeys(conversationID: UUID) throws -> [String]
 
+    // MARK: - Tool result spill (session-scoped; recoverable oversized output)
+
+    /// Spill directory for one conversation when on-disk store supports spill; nil for unsupported backends.
+    func toolResultSpillDirectory(conversationID: UUID) -> URL?
+
+    /// Idempotent spill keyed by tool call id.
+    func putToolResultSpillIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult?
+
+    /// True when `path` resolves under the conversation's spill directory.
+    func isAllowlistedToolResultSpillPath(_ path: String, conversationID: UUID) -> Bool
+
     // MARK: - Media / blob store
 
     func putBlob(
@@ -403,6 +418,28 @@ extension HarnessSessionPersistence {
     func listEngineArtifactKeys(conversationID: UUID) throws -> [String] {
         _ = conversationID
         return []
+    }
+
+    func toolResultSpillDirectory(conversationID: UUID) -> URL? {
+        _ = conversationID
+        return nil
+    }
+
+    func putToolResultSpillIfNeeded(
+        conversationID: UUID,
+        toolCallId: String,
+        content: String
+    ) throws -> ToolResultSpillWriteResult? {
+        _ = conversationID
+        _ = toolCallId
+        _ = content
+        return nil
+    }
+
+    func isAllowlistedToolResultSpillPath(_ path: String, conversationID: UUID) -> Bool {
+        _ = path
+        _ = conversationID
+        return false
     }
 
     func putBlob(

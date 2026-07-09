@@ -34,6 +34,25 @@ enum SessionPersistenceLayout {
             .appendingPathExtension("lock")
     }
 
+    static func toolResultsDirectory(root: URL, agentId: String, conversationId: UUID) -> URL {
+        agentSessionsDirectory(root: root, agentId: agentId)
+            .appendingPathComponent("\(conversationId.uuidString)/tool-results", isDirectory: true)
+    }
+
+    static func toolResultSpillFileURL(
+        root: URL,
+        agentId: String,
+        conversationId: UUID,
+        toolCallId: String
+    ) -> URL {
+        let sanitized = toolCallId
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "_")
+        let fileName = sanitized.isEmpty ? "unknown-tool-call.txt" : "\(sanitized).txt"
+        return toolResultsDirectory(root: root, agentId: agentId, conversationId: conversationId)
+            .appendingPathComponent(fileName, isDirectory: false)
+    }
+
     static func engineArtifactsDirectory(root: URL, conversationId: UUID) -> URL {
         root.appendingPathComponent("cache/engine-artifacts/\(conversationId.uuidString)", isDirectory: true)
     }

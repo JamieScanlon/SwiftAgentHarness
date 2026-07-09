@@ -445,12 +445,14 @@ struct TurnLoop {
                     break toolDispatchLoop
                 case .completed(let message), .pendingHandle(let message), .denied(let message):
                     try await ports.conversation.append(message, conversationID: conversationID, runID: runID)
+                    let resultTruncated = ToolResultSpillEnvelope.isSpillEnvelope(message.content)
                     await lifecycleEmitter.emit(
                         .toolCallCompleted(
                             iteration: iteration,
                             modelID: handle.modelID,
                             toolName: call.name,
-                            toolCallID: call.id
+                            toolCallID: call.id,
+                            resultTruncated: resultTruncated ? true : nil
                         ),
                         conversationID: conversationID,
                         runID: runID
