@@ -1,5 +1,6 @@
 //
-//  SQLite catalog + JSONL transcript (harness layout). Process-aware file lock per conversation.
+//  SQLite catalog + JSONL transcript (harness layout). Process-aware file lock per conversation
+//  when multiple OS processes share the store; single-process servers rely on actor-isolated writers.
 //
 
 import Foundation

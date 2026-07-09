@@ -1,5 +1,7 @@
 //
 //  Combined catalog + transcript seam with transcript write lock (harness SessionBackend subset).
+//  Single-process servers: writers are serialized via ConversationPersistenceDomain (actor).
+//  File-based locks apply when multiple OS processes share SAH_SESSION_STORE_ROOT (X4).
 //
 
 import Foundation

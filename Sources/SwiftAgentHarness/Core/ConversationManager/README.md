@@ -126,6 +126,8 @@ Runtime lifecycle topic fanout lives in [`RuntimeLifecyclePublicationService`](.
 - [`ConversationEventLogService`](ConversationEventLogService.swift) (raw journal markers)
 - [`DerivedEventStore`](../ContextEngine/DerivedEventStore.swift) routing (derived journal / checkpoints)
 
+All durable mutations go through [`ConversationPersistenceDomain`](ConversationPersistenceDomain.swift) (actor). **Single-writer assumption:** one server process owns a given `SAH_SESSION_STORE_ROOT`; SQLite catalog + JSONL transcripts are reached only via this actor stack, with per-conversation transcript locks and one active run per session. Cross-process pid+starttime lockfiles ([`ProcessAwareTranscriptWriteLock`](../../Backends/Persistence/Local/ProcessAwareTranscriptWriteLock.swift)) matter only when a second process (CLI alongside server, external repair) writes the same store — see [Backends/Persistence/README.md](../../Backends/Persistence/README.md).
+
 Append path: stack → transcript lock → catalog + JSONL. Search/branch/projection extensions: `ConversationManager+Search`, `+BranchJournal`, `+Projection`, `+JournalV2`, etc.
 
 **Two projections** (do not conflate): UI turn-summary overlay vs model-facing context assembly — see [`../ContextEngine/README.md`](../ContextEngine/README.md) and [`../../../../../Documentation/PROJECTION.md`](../../../../../Documentation/PROJECTION.md).
