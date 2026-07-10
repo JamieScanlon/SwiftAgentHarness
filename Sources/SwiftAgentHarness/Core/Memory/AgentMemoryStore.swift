@@ -40,6 +40,13 @@ struct AgentMemoryStore: Sendable {
     }
 
     func writeTopic(filename: String, content: String) throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory, fileManager: .default) {
+            try writeTopicAssumingLocked(filename: filename, content: content)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func writeTopicAssumingLocked(filename: String, content: String) throws {
         try MemoryContentScanner.validateWrite(content).get()
         try ensureLayout()
         let path = try WorkspacePathPolicy.resolveMemoryRelativePath(
@@ -47,17 +54,20 @@ struct AgentMemoryStore: Sendable {
             memoryDirectory: memoryDirectory,
             requireExists: false
         )
-        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory, fileManager: .default) {
-            try MemoryFileLock.atomicWrite(text: content, to: URL(fileURLWithPath: path), fileManager: .default)
-        }
+        try MemoryFileLock.atomicWrite(text: content, to: URL(fileURLWithPath: path), fileManager: .default)
     }
 
     func writeIndex(content: String) throws -> String? {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory, fileManager: .default) {
+            try writeIndexAssumingLocked(content: content)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func writeIndexAssumingLocked(content: String) throws -> String? {
         let prepared = try Self.validatedTruncatedIndexContent(content)
         try ensureLayout()
-        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory, fileManager: .default) {
-            try MemoryFileLock.atomicWrite(text: prepared.text, to: indexURL, fileManager: .default)
-        }
+        try MemoryFileLock.atomicWrite(text: prepared.text, to: indexURL, fileManager: .default)
         return prepared.capFired
     }
 

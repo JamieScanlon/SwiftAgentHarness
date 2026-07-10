@@ -327,7 +327,12 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 memoryDirectory: memoryDirectoryURL(),
                 content: content
             ).get()
-            try await bridge.writeFile(path: raw, content: Data(content.utf8))
+            try await writeFileTakingMemoryLockIfNeeded(
+                bridge: bridge,
+                rawPath: raw,
+                absolutePath: path,
+                content: Data(content.utf8)
+            )
             await notifyMemoryWrite(path)
             return ok(toolCall, "Wrote \(path)")
         } catch {
@@ -353,12 +358,34 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 memoryDirectory: memoryDirectoryURL(),
                 content: content
             ).get()
-            try await bridge.writeFile(path: raw, content: Data(content.utf8))
+            try await writeFileTakingMemoryLockIfNeeded(
+                bridge: bridge,
+                rawPath: raw,
+                absolutePath: path,
+                content: Data(content.utf8)
+            )
             await notifyMemoryWrite(path)
             return ok(toolCall, "Edited \(path)")
         } catch {
             return err(toolCall, pathErrorMessage(error))
         }
+    }
+
+    /// Memory-directory writes share `.memory.lock` with dreaming sweeps.
+    private func writeFileTakingMemoryLockIfNeeded(
+        bridge: any SandboxFsBridge,
+        rawPath: String,
+        absolutePath: String,
+        content: Data
+    ) async throws {
+        if let memoryDirectory = memoryDirectoryURL(),
+           AgentMemoryPathResolver.isPathInsideMemoryDirectory(absolutePath, memoryDirectory: memoryDirectory) {
+            try await MemoryFileLock.withLockAsync(memoryDirectory: memoryDirectory) {
+                try await bridge.writeFile(path: rawPath, content: content)
+            }
+            return
+        }
+        try await bridge.writeFile(path: rawPath, content: content)
     }
 
     private func memoryDirectoryURL() -> URL? {

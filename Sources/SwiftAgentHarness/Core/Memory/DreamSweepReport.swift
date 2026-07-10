@@ -126,6 +126,13 @@ struct DreamSweepReportStore: Sendable {
     }
 
     func write(_ report: DreamSweepReport) throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            try writeAssumingLocked(report)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func writeAssumingLocked(_ report: DreamSweepReport) throws {
         try FileManager.default.createDirectory(at: dreamsDirectory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -140,6 +147,13 @@ struct DreamSweepReportStore: Sendable {
     }
 
     func appendDiary(for report: DreamSweepReport) throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            try appendDiaryAssumingLocked(for: report)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func appendDiaryAssumingLocked(for report: DreamSweepReport) throws {
         let section = DreamingReviewFormatter.diarySection(report: report)
         try FileManager.default.createDirectory(at: memoryDirectory, withIntermediateDirectories: true)
         let existing = (try? String(contentsOf: diaryURL, encoding: .utf8)) ?? ""

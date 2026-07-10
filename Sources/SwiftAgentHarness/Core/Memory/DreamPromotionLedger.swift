@@ -42,24 +42,30 @@ struct DreamPromotionLedger: Sendable {
 
     func append(_ records: [DreamPromotionRecord]) throws {
         guard !records.isEmpty else { return }
-        try ensureDreamsDirectory()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
         let pathKey = memoryDirectory.standardizedFileURL.path
         let processLock = DreamRecallPathLocks.lock(for: pathKey)
         processLock.lock()
         defer { processLock.unlock() }
         try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
-            var chunk = ""
-            for record in records {
-                let data = try encoder.encode(record)
-                guard let line = String(data: data, encoding: .utf8) else { continue }
-                chunk += line
-                chunk += "\n"
-            }
-            let existing = (try? String(contentsOf: promotionsURL, encoding: .utf8)) ?? ""
-            try MemoryFileLock.atomicWrite(text: existing + chunk, to: promotionsURL)
+            try appendAssumingLocked(records)
         }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func appendAssumingLocked(_ records: [DreamPromotionRecord]) throws {
+        guard !records.isEmpty else { return }
+        try ensureDreamsDirectory()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var chunk = ""
+        for record in records {
+            let data = try encoder.encode(record)
+            guard let line = String(data: data, encoding: .utf8) else { continue }
+            chunk += line
+            chunk += "\n"
+        }
+        let existing = (try? String(contentsOf: promotionsURL, encoding: .utf8)) ?? ""
+        try MemoryFileLock.atomicWrite(text: existing + chunk, to: promotionsURL)
     }
 
     func loadRecords() throws -> [DreamPromotionRecord] {
@@ -83,6 +89,13 @@ struct DreamPromotionLedger: Sendable {
     }
 
     func writeLastDeepMarker(_ marker: DreamLastDeepMarker) throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            try writeLastDeepMarkerAssumingLocked(marker)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func writeLastDeepMarkerAssumingLocked(_ marker: DreamLastDeepMarker) throws {
         try ensureDreamsDirectory()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
@@ -109,6 +122,13 @@ struct DreamPromotionLedger: Sendable {
     }
 
     func clearLastDeepMarker() throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            try clearLastDeepMarkerAssumingLocked()
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
+    func clearLastDeepMarkerAssumingLocked() throws {
         if FileManager.default.fileExists(atPath: lastDeepURL.path) {
             try FileManager.default.removeItem(at: lastDeepURL)
         }

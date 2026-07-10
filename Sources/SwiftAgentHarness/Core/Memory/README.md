@@ -20,6 +20,8 @@ Before writing, deep **re-reads the live daily**, skips if the staged snippet is
 
 Each non-rollback sweep writes `.dreams/last-sweep.json` (phase outcomes + reject reasons) and appends a section to `DREAMS.md`. Use `/dreaming explain` or `memory dreaming explain` to tune thresholds; `/dreaming status` / `memory dreaming status` show thresholds and last-run summary.
 
+Deep durable writes, rollback, and memory-directory `write_file` / `edit_file` share the sidecar `.memory.lock` (sweep-scoped hold for promote + reviewability). Nested store helpers use assuming-locked APIs because `flock` is not reentrant.
+
 Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/promotions.jsonl`. `memory rem-backfill --rollback` (alias `--rollback-short-term`) reverses the last run’s created topics and `MEMORY.md` lines without touching dailies, recall traces, or the diary/report.
 
 ## Boundary

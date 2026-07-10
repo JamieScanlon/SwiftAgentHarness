@@ -38,19 +38,21 @@ actor DreamingConsolidationScheduler {
         let runID = UUID().uuidString
         let lightCandidates = try stageLightPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir)
         let remCandidates = remPhase(candidates: lightCandidates)
-        let deepResult = try await deepPhase(
-            memoryDirectory: memoryDirectory,
-            dreamsDir: dreamsDir,
-            candidates: remCandidates,
-            runID: runID
-        )
-        try persistReviewability(
-            memoryDirectory: memoryDirectory,
-            runID: runID,
-            lightCandidates: lightCandidates,
-            remCandidates: remCandidates,
-            deepResult: deepResult
-        )
+        // Hold `.memory.lock` for the full durable write + reviewability persist (not reentrant).
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            let deepResult = try deepPhaseAssumingLocked(
+                memoryDirectory: memoryDirectory,
+                candidates: remCandidates,
+                runID: runID
+            )
+            try persistReviewabilityAssumingLocked(
+                memoryDirectory: memoryDirectory,
+                runID: runID,
+                lightCandidates: lightCandidates,
+                remCandidates: remCandidates,
+                deepResult: deepResult
+            )
+        }
     }
 
     /// Test seam: light-phase candidates with measured signals (before REM boost).
@@ -66,22 +68,23 @@ actor DreamingConsolidationScheduler {
         try FileManager.default.createDirectory(at: dreamsDir, withIntermediateDirectories: true)
         let runID = UUID().uuidString
         let remCandidates = remPhase(candidates: candidates)
-        let deepResult = try await deepPhase(
-            memoryDirectory: memoryDirectory,
-            dreamsDir: dreamsDir,
-            candidates: remCandidates,
-            runID: runID
-        )
-        try persistReviewability(
-            memoryDirectory: memoryDirectory,
-            runID: runID,
-            lightCandidates: candidates,
-            remCandidates: remCandidates,
-            deepResult: deepResult
-        )
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            let deepResult = try deepPhaseAssumingLocked(
+                memoryDirectory: memoryDirectory,
+                candidates: remCandidates,
+                runID: runID
+            )
+            try persistReviewabilityAssumingLocked(
+                memoryDirectory: memoryDirectory,
+                runID: runID,
+                lightCandidates: candidates,
+                remCandidates: remCandidates,
+                deepResult: deepResult
+            )
+        }
     }
 
-    private func persistReviewability(
+    private func persistReviewabilityAssumingLocked(
         memoryDirectory: URL,
         runID: String,
         lightCandidates: [DreamCandidate],
@@ -98,8 +101,8 @@ actor DreamingConsolidationScheduler {
             deepRejected: deepResult.rejected
         )
         let store = DreamSweepReportStore(memoryDirectory: memoryDirectory)
-        try store.write(report)
-        try store.appendDiary(for: report)
+        try store.writeAssumingLocked(report)
+        try store.appendDiaryAssumingLocked(for: report)
     }
 
     private func stageLightPhase(memoryDirectory: URL, dreamsDir: URL) throws -> [DreamCandidate] {
@@ -203,13 +206,12 @@ actor DreamingConsolidationScheduler {
         return nil
     }
 
-    private func deepPhase(
+    /// Durable deep promote. Caller must already hold `MemoryFileLock.withLock`.
+    private func deepPhaseAssumingLocked(
         memoryDirectory: URL,
-        dreamsDir: URL,
         candidates: [DreamCandidate],
         runID: String
-    ) async throws -> DeepPhaseResult {
-        _ = dreamsDir
+    ) throws -> DeepPhaseResult {
         let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
         let ledger = DreamPromotionLedger(memoryDirectory: memoryDirectory)
         var promotedReports: [DreamCandidateReport] = []
@@ -236,6 +238,7 @@ actor DreamingConsolidationScheduler {
         }
 
         let promotedAt = DreamRecallStore.isoString(from: now())
+        // Re-read index inside the sweep lock to close the RMW gap vs concurrent writers.
         var index = (try? String(contentsOf: store.indexURL, encoding: .utf8)) ?? ""
         var promotedTopics: [String] = []
         var sourceDailies: [String] = []
@@ -297,7 +300,7 @@ actor DreamingConsolidationScheduler {
                 """
                 let createdNewFile = (try? store.readTopicBody(filename: topicFilename)) == nil
                 if createdNewFile {
-                    try store.writeTopic(filename: topicFilename, content: topicContent)
+                    try store.writeTopicAssumingLocked(filename: topicFilename, content: topicContent)
                 }
                 let line = "- [\(title)](\(topicFilename)) — \(String(liveSnippet.prefix(100)).replacingOccurrences(of: "\n", with: " "))"
                 if !index.contains(topicFilename) {
@@ -336,11 +339,11 @@ actor DreamingConsolidationScheduler {
         }
 
         if !promotedTopics.isEmpty {
-            if let capFired = try store.writeIndex(content: index) {
+            if let capFired = try store.writeIndexAssumingLocked(content: index) {
                 logger?.warning("[Dreaming] MEMORY.md truncated at write: \(capFired)")
             }
-            try ledger.append(ledgerRecords)
-            try ledger.writeLastDeepMarker(
+            try ledger.appendAssumingLocked(ledgerRecords)
+            try ledger.writeLastDeepMarkerAssumingLocked(
                 DreamLastDeepMarker(
                     runID: runID,
                     promoted: promotedTopics,
@@ -357,6 +360,16 @@ actor DreamingConsolidationScheduler {
     /// Nonisolated so CLI / sync callers can reverse without hopping through the actor.
     /// Does not scrub `DREAMS.md` or `last-sweep.json` (reviewability postmortem).
     nonisolated static func rollbackLastPromotionRun(
+        memoryDirectory: URL,
+        logger: Logger? = nil
+    ) throws {
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory) {
+            try rollbackLastPromotionRunAssumingLocked(memoryDirectory: memoryDirectory, logger: logger)
+        }
+    }
+
+    /// Caller must already hold `MemoryFileLock.withLock`.
+    nonisolated private static func rollbackLastPromotionRunAssumingLocked(
         memoryDirectory: URL,
         logger: Logger? = nil
     ) throws {
@@ -396,7 +409,7 @@ actor DreamingConsolidationScheduler {
                     return !filenames.contains { trimmed.contains($0) }
                 }
             index = kept.joined(separator: "\n")
-            _ = try store.writeIndex(content: index)
+            _ = try store.writeIndexAssumingLocked(content: index)
         }
 
         for record in records where record.createdNewFile {
@@ -414,7 +427,7 @@ actor DreamingConsolidationScheduler {
             logger?.info("[Dreaming] rollback: deleted \(record.topicFilename)")
         }
 
-        try ledger.clearLastDeepMarker()
+        try ledger.clearLastDeepMarkerAssumingLocked()
         logger?.info("[Dreaming] rollback: cleared last-deep marker runID=\(marker.runID)")
     }
 
