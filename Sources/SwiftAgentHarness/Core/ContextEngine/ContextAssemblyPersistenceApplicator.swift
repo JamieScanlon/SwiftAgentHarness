@@ -3,7 +3,7 @@ import Logging
 
 /// Which derived checkpoints to persist after **`ContextEngine`** **`assemble`** / **`compact`**.
 enum ContextAssemblyDerivedCheckpointScope: Sendable {
-    /// Orchestrator **`assemble`** path: memory injection + pre-flush (when transform produced output), system prompt assembly, attachment projection, compaction.
+    /// Orchestrator **`assemble`** path: memory injection + pre-flush (when transform or flush-only produced output), system prompt assembly, attachment projection, compaction.
     case orchestratorAssemble
     /// **`compact`** / manual compaction: memory injection, pre-flush, compaction only (matches historical **`performManualCompaction`**).
     case manualCompaction
@@ -25,7 +25,7 @@ enum ContextAssemblyPersistenceApplicator {
         persistence: ConversationPersistenceStack,
         logger: Logger?,
         scope: ContextAssemblyDerivedCheckpointScope,
-        /// When false, skips memory injection + pre-compaction flush rows (orchestrator passthrough / no transform output).
+        /// When false, skips memory injection + pre-compaction flush rows (orchestrator passthrough with no flush).
         persistMemoryAndFlushCheckpoints: Bool
     ) -> ContextAssemblyPersistenceSideEffects {
         switch scope {

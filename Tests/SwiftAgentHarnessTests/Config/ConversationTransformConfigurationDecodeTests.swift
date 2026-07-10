@@ -139,6 +139,70 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.reinjectFileContentEnabled == true)
     }
 
+    @Test("softThresholdTokens defaults to 8000 and CE flush defaults on")
+    func softThresholdAndFlushDefaults() {
+        let config = ContextCompactionConfiguration.default
+        #expect(config.softThresholdTokens == 8_000)
+        #expect(config.preCompactionMemoryFlushEnabled == true)
+    }
+
+    @Test("softThresholdTokens loader clamps to non-negative with upper bound")
+    func softThresholdLoaderClamps() {
+        let negative: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": -5],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: negative)
+                .contextCompaction.softThresholdTokens == 0
+        )
+        let huge: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": 999_999],
+        ]
+        let clamped = ConversationTransformConfiguration.configuration(fromJSON: huge).contextCompaction.softThresholdTokens
+        #expect(clamped <= 100_000)
+        #expect(clamped >= 0)
+        let explicit: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": 4_000],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: explicit)
+                .contextCompaction.softThresholdTokens == 4_000
+        )
+    }
+
+    @Test("softProactiveThresholdTokens is hard minus soft headroom")
+    func softProactiveThresholdMath() {
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        let hard = ContextCompactionPolicy.proactiveThresholdTokens(
+            modelContextLimitTokens: 100_000,
+            config: config
+        )
+        let soft = ContextCompactionPolicy.softProactiveThresholdTokens(
+            modelContextLimitTokens: 100_000,
+            config: config
+        )
+        #expect(hard == 80_000)
+        #expect(soft == 72_000)
+        config.softThresholdTokens = 0
+        #expect(
+            ContextCompactionPolicy.softProactiveThresholdTokens(
+                modelContextLimitTokens: 100_000,
+                config: config
+            ) == hard
+        )
+        #expect(
+            ContextCompactionPolicy.softProactiveTriggerFires(
+                messages: [],
+                modelContextLimitTokens: 100_000,
+                lastActualPromptTokens: 75_000,
+                config: config
+            ) == false
+        )
+    }
+
     @Test("Changing a re-injection budget changes configFingerprint")
     func fingerprintReflectsReinjectionBudgets() {
         var a = ContextCompactionConfiguration.default

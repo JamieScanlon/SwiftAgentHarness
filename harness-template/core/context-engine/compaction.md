@@ -171,6 +171,8 @@ Whichever you choose, log the threshold breach and the savings of each compactio
 
 Before the summarizer runs, run a **silent turn** that reminds the agent to dump important notes to its durable memory file(s) first. Durable state gets promoted before any text is summarized away.
 
+Soft-threshold headroom (`softThresholdTokens`, default 8k) can flush **before** the hard proactive compaction trigger so the flush sub-agent is not competing with a critically full context. Soft band: flush-only; hard band: flush then summarize. See [memory-aware-compaction.md](../memory/memory-aware-compaction.md).
+
 ### Identifier preservation
 
 Compaction silently mangles opaque identifiers (PR numbers, ticket IDs, file hashes, commit SHAs, error codes) into plausible-looking but wrong text more often than is widely acknowledged. Set an explicit policy:

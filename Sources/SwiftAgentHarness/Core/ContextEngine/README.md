@@ -57,7 +57,7 @@ On the orchestrator path, memory injection + pre-flush rows persist only when **
 - Compaction now resolves one typed deterministic hygiene policy at input-build time (`ContextCompactionPolicy.resolvedDeterministicHygienePolicy`).
 - Transformer execution runs one staged pre-summarizer path: strategy shaping -> cache-aware pruning -> attachment/document/image hygiene -> optional tool-result pruning.
 - Defaults preserve prior behavior (`tool-result pruning on`, attachment/document/image hygiene off), while config knobs make stage ownership explicit under Context Engine policy surfaces.
-- Optional pre-compaction memory flush policy is resolved via `ContextCompactionPolicy.resolvedPreCompactionMemoryFlushPolicy` and executed in CE lifecycle assembly before compaction transform invocation.
+- Pre-compaction memory flush is **default-on** (`preCompactionMemoryFlushEnabled: true`) and dual-gated with Memory’s `preCompactionFlushEnabled`. Soft threshold (`softThresholdTokens`, default 8k) runs a flush-only assemble before the hard proactive trigger; hard path still flushes then summarizes. Spec: harness-template `core/memory/memory-aware-compaction.md`.
 - Identifier-preservation policy is resolved via `ContextCompactionPolicy.resolvedIdentifierPreservationPolicy` and threaded into compaction prompt construction (`strict` / `custom` / `off`) to preserve opaque IDs in summaries.
 
 ## Prompt + Attachment policy projection

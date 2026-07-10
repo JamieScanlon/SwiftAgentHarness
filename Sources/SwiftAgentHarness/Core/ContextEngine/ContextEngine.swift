@@ -13,10 +13,17 @@ public struct ContextMemoryInjectionSnapshotSpec: Sendable {
 public struct ContextEnginePreCompactionMemoryFlushPolicyInput: Sendable {
     public let enabled: Bool
     public let maxFlushedMemoryEntries: Int
+    /// Soft headroom below the hard proactive threshold (diagnostics / soft-path gating).
+    public let softThresholdTokens: Int
 
-    public init(enabled: Bool = false, maxFlushedMemoryEntries: Int = 64) {
+    public init(
+        enabled: Bool = false,
+        maxFlushedMemoryEntries: Int = 64,
+        softThresholdTokens: Int = 8_000
+    ) {
         self.enabled = enabled
         self.maxFlushedMemoryEntries = max(1, maxFlushedMemoryEntries)
+        self.softThresholdTokens = max(0, softThresholdTokens)
     }
 }
 

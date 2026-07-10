@@ -19,6 +19,8 @@ public actor DefaultMemoryService: MemoryServicing {
     private var sessionByConversation: [UUID: MemorySessionContext] = [:]
     private var storeByConversation: [UUID: AgentMemoryStore] = [:]
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
+    /// Conversations that already completed a soft-threshold flush since the last hard compaction.
+    private var softPreCompactionFlushCompleted: Set<UUID> = []
     private let userConfigDir: URL
 
     /// Silenia / composition-root entry: caller supplies resolved memory configuration explicitly.
@@ -282,11 +284,24 @@ public actor DefaultMemoryService: MemoryServicing {
         sessionByConversation.removeValue(forKey: conversationID)
         storeByConversation.removeValue(forKey: conversationID)
         hintTrackerByConversation.removeValue(forKey: conversationID)
+        softPreCompactionFlushCompleted.remove(conversationID)
         await snapshotStore.endSession(conversationID: conversationID)
         await writeTracker.removeConversation(conversationID: conversationID)
         await activeMemory.endSession(conversationID: conversationID)
         await extractor.discardStashedWork(for: conversationID)
         await providerRegistry.endSessionAll(messages: [])
+    }
+
+    func hasCompletedSoftPreCompactionFlush(conversationID: UUID) -> Bool {
+        softPreCompactionFlushCompleted.contains(conversationID)
+    }
+
+    func markSoftPreCompactionFlushCompleted(conversationID: UUID) {
+        softPreCompactionFlushCompleted.insert(conversationID)
+    }
+
+    func clearSoftPreCompactionFlush(conversationID: UUID) {
+        softPreCompactionFlushCompleted.remove(conversationID)
     }
 
     func currentSnapshotGeneration(conversationID: UUID) async -> Int {

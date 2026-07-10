@@ -6,7 +6,9 @@ import SwiftAgentKit
 /// Proactive trigger model:
 /// - `effective_context_window = model_context_window − proactiveOutputReserveTokens`
 /// - `proactiveThresholdTokens = effective_context_window − proactiveSafetyBufferTokens`
-/// - Trigger fires when `total_prompt_tokens > proactiveThresholdTokens`.
+/// - `softProactiveThresholdTokens = max(1, hard − softThresholdTokens)` (when soft headroom > 0)
+/// - Hard trigger fires when `total_prompt_tokens > proactiveThresholdTokens`.
+/// - Soft trigger fires when `total_prompt_tokens > softProactiveThresholdTokens` (and soft headroom > 0).
 /// - `total_prompt_tokens` comes from the previous successful LLM response (`lastPromptTokens`)
 ///   when available; otherwise estimated from the outgoing payload via `charactersPerToken`.
 public enum ContextCompactionPolicy: Sendable {
@@ -95,7 +97,8 @@ public enum ContextCompactionPolicy: Sendable {
     ) -> ContextEnginePreCompactionMemoryFlushPolicyInput {
         ContextEnginePreCompactionMemoryFlushPolicyInput(
             enabled: config.preCompactionMemoryFlushEnabled,
-            maxFlushedMemoryEntries: max(1, config.preCompactionMemoryFlushMaxEntries)
+            maxFlushedMemoryEntries: max(1, config.preCompactionMemoryFlushMaxEntries),
+            softThresholdTokens: max(0, config.softThresholdTokens)
         )
     }
 
@@ -182,6 +185,42 @@ public enum ContextCompactionPolicy: Sendable {
             charactersPerToken: config.charactersPerToken
         )
         let threshold = proactiveThresholdTokens(
+            modelContextLimitTokens: modelContextLimitTokens,
+            config: config
+        )
+        return prompt > threshold
+    }
+
+    /// Soft proactive threshold: `hard − softThresholdTokens`, clamped to ≥ 1.
+    /// When `softThresholdTokens == 0`, soft flush is disabled and this equals the hard threshold.
+    public static func softProactiveThresholdTokens(
+        modelContextLimitTokens: Int,
+        config: ContextCompactionConfiguration
+    ) -> Int {
+        let hard = proactiveThresholdTokens(
+            modelContextLimitTokens: modelContextLimitTokens,
+            config: config
+        )
+        let softHeadroom = max(0, config.softThresholdTokens)
+        guard softHeadroom > 0 else { return hard }
+        return max(1, hard - softHeadroom)
+    }
+
+    /// True when total prompt tokens exceed ``softProactiveThresholdTokens``.
+    /// Returns `false` when soft headroom is disabled (`softThresholdTokens == 0`).
+    public static func softProactiveTriggerFires(
+        messages: [Message],
+        modelContextLimitTokens: Int,
+        lastActualPromptTokens: Int?,
+        config: ContextCompactionConfiguration
+    ) -> Bool {
+        guard config.softThresholdTokens > 0 else { return false }
+        let prompt = resolvedTotalPromptTokens(
+            messages: messages,
+            lastActualPromptTokens: lastActualPromptTokens,
+            charactersPerToken: config.charactersPerToken
+        )
+        let threshold = softProactiveThresholdTokens(
             modelContextLimitTokens: modelContextLimitTokens,
             config: config
         )

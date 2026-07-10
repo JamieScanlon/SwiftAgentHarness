@@ -2,7 +2,9 @@
 
 Cross-session durable knowledge: project-instruction files (`AGENTS.md` / `CLAUDE.md`), agent-written memory (`MEMORY.md` index + topic files + daily staging notes), recall, extraction, and consolidation.
 
-Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply-recall.md`, and `core/memory/README.md`.
+Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply-recall.md`, `core/memory/memory-aware-compaction.md`, and `core/memory/README.md`.
+
+Pre-compaction flush is default-on on both Memory and Context Engine gates; soft-threshold flush-only runs with headroom before hard compaction (see `memory-aware-compaction.md`).
 
 ## Layout (capture vs curate)
 

@@ -59,6 +59,7 @@ enum ContextAssemblyPipeline {
             logger: logger,
             scope: .orchestratorAssemble,
             persistMemoryAndFlushCheckpoints: result.transformOutput != nil
+                || result.preCompactionMemoryFlush != nil
         )
         return ContextAssemblyPipelineRunOutput(
             assembleRequest: assembleRequest,

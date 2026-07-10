@@ -752,6 +752,458 @@ struct ContextEngineTests {
         try? FileManager.default.removeItem(at: root)
     }
 
+    @Test("Soft threshold flush-only: flush runs, transform does not")
+    func softThresholdFlushOnlyDoesNotTransform() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-soft-flush-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let flushedID = UUID()
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [flushedID]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 100_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        // hard = 80_000, soft = 72_000; prompt in soft band
+        let lastPromptTokens = 75_000
+
+        let messages = Self.longTranscriptForFlushTests()
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: .production,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: config,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 100_000,
+            lastPromptTokens: lastPromptTokens,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16,
+                softThresholdTokens: 8_000
+            )
+        )
+        let transformCounter = TransformCallCounter()
+        let result = await engine.assemble(request: request) { input in
+            await transformCounter.increment()
+            return ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionCheckpointKind.summarizedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(await transformCounter.count == 0)
+        #expect(result.transformOutput == nil)
+        #expect(result.passthroughReason == "context_compaction_noop_under_token_threshold")
+        #expect(result.preCompactionMemoryFlush?.flushedMemoryEntryIDs == [flushedID])
+        #expect(await stubRunner.callCount == 1)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("Hard threshold still flushes then transforms")
+    func hardThresholdFlushThenTransform() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-hard-flush-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let flushedID = UUID()
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [flushedID]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 100_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        config.middleMinCharactersForCompactionLLM = 0
+        config.compactionLLMCooldownSeconds = 0
+        let lastPromptTokens = 85_000
+
+        let messages = Self.longTranscriptForFlushTests()
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: .production,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: config,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 100_000,
+            lastPromptTokens: lastPromptTokens,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16,
+                softThresholdTokens: 8_000
+            )
+        )
+        let transformCounter = TransformCallCounter()
+        let result = await engine.assemble(request: request) { input in
+            await transformCounter.increment()
+            return ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionCheckpointKind.summarizedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(await transformCounter.count == 1)
+        #expect(result.transformOutput != nil)
+        #expect(result.preCompactionMemoryFlush?.flushedMemoryEntryIDs == [flushedID])
+        #expect(await stubRunner.callCount == 1)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("Under soft threshold: neither flush nor transform")
+    func underSoftThresholdNeitherFlushNorTransform() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-under-soft-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [UUID()]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 100_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        let lastPromptTokens = 50_000
+
+        let messages = Self.longTranscriptForFlushTests()
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: .production,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: config,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 100_000,
+            lastPromptTokens: lastPromptTokens,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16,
+                softThresholdTokens: 8_000
+            )
+        )
+        let transformCounter = TransformCallCounter()
+        let result = await engine.assemble(request: request) { input in
+            await transformCounter.increment()
+            return ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        #expect(await transformCounter.count == 0)
+        #expect(result.preCompactionMemoryFlush == nil)
+        #expect(await stubRunner.callCount == 0)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("Soft flush dedupe: second soft assemble does not re-flush")
+    func softFlushDedupeSkipsSecondSoftAssemble() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-soft-dedupe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [UUID()]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 100_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        let messages = Self.longTranscriptForFlushTests()
+
+        func makeRequest() -> ContextEngineAssembleRequest {
+            ContextEngineAssembleRequest(
+                messages: messages,
+                conversation: conv,
+                phase: .initial,
+                gatingOverride: .production,
+                compactionCustomInstructionsOverride: nil,
+                enableContextTransform: true,
+                compactionConfig: config,
+                transformMetadata: ConversationTransformMetadata(
+                    conversationID: conv.id,
+                    modelID: conv.model.id.uuidString,
+                    modelName: conv.model.modelName,
+                    interactionMode: .chat,
+                    routingPolicyTools: [],
+                    routingPolicySkills: [],
+                    thinkingEnabled: false,
+                    reasoningEffort: nil,
+                    metadata: nil
+                ),
+                lastContextLimitTokens: 100_000,
+                lastPromptTokens: 75_000,
+                events: [],
+                eventLogFrontier: 0,
+                lastLLMDateByConversationID: [:],
+                persistCompactionCheckpoint: true,
+                allowProactiveCompactionTriggers: true,
+                compactionLockAlreadyHeldByCaller: false,
+                derivedTailAtProjectionStart: 0,
+                preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                    enabled: true,
+                    maxFlushedMemoryEntries: 16,
+                    softThresholdTokens: 8_000
+                )
+            )
+        }
+
+        let first = await engine.assemble(request: makeRequest()) { input in
+            fatalError("transform must not run on soft path")
+        }
+        #expect(first.preCompactionMemoryFlush != nil)
+        #expect(await stubRunner.callCount == 1)
+
+        let second = await engine.assemble(request: makeRequest()) { input in
+            fatalError("transform must not run on soft path")
+        }
+        #expect(second.preCompactionMemoryFlush == nil)
+        #expect(await stubRunner.callCount == 1)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test("softThresholdTokens 0 disables soft flush; flush only on hard path")
+    func softThresholdZeroDisablesSoftFlush() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-soft-zero-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [UUID()]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 100_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 0
+
+        let messages = Self.longTranscriptForFlushTests()
+        let softBandRequest = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: .production,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: config,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 100_000,
+            lastPromptTokens: 75_000,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16,
+                softThresholdTokens: 0
+            )
+        )
+        let softResult = await engine.assemble(request: softBandRequest) { input in
+            fatalError("transform must not run under hard threshold")
+        }
+        #expect(softResult.preCompactionMemoryFlush == nil)
+        #expect(await stubRunner.callCount == 0)
+        try? FileManager.default.removeItem(at: root)
+    }
+
     @Test("DefaultContextEngine omits pre-compaction memory flush spec when disabled")
     func engineOmitsPreCompactionMemoryFlushWhenDisabled() async {
         let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
@@ -986,6 +1438,17 @@ struct ContextEngineTests {
         #expect(result.compactionLowSavings == false)
         #expect(result.checkpointPersistence != nil)
     }
+
+    private static func longTranscriptForFlushTests() -> [Message] {
+        let longBody = String(repeating: "token ", count: 8000)
+        var messages: [Message] = []
+        for index in 0..<12 {
+            messages.append(Message(id: UUID(), role: .user, content: "\(longBody) user \(index)", timestamp: Date(), toolCalls: []))
+            messages.append(Message(id: UUID(), role: .assistant, content: "\(longBody) assistant \(index)", timestamp: Date(), toolCalls: []))
+        }
+        messages.append(Message(id: UUID(), role: .user, content: "latest user", timestamp: Date(), toolCalls: []))
+        return messages
+    }
 }
 
 private func longCompactionThreadForEngineTests() -> [Message] {
@@ -1001,9 +1464,15 @@ private func longCompactionThreadForEngineTests() -> [Message] {
     return messages
 }
 
+private actor TransformCallCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
+}
+
 private actor StubPreCompactionFlushRunner: PreCompactionMemoryFlushRunning {
     let result: PreCompactionMemoryFlushResult
     private(set) var lastContext: PreCompactionMemoryFlushContext?
+    private(set) var callCount = 0
 
     init(result: PreCompactionMemoryFlushResult) {
         self.result = result
@@ -1014,6 +1483,7 @@ private actor StubPreCompactionFlushRunner: PreCompactionMemoryFlushRunning {
         logger: Logger?
     ) async -> PreCompactionMemoryFlushResult {
         _ = logger
+        callCount += 1
         lastContext = context
         return result
     }

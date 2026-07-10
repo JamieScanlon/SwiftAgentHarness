@@ -81,6 +81,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var preCompactionMemoryFlushEnabled: Bool
     /// Max number of memory entries included in a pre-compaction flush snapshot.
     public var preCompactionMemoryFlushMaxEntries: Int
+    /// Token headroom below the hard proactive threshold for a flush-only soft pass.
+    /// `0` disables soft flush (flush only on the hard compaction path).
+    public var softThresholdTokens: Int
     /// Optional compaction provider slot id (e.g. `ollama`, `none`). `nil` means default provider.
     public var optionalCompactionProviderSlot: String?
     /// When true, provider errors fall back to the default Ollama provider chain.
@@ -192,8 +195,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         deterministicDocumentCharacterThreshold: 12_000,
         deterministicDocumentPlaceholder: "[Document content cleared for context compaction]",
         deterministicImagePlaceholder: "[Image attachment omitted for context compaction]",
-        preCompactionMemoryFlushEnabled: false,
+        preCompactionMemoryFlushEnabled: true,
         preCompactionMemoryFlushMaxEntries: 64,
+        softThresholdTokens: 8_000,
         optionalCompactionProviderSlot: nil,
         optionalCompactionProviderFallbackToOllama: true,
         headMinMessageCount: 3,
@@ -254,8 +258,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         deterministicDocumentCharacterThreshold: Int = 12_000,
         deterministicDocumentPlaceholder: String = "[Document content cleared for context compaction]",
         deterministicImagePlaceholder: String = "[Image attachment omitted for context compaction]",
-        preCompactionMemoryFlushEnabled: Bool = false,
+        preCompactionMemoryFlushEnabled: Bool = true,
         preCompactionMemoryFlushMaxEntries: Int = 64,
+        softThresholdTokens: Int = 8_000,
         optionalCompactionProviderSlot: String? = nil,
         optionalCompactionProviderFallbackToOllama: Bool = true,
         headMinMessageCount: Int = 3,
@@ -316,6 +321,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.deterministicImagePlaceholder = deterministicImagePlaceholder
         self.preCompactionMemoryFlushEnabled = preCompactionMemoryFlushEnabled
         self.preCompactionMemoryFlushMaxEntries = preCompactionMemoryFlushMaxEntries
+        self.softThresholdTokens = softThresholdTokens
         self.optionalCompactionProviderSlot = optionalCompactionProviderSlot
         self.optionalCompactionProviderFallbackToOllama = optionalCompactionProviderFallbackToOllama
         self.headMinMessageCount = headMinMessageCount
@@ -872,6 +878,13 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.preCompactionMemoryFlushMaxEntries
             }()
+            let softThresholdTokens: Int = {
+                if let value = payload["softThresholdTokens"] as? Int {
+                    let upper = Swift.min(100_000, Swift.max(0, proactiveSafetyBufferTokens * 2))
+                    return Swift.min(upper, Swift.max(0, value))
+                }
+                return def.softThresholdTokens
+            }()
             let optionalCompactionProviderSlot: String? = {
                 if payload["optionalCompactionProviderSlot"] is NSNull { return nil }
                 if let value = payload["optionalCompactionProviderSlot"] as? String {
@@ -932,6 +945,7 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 deterministicImagePlaceholder: deterministicImagePlaceholder,
                 preCompactionMemoryFlushEnabled: preCompactionMemoryFlushEnabled,
                 preCompactionMemoryFlushMaxEntries: preCompactionMemoryFlushMaxEntries,
+                softThresholdTokens: softThresholdTokens,
                 optionalCompactionProviderSlot: optionalCompactionProviderSlot,
                 optionalCompactionProviderFallbackToOllama: optionalCompactionProviderFallbackToOllama,
                 headMinMessageCount: (payload["headMinMessageCount"] as? Int) ?? def.headMinMessageCount,

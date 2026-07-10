@@ -343,6 +343,12 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             )
             switch initial {
             case .passthrough(let reason):
+                let softFlush = await softFlushOnlyIfEligible(
+                    request: request,
+                    compactionTranscript: compactionTranscript,
+                    compactionInjectedPrefix: compactionInjectedPrefix,
+                    passthroughReason: reason
+                )
                 return ContextTurnAssemblyResult(
                     messages: policyAdjustedMessages,
                     transformOutput: Optional<ContextTransformOutput>.none,
@@ -353,7 +359,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
-                    preCompactionMemoryFlush: nil
+                    preCompactionMemoryFlush: softFlush
                 )
             case .transform(let built):
                 input = built
@@ -425,52 +431,11 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             inputWithManualOverride = input
         }
 
-        var preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
-        if request.preCompactionMemoryFlushPolicy?.enabled == true,
-           request.persistCompactionCheckpoint,
-           case .initial = request.phase,
-           request.enableContextTransform,
-           request.compactionConfig.enabled {
-            let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
-            if memoryStoreVersion > 0 {
-                let modelLimit = request.lastContextLimitTokens
-                    ?? request.conversation.model.maxContextLength
-                    ?? request.compactionConfig.fallbackContextLimitTokens
-                let segments = ContextCompactionCheckpointSupport.splitForCompaction(
-                    compactionTranscript,
-                    config: request.compactionConfig,
-                    modelContextLimitTokens: modelLimit
-                )
-                if segments.lastUserPinSkipped, !segments.middle.isEmpty {
-                    logger?.debug(
-                        "[ContextEngine] last-user pin skipped (outside tail window) conversation=\(request.conversation.id)"
-                    )
-                }
-                let middle = segments.middle
-                if !middle.isEmpty {
-                    let timeoutMs = await memoryService?.preCompactionFlushTimeoutMs() ?? 30_000
-                    let flushContext = PreCompactionMemoryFlushContext(
-                        conversationID: request.conversation.id,
-                        middleMessages: middle,
-                        maxFlushedMemoryEntries: request.preCompactionMemoryFlushPolicy?.maxFlushedMemoryEntries ?? 64,
-                        timeoutMs: timeoutMs
-                    )
-                    let flushResult = await preCompactionMemoryFlushRunner.runSilentFlushIfNeeded(
-                        context: flushContext,
-                        logger: logger
-                    )
-                    if flushResult.succeeded {
-                        preCompactionMemoryFlush = ContextPreCompactionMemoryFlushSpec(
-                            conversationID: request.conversation.id,
-                            phase: request.phase,
-                            memoryStoreVersion: flushResult.memoryStoreVersion,
-                            memoryStoreNamespaceKey: request.conversation.id.uuidString,
-                            flushedMemoryEntryIDs: flushResult.flushedMemoryEntryIDs
-                        )
-                    }
-                }
-            }
-        }
+        let preCompactionMemoryFlush = await runPreCompactionFlushIfEligible(
+            request: request,
+            compactionTranscript: compactionTranscript,
+            skipIfSoftAlreadyFlushed: false
+        )
 
         if acquiredCompactionLock, let coordinator = compactionCoordinator {
             let conversationID = request.conversation.id
@@ -484,11 +449,14 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 performTransform: performTransform,
                 preCompactionMemoryFlush: preCompactionMemoryFlush
             )
+            if result.checkpointPersistence != nil {
+                await memoryService?.clearSoftPreCompactionFlush(conversationID: conversationID)
+            }
             await coordinator.release(for: conversationID)
             return result
         }
 
-        return await runTransformStep(
+        let result = await runTransformStep(
             request: request,
             fallbackMessages: policyAdjustedMessages,
             input: inputWithManualOverride,
@@ -497,6 +465,107 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             attachmentProjectionCheckpoint: attachmentCheckpoint,
             performTransform: performTransform,
             preCompactionMemoryFlush: preCompactionMemoryFlush
+        )
+        if result.checkpointPersistence != nil {
+            await memoryService?.clearSoftPreCompactionFlush(conversationID: request.conversation.id)
+        }
+        return result
+    }
+
+    /// Soft-threshold flush-only path: when under the hard proactive threshold but above soft,
+    /// await a silent flush and return uncompacted context (no summarizer).
+    private func softFlushOnlyIfEligible(
+        request: ContextTurnAssemblyRequest,
+        compactionTranscript: [Message],
+        compactionInjectedPrefix: [Message],
+        passthroughReason: String
+    ) async -> ContextPreCompactionMemoryFlushSpec? {
+        guard passthroughReason == "context_compaction_noop_under_token_threshold" else { return nil }
+        guard request.preCompactionMemoryFlushPolicy?.enabled == true else { return nil }
+        guard request.persistCompactionCheckpoint else { return nil }
+        guard case .initial = request.phase else { return nil }
+        guard request.enableContextTransform, request.compactionConfig.enabled else { return nil }
+        guard request.allowProactiveCompactionTriggers else { return nil }
+        guard request.compactionConfig.softThresholdTokens > 0 else { return nil }
+
+        let modelLimit = request.lastContextLimitTokens
+            ?? request.conversation.model.maxContextLength
+            ?? request.compactionConfig.fallbackContextLimitTokens
+        let softFires = ContextCompactionPolicy.softProactiveTriggerFires(
+            messages: compactionInjectedPrefix + compactionTranscript,
+            modelContextLimitTokens: modelLimit,
+            lastActualPromptTokens: request.lastPromptTokens,
+            config: request.compactionConfig
+        )
+        guard softFires else { return nil }
+
+        return await runPreCompactionFlushIfEligible(
+            request: request,
+            compactionTranscript: compactionTranscript,
+            skipIfSoftAlreadyFlushed: true
+        )
+    }
+
+    /// Shared silent flush used by soft flush-only and hard flush-then-transform paths.
+    private func runPreCompactionFlushIfEligible(
+        request: ContextTurnAssemblyRequest,
+        compactionTranscript: [Message],
+        skipIfSoftAlreadyFlushed: Bool
+    ) async -> ContextPreCompactionMemoryFlushSpec? {
+        guard request.preCompactionMemoryFlushPolicy?.enabled == true,
+              request.persistCompactionCheckpoint,
+              case .initial = request.phase,
+              request.enableContextTransform,
+              request.compactionConfig.enabled
+        else { return nil }
+
+        if skipIfSoftAlreadyFlushed,
+           await memoryService?.hasCompletedSoftPreCompactionFlush(conversationID: request.conversation.id) == true {
+            return nil
+        }
+
+        let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
+        guard memoryStoreVersion > 0 else { return nil }
+
+        let modelLimit = request.lastContextLimitTokens
+            ?? request.conversation.model.maxContextLength
+            ?? request.compactionConfig.fallbackContextLimitTokens
+        let segments = ContextCompactionCheckpointSupport.splitForCompaction(
+            compactionTranscript,
+            config: request.compactionConfig,
+            modelContextLimitTokens: modelLimit
+        )
+        if segments.lastUserPinSkipped, !segments.middle.isEmpty {
+            logger?.debug(
+                "[ContextEngine] last-user pin skipped (outside tail window) conversation=\(request.conversation.id)"
+            )
+        }
+        let middle = segments.middle
+        guard !middle.isEmpty else { return nil }
+
+        let timeoutMs = await memoryService?.preCompactionFlushTimeoutMs() ?? 30_000
+        let flushContext = PreCompactionMemoryFlushContext(
+            conversationID: request.conversation.id,
+            middleMessages: middle,
+            maxFlushedMemoryEntries: request.preCompactionMemoryFlushPolicy?.maxFlushedMemoryEntries ?? 64,
+            timeoutMs: timeoutMs
+        )
+        let flushResult = await preCompactionMemoryFlushRunner.runSilentFlushIfNeeded(
+            context: flushContext,
+            logger: logger
+        )
+        guard flushResult.succeeded else { return nil }
+
+        if skipIfSoftAlreadyFlushed {
+            await memoryService?.markSoftPreCompactionFlushCompleted(conversationID: request.conversation.id)
+        }
+
+        return ContextPreCompactionMemoryFlushSpec(
+            conversationID: request.conversation.id,
+            phase: request.phase,
+            memoryStoreVersion: flushResult.memoryStoreVersion,
+            memoryStoreNamespaceKey: request.conversation.id.uuidString,
+            flushedMemoryEntryIDs: flushResult.flushedMemoryEntryIDs
         )
     }
 

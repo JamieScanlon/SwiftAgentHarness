@@ -1,0 +1,66 @@
+# Memory-aware compaction
+
+Handshake between in-session [compaction](../context-engine/compaction.md) and durable memory: promote important notes out of the conversation **before** the summarizer runs, with enough token headroom for a bounded flush sub-agent.
+
+Drafted for M1 soft-threshold flush. Transcript-byte fallback triggers are **out of scope** (trigger remains the compaction token decision / soft headroom of that decision).
+
+## Handshake overview
+
+```mermaid
+flowchart TD
+  tokens["resolved prompt tokens"] --> soft{"tokens > softThreshold?"}
+  soft -->|no| pass["passthrough"]
+  soft -->|yes| hard{"tokens > hardThreshold?"}
+  hard -->|no| flushOnly["await silent flush"]
+  flushOnly --> passAfter["return uncompacted context"]
+  hard -->|yes| flushThen["await silent flush"]
+  flushThen --> compact["performTransform summarizer"]
+```
+
+| Band | Behavior |
+|------|----------|
+| Under soft | Passthrough (no flush, no summarizer) |
+| Soft fires, hard does not | **Flush-only**: silent memory flush, then return uncompacted context |
+| Hard fires (or forced gating) | **Flush then transform**: silent flush, then compaction summarizer |
+
+Soft-flush **dedupe**: after a successful soft flush for a conversation, further soft-band assembles skip re-flush until a hard compaction checkpoint completes or the memory session ends.
+
+## Headroom rationale
+
+Hard proactive threshold (unchanged):
+
+- `effective_context_window = model_context_window − proactiveOutputReserveTokens`
+- `proactiveThresholdTokens = effective_context_window − proactiveSafetyBufferTokens`
+- Hard fires when `promptTokens > hard`
+
+Soft threshold:
+
+- `softProactiveThresholdTokens = max(1, hard − softThresholdTokens)`
+- Soft fires when `promptTokens > soft` and `softThresholdTokens > 0`
+
+Default `softThresholdTokens = 8_000` leaves headroom for a bounded flush sub-agent before the context is critically full. Set `softThresholdTokens: 0` to disable soft flush (flush only on the hard path — prior behavior).
+
+## Config
+
+Dual gate: **both** Context Engine and Memory knobs must allow flush.
+
+| Knob | Surface | Default | Role |
+|------|---------|---------|------|
+| `contextCompaction.preCompactionMemoryFlushEnabled` | CE / PromptConfig | `true` | CE assemble may run pre-compaction flush |
+| `contextCompaction.preCompactionMemoryFlushMaxEntries` | CE | `64` | Cap on flushed entry IDs in the checkpoint snapshot |
+| `contextCompaction.softThresholdTokens` | CE | `8_000` | Soft headroom below hard; `0` = soft disabled |
+| `memory.preCompactionFlushEnabled` | Memory | `true` | Memory service / spawn path may execute flush |
+| `memory.preCompactionFlushTimeoutMs` | Memory | `30_000` | Flush sub-agent timeout |
+| `memory.preCompactionFlushMaxIterations` | Memory | `2` | Flush sub-agent iteration bound |
+
+Loader clamp for `softThresholdTokens`: `max(0, v)` with upper bound `min(100_000, proactiveSafetyBufferTokens * 2)`.
+
+## Explicitly deferred
+
+- **Transcript-byte fallback** as an alternate flush/compaction trigger (token decision remains authoritative for M1).
+
+## Related
+
+- [compaction.md](../context-engine/compaction.md) — proactive thresholds, summarizer, re-injection
+- [memory.md](./memory.md) — durable memory surfaces and layout
+- [pre-reply-recall.md](./pre-reply-recall.md) — active-memory pre-reply (separate from pre-compaction flush)
