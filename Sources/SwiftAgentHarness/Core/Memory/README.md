@@ -31,10 +31,16 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `AgentMemoryStore.swift` | `MEMORY.md` + topic file CRUD |
 | `DreamRecallStore.swift` | Append-only recall traces under `memory/.dreams/recalls.jsonl` |
 | `DreamingConsolidationScheduler.swift` | Light / REM / deep consolidation over the recall store |
+| `DreamingControlStore.swift` | On/off gate for dreaming (`/dreaming`); default on |
+| `MemoryDreamingBridge.swift` | Enumerates project memory dirs and runs due sweeps |
+| `MemoryDreamingCronInstaller.swift` | Permanent system cron `dream` consuming `dreamingCron` |
+| `MemoryDreamingDeliver.swift` | Cron deliver short-circuit (no LLM turn for dream fires) |
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |
 | `MemoryProviderRegistry.swift` | Built-in + single external provider slot |
+
+Operator surface: `/dreaming status|on|off`. Triggers installs a permanent `dream` cron (`0 3 * * *` by default) that calls the bridge directly.
 
 ## Related
 

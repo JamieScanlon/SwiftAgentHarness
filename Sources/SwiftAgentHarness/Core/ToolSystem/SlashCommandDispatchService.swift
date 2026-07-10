@@ -153,6 +153,11 @@ actor SlashCommandDispatchService {
                         conversationID: conversationID,
                         filename: innerParsed.args.isEmpty ? nil : innerParsed.args
                     )
+                case "dreaming":
+                    return try await runSlashDreamingCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
+                    )
                 case "init":
                     return try await runSlashInitCommand(conversationID: conversationID)
                 case "approve":

@@ -255,14 +255,31 @@ public enum TriggersRuntimeWiring {
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
         )
         let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
+        let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
+        let dreamingBridge = MemoryDreamingBridge(config: memoryConfig, logger: logger)
+        let dreamingDeliver = MemoryDreamingDeliver.wrap(
+            dispatch: dispatch,
+            bridge: dreamingBridge,
+            logger: logger
+        )
         let scheduler = TriggerSchedulerService(
             store: taskStore,
-            dispatch: dispatch,
+            deliver: dreamingDeliver,
             lockURL: lockURL,
             config: TriggerSchedulerConfiguration(lockIdentity: configuration.schedulerIdentity),
             taskRuns: taskRuns,
             logger: logger
         )
+        // Permanent system cron — installer path only (`allowPermanent` via scanner on store upsert).
+        do {
+            try MemoryDreamingCronInstaller.ensureInstalled(
+                store: taskStore,
+                config: memoryConfig,
+                logger: logger
+            )
+        } catch {
+            logger.error("[Dreaming] failed to install dream cron: \(error.localizedDescription)")
+        }
         let dynamicStore = WebhookDynamicRouteStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
         )

@@ -153,6 +153,16 @@ public struct SlashCommandRegistry: Sendable {
             ),
             SlashCommand(
                 base: SlashCommandBase(
+                    name: "dreaming",
+                    description: "Show or toggle background memory consolidation (dreaming).",
+                    argumentHint: "status|on|off",
+                    hiddenKeywords: "dream consolidate recall cron",
+                    bypassTier: .queued
+                ),
+                kind: .local
+            ),
+            SlashCommand(
+                base: SlashCommandBase(
                     name: "init",
                     description: "Bootstrap AGENTS.md for the current workspace.",
                     argumentHint: "",

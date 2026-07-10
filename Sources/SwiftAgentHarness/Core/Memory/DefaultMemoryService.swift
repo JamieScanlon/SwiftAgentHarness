@@ -289,9 +289,13 @@ public actor DefaultMemoryService: MemoryServicing {
 
     func hybridSearch() -> HybridMemorySearch { search }
 
+    func runDreamingSweep(memoryDirectory: URL, rollback: Bool = false) async throws {
+        try await dreaming.runSweep(memoryDirectory: memoryDirectory, rollback: rollback)
+    }
+
     func runDreamingSweep(conversationID: UUID, rollback: Bool = false) async throws {
         guard let context = sessionByConversation[conversationID] else { return }
-        try await dreaming.runSweep(memoryDirectory: context.memoryDirectory, rollback: rollback)
+        try await runDreamingSweep(memoryDirectory: context.memoryDirectory, rollback: rollback)
     }
 
     nonisolated func makeSessionContext(conversationID: UUID, cwd: String, chatType: MemoryChatType = .direct) throws -> MemorySessionContext {
