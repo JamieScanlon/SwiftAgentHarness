@@ -2,7 +2,7 @@
 
 Cross-session durable knowledge: project-instruction files (`AGENTS.md` / `CLAUDE.md`), agent-written memory (`MEMORY.md` index + topic files + daily staging notes), recall, extraction, and consolidation.
 
-Normative spec: harness-template `core/memory/memory.md` and `core/memory/README.md`.
+Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply-recall.md`, and `core/memory/README.md`.
 
 ## Layout (capture vs curate)
 
@@ -31,7 +31,7 @@ Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/prom
 | Consumer | Uses Memory for |
 |----------|-----------------|
 | **Context Engine** | Frozen snapshot system prompt blocks at `assemble` |
-| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply |
+| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply (`NONE` → no injection) |
 | **Tool System** | Workspace file tools + memory write gates; `memory_search` / `memory_get` |
 | **Sub-Agent Pool** | Forked extraction subagent |
 | **Model Pool** | Cheap recall selector + active-memory model |
@@ -60,6 +60,7 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `MemoryDreamingBridge.swift` | Enumerates project memory dirs and runs due sweeps |
 | `MemoryDreamingCronInstaller.swift` | Permanent system cron `dream` consuming `dreamingCron` |
 | `MemoryDreamingDeliver.swift` | Cron deliver short-circuit (no LLM turn for dream fires) |
+| `ActiveMemoryRecallOutput.swift` | NONE-contract parse (`noteOrNil`) for pre-reply lanes |
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |

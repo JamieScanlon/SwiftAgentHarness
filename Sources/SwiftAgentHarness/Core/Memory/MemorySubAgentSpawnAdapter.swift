@@ -40,11 +40,13 @@ enum MemorySubAgentSpawnAdapter {
                     await cancelChildRun(childID)
                     return nil
                 }
-                guard let raw = await lastAssistantText(childID),
-                      !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                guard let raw = await lastAssistantText(childID) else {
                     return nil
                 }
-                let capped = String(raw.prefix(maxSummaryChars))
+                guard let note = ActiveMemoryRecallOutput.noteOrNil(raw) else {
+                    return nil
+                }
+                let capped = String(note.prefix(maxSummaryChars))
                 return MemoryContextFencer.fence(capped)
             },
             spawnBackgroundExtraction: { request in
