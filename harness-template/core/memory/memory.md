@@ -344,7 +344,7 @@ Most memory systems are *reactive*: they only fire when the model decides to cal
 Add a **pre-reply blocking memory sub-agent** before the main reply so a separate bounded model call gets one chance to surface relevant memory. Conversational products often treat this as an **opt-in** surface; **this coding harness ships it on** (`activeMemoryEnabled` + both lanes default `true`) and opts out via PromptConfig. Constrain it tightly:
 
 - **Restricted tool surface.** Only `memory_search` and `memory_get`. No write, no edit, no other tools.
-- **Separate model.** A fast cheap recall model (Cerebras gpt-oss-120b, Gemini Flash, etc.) — latency matters more than quality on this path. Allow inheriting the session model when no override is set.
+- **Separate model.** Prefer a fast cheap tools-capable recall model via the Model Pool (`memory-recall` use class); optional explicit pin; inherit the session model only as last resort when the pool query is empty. Do not silently upgrade provider trust (local session must not pick a hosted model unless opted in).
 - **Bounded by chat type.** Default to direct messages only (`allowedChatTypes: ["direct"]`). Group/channel sessions opt in explicitly because they're noisier and the recall trace gets less useful per turn.
 - **Per-agent allowlist.** In multi-agent setups, opt agents in by id (`agents: ["main"]`).
 - **Bounded budget.** Hard `timeoutMs` (15s default) and a `maxSummaryChars` cap on the recall summary handed to the main reply (default **220**, clamp **40–1000** — one compact note, not an essay).

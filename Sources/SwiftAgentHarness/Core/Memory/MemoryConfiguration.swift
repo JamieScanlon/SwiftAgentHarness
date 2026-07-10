@@ -18,8 +18,12 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var dreamingMinUniqueQueries: Int
     public var recallSelectorModel: String
     public var recallSelectorOllamaServerURL: URL
-    var activeMemoryModel: String
+    /// Optional Model Pool pin (slug or UUID). When nil, active memory resolves via pool query + session last resort.
+    var activeMemoryModelRef: String?
+    /// Legacy Ollama endpoint still used by ``ModelPoolMemoryLLMRecallSelector`` until that path migrates.
     var activeMemoryOllamaServerURL: URL
+    /// When false (default), pool candidates must not exceed the parent session's provider trust tier.
+    var activeMemoryAllowCrossProviderTrust: Bool
     var extractionRecentMessageCount: Int
     var preCompactionFlushEnabled: Bool
     var preCompactionFlushTimeoutMs: Int
@@ -47,8 +51,9 @@ public struct MemoryConfiguration: Sendable, Equatable {
         dreamingMinUniqueQueries: 2,
         recallSelectorModel: "llama3.2:3b",
         recallSelectorOllamaServerURL: URL(string: "http://127.0.0.1:11434")!,
-        activeMemoryModel: "llama3.2:3b",
+        activeMemoryModelRef: nil,
         activeMemoryOllamaServerURL: URL(string: "http://127.0.0.1:11434")!,
+        activeMemoryAllowCrossProviderTrust: false,
         extractionRecentMessageCount: 20,
         preCompactionFlushEnabled: true,
         preCompactionFlushTimeoutMs: 30_000,
@@ -95,10 +100,18 @@ public enum MemoryConfigurationLoader {
            let url = URL(string: urlString) {
             config.recallSelectorOllamaServerURL = url
         }
-        if let v = memory["activeMemoryModel"] as? String, !v.isEmpty { config.activeMemoryModel = v }
+        if let v = memory["activeMemoryModelRef"] as? String, !v.isEmpty {
+            config.activeMemoryModelRef = v
+        } else if let legacy = memory["activeMemoryModel"] as? String, !legacy.isEmpty {
+            // Legacy key: treat as an optional pool pin (slug), not a mandatory Ollama model name.
+            config.activeMemoryModelRef = legacy
+        }
         if let urlString = memory["activeMemoryOllamaServerURL"] as? String,
            let url = URL(string: urlString) {
             config.activeMemoryOllamaServerURL = url
+        }
+        if let v = memory["activeMemoryAllowCrossProviderTrust"] as? Bool {
+            config.activeMemoryAllowCrossProviderTrust = v
         }
         if let v = memory["extractionRecentMessageCount"] as? Int {
             config.extractionRecentMessageCount = max(1, v)

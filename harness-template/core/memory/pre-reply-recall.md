@@ -7,7 +7,7 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 ## Constraints
 
 - **Tools:** only `memory_search` and `memory_get`. No write, edit, or other tools. Restriction is **gateway-enforced** via spawn `toolsAllow` (child `routingPrefs.explicitToolPolicy`) plus the `memory-active-recall` mode profile allowlist — not prompt hope alone.
-- **Model:** a separate, typically faster/cheaper recall model (or an explicit inherit of the session model).
+- **Model:** resolved via the Model Pool — optional pin (`activeMemoryModelRef`), then a `memory-recall` capability query (prefer cheap/tools, trust-scoped to the session provider tier by default), then the parent session model if it has tools. Unresolved → skip recall (no error).
 - **Chat types:** default to direct messages; group/channel sessions opt in explicitly.
 - **Agents:** per-agent allowlist in multi-agent setups.
 - **Budget:** hard timeout and a `maxSummaryChars` cap on any note handed to the main reply. Default **220** (compact note, not an essay); PromptConfig clamp **40–1000**. Soft limit in the recall prompt; hard truncate with a trailing `…` when clipped.

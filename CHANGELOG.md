@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Memory — active-memory model via Model Pool
+
+- **Config:** `activeMemoryModelRef` optional pin (slug/UUID); default is no pin. Legacy `activeMemoryModel` string maps to the pin. `activeMemoryAllowCrossProviderTrust` defaults false.
+- **Resolution:** pin (must have `.tools`) → pool `memory-recall` query (trust-scoped) → parent session if tools-capable → skip recall. Spawn path no longer hardcodes Ollama `llama3.2:3b`.
+
 ### Memory — active-memory feedback-loop guard
 
 - **Affected prompts:** `ActiveMemoryPreReplyPrompts` standing + situational contracts now require ignoring `<memory-context>` / `[Active Memory Recall]` artifacts and basing notes only on durable `memory_search` / `memory_get` results.

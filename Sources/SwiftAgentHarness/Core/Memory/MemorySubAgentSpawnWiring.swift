@@ -13,6 +13,7 @@ enum MemorySubAgentSpawnWiring {
             return
         }
         let config = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: deps.logger)
+        let ranked = deps.rankedRegistryEntriesProvider
         let port = MemorySubAgentSpawnAdapter.makePort(
             spawnSubAgent: { parentID, request, model in
                 try await subAgentSpawnService.spawnSubAgentViaPool(
@@ -56,6 +57,13 @@ enum MemorySubAgentSpawnWiring {
                 }
                 let entries = await memoryService.manifestEntries(conversationID: conversationID)
                 return entries.map(MemoryManifestScanner.formatManifestLine)
+            },
+            parentModel: { conversationID in
+                await persistenceDomain.modelConversation(id: conversationID)?.model
+            },
+            rankedRegistryEntries: { ref in
+                guard let ranked else { return [] }
+                return await ranked(ref)
             },
             config: config,
             logger: deps.logger

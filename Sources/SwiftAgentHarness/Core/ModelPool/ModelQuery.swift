@@ -26,6 +26,8 @@ public struct ModelQuery: Sendable, Hashable {
     public var requireParallelToolCalls: Bool = false
     /// Non-empty: must be a subset of the entry's ``ModelRequestFeatures/reasoningEfforts``.
     public var requireReasoningEfforts: Set<ReasoningEffort> = []
+    /// When set, the entry's primary binding protocol must be in this set (provider trust / locality filter).
+    public var allowedModelProtocols: Set<ModelProtocol>?
 
     public init(
         mustIncludeCapabilities: Set<LLMCapability> = [],
@@ -39,7 +41,8 @@ public struct ModelQuery: Sendable, Hashable {
         requireStreaming: Bool = false,
         requireResponseFormats: Set<ResponseFormatKind> = [],
         requireParallelToolCalls: Bool = false,
-        requireReasoningEfforts: Set<ReasoningEffort> = []
+        requireReasoningEfforts: Set<ReasoningEffort> = [],
+        allowedModelProtocols: Set<ModelProtocol>? = nil
     ) {
         self.mustIncludeCapabilities = mustIncludeCapabilities
         self.minimumContextWindow = minimumContextWindow
@@ -53,11 +56,17 @@ public struct ModelQuery: Sendable, Hashable {
         self.requireResponseFormats = requireResponseFormats
         self.requireParallelToolCalls = requireParallelToolCalls
         self.requireReasoningEfforts = requireReasoningEfforts
+        self.allowedModelProtocols = allowedModelProtocols
     }
 
     public func matches(_ entry: ModelRegistryEntry) -> Bool {
         if !mustIncludeCapabilities.isSubset(of: entry.capabilities) {
             return false
+        }
+        if let allowed = allowedModelProtocols {
+            guard let proto = entry.primaryBinding?.modelProtocol, allowed.contains(proto) else {
+                return false
+            }
         }
         if let minWin = minimumContextWindow {
             guard let ctx = entry.maxContextLength, ctx >= minWin else {

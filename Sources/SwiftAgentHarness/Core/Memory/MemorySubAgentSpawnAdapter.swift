@@ -15,12 +15,25 @@ enum MemorySubAgentSpawnAdapter {
         cancelChildRun: @escaping @Sendable (UUID) async -> Void,
         lastAssistantText: @escaping @Sendable (UUID) async -> String?,
         manifestLines: @escaping @Sendable (UUID) async -> [String],
+        parentModel: @escaping @Sendable (UUID) async -> Model?,
+        rankedRegistryEntries: @escaping @Sendable (ModelReference) async -> [ModelRegistryEntry],
         config: MemoryConfiguration,
         logger: Logger?
     ) -> MemorySubAgentSpawnPort {
         MemorySubAgentSpawnPort(
             spawnBlockingRecall: { parentConversationID, userQuery, lane, timeoutMs, maxSummaryChars in
-                let model = activeMemoryModel(from: config)
+                guard let parent = await parentModel(parentConversationID) else {
+                    logger?.debug("[ActiveMemory] parent conversation missing; skipping recall")
+                    return nil
+                }
+                guard let model = await ActiveMemoryModelResolver.resolve(
+                    parentModel: parent,
+                    config: config,
+                    ranked: rankedRegistryEntries,
+                    logger: logger
+                ) else {
+                    return nil
+                }
                 let sanitizedQuery = userQuery.map { MemoryContextFencer.stripInjectedRecallArtifacts($0) }
                 let (systemPrompt, userPromptText) = ActiveMemoryPreReplyPrompts.prompts(
                     for: lane,
@@ -139,15 +152,16 @@ enum MemorySubAgentSpawnAdapter {
         )
     }
 
-    static func activeMemoryModel(from config: MemoryConfiguration) -> Model {
+    /// Fixture helper for tests that need a tools-capable local model (not used on the spawn path).
+    static func fixtureToolsCapableLocalModel(
+        name: String = "active-memory-fixture",
+        serverURL: URL = MemoryConfiguration.default.activeMemoryOllamaServerURL
+    ) -> Model {
         Model(
-            id: ModelPoolMemoryLLMRecallSelector.modelID(
-                model: config.activeMemoryModel,
-                serverURL: config.activeMemoryOllamaServerURL
-            ),
+            id: ModelPoolMemoryLLMRecallSelector.modelID(model: name, serverURL: serverURL),
             protocol: .ollama,
-            modelName: config.activeMemoryModel,
-            serverURL: config.activeMemoryOllamaServerURL,
+            modelName: name,
+            serverURL: serverURL,
             capabilities: [.completion, .tools],
             modelProtocol: .ollama
         )

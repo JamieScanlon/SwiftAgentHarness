@@ -474,6 +474,8 @@ struct MemorySubAgentSpawnAdapterTests {
             cancelChildRun: { _ in },
             lastAssistantText: { _ in nil },
             manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
             config: .default,
             logger: nil
         )
@@ -517,6 +519,8 @@ struct MemorySubAgentSpawnAdapterTests {
             cancelChildRun: { _ in },
             lastAssistantText: { _ in "NONE" },
             manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
             config: .default,
             logger: nil
         )
@@ -557,6 +561,8 @@ struct MemorySubAgentSpawnAdapterTests {
             cancelChildRun: { _ in },
             lastAssistantText: { _ in "NONE" },
             manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
             config: .default,
             logger: nil
         )

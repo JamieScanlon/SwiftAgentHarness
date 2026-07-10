@@ -42,7 +42,7 @@ struct ActiveMemoryOrchestrationDesyncTests {
 
         let childID = try await session.persistenceDomain.createIsolatedSubAgent(
             parentConversationID: parent.id,
-            selectedModel: MemorySubAgentSpawnAdapter.activeMemoryModel(from: .default),
+            selectedModel: MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel(),
             userSystemPrompt: ActiveMemoryPreReplyPrompts.systemPrompt(),
             topic: "memory-active-recall",
             description: nil,
