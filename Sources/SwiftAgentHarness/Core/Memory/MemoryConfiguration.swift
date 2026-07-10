@@ -12,6 +12,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var teamMemoryEnabled: Bool
     var dreamingCron: String
     var dreamingMinScore: Double
+    var dreamingMinRecallCount: Int
+    var dreamingMinUniqueQueries: Int
     public var recallSelectorModel: String
     public var recallSelectorOllamaServerURL: URL
     var activeMemoryModel: String
@@ -38,6 +40,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
         teamMemoryEnabled: true,
         dreamingCron: "0 3 * * *",
         dreamingMinScore: 0.55,
+        dreamingMinRecallCount: 2,
+        dreamingMinUniqueQueries: 2,
         recallSelectorModel: "llama3.2:3b",
         recallSelectorOllamaServerURL: URL(string: "http://127.0.0.1:11434")!,
         activeMemoryModel: "llama3.2:3b",
@@ -73,6 +77,8 @@ public enum MemoryConfigurationLoader {
         if let v = memory["teamMemoryEnabled"] as? Bool { config.teamMemoryEnabled = v }
         if let v = memory["dreamingCron"] as? String { config.dreamingCron = v }
         if let v = memory["dreamingMinScore"] as? Double { config.dreamingMinScore = v }
+        if let v = memory["dreamingMinRecallCount"] as? Int { config.dreamingMinRecallCount = max(1, v) }
+        if let v = memory["dreamingMinUniqueQueries"] as? Int { config.dreamingMinUniqueQueries = max(1, v) }
         if let v = memory["recallSelectorModel"] as? String, !v.isEmpty { config.recallSelectorModel = v }
         if let urlString = memory["recallSelectorOllamaServerURL"] as? String,
            let url = URL(string: urlString) {

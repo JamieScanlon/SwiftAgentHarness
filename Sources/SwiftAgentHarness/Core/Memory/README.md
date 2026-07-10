@@ -29,6 +29,8 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `SubdirectoryHintTracker.swift` | Lazy subdirectory hints on tool results |
 | `AgentMemoryPathResolver.swift` | Secure memory directory resolution |
 | `AgentMemoryStore.swift` | `MEMORY.md` + topic file CRUD |
+| `DreamRecallStore.swift` | Append-only recall traces under `memory/.dreams/recalls.jsonl` |
+| `DreamingConsolidationScheduler.swift` | Light / REM / deep consolidation over the recall store |
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |

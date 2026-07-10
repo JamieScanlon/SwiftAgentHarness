@@ -8,6 +8,7 @@ public struct MemorySearchToolProvider: ToolProvider, ToolDescriptorHinting {
 
     private let memoryDirectory: URL
     private let search: HybridMemorySearch
+    private let recallStore: DreamRecallStore
 
     public var name: String { "MemorySearch" }
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
@@ -17,9 +18,10 @@ public struct MemorySearchToolProvider: ToolProvider, ToolDescriptorHinting {
         ]
     }
 
-    init(memoryDirectory: URL, search: HybridMemorySearch) {
+    init(memoryDirectory: URL, search: HybridMemorySearch, recallStore: DreamRecallStore? = nil) {
         self.memoryDirectory = memoryDirectory
         self.search = search
+        self.recallStore = recallStore ?? DreamRecallStore(memoryDirectory: memoryDirectory)
     }
 
     public func availableTools() async -> [ToolDefinition] {
@@ -48,6 +50,7 @@ public struct MemorySearchToolProvider: ToolProvider, ToolDescriptorHinting {
         case Self.searchToolName:
             let query = extractString(from: toolCall.arguments, key: "query") ?? ""
             let hits = await search.search(query: query, memoryDirectory: memoryDirectory, limit: 10)
+            try? recallStore.recordSearchHits(query: query, hits: hits)
             let rendered = hits.map { "[\($0.filename)] score=\($0.score): \($0.snippet)" }.joined(separator: "\n")
             return ToolResult(success: true, content: rendered, metadata: .object(["source": .string("memory_search")]), toolCallId: toolCall.id)
         case Self.getToolName:
@@ -56,6 +59,7 @@ public struct MemorySearchToolProvider: ToolProvider, ToolDescriptorHinting {
             guard let body = try store.readTopicBody(filename: filename) else {
                 return ToolResult(success: false, content: "", metadata: .object(["source": .string("memory_search")]), toolCallId: toolCall.id, error: "Not found")
             }
+            try? recallStore.recordGet(filename: filename, snippet: body)
             return ToolResult(success: true, content: body, metadata: .object(["source": .string("memory_search")]), toolCallId: toolCall.id)
         default:
             return ToolResult(success: false, content: "", metadata: .object(["source": .string("memory_search")]), toolCallId: toolCall.id, error: "Unknown tool")
