@@ -32,14 +32,19 @@ struct DreamingControlStoreTests {
         #expect(FileManager.default.fileExists(atPath: store.controlFileURL.path))
     }
 
-    @Test("statusSummary includes cron and enabled state")
+    @Test("statusSummary includes cron, control, and config dreamingEnabled")
     func statusSummary() throws {
         let root = try tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DreamingControlStore(rootDirectory: root)
-        let text = store.statusSummary(cronExpr: "0 3 * * *", memoryDirectory: nil)
+        var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
+        let text = store.statusSummary(cronExpr: "0 3 * * *", memoryDirectory: nil, config: config)
         #expect(text.contains("Dreaming: on"))
+        #expect(text.contains("Config dreamingEnabled: on"))
         #expect(text.contains("0 3 * * *"))
+        let offText = store.statusSummary(cronExpr: "0 3 * * *", memoryDirectory: nil, config: .default)
+        #expect(offText.contains("Config dreamingEnabled: off"))
     }
 }
 
@@ -72,6 +77,7 @@ struct MemoryDreamingBridgeTests {
         )
 
         var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         config.dreamingMinScore = 0
         config.dreamingMinRecallCount = 1
         config.dreamingMinUniqueQueries = 1
@@ -84,6 +90,25 @@ struct MemoryDreamingBridgeTests {
         #expect(swept == 0)
         let index = (try? String(contentsOf: tree.memory.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
         #expect(!index.contains("t.md"))
+    }
+
+    @Test("config dreamingEnabled=false skips sweeps even when control is on")
+    func configDisabledSkips() async throws {
+        let tree = try makeProjectsTree()
+        defer { try? FileManager.default.removeItem(at: tree.root) }
+        let control = DreamingControlStore(rootDirectory: tree.root)
+        try control.setEnabled(true)
+        try AgentMemoryStore(memoryDirectory: tree.memory).ensureLayout()
+
+        var config = MemoryConfiguration.default
+        #expect(config.dreamingEnabled == false)
+        let bridge = MemoryDreamingBridge(
+            config: config,
+            controlStore: control,
+            projectsRoot: tree.projects
+        )
+        let swept = try await bridge.runDueSweeps()
+        #expect(swept == 0)
     }
 
     @Test("enabled bridge sweeps memory dirs with content")
@@ -107,6 +132,7 @@ struct MemoryDreamingBridgeTests {
         }
 
         var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         config.dreamingMinScore = 0
         config.dreamingMinRecallCount = 2
         config.dreamingMinUniqueQueries = 2
@@ -131,7 +157,10 @@ struct MemoryDreamingBridgeTests {
         let projects = root.appendingPathComponent("projects", isDirectory: true)
         try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         let bridge = MemoryDreamingBridge(
+            config: config,
             controlStore: DreamingControlStore(rootDirectory: root),
             projectsRoot: projects
         )
@@ -178,7 +207,7 @@ struct MemoryDreamingBridgeTests {
 
 @Suite("MemoryDreamingCronInstaller")
 struct MemoryDreamingCronInstallerTests {
-    @Test("installs permanent dream task using dreamingCron")
+    @Test("installs permanent dream task using dreamingCron when enabled")
     func installsPermanentTask() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("dream-cron-\(UUID().uuidString)", isDirectory: true)
@@ -186,9 +215,10 @@ struct MemoryDreamingCronInstallerTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         config.dreamingCron = "15 4 * * *"
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
-        let saved = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        let saved = try #require(try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config))
         #expect(saved.id == "dream")
         #expect(saved.permanent)
         #expect(saved.recurring)
@@ -196,6 +226,26 @@ struct MemoryDreamingCronInstallerTests {
         #expect(saved.payloadKind == .systemEvent)
         #expect(saved.schedule.expr == "15 4 * * *")
         #expect(config.dreamingCron == saved.schedule.expr)
+    }
+
+    @Test("dreamingEnabled=false skips install and removes existing dream task")
+    func disabledRemovesTask() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dream-cron-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
+        var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
+        config.dreamingCron = "0 3 * * *"
+        _ = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        #expect(try store.task(id: "dream") != nil)
+
+        config.dreamingEnabled = false
+        let result = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        #expect(result == nil)
+        #expect(try store.task(id: "dream") == nil)
     }
 
     @Test("reinstall refreshes cron expression from config")
@@ -207,10 +257,11 @@ struct MemoryDreamingCronInstallerTests {
 
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
         var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         config.dreamingCron = "0 3 * * *"
         _ = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
         config.dreamingCron = "30 2 * * 1"
-        let updated = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        let updated = try #require(try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config))
         #expect(updated.schedule.expr == "30 2 * * 1")
         let loaded = try store.task(id: "dream")
         #expect(loaded?.schedule.expr == "30 2 * * 1")
@@ -274,8 +325,10 @@ struct MemoryDreamingCronInstallerTests {
             promptBuilder: TriggerPromptBuilder(),
             runtime: runtime
         )
+        var bridgeConfig = MemoryConfiguration.default
+        bridgeConfig.dreamingEnabled = true
         let bridge = MemoryDreamingBridge(
-            config: .default,
+            config: bridgeConfig,
             controlStore: control,
             projectsRoot: projects
         )
@@ -288,8 +341,9 @@ struct MemoryDreamingCronInstallerTests {
             logger: Logger(label: "test")
         )
         var config = MemoryConfiguration.default
+        config.dreamingEnabled = true
         config.dreamingCron = "0 3 * * *"
-        let task = try await MemoryDreamingCronInstaller.ensureInstalled(scheduler: scheduler, config: config)
+        let task = try #require(try await MemoryDreamingCronInstaller.ensureInstalled(scheduler: scheduler, config: config))
         #expect(task.id == "dream")
         #expect(task.schedule.expr == config.dreamingCron)
 

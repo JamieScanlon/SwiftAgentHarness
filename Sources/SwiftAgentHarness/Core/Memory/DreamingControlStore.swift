@@ -51,6 +51,7 @@ struct DreamingControlStore: Sendable {
     ) -> String {
         let enabled = isEnabled()
         var lines = [
+            "Config dreamingEnabled: \(config.dreamingEnabled ? "on" : "off")",
             "Dreaming: \(enabled ? "on" : "off")",
             "Cron: \(cronExpr)",
             "Control file: \(controlFileURL.path)",

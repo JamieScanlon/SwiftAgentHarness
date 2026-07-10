@@ -36,6 +36,10 @@ struct MemoryDreamingBridge: Sendable {
 
     @discardableResult
     func runDueSweeps(rollback: Bool = false) async throws -> Int {
+        guard config.dreamingEnabled else {
+            logger?.info("[Dreaming] sweeps skipped — dreamingEnabled=false in config")
+            return 0
+        }
         guard controlStore.isEnabled() else {
             logger?.info("[Dreaming] sweeps skipped — dreaming is off")
             return 0

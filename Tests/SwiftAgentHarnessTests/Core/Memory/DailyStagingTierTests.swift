@@ -283,11 +283,22 @@ struct DailyStagingTierTests {
         #expect(topicBody.contains(note) || topicBody.contains("grafana"))
     }
 
-    @Test("default dreamingMinScore is 0.75")
+    @Test("default dreamingMinScore is 0.75; dreamingEnabled ships off")
     func defaultMinScore() {
         #expect(MemoryConfiguration.default.dreamingMinScore == 0.75)
         #expect(MemoryConfiguration.default.dreamingMinRecallCount == 2)
         #expect(MemoryConfiguration.default.dreamingMinUniqueQueries == 2)
+        #expect(MemoryConfiguration.default.dreamingEnabled == false)
+    }
+
+    @Test("loader applies dreamingEnabled from memory object")
+    func loaderDreamingEnabled() {
+        let on = MemoryConfigurationLoader.load(fromMemoryObject: ["dreamingEnabled": true])
+        #expect(on.dreamingEnabled == true)
+        let off = MemoryConfigurationLoader.load(fromMemoryObject: ["dreamingEnabled": false])
+        #expect(off.dreamingEnabled == false)
+        let missing = MemoryConfigurationLoader.load(fromMemoryObject: [:])
+        #expect(missing.dreamingEnabled == false)
     }
 
     @Test("extraction and flush prompts include daily capture guidance")

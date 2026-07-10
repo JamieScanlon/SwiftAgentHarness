@@ -6,12 +6,21 @@ enum MemoryDreamingCronInstaller {
     static let taskID = MemoryDreamingBridge.dreamTaskID
 
     /// Sync install via the task store (composition-root path; `resolve` is non-async).
+    /// When `dreamingEnabled` is false, removes any existing permanent dream task and returns nil.
     @discardableResult
     static func ensureInstalled(
         store: ScheduledTaskStore,
         config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
         logger: Logger? = nil
-    ) throws -> ScheduledTask {
+    ) throws -> ScheduledTask? {
+        guard config.dreamingEnabled else {
+            if try store.delete(id: taskID) {
+                logger?.info("[Dreaming] removed permanent cron task id=\(taskID) (dreamingEnabled=false)")
+            } else {
+                logger?.info("[Dreaming] cron install skipped — dreamingEnabled=false")
+            }
+            return nil
+        }
         let task = makeTask(config: config, existing: try store.task(id: taskID))
         switch ScheduledTaskCreateScanner.validateCreate(task: task, allowPermanent: true) {
         case .failure(let error):
@@ -25,12 +34,21 @@ enum MemoryDreamingCronInstaller {
     }
 
     /// Async install via the scheduler actor (tests / runtime helpers).
+    /// When `dreamingEnabled` is false, removes any existing permanent dream task and returns nil.
     @discardableResult
     static func ensureInstalled(
         scheduler: TriggerSchedulerService,
         config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
         logger: Logger? = nil
-    ) async throws -> ScheduledTask {
+    ) async throws -> ScheduledTask? {
+        guard config.dreamingEnabled else {
+            if try await scheduler.deleteTask(id: taskID) {
+                logger?.info("[Dreaming] removed permanent cron task id=\(taskID) (dreamingEnabled=false)")
+            } else {
+                logger?.info("[Dreaming] cron install skipped — dreamingEnabled=false")
+            }
+            return nil
+        }
         let existing = try await scheduler.listTasks().first { $0.id == taskID }
         let task = makeTask(config: config, existing: existing)
         let saved = try await scheduler.createTask(task, allowPermanent: true)

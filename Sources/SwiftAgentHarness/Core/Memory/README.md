@@ -16,6 +16,8 @@ Normative spec: harness-template `core/memory/memory.md` and `core/memory/README
 
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
 
+Autonomous dreaming **ships off**: set PromptConfig `memory.dreamingEnabled: true` to opt in. After opt-in, `/dreaming on|off` is a soft runtime toggle (control store; missing file defaults on). Both config and control must be on for bridge sweeps; cron install is skipped (and any existing `dream` task removed) when `dreamingEnabled` is false.
+
 Before writing, deep **re-reads the live daily**, skips if the staged snippet is gone, then derives topic title / description / body / index hook from a fresh `richestSnippet` of that live body (not the light-phase snapshot alone). A contamination denylist blocks `MEMORY.md`, `DREAMS.md`, and `.dreams/*` machine artifacts from staging or promotion.
 
 Each non-rollback sweep writes `.dreams/last-sweep.json` (phase outcomes + reject reasons) and appends a section to `DREAMS.md`. Use `/dreaming explain` or `memory dreaming explain` to tune thresholds; `/dreaming status` / `memory dreaming status` show thresholds and last-run summary.
@@ -63,7 +65,7 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |
 | `MemoryProviderRegistry.swift` | Built-in + single external provider slot |
 
-Operator surface: `/dreaming status|explain|on|off` (CLI: `memory dreaming status|explain`). Triggers installs a permanent `dream` cron (`0 3 * * *` by default) that calls the bridge directly.
+Operator surface: `/dreaming status|explain|on|off` (CLI: `memory dreaming status|explain`). Opt-in via PromptConfig `memory.dreamingEnabled`. Triggers installs a permanent `dream` cron (`0 3 * * *` by default) only when dreaming is enabled in config.
 
 ## Related
 

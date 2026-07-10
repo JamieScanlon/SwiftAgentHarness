@@ -10,6 +10,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var activeMemoryTimeoutMs: Int
     var activeMemoryMaxSummaryChars: Int
     var teamMemoryEnabled: Bool
+    /// Deploy-time opt-in for autonomous dreaming sweeps (default off). Soft `/dreaming` toggle applies after this is on.
+    var dreamingEnabled: Bool
     var dreamingCron: String
     var dreamingMinScore: Double
     var dreamingMinRecallCount: Int
@@ -38,6 +40,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         activeMemoryTimeoutMs: 2_500,
         activeMemoryMaxSummaryChars: 4_000,
         teamMemoryEnabled: true,
+        dreamingEnabled: false,
         dreamingCron: "0 3 * * *",
         dreamingMinScore: 0.75,
         dreamingMinRecallCount: 2,
@@ -66,6 +69,11 @@ public enum MemoryConfigurationLoader {
               let memory = json["memory"] as? [String: Any] else {
             return .default
         }
+        return load(fromMemoryObject: memory)
+    }
+
+    /// Applies a PromptConfig `memory` object onto defaults (testable without the bundle).
+    public static func load(fromMemoryObject memory: [String: Any]) -> MemoryConfiguration {
         var config = MemoryConfiguration.default
         if let enabled = memory["enabled"] as? Bool { config.enabled = enabled }
         if let path = memory["managedInstructionsPath"] as? String { config.managedInstructionsPath = path.nilIfEmpty }
@@ -75,6 +83,7 @@ public enum MemoryConfigurationLoader {
         if let v = memory["activeMemoryTimeoutMs"] as? Int { config.activeMemoryTimeoutMs = max(1, v) }
         if let v = memory["activeMemoryMaxSummaryChars"] as? Int { config.activeMemoryMaxSummaryChars = max(256, v) }
         if let v = memory["teamMemoryEnabled"] as? Bool { config.teamMemoryEnabled = v }
+        if let v = memory["dreamingEnabled"] as? Bool { config.dreamingEnabled = v }
         if let v = memory["dreamingCron"] as? String { config.dreamingCron = v }
         if let v = memory["dreamingMinScore"] as? Double { config.dreamingMinScore = v }
         if let v = memory["dreamingMinRecallCount"] as? Int { config.dreamingMinRecallCount = max(1, v) }
