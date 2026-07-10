@@ -21,6 +21,7 @@ public actor DefaultMemoryService: MemoryServicing {
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
     /// Conversations that already completed a soft-threshold flush since the last hard compaction.
     private var softPreCompactionFlushCompleted: Set<UUID> = []
+    private var preCompactionFlushDedupeByConversation: [UUID: PreCompactionFlushDedupeState] = [:]
     private var preCompactionFlushWriteGuardByConversation: [UUID: PreCompactionFlushWriteGuard.Policy] = [:]
     private let userConfigDir: URL
 
@@ -289,6 +290,7 @@ public actor DefaultMemoryService: MemoryServicing {
         storeByConversation.removeValue(forKey: conversationID)
         hintTrackerByConversation.removeValue(forKey: conversationID)
         softPreCompactionFlushCompleted.remove(conversationID)
+        preCompactionFlushDedupeByConversation.removeValue(forKey: conversationID)
         preCompactionFlushWriteGuardByConversation.removeValue(forKey: conversationID)
         await snapshotStore.endSession(conversationID: conversationID)
         await writeTracker.removeConversation(conversationID: conversationID)
@@ -305,8 +307,35 @@ public actor DefaultMemoryService: MemoryServicing {
         softPreCompactionFlushCompleted.insert(conversationID)
     }
 
-    func clearSoftPreCompactionFlush(conversationID: UUID) {
+    func filterPreCompactionFlushMiddle(conversationID: UUID, middle: [Message]) -> [Message] {
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        let novel = state.filterNovelMiddle(middle)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+        return novel
+    }
+
+    func shouldSkipPreCompactionFlushFingerprint(conversationID: UUID, fingerprint: String) -> Bool {
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        let skip = state.shouldSkipFingerprint(fingerprint)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+        return skip
+    }
+
+    func recordPreCompactionFlushMiddle(conversationID: UUID, middle: [Message]) {
+        guard !middle.isEmpty else { return }
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        state.recordSuccessfulFlush(middle: middle)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+    }
+
+    func clearPreCompactionFlushCycle(conversationID: UUID) {
         softPreCompactionFlushCompleted.remove(conversationID)
+        preCompactionFlushDedupeByConversation[conversationID]?.beginNewCycle()
+        preCompactionFlushDedupeByConversation.removeValue(forKey: conversationID)
+    }
+
+    func clearSoftPreCompactionFlush(conversationID: UUID) {
+        clearPreCompactionFlushCycle(conversationID: conversationID)
     }
 
     func registerPreCompactionFlushWriteGuard(

@@ -95,9 +95,27 @@ Lifecycle order on the hard compaction path:
 
 Soft flush-only paths return uncompacted context and do not run provider extraction or the summarizer.
 
+## Flush dedupe (once-per-cycle + context fingerprint)
+
+Pre-compaction flush tracks **per-message ID coverage** and a **middle context fingerprint** for the novel segment within each compaction cycle:
+
+| Mechanism | Role |
+|-----------|------|
+| Per-message IDs | Skip or narrow flush to messages not yet flushed this cycle; overlapping compaction middles flush **novel messages only** |
+| Middle fingerprint | Skip when the exact novel segment hash was already flushed (exact-duplicate guard) |
+
+When the novel middle is empty after ID filtering, or the fingerprint matches a prior flush in the cycle, the flush sub-agent is not spawned.
+
+Cycle boundary: dedupe state clears when a **hard compaction checkpoint persists** or the memory session ends (in-memory only for M5; not replayed from checkpoint events across restart).
+
+Soft-band dedupe (`softPreCompactionFlushCompleted`) still short-circuits repeated soft-only assembles. Hard-path flush reuses the same ID/fingerprint tracker, so a successful soft flush is not duplicated when hard compaction fires on the same middle coverage.
+
+Provider `onPreCompress` extraction uses the same novel middle gate as flush (after flush attempt, before summarizer).
+
 ## Explicitly deferred
 
 - **Transcript-byte fallback** as an alternate flush/compaction trigger (token decision remains authoritative for M1).
+- **Cross-session / checkpoint-persisted flush dedupe** (M5 tracker is in-memory per memory session).
 
 ## Related
 

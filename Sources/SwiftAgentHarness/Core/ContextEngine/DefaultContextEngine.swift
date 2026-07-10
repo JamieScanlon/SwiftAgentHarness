@@ -434,16 +434,17 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             inputWithManualOverride = input
         }
 
-        let preCompactionMemoryFlush = await runPreCompactionFlushIfEligible(
+        let (preCompactionMemoryFlush, novelMiddleForProvider) = await runPreCompactionFlushIfEligible(
             request: request,
             compactionTranscript: compactionTranscript,
             skipIfSoftAlreadyFlushed: false
         )
 
-        let rawMiddle = inputWithManualOverride.compactionRawMiddleMessages ?? []
-        let providerNotes = await memoryService?.collectProviderPreCompressNotes(
-            messages: rawMiddle.map(\.content)
-        ) ?? ""
+        let providerNotes = novelMiddleForProvider.isEmpty
+            ? ""
+            : await memoryService?.collectProviderPreCompressNotes(
+                messages: novelMiddleForProvider.map(\.content)
+            ) ?? ""
         let inputForTransform = inputWithManualOverride.withCompactionProviderPreCompressNotes(
             providerNotes.isEmpty ? nil : providerNotes
         )
@@ -461,7 +462,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 preCompactionMemoryFlush: preCompactionMemoryFlush
             )
             if result.checkpointPersistence != nil {
-                await memoryService?.clearSoftPreCompactionFlush(conversationID: conversationID)
+                await memoryService?.clearPreCompactionFlushCycle(conversationID: conversationID)
             }
             await coordinator.release(for: conversationID)
             return result
@@ -478,7 +479,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             preCompactionMemoryFlush: preCompactionMemoryFlush
         )
         if result.checkpointPersistence != nil {
-            await memoryService?.clearSoftPreCompactionFlush(conversationID: request.conversation.id)
+            await memoryService?.clearPreCompactionFlushCycle(conversationID: request.conversation.id)
         }
         return result
     }
@@ -510,11 +511,11 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         )
         guard softFires else { return nil }
 
-        return await runPreCompactionFlushIfEligible(
+        return (await runPreCompactionFlushIfEligible(
             request: request,
             compactionTranscript: compactionTranscript,
             skipIfSoftAlreadyFlushed: true
-        )
+        )).0
     }
 
     /// Shared silent flush used by soft flush-only and hard flush-then-transform paths.
@@ -522,21 +523,21 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextTurnAssemblyRequest,
         compactionTranscript: [Message],
         skipIfSoftAlreadyFlushed: Bool
-    ) async -> ContextPreCompactionMemoryFlushSpec? {
+    ) async -> (ContextPreCompactionMemoryFlushSpec?, [Message]) {
         guard request.preCompactionMemoryFlushPolicy?.enabled == true,
               request.persistCompactionCheckpoint,
               case .initial = request.phase,
               request.enableContextTransform,
               request.compactionConfig.enabled
-        else { return nil }
+        else { return (nil, []) }
 
         if skipIfSoftAlreadyFlushed,
            await memoryService?.hasCompletedSoftPreCompactionFlush(conversationID: request.conversation.id) == true {
-            return nil
+            return (nil, [])
         }
 
         let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
-        guard memoryStoreVersion > 0 else { return nil }
+        guard memoryStoreVersion > 0 else { return (nil, []) }
 
         let modelLimit = request.lastContextLimitTokens
             ?? request.conversation.model.maxContextLength
@@ -552,12 +553,34 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             )
         }
         let middle = segments.middle
-        guard !middle.isEmpty else { return nil }
+        guard !middle.isEmpty else { return (nil, []) }
+
+        let novelMiddle = await memoryService?.filterPreCompactionFlushMiddle(
+            conversationID: request.conversation.id,
+            middle: middle
+        ) ?? middle
+        guard !novelMiddle.isEmpty else {
+            logger?.debug(
+                "[PreCompactionMemoryFlush] skipped: no novel middle messages conversation=\(request.conversation.id)"
+            )
+            return (nil, [])
+        }
+
+        let fingerprint = PreCompactionFlushMiddleFingerprint.of(messages: novelMiddle)
+        if await memoryService?.shouldSkipPreCompactionFlushFingerprint(
+            conversationID: request.conversation.id,
+            fingerprint: fingerprint
+        ) == true {
+            logger?.debug(
+                "[PreCompactionMemoryFlush] skipped: duplicate middle fingerprint conversation=\(request.conversation.id)"
+            )
+            return (nil, [])
+        }
 
         let timeoutMs = await memoryService?.preCompactionFlushTimeoutMs() ?? 30_000
         let flushContext = PreCompactionMemoryFlushContext(
             conversationID: request.conversation.id,
-            middleMessages: middle,
+            middleMessages: novelMiddle,
             maxFlushedMemoryEntries: request.preCompactionMemoryFlushPolicy?.maxFlushedMemoryEntries ?? 64,
             timeoutMs: timeoutMs
         )
@@ -565,19 +588,25 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             context: flushContext,
             logger: logger
         )
-        guard flushResult.succeeded else { return nil }
+        guard flushResult.succeeded else { return (nil, novelMiddle) }
+
+        await memoryService?.recordPreCompactionFlushMiddle(
+            conversationID: request.conversation.id,
+            middle: novelMiddle
+        )
 
         if skipIfSoftAlreadyFlushed {
             await memoryService?.markSoftPreCompactionFlushCompleted(conversationID: request.conversation.id)
         }
 
-        return ContextPreCompactionMemoryFlushSpec(
+        let spec = ContextPreCompactionMemoryFlushSpec(
             conversationID: request.conversation.id,
             phase: request.phase,
             memoryStoreVersion: flushResult.memoryStoreVersion,
             memoryStoreNamespaceKey: request.conversation.id.uuidString,
             flushedMemoryEntryIDs: flushResult.flushedMemoryEntryIDs
         )
+        return (spec, novelMiddle)
     }
 
     private func runTransformStep(
