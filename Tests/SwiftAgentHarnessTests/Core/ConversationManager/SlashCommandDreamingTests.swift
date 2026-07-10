@@ -100,7 +100,22 @@ struct SlashCommandDreamingTests {
             )
             let messages = try await manager.listCurrentMessages()
             let assistant = try #require(messages.last { $0.role == .assistant })
-            #expect(assistant.content.contains("Usage: /dreaming status|on|off"))
+            #expect(assistant.content.contains("Usage: /dreaming status|explain|on|off"))
+        }
+    }
+
+    @Test("/dreaming explain with no report is clear")
+    func explainEmpty() async throws {
+        try await Self.withIsolatedRoots { manager, conversationID, _ in
+            _ = try #require(
+                await manager.testing_runSlashCommandIfNeeded("/dreaming explain", conversationID: conversationID)
+            )
+            let messages = try await manager.listCurrentMessages()
+            let assistant = try #require(messages.last { $0.role == .assistant })
+            #expect(
+                assistant.content.contains("No sweep report yet")
+                    || assistant.content.contains("No workspace memory directory")
+            )
         }
     }
 }

@@ -155,7 +155,7 @@ public struct SlashCommandRegistry: Sendable {
                 base: SlashCommandBase(
                     name: "dreaming",
                     description: "Show or toggle background memory consolidation (dreaming).",
-                    argumentHint: "status|on|off",
+                    argumentHint: "status|explain|on|off",
                     hiddenKeywords: "dream consolidate recall cron",
                     bypassTier: .queued
                 ),

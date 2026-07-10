@@ -11,14 +11,16 @@ Normative spec: harness-template `core/memory/memory.md` and `core/memory/README
 | `memory/YYYY-MM-DD.md` | **Staging** — capture-cheap daily notes (no taxonomy frontmatter); light phase stages from these |
 | Typed topic `*.md` | **Curated** — four-type frontmatter; always-on recall via manifest |
 | `MEMORY.md` | **Index only** — one-line links to curated topics; deep promotion target |
-| `memory/.dreams/` | Machine state (recall store, promotions ledger, last-deep marker) — never a promotion candidate |
-| `DREAMS.md` | Optional human diary — excluded from dreaming candidates |
+| `memory/.dreams/` | Machine state (recall store, promotions ledger, last-deep marker, `last-sweep.json`) — never a promotion candidate |
+| `DREAMS.md` | Human-readable dreaming diary — appended each sweep; excluded from candidates |
 
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
 
 Before writing, deep **re-reads the live daily**, skips if the staged snippet is gone, then derives topic title / description / body / index hook from a fresh `richestSnippet` of that live body (not the light-phase snapshot alone). A contamination denylist blocks `MEMORY.md`, `DREAMS.md`, and `.dreams/*` machine artifacts from staging or promotion.
 
-Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/promotions.jsonl`. `memory rem-backfill --rollback` (alias `--rollback-short-term`) reverses the last run’s created topics and `MEMORY.md` lines without touching dailies or recall traces.
+Each non-rollback sweep writes `.dreams/last-sweep.json` (phase outcomes + reject reasons) and appends a section to `DREAMS.md`. Use `/dreaming explain` or `memory dreaming explain` to tune thresholds; `/dreaming status` / `memory dreaming status` show thresholds and last-run summary.
+
+Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/promotions.jsonl`. `memory rem-backfill --rollback` (alias `--rollback-short-term`) reverses the last run’s created topics and `MEMORY.md` lines without touching dailies, recall traces, or the diary/report.
 
 ## Boundary
 
@@ -47,6 +49,7 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `AgentMemoryStore.swift` | `MEMORY.md` + topic CRUD + daily staging append/read |
 | `DreamRecallStore.swift` | Append-only recall traces under `memory/.dreams/recalls.jsonl` |
 | `DreamPromotionLedger.swift` | Tagged promotion JSONL + last-deep marker (`runID`, `sourceDailies`) |
+| `DreamSweepReport.swift` | Last-sweep JSON + diary append + explain/status formatters |
 | `DreamingContaminationGuard.swift` | Denylist for diary / index / `.dreams` artifacts |
 | `DreamingConsolidationScheduler.swift` | Light / REM / deep consolidation over dailies + recall boosts |
 | `DreamingControlStore.swift` | On/off gate for dreaming (`/dreaming`); default on |
@@ -58,7 +61,7 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |
 | `MemoryProviderRegistry.swift` | Built-in + single external provider slot |
 
-Operator surface: `/dreaming status|on|off`. Triggers installs a permanent `dream` cron (`0 3 * * *` by default) that calls the bridge directly.
+Operator surface: `/dreaming status|explain|on|off` (CLI: `memory dreaming status|explain`). Triggers installs a permanent `dream` cron (`0 3 * * *` by default) that calls the bridge directly.
 
 ## Related
 

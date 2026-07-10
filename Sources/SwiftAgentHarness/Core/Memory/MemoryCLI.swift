@@ -47,8 +47,28 @@ public enum MemoryCLI {
                     memoryDirectory: context.memoryDirectory
                 )
                 print("rolled back last dreaming promotion run")
+            case "dreaming":
+                let action = arguments.count >= 4 ? arguments[3].lowercased() : "status"
+                switch action {
+                case "status":
+                    let summary = DreamingControlStore().statusSummary(
+                        cronExpr: config.dreamingCron,
+                        memoryDirectory: context.memoryDirectory,
+                        config: config
+                    )
+                    print(summary)
+                case "explain":
+                    let report = try DreamSweepReportStore(memoryDirectory: context.memoryDirectory).read()
+                    print(DreamingReviewFormatter.explain(
+                        report: report,
+                        memoryDirectory: context.memoryDirectory
+                    ))
+                default:
+                    fputs("usage: memory dreaming status|explain\n", stderr)
+                    exit(1)
+                }
             default:
-                fputs("usage: memory list|show|remove|rem-backfill --rollback\n", stderr)
+                fputs("usage: memory list|show|remove|rem-backfill --rollback|dreaming status|explain\n", stderr)
                 exit(1)
             }
         } catch {

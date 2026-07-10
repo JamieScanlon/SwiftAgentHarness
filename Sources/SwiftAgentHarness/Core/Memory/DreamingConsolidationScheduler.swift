@@ -9,6 +9,7 @@ actor DreamingConsolidationScheduler {
     private static let consolidationWeight = 0.10
     private static let richnessWeight = 0.06
     private static let remPhaseBoost = 0.05
+    private static let deepTopN = 3
 
     private let config: MemoryConfiguration
     private let logger: Logger?
@@ -34,12 +35,21 @@ actor DreamingConsolidationScheduler {
             try rollbackLastPromotionRun(memoryDirectory: memoryDirectory)
             return
         }
-        let candidates = try stageLightPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir)
-        let themes = remPhase(candidates: candidates)
-        try await deepPhase(
+        let runID = UUID().uuidString
+        let lightCandidates = try stageLightPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir)
+        let remCandidates = remPhase(candidates: lightCandidates)
+        let deepResult = try await deepPhase(
             memoryDirectory: memoryDirectory,
             dreamsDir: dreamsDir,
-            candidates: themes
+            candidates: remCandidates,
+            runID: runID
+        )
+        try persistReviewability(
+            memoryDirectory: memoryDirectory,
+            runID: runID,
+            lightCandidates: lightCandidates,
+            remCandidates: remCandidates,
+            deepResult: deepResult
         )
     }
 
@@ -54,8 +64,42 @@ actor DreamingConsolidationScheduler {
     func promoteCandidatesForTesting(memoryDirectory: URL, candidates: [DreamCandidate]) async throws {
         let dreamsDir = memoryDirectory.appendingPathComponent(".dreams", isDirectory: true)
         try FileManager.default.createDirectory(at: dreamsDir, withIntermediateDirectories: true)
-        let themes = remPhase(candidates: candidates)
-        try await deepPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir, candidates: themes)
+        let runID = UUID().uuidString
+        let remCandidates = remPhase(candidates: candidates)
+        let deepResult = try await deepPhase(
+            memoryDirectory: memoryDirectory,
+            dreamsDir: dreamsDir,
+            candidates: remCandidates,
+            runID: runID
+        )
+        try persistReviewability(
+            memoryDirectory: memoryDirectory,
+            runID: runID,
+            lightCandidates: candidates,
+            remCandidates: remCandidates,
+            deepResult: deepResult
+        )
+    }
+
+    private func persistReviewability(
+        memoryDirectory: URL,
+        runID: String,
+        lightCandidates: [DreamCandidate],
+        remCandidates: [DreamCandidate],
+        deepResult: DeepPhaseResult
+    ) throws {
+        let report = DreamSweepReport(
+            runID: runID,
+            completedAt: DreamRecallStore.isoString(from: now()),
+            thresholds: DreamThresholdSnapshot(config: config),
+            light: lightCandidates.map { DreamCandidateReport.from(candidate: $0, outcome: .staged) },
+            rem: remCandidates.map { DreamCandidateReport.from(candidate: $0, outcome: .rem) },
+            deepPromoted: deepResult.promoted,
+            deepRejected: deepResult.rejected
+        )
+        let store = DreamSweepReportStore(memoryDirectory: memoryDirectory)
+        try store.write(report)
+        try store.appendDiary(for: report)
     }
 
     private func stageLightPhase(memoryDirectory: URL, dreamsDir: URL) throws -> [DreamCandidate] {
@@ -138,24 +182,59 @@ actor DreamingConsolidationScheduler {
         }
     }
 
+    private struct DeepPhaseResult: Sendable {
+        var promoted: [DreamCandidateReport]
+        var rejected: [DreamCandidateReport]
+    }
+
+    private func gateRejectReason(for candidate: DreamCandidate) -> DreamRejectReason? {
+        if candidate.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .emptySnippet
+        }
+        if candidate.signal < config.dreamingMinScore {
+            return .belowMinScore
+        }
+        if candidate.recallCount < config.dreamingMinRecallCount {
+            return .belowRecallCount
+        }
+        if candidate.uniqueQueryCount < config.dreamingMinUniqueQueries {
+            return .belowUniqueQueries
+        }
+        return nil
+    }
+
     private func deepPhase(
         memoryDirectory: URL,
         dreamsDir: URL,
-        candidates: [DreamCandidate]
-    ) async throws {
+        candidates: [DreamCandidate],
+        runID: String
+    ) async throws -> DeepPhaseResult {
         _ = dreamsDir
         let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
         let ledger = DreamPromotionLedger(memoryDirectory: memoryDirectory)
-        let gated = candidates.filter { candidate in
-            candidate.signal >= config.dreamingMinScore
-                && candidate.recallCount >= config.dreamingMinRecallCount
-                && candidate.uniqueQueryCount >= config.dreamingMinUniqueQueries
-                && !candidate.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        let ranked = gated.sorted { $0.signal > $1.signal }.prefix(3)
-        guard !ranked.isEmpty else { return }
+        var promotedReports: [DreamCandidateReport] = []
+        var rejectedReports: [DreamCandidateReport] = []
 
-        let runID = UUID().uuidString
+        var gated: [DreamCandidate] = []
+        for candidate in candidates {
+            if let reason = gateRejectReason(for: candidate) {
+                rejectedReports.append(
+                    DreamCandidateReport.from(candidate: candidate, outcome: .rejected, rejectReason: reason)
+                )
+            } else {
+                gated.append(candidate)
+            }
+        }
+
+        let sortedGated = gated.sorted { $0.signal > $1.signal }
+        let ranked = Array(sortedGated.prefix(Self.deepTopN))
+        let rankedSet = Set(ranked.map(\.filename))
+        for candidate in sortedGated where !rankedSet.contains(candidate.filename) {
+            rejectedReports.append(
+                DreamCandidateReport.from(candidate: candidate, outcome: .rejected, rejectReason: .notInTopN)
+            )
+        }
+
         let promotedAt = DreamRecallStore.isoString(from: now())
         var index = (try? String(contentsOf: store.indexURL, encoding: .utf8)) ?? ""
         var promotedTopics: [String] = []
@@ -165,16 +244,25 @@ actor DreamingConsolidationScheduler {
         for candidate in ranked {
             if DreamingContaminationGuard.isExcluded(filename: candidate.filename) {
                 logger?.info("[Dreaming] skip \(candidate.filename): contamination guard")
+                rejectedReports.append(
+                    DreamCandidateReport.from(candidate: candidate, outcome: .rejected, rejectReason: .contamination)
+                )
                 continue
             }
             switch candidate.source {
             case .daily:
                 guard let liveBody = try store.readDailyBody(filename: candidate.filename) else {
                     logger?.info("[Dreaming] skip \(candidate.filename): daily missing")
+                    rejectedReports.append(
+                        DreamCandidateReport.from(candidate: candidate, outcome: .rejected, rejectReason: .dailyMissing)
+                    )
                     continue
                 }
                 guard liveBody.contains(candidate.snippet) else {
                     logger?.info("[Dreaming] skip \(candidate.filename): staged snippet stale")
+                    rejectedReports.append(
+                        DreamCandidateReport.from(candidate: candidate, outcome: .rejected, rejectReason: .staleSnippet)
+                    )
                     continue
                 }
                 let liveSnippet = String(
@@ -182,6 +270,13 @@ actor DreamingConsolidationScheduler {
                 )
                 guard !liveSnippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     logger?.info("[Dreaming] skip \(candidate.filename): live snippet empty")
+                    rejectedReports.append(
+                        DreamCandidateReport.from(
+                            candidate: candidate,
+                            outcome: .rejected,
+                            rejectReason: .liveSnippetEmpty
+                        )
+                    )
                     continue
                 }
                 let topicFilename = Self.promotedTopicFilename(
@@ -221,29 +316,46 @@ actor DreamingConsolidationScheduler {
                         origin: DreamPromotionRecord.originDreamingDeep
                     )
                 )
+                promotedReports.append(
+                    DreamCandidateReport.from(
+                        candidate: candidate,
+                        outcome: .promoted,
+                        promotedTopic: topicFilename
+                    )
+                )
             case .recall:
                 logger?.info("[Dreaming] skip \(candidate.filename): recall source not promotable")
-                continue
+                rejectedReports.append(
+                    DreamCandidateReport.from(
+                        candidate: candidate,
+                        outcome: .rejected,
+                        rejectReason: .recallSourceSkipped
+                    )
+                )
             }
         }
 
-        guard !promotedTopics.isEmpty else { return }
-        if let capFired = try store.writeIndex(content: index) {
-            logger?.warning("[Dreaming] MEMORY.md truncated at write: \(capFired)")
-        }
-        try ledger.append(ledgerRecords)
-        try ledger.writeLastDeepMarker(
-            DreamLastDeepMarker(
-                runID: runID,
-                promoted: promotedTopics,
-                sourceDailies: Array(Set(sourceDailies)).sorted()
+        if !promotedTopics.isEmpty {
+            if let capFired = try store.writeIndex(content: index) {
+                logger?.warning("[Dreaming] MEMORY.md truncated at write: \(capFired)")
+            }
+            try ledger.append(ledgerRecords)
+            try ledger.writeLastDeepMarker(
+                DreamLastDeepMarker(
+                    runID: runID,
+                    promoted: promotedTopics,
+                    sourceDailies: Array(Set(sourceDailies)).sorted()
+                )
             )
-        )
-        logger?.info("[Dreaming] promoted \(promotedTopics.count) candidate(s) to MEMORY.md runID=\(runID)")
+            logger?.info("[Dreaming] promoted \(promotedTopics.count) candidate(s) to MEMORY.md runID=\(runID)")
+        }
+
+        return DeepPhaseResult(promoted: promotedReports, rejected: rejectedReports)
     }
 
     /// Reverses the last tagged deep promotion run: deletes created topics, scrubs MEMORY.md, clears marker.
     /// Nonisolated so CLI / sync callers can reverse without hopping through the actor.
+    /// Does not scrub `DREAMS.md` or `last-sweep.json` (reviewability postmortem).
     nonisolated static func rollbackLastPromotionRun(
         memoryDirectory: URL,
         logger: Logger? = nil

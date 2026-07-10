@@ -17,11 +17,26 @@ extension SlashCommandDispatchService {
             let memoryDirectory = await currentMemoryDirectory(conversationID: conversationID)
             let summary = control.statusSummary(
                 cronExpr: memoryConfig.dreamingCron,
-                memoryDirectory: memoryDirectory
+                memoryDirectory: memoryDirectory,
+                config: memoryConfig
             )
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
                 content: summary
+            )
+        case "explain":
+            let memoryDirectory = await currentMemoryDirectory(conversationID: conversationID)
+            guard let memoryDirectory else {
+                return try await deliverSyntheticSlashAssistantResponse(
+                    conversationID: conversationID,
+                    content: "No workspace memory directory for this conversation."
+                )
+            }
+            let report = try? DreamSweepReportStore(memoryDirectory: memoryDirectory).read()
+            let content = DreamingReviewFormatter.explain(report: report, memoryDirectory: memoryDirectory)
+            return try await deliverSyntheticSlashAssistantResponse(
+                conversationID: conversationID,
+                content: content
             )
         case "on":
             try control.setEnabled(true)
@@ -38,7 +53,7 @@ extension SlashCommandDispatchService {
         default:
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
-                content: "Usage: /dreaming status|on|off"
+                content: "Usage: /dreaming status|explain|on|off"
             )
         }
     }

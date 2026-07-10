@@ -44,24 +44,21 @@ struct DreamingControlStore: Sendable {
         try MemoryFileLock.atomicWrite(data: data, to: controlFileURL, fileManager: fm)
     }
 
-    func statusSummary(cronExpr: String, memoryDirectory: URL?) -> String {
-        let fm = FileManager.default
+    func statusSummary(
+        cronExpr: String,
+        memoryDirectory: URL?,
+        config: MemoryConfiguration = .default
+    ) -> String {
         let enabled = isEnabled()
         var lines = [
             "Dreaming: \(enabled ? "on" : "off")",
             "Cron: \(cronExpr)",
             "Control file: \(controlFileURL.path)",
         ]
-        if let memoryDirectory {
-            let lastDeep = memoryDirectory
-                .appendingPathComponent(".dreams", isDirectory: true)
-                .appendingPathComponent(DreamRecallStore.lastDeepFilename)
-            if fm.fileExists(atPath: lastDeep.path) {
-                lines.append("Last deep marker: present (\(lastDeep.path))")
-            } else {
-                lines.append("Last deep marker: none for this workspace")
-            }
-        }
+        lines.append(contentsOf: DreamingReviewFormatter.statusExtras(
+            config: config,
+            memoryDirectory: memoryDirectory
+        ))
         return lines.joined(separator: "\n")
     }
 }
