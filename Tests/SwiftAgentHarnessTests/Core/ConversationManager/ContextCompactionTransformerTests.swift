@@ -10,6 +10,7 @@ struct ContextCompactionTransformerTests {
     private actor CapturingSummarizer: ContextCompactionSummarizing {
         private(set) var capturedMessages: [Message] = []
         private(set) var capturedPreviousSummaryText: String?
+        private(set) var capturedProviderPreCompressNotes: String?
         private let output: [Message]
 
         init(output: [Message]) {
@@ -24,6 +25,7 @@ struct ContextCompactionTransformerTests {
                 customInstructionsOverride: nil,
                 identifierPreservationPolicy: nil,
                 previousSummaryText: nil,
+                providerPreCompressNotes: nil,
                 summaryBudgetTokens: 2000,
                 maxOutputTokens: 20_000
             )
@@ -36,16 +38,22 @@ struct ContextCompactionTransformerTests {
             customInstructionsOverride _: String?,
             identifierPreservationPolicy _: ContextCompactionIdentifierPreservationPolicy?,
             previousSummaryText: String?,
+            providerPreCompressNotes: String?,
             summaryBudgetTokens _: Int,
             maxOutputTokens _: Int
         ) async throws -> [Message] {
             capturedMessages = messages
             capturedPreviousSummaryText = previousSummaryText
+            capturedProviderPreCompressNotes = providerPreCompressNotes
             return Array(output.prefix(maxMessages))
         }
 
-        func snapshot() async -> (messages: [Message], previousSummaryText: String?) {
-            (capturedMessages, capturedPreviousSummaryText)
+        func snapshot() async -> (
+            messages: [Message],
+            previousSummaryText: String?,
+            providerPreCompressNotes: String?
+        ) {
+            (capturedMessages, capturedPreviousSummaryText, capturedProviderPreCompressNotes)
         }
     }
 
@@ -320,10 +328,69 @@ struct ContextCompactionTransformerTests {
                 "identifier_preservation_block": block,
                 "custom_instructions_block": "",
                 "previous_summary_block": "",
+                "memory_provider_pre_compress_block": "",
             ]
         ).render()
         #expect(rendered.contains("# Identifier preservation"))
         #expect(rendered.contains("Preserve opaque identifiers"))
+    }
+
+    @Test("Handoff user prompt template renders provider pre-compress block when notes are present")
+    func handoffTemplateIncludesProviderPreCompressBlock() {
+        let block = MemoryProviderPreCompressNotes.summarizerHandoffBlock(notes: "User prefers JWT auth.")
+        let rendered = DynamicPrompt(
+            template: ContextCompactionHandoffUserPromptTemplate.value,
+            defaultTokens: [
+                "summary_budget": "2000",
+                "identifier_preservation_block": "",
+                "custom_instructions_block": "",
+                "previous_summary_block": "",
+                "memory_provider_pre_compress_block": block,
+            ]
+        ).render()
+        #expect(rendered.contains("# Memory provider pre-compaction extraction"))
+        #expect(rendered.contains("<memory-pre-compress>"))
+        #expect(rendered.contains("User prefers JWT auth."))
+    }
+
+    @Test("Handoff user prompt template omits provider pre-compress section when notes are empty")
+    func handoffTemplateOmitsProviderPreCompressWhenEmpty() {
+        let rendered = DynamicPrompt(
+            template: ContextCompactionHandoffUserPromptTemplate.value,
+            defaultTokens: [
+                "summary_budget": "2000",
+                "identifier_preservation_block": "",
+                "custom_instructions_block": "",
+                "previous_summary_block": "",
+                "memory_provider_pre_compress_block": "",
+            ]
+        ).render()
+        #expect(!rendered.contains("# Memory provider pre-compaction extraction"))
+        #expect(!rendered.contains("<memory-pre-compress>"))
+    }
+
+    @Test("transformContext forwards provider pre-compress notes to summarizer")
+    func transformForwardsProviderPreCompressNotes() async throws {
+        let summarizer = CapturingSummarizer(output: [
+            Message(
+                id: UUID(),
+                role: .assistant,
+                content: "<summary>ok</summary>",
+                timestamp: Date(),
+                toolCalls: []
+            ),
+        ])
+        let cfg = summarizerPathConfig()
+        let transformer = ContextCompactionTransformer(config: cfg, summarizer: summarizer)
+        let messages = compressibleTranscript()
+        let input = baseTransformInput(
+            messages: messages,
+            compactionEffectiveMiddle: Array(messages.dropFirst(1).dropLast(2)),
+            compactionRawMiddleMessages: Array(messages.dropFirst(1).dropLast(2))
+        ).withCompactionProviderPreCompressNotes("Provider extracted durable fact.")
+        _ = try await transformer.transformContext(input)
+        let captured = await summarizer.snapshot()
+        #expect(captured.providerPreCompressNotes == "Provider extracted durable fact.")
     }
 
     // MARK: - Scheduling

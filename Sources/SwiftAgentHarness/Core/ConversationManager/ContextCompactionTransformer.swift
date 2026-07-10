@@ -22,6 +22,7 @@ protocol ContextCompactionSummarizing: Sendable {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
         maxOutputTokens: Int
     ) async throws -> [Message]
@@ -35,6 +36,7 @@ extension ContextCompactionSummarizing {
         customInstructionsOverride _: String?,
         identifierPreservationPolicy _: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText _: String?,
+        providerPreCompressNotes _: String?,
         summaryBudgetTokens _: Int,
         maxOutputTokens _: Int
     ) async throws -> [Message] {
@@ -196,6 +198,7 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
             customInstructionsOverride: nil,
             identifierPreservationPolicy: nil,
             previousSummaryText: nil,
+            providerPreCompressNotes: nil,
             summaryBudgetTokens: 2_000,
             maxOutputTokens: 20_000
         )
@@ -208,6 +211,7 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
         maxOutputTokens: Int
     ) async throws -> [Message] {
@@ -219,6 +223,7 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 customInstructionsOverride: customInstructionsOverride,
                 identifierPreservationPolicy: identifierPreservationPolicy,
                 previousSummaryText: previousSummaryText,
+                providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
                 maxOutputTokens: maxOutputTokens
             )
@@ -231,6 +236,7 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 customInstructionsOverride: customInstructionsOverride,
                 identifierPreservationPolicy: identifierPreservationPolicy,
                 previousSummaryText: previousSummaryText,
+                providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
                 maxOutputTokens: maxOutputTokens
             )
@@ -767,6 +773,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             customInstructionsOverride: input.compactionCustomInstructionsOverride,
             identifierPreservationPolicy: input.compactionIdentifierPreservationPolicy,
             previousSummaryText: input.compactionPreviousSummaryText,
+            providerPreCompressNotes: input.compactionProviderPreCompressNotes,
             summaryBudgetTokens: summaryBudget,
             maxOutputTokens: config.resolvedSummarizerMaxOutputTokens
         )
@@ -1074,6 +1081,7 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             customInstructionsOverride: nil,
             identifierPreservationPolicy: nil,
             previousSummaryText: nil,
+            providerPreCompressNotes: nil,
             summaryBudgetTokens: config.compactionSummaryBudgetTokens,
             maxOutputTokens: config.resolvedSummarizerMaxOutputTokens
         )
@@ -1086,6 +1094,7 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
         maxOutputTokens: Int
     ) async throws -> [Message] {
@@ -1162,6 +1171,9 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             policy: identifierPreservationPolicy
         )
         let previousSummaryBlock = Self.previousSummaryPromptBlock(previousSummaryText: previousSummaryText)
+        let providerPreCompressBlock = MemoryProviderPreCompressNotes.summarizerHandoffBlock(
+            notes: providerPreCompressNotes
+        )
         let userPrompt = DynamicPrompt(
             template: ContextCompactionHandoffUserPromptTemplate.value,
             defaultTokens: [
@@ -1169,6 +1181,7 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
                 "identifier_preservation_block": identifierPreservationBlock,
                 "custom_instructions_block": customInstructionsBlock,
                 "previous_summary_block": previousSummaryBlock,
+                "memory_provider_pre_compress_block": providerPreCompressBlock,
             ]
         )
         let handoffRendered = userPrompt.render()

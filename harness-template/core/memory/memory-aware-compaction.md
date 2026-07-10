@@ -83,6 +83,18 @@ Prompt + runtime guard: the flush sub-agent gets a dedicated curated-only prompt
 
 Background extraction may still append to daily staging; only the pre-compaction flush path is curated-only.
 
+## Provider pre-compaction extraction
+
+After optional flush and **before** the compaction summarizer runs, active memory provider(s) receive the raw middle transcript via `onPreCompress(messages)`. Non-empty return values are aggregated (builtin provider first, then external) and injected into the summarizer handoff prompt as `memory_provider_pre_compress_block` — a fenced `<memory-pre-compress>` section the summarizer must treat as authoritative background.
+
+Lifecycle order on the hard compaction path:
+
+1. Optional silent flush sub-agent (promote durable facts to curated topics)
+2. Provider `onPreCompress` extraction (return strings only; not invoked during flush)
+3. Compaction summarizer LLM handoff
+
+Soft flush-only paths return uncompacted context and do not run provider extraction or the summarizer.
+
 ## Explicitly deferred
 
 - **Transcript-byte fallback** as an alternate flush/compaction trigger (token decision remains authoritative for M1).

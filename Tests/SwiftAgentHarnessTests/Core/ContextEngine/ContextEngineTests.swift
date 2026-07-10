@@ -667,6 +667,96 @@ struct ContextEngineTests {
         try? FileManager.default.removeItem(at: root)
     }
 
+    @Test("DefaultContextEngine collects provider pre-compress notes after flush and before transform")
+    func engineCollectsProviderPreCompressNotesBeforeTransform() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-precompress-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
+        try await memoryService.registerExternalMemoryProvider(
+            id: "test-external",
+            provider: StubPreCompressMemoryProvider(note: "Durable fact from external provider.")
+        )
+        let stubRunner = StubPreCompactionFlushRunner(
+            result: PreCompactionMemoryFlushResult(
+                succeeded: true,
+                memoryStoreVersion: 1,
+                flushedMemoryEntryIDs: [UUID()]
+            )
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            preCompactionMemoryFlushRunner: stubRunner,
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await memoryService.bootstrapSession(context: ctx)
+        let longBody = String(repeating: "token ", count: 8000)
+        var messages: [Message] = []
+        for index in 0..<12 {
+            messages.append(Message(id: UUID(), role: .user, content: "\(longBody) user \(index)", timestamp: Date(), toolCalls: []))
+            messages.append(Message(id: UUID(), role: .assistant, content: "\(longBody) assistant \(index)", timestamp: Date(), toolCalls: []))
+        }
+        messages.append(Message(id: UUID(), role: .user, content: "latest user", timestamp: Date(), toolCalls: []))
+        let noteCapture = ProviderPreCompressNoteCapture()
+        let request = ContextEngineAssembleRequest(
+            messages: messages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true),
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: nil,
+            lastPromptTokens: nil,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: true,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput(
+                enabled: true,
+                maxFlushedMemoryEntries: 16
+            )
+        )
+        _ = await engine.assemble(request: request) { input in
+            await noteCapture.set(input.compactionProviderPreCompressNotes)
+            return ContextTransformOutput(
+                messages: input.messages,
+                diagnostics: ContextCompactionCheckpointKind.summarizedDiagnostic,
+                messageProvenance: nil
+            )
+        }
+        #expect(await noteCapture.value == "Durable fact from external provider.")
+        try? FileManager.default.removeItem(at: root)
+    }
+
     @Test("DefaultContextEngine skips pre-compaction flush when persistCompactionCheckpoint is false")
     func engineSkipsPreCompactionFlushWhenPersistenceDisabled() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -1487,4 +1577,47 @@ private actor StubPreCompactionFlushRunner: PreCompactionMemoryFlushRunning {
         lastContext = context
         return result
     }
+}
+
+private actor ProviderPreCompressNoteCapture {
+    private(set) var value: String?
+    func set(_ notes: String?) {
+        value = notes
+    }
+}
+
+private struct StubPreCompressMemoryProvider: MemoryProviding {
+    let note: String
+
+    func initialize(sessionID: UUID, context: MemorySessionContext) async throws {
+        _ = sessionID
+        _ = context
+    }
+
+    func systemPromptBlock() async -> String { "" }
+
+    func prefetch(query: String) async -> String? {
+        _ = query
+        return nil
+    }
+
+    func queuePrefetch(query: String) async {
+        _ = query
+    }
+
+    func syncTurn(userContent: String, assistantContent: String) async {
+        _ = userContent
+        _ = assistantContent
+    }
+
+    func onPreCompress(messages: [String]) async -> String {
+        _ = messages
+        return note
+    }
+
+    func onSessionEnd(messages: [String]) async {
+        _ = messages
+    }
+
+    func shutdown() async {}
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Final user turn for `OllamaContextCompactionSummarizer` (after the system instruction and in-order middle messages).
-/// `DynamicPrompt` token names: `summary_budget`, `identifier_preservation_block`, `custom_instructions_block`.
+/// `DynamicPrompt` token names: `summary_budget`, `identifier_preservation_block`, `custom_instructions_block`, `memory_provider_pre_compress_block`.
 enum ContextCompactionHandoffUserPromptTemplate {
     // swiftformat:disable all
     static let value = #"""
@@ -11,6 +11,8 @@ enum ContextCompactionHandoffUserPromptTemplate {
     work.
 
     {{previous_summary_block}}
+
+    {{memory_provider_pre_compress_block}}
 
     # Method
 

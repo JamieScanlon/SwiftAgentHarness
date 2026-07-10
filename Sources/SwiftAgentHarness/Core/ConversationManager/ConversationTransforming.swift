@@ -233,6 +233,8 @@ public struct ContextTransformInput: Sendable {
     let compactionPreviousSummaryText: String?
     /// Pre-compaction session memory note for middle swap (spec stage 3).
     let compactionSessionMemoryNote: String?
+    /// Aggregated memory provider `onPreCompress` notes for the compaction summarizer handoff prompt.
+    let compactionProviderPreCompressNotes: String?
     /// Filtered transcript used for head/middle/tail split and checkpoint validity (excludes harness injections).
     let compactionSplitBaseMessages: [Message]?
     /// Harness-injected system messages prepended to split head in transformer output.
@@ -263,6 +265,7 @@ public struct ContextTransformInput: Sendable {
         compactionIdentifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy? = nil,
         compactionPreviousSummaryText: String? = nil,
         compactionSessionMemoryNote: String? = nil,
+        compactionProviderPreCompressNotes: String? = nil,
         compactionSplitBaseMessages: [Message]? = nil,
         compactionInjectedPrefixMessages: [Message]? = nil,
         compactionReinjectableSkills: [ReinjectableSkill] = [],
@@ -288,10 +291,41 @@ public struct ContextTransformInput: Sendable {
         self.compactionIdentifierPreservationPolicy = compactionIdentifierPreservationPolicy
         self.compactionPreviousSummaryText = compactionPreviousSummaryText
         self.compactionSessionMemoryNote = compactionSessionMemoryNote
+        self.compactionProviderPreCompressNotes = compactionProviderPreCompressNotes
         self.compactionSplitBaseMessages = compactionSplitBaseMessages
         self.compactionInjectedPrefixMessages = compactionInjectedPrefixMessages
         self.compactionReinjectableSkills = compactionReinjectableSkills
         self.compactionProtectedToolNames = compactionProtectedToolNames
+    }
+
+    func withCompactionProviderPreCompressNotes(_ notes: String?) -> ContextTransformInput {
+        ContextTransformInput(
+            messages: messages,
+            conversation: conversation,
+            phase: phase,
+            compactionEffectiveMiddle: compactionEffectiveMiddle,
+            compactionRawMiddleMessages: compactionRawMiddleMessages,
+            effectiveContextLimitTokens: effectiveContextLimitTokens,
+            compactionSummarizerDebugOutputPath: compactionSummarizerDebugOutputPath,
+            compactionCustomInstructionsOverride: compactionCustomInstructionsOverride,
+            compactionCheckpointKind: compactionCheckpointKind,
+            compactionCheckpointPrefixCount: compactionCheckpointPrefixCount,
+            compactionModelContextLimitTokens: compactionModelContextLimitTokens,
+            compactionLastPromptTokens: compactionLastPromptTokens,
+            compactionStrategy: compactionStrategy,
+            compactionFocusQuery: compactionFocusQuery,
+            branchParentConversationID: branchParentConversationID,
+            compactionCachePolicy: compactionCachePolicy,
+            compactionDeterministicHygienePolicy: compactionDeterministicHygienePolicy,
+            compactionIdentifierPreservationPolicy: compactionIdentifierPreservationPolicy,
+            compactionPreviousSummaryText: compactionPreviousSummaryText,
+            compactionSessionMemoryNote: compactionSessionMemoryNote,
+            compactionProviderPreCompressNotes: notes,
+            compactionSplitBaseMessages: compactionSplitBaseMessages,
+            compactionInjectedPrefixMessages: compactionInjectedPrefixMessages,
+            compactionReinjectableSkills: compactionReinjectableSkills,
+            compactionProtectedToolNames: compactionProtectedToolNames
+        )
     }
 }
 

@@ -129,14 +129,6 @@ public actor DefaultMemoryService: MemoryServicing {
         }
 
         let pathsBefore = Set(await writeTracker.auxiliaryWrittenPaths(conversationID: context.conversationID))
-        let messageStrings = context.middleMessages.map(\.content)
-        let providers = await providerRegistry.activeProviders()
-        for provider in providers {
-            let note = await provider.onPreCompress(messages: messageStrings)
-            if !note.isEmpty {
-                logger?.info("[MemoryFlush] pre-compaction note: \(note.prefix(120))")
-            }
-        }
 
         let completed = await spawnPort.spawnBlockingPreCompactionFlush(
             context.conversationID,
@@ -364,6 +356,15 @@ public actor DefaultMemoryService: MemoryServicing {
 
     func currentSnapshotGeneration(conversationID: UUID) async -> Int {
         await snapshotStore.generation(for: conversationID)
+    }
+
+    func collectProviderPreCompressNotes(messages: [String]) async -> String {
+        let providers = await providerRegistry.activeProviders()
+        return await MemoryProviderPreCompressNotes.collect(providers: providers, messages: messages)
+    }
+
+    func registerExternalMemoryProvider(id: String, provider: any MemoryProviding) async throws {
+        try await providerRegistry.registerExternal(id: id, provider: provider)
     }
 
     func preCompactionFlushTimeoutMs() -> Int {

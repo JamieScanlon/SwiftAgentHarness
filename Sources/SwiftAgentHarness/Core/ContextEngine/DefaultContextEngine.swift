@@ -424,8 +424,11 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 compactionIdentifierPreservationPolicy: input.compactionIdentifierPreservationPolicy,
                 compactionPreviousSummaryText: input.compactionPreviousSummaryText,
                 compactionSessionMemoryNote: input.compactionSessionMemoryNote,
+                compactionProviderPreCompressNotes: input.compactionProviderPreCompressNotes,
                 compactionSplitBaseMessages: input.compactionSplitBaseMessages,
-                compactionInjectedPrefixMessages: input.compactionInjectedPrefixMessages
+                compactionInjectedPrefixMessages: input.compactionInjectedPrefixMessages,
+                compactionReinjectableSkills: input.compactionReinjectableSkills,
+                compactionProtectedToolNames: input.compactionProtectedToolNames
             )
         } else {
             inputWithManualOverride = input
@@ -437,12 +440,20 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             skipIfSoftAlreadyFlushed: false
         )
 
+        let rawMiddle = inputWithManualOverride.compactionRawMiddleMessages ?? []
+        let providerNotes = await memoryService?.collectProviderPreCompressNotes(
+            messages: rawMiddle.map(\.content)
+        ) ?? ""
+        let inputForTransform = inputWithManualOverride.withCompactionProviderPreCompressNotes(
+            providerNotes.isEmpty ? nil : providerNotes
+        )
+
         if acquiredCompactionLock, let coordinator = compactionCoordinator {
             let conversationID = request.conversation.id
             let result = await runTransformStep(
                 request: request,
                 fallbackMessages: policyAdjustedMessages,
-                input: inputWithManualOverride,
+                input: inputForTransform,
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
@@ -459,7 +470,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         let result = await runTransformStep(
             request: request,
             fallbackMessages: policyAdjustedMessages,
-            input: inputWithManualOverride,
+            input: inputForTransform,
             projectionArtifact: projectionArtifact,
             systemPromptCheckpoint: promptCheckpoint,
             attachmentProjectionCheckpoint: attachmentCheckpoint,
