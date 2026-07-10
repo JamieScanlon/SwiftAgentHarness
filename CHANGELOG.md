@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Memory — active-memory feedback-loop guard
+
+- **Affected prompts:** `ActiveMemoryPreReplyPrompts` standing + situational contracts now require ignoring `<memory-context>` / `[Active Memory Recall]` artifacts and basing notes only on durable `memory_search` / `memory_get` results.
+- **Query sanitize:** situational `userQuery` is stripped of those injected fences/prefixes before the recall child prompt is built.
+
 ### Memory — active memory on by default
 
 - **Config:** `activeMemoryEnabled` and both standing/situational lane flags remain default `true` (documented product choice for this coding harness vs template “opt-in surface”). Opt out via PromptConfig `memory.activeMemoryEnabled: false` (or per-lane flags). Test PromptConfig now states the three keys explicitly.

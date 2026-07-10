@@ -24,6 +24,10 @@ Lanes (implementation):
 - **Standing** — `user` / `feedback` types (stable profile).
 - **Situational** — `project` / `reference` types relevant to the current user message.
 
+## Feedback-loop guard
+
+Prior injected recall (`<memory-context>…</memory-context>`, `[Active Memory Recall]`) must not become evidence for the next recall pass. The recall prompt tells the sub-agent to ignore those artifacts and base notes only on `memory_search` / `memory_get`. Situational `userQuery` is stripped of the same fences/prefixes before the child prompt is built, so standing-lane notes cannot echo into situational recall via a contaminated query string.
+
 ## NONE contract (core)
 
 The recall sub-agent must **bias toward silence**. Its output is binary:

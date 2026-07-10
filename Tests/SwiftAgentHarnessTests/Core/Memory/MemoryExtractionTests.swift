@@ -538,6 +538,45 @@ struct MemorySubAgentSpawnAdapterTests {
         ])
     }
 
+    @Test("Situational recall spawn strips injected memory-context from contaminated userQuery")
+    func situationalRecallSpawnStripsInjectedContextFromQuery() async throws {
+        let capture = ExtractionSpawnCapture()
+        let prior = MemoryContextFencer.fence("User prefers Grafana dashboards.")
+        let contaminated = """
+        \(HarnessInjectedMessagePrefixes.activeMemoryRecall)
+        \(prior)
+
+        latency review tips?
+        """
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, request, _ in
+                await capture.recordSpawn(request)
+                return UUID()
+            },
+            sendMessageAndRun: { _, _ in },
+            cancelChildRun: { _ in },
+            lastAssistantText: { _ in "NONE" },
+            manifestLines: { _ in [] },
+            config: .default,
+            logger: nil
+        )
+        _ = await port.spawnBlockingRecall(
+            UUID(),
+            contaminated,
+            .situational,
+            5_000,
+            200
+        )
+        let spawn = try #require(await capture.spawnRequest)
+        let prompt = try #require(spawn.prompt)
+        #expect(!prompt.contains("<memory-context>"))
+        #expect(!prompt.contains("</memory-context>"))
+        #expect(!prompt.contains(HarnessInjectedMessagePrefixes.activeMemoryRecall))
+        #expect(!prompt.contains("User prefers Grafana dashboards."))
+        #expect(prompt.contains("latency review tips?"))
+        #expect(spawn.userSystemPrompt?.contains("Ignore any <memory-context>") == true)
+    }
+
     @Test("extraction prompt scopes file tools to memory directory and cold start")
     func extractionPromptGuidesMemoryScopedPaths() {
         let prompt = MemoryExtractionPrompts.systemPrompt(manifestLines: [])

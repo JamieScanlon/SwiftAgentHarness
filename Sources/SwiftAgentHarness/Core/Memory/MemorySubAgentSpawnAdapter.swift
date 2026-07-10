@@ -21,9 +21,10 @@ enum MemorySubAgentSpawnAdapter {
         MemorySubAgentSpawnPort(
             spawnBlockingRecall: { parentConversationID, userQuery, lane, timeoutMs, maxSummaryChars in
                 let model = activeMemoryModel(from: config)
+                let sanitizedQuery = userQuery.map { MemoryContextFencer.stripInjectedRecallArtifacts($0) }
                 let (systemPrompt, userPromptText) = ActiveMemoryPreReplyPrompts.prompts(
                     for: lane,
-                    query: userQuery,
+                    query: sanitizedQuery,
                     maxSummaryChars: maxSummaryChars
                 )
                 let spawnRequest = SubAgentSpawnRequest(

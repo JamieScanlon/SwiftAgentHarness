@@ -33,7 +33,7 @@ Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/prom
 | Consumer | Uses Memory for |
 |----------|-----------------|
 | **Context Engine** | Frozen snapshot system prompt blocks at `assemble` |
-| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply (`NONE` → no injection; spawn `toolsAllow` + `memory-active-recall` mode profile gate tools at the gateway; note budget default 220 chars) |
+| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply (`NONE` → no injection; spawn `toolsAllow` + `memory-active-recall` mode profile gate tools at the gateway; note budget default 220 chars; ignore/strip prior `<memory-context>` to prevent feedback loops) |
 | **Tool System** | Workspace file tools + memory write gates; `memory_search` / `memory_get` |
 | **Sub-Agent Pool** | Forked extraction subagent |
 | **Model Pool** | Cheap recall selector + active-memory model |

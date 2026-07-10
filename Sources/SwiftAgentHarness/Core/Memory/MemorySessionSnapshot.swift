@@ -48,6 +48,23 @@ enum MemoryContextFencer {
         text = text.replacingOccurrences(of: systemNote, with: "")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Removes previously injected recall fences/prefixes so they cannot contaminate a recall query.
+    static func stripInjectedRecallArtifacts(_ content: String) -> String {
+        var text = content
+        while let range = text.range(
+            of: #"<memory-context>[\s\S]*?</memory-context>"#,
+            options: .regularExpression
+        ) {
+            text.removeSubrange(range)
+        }
+        text = text.replacingOccurrences(
+            of: HarnessInjectedMessagePrefixes.activeMemoryRecall,
+            with: ""
+        )
+        text = stripExistingFence(text)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 actor MemorySessionSnapshotStore {
