@@ -717,6 +717,32 @@ public actor OrchestratorRuntimeService {
                     providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
                 }
             }
+            let workshopConfig = SkillWorkshopConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
+            if workshopConfig.enabled,
+               let skillsPath = try? SystemPrompt.loadSkillsFolderPathFromConfig() {
+                let gitRoot = GitRootResolver.canonicalGitRoot(for: workspaceRoot)
+                let workspaceKey = AgentMemoryPathResolver.sanitizedProjectKey(
+                    canonicalGitRoot: gitRoot,
+                    cwd: workspaceRoot
+                )
+                let skillsRoot = URL(fileURLWithPath: skillsPath)
+                let store = SkillWorkshopProposalStore(workspaceKey: workspaceKey, config: workshopConfig)
+                let workshopService = SkillWorkshopService(
+                    config: workshopConfig,
+                    workspaceKey: workspaceKey,
+                    skillsRoot: skillsRoot,
+                    store: store,
+                    onApplied: { [skillActivation] sessionID in
+                        await skillActivation.invalidateSkillCatalog(for: sessionID ?? conversationID)
+                    }
+                )
+                providers.append(
+                    SkillWorkshopToolProvider(
+                        service: workshopService,
+                        conversationID: conversationID
+                    )
+                )
+            }
         }
         if deps.conversationTransformConfiguration.contextCompaction.manualToolEnabled {
             providers.append(

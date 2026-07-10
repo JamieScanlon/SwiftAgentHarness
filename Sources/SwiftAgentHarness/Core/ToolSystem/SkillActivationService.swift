@@ -24,6 +24,15 @@ actor SkillActivationService {
         catalogSkillLoader = nil
     }
 
+    func invalidateSkillCatalog(for conversationID: UUID?) async {
+        if let conversationID {
+            skillLoadersByConversationID.removeValue(forKey: conversationID)
+        } else {
+            skillLoadersByConversationID.removeAll()
+        }
+        catalogSkillLoader = nil
+    }
+
     func skillLoader(for conversationID: UUID?) async -> SkillLoader? {
         guard includeAgentSkills else { return nil }
         if let conversationID {
