@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Memory — active memory on by default
+
+- **Config:** `activeMemoryEnabled` and both standing/situational lane flags remain default `true` (documented product choice for this coding harness vs template “opt-in surface”). Opt out via PromptConfig `memory.activeMemoryEnabled: false` (or per-lane flags). Test PromptConfig now states the three keys explicitly.
+
 ### Memory — active-memory summary cap (220)
 
 - **Config:** `activeMemoryMaxSummaryChars` default **220** (was 4000); loader clamp **40–1000** (was floor 256).

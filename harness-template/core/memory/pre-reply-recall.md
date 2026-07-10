@@ -13,6 +13,12 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 - **Budget:** hard timeout and a `maxSummaryChars` cap on any note handed to the main reply. Default **220** (compact note, not an essay); PromptConfig clamp **40–1000**. Soft limit in the recall prompt; hard truncate with a trailing `…` when clipped.
 - **Isolation:** run on its own per-conversation execution context so it does not cancel the main in-flight model call.
 
+## Defaults (this harness)
+
+Active memory **ships on**: `activeMemoryEnabled`, `activeMemoryStandingEnabled`, and `activeMemorySituationalEnabled` default to `true`. The template page describes an opt-in surface for conversational products; here the product choice is opt-**out** via PromptConfig (`memory.activeMemoryEnabled: false`, or per-lane flags).
+
+The `chatType == direct` gate remains, but coding REPL/API sessions are constructed as `direct`, so that gate is not a product off-switch. Group/channel sessions still require an explicit non-direct `chatType` and stay skipped unless the host sets one.
+
 Lanes (implementation):
 
 - **Standing** — `user` / `feedback` types (stable profile).

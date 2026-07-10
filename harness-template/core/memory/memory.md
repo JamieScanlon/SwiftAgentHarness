@@ -341,7 +341,7 @@ Tell the model this directly.
 
 Most memory systems are *reactive*: they only fire when the model decides to call `memory_search`, or when the user says "remember this" or "search memory". By that point, the moment where memory would have made the reply feel natural has passed.
 
-Add a **pre-reply blocking memory sub-agent** as an opt-in surface for conversational sessions: before the main reply runs, a separate bounded model call gets one chance to surface relevant memory. Constrain it tightly:
+Add a **pre-reply blocking memory sub-agent** before the main reply so a separate bounded model call gets one chance to surface relevant memory. Conversational products often treat this as an **opt-in** surface; **this coding harness ships it on** (`activeMemoryEnabled` + both lanes default `true`) and opts out via PromptConfig. Constrain it tightly:
 
 - **Restricted tool surface.** Only `memory_search` and `memory_get`. No write, no edit, no other tools.
 - **Separate model.** A fast cheap recall model (Cerebras gpt-oss-120b, Gemini Flash, etc.) — latency matters more than quality on this path. Allow inheriting the session model when no override is set.

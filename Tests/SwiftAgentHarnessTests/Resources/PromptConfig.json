@@ -105,5 +105,10 @@
         "maxDepth": 1
       }
     }
-  ]
+  ],
+  "memory": {
+    "activeMemoryEnabled": true,
+    "activeMemoryStandingEnabled": true,
+    "activeMemorySituationalEnabled": true
+  }
 }

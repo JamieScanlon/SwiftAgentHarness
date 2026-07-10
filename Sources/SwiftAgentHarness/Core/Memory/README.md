@@ -16,6 +16,8 @@ Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply
 
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
 
+Active memory (pre-reply recall) **ships on**: `activeMemoryEnabled` and both standing/situational lane flags default `true`. Set PromptConfig `memory.activeMemoryEnabled: false` (or a per-lane `*Enabled: false`) to disable. Coding sessions are `chatType: direct`, so the direct-chat gate does not act as an off-switch; group/channel still skip unless the host sets a non-direct type.
+
 Autonomous dreaming **ships off**: set PromptConfig `memory.dreamingEnabled: true` to opt in. After opt-in, `/dreaming on|off` is a soft runtime toggle (control store; missing file defaults on). Both config and control must be on for bridge sweeps; cron install is skipped (and any existing `dream` task removed) when `dreamingEnabled` is false.
 
 Before writing, deep **re-reads the live daily**, skips if the staged snippet is gone, then derives topic title / description / body / index hook from a fresh `richestSnippet` of that live body (not the light-phase snapshot alone). A contamination denylist blocks `MEMORY.md`, `DREAMS.md`, and `.dreams/*` machine artifacts from staging or promotion.

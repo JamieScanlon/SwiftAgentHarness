@@ -282,12 +282,33 @@ struct MemoryConfigurationTwoLaneTests {
     @Test("default config has expected two-lane values")
     func defaultTwoLaneValues() {
         let config = MemoryConfiguration.default
+        #expect(config.activeMemoryEnabled == true)
         #expect(config.activeMemoryStandingEnabled == true)
         #expect(config.activeMemoryStandingTTLMs == 3_600_000)
         #expect(config.activeMemoryStandingBudgetMs == 15_000)
         #expect(config.activeMemorySituationalEnabled == true)
         #expect(config.activeMemorySituationalTimeoutMs == 2_500)
         #expect(config.activeMemorySituationalTTLMs == 60_000)
+    }
+
+    @Test("active memory ships on; PromptConfig can opt out")
+    func activeMemoryOnByDefaultWithOptOut() {
+        #expect(MemoryConfiguration.default.activeMemoryEnabled == true)
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: [:]).activeMemoryEnabled == true
+        )
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryEnabled": false])
+                .activeMemoryEnabled == false
+        )
+        let fromBundleKeys = MemoryConfigurationLoader.load(fromMemoryObject: [
+            "activeMemoryEnabled": true,
+            "activeMemoryStandingEnabled": true,
+            "activeMemorySituationalEnabled": true,
+        ])
+        #expect(fromBundleKeys.activeMemoryEnabled == true)
+        #expect(fromBundleKeys.activeMemoryStandingEnabled == true)
+        #expect(fromBundleKeys.activeMemorySituationalEnabled == true)
     }
 
     @Test("legacy activeMemoryTimeoutMs maps to situational timeout when new key absent")
