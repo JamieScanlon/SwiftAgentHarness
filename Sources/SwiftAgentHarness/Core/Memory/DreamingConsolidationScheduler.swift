@@ -82,6 +82,7 @@ actor DreamingConsolidationScheduler {
 
         var candidates: [DreamCandidate] = []
         for daily in dailies {
+            guard !DreamingContaminationGuard.isExcluded(filename: daily.filename) else { continue }
             let snippet = Self.richestSnippet(from: daily.body)
             guard !snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let richness = DreamRecallStore.conceptualRichness(snippet: snippet)
@@ -162,6 +163,10 @@ actor DreamingConsolidationScheduler {
         var ledgerRecords: [DreamPromotionRecord] = []
 
         for candidate in ranked {
+            if DreamingContaminationGuard.isExcluded(filename: candidate.filename) {
+                logger?.info("[Dreaming] skip \(candidate.filename): contamination guard")
+                continue
+            }
             switch candidate.source {
             case .daily:
                 guard let liveBody = try store.readDailyBody(filename: candidate.filename) else {
@@ -172,23 +177,34 @@ actor DreamingConsolidationScheduler {
                     logger?.info("[Dreaming] skip \(candidate.filename): staged snippet stale")
                     continue
                 }
-                let topicFilename = Self.promotedTopicFilename(from: candidate)
-                let title = Self.promotedTitle(from: candidate.snippet)
+                let liveSnippet = String(
+                    Self.richestSnippet(from: liveBody).prefix(DreamRecallStore.maxSnippetLength)
+                )
+                guard !liveSnippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    logger?.info("[Dreaming] skip \(candidate.filename): live snippet empty")
+                    continue
+                }
+                let topicFilename = Self.promotedTopicFilename(
+                    sourceDailyFilename: candidate.filename,
+                    snippet: liveSnippet
+                )
+                let title = Self.promotedTitle(from: liveSnippet)
+                let description = String(liveSnippet.prefix(120)).replacingOccurrences(of: "\n", with: " ")
                 let topicContent = """
                 ---
                 name: \(title)
-                description: \(String(candidate.snippet.prefix(120)).replacingOccurrences(of: "\n", with: " "))
+                description: \(description)
                 type: reference
                 origin: \(DreamPromotionRecord.originDreamingDeep)
                 sourceDaily: \(candidate.filename)
                 ---
-                \(candidate.snippet)
+                \(liveSnippet)
                 """
                 let createdNewFile = (try? store.readTopicBody(filename: topicFilename)) == nil
                 if createdNewFile {
                     try store.writeTopic(filename: topicFilename, content: topicContent)
                 }
-                let line = "- [\(title)](\(topicFilename)) — \(String(candidate.snippet.prefix(100)).replacingOccurrences(of: "\n", with: " "))"
+                let line = "- [\(title)](\(topicFilename)) — \(String(liveSnippet.prefix(100)).replacingOccurrences(of: "\n", with: " "))"
                 if !index.contains(topicFilename) {
                     index += (index.isEmpty ? "" : "\n") + line
                 }
@@ -206,22 +222,8 @@ actor DreamingConsolidationScheduler {
                     )
                 )
             case .recall:
-                let line = "- [\(candidate.filename)](\(candidate.filename)) — \(candidate.snippet)"
-                if !index.contains(candidate.filename) {
-                    index += (index.isEmpty ? "" : "\n") + line
-                }
-                promotedTopics.append(candidate.filename)
-                ledgerRecords.append(
-                    DreamPromotionRecord(
-                        runID: runID,
-                        promotedAt: promotedAt,
-                        topicFilename: candidate.filename,
-                        sourceDaily: nil,
-                        indexLine: line,
-                        createdNewFile: false,
-                        origin: DreamPromotionRecord.originDreamingDeep
-                    )
-                )
+                logger?.info("[Dreaming] skip \(candidate.filename): recall source not promotable")
+                continue
             }
         }
 
@@ -329,6 +331,7 @@ actor DreamingConsolidationScheduler {
         var results: [(filename: String, body: String, snippet: String)] = []
         for url in contents {
             let name = url.lastPathComponent
+            guard !DreamingContaminationGuard.isExcluded(filename: name) else { continue }
             guard AgentMemoryStore.isDailyFilename(name) else { continue }
             let day = String(name.dropLast(3))
             guard day >= cutoff else { continue }
@@ -364,9 +367,9 @@ actor DreamingConsolidationScheduler {
         return String(cleaned.prefix(80))
     }
 
-    private static func promotedTopicFilename(from candidate: DreamCandidate) -> String {
-        let day = String(candidate.filename.dropLast(3))
-        let slugSource = promotedTitle(from: candidate.snippet)
+    private static func promotedTopicFilename(sourceDailyFilename: String, snippet: String) -> String {
+        let day = String(sourceDailyFilename.dropLast(3))
+        let slugSource = promotedTitle(from: snippet)
             .lowercased()
             .map { ch -> Character in
                 if ch.isLetter || ch.isNumber { return ch }
@@ -377,7 +380,7 @@ actor DreamingConsolidationScheduler {
             .joined(separator: "-")
         if slug.isEmpty { slug = "note" }
         slug = String(slug.prefix(48))
-        let digest = DreamRecallStore.queryHash(for: candidate.snippet)
+        let digest = DreamRecallStore.queryHash(for: snippet)
         let hash = String(digest.prefix(6))
         return "reference_\(day)_\(slug)_\(hash).md"
     }
