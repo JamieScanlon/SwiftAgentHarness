@@ -158,6 +158,11 @@ actor SlashCommandDispatchService {
                         conversationID: conversationID,
                         args: innerParsed.args
                     )
+                case "active-memory":
+                    return try await runSlashActiveMemoryCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
+                    )
                 case "init":
                     return try await runSlashInitCommand(conversationID: conversationID)
                 case "approve":

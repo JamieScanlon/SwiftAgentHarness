@@ -15,7 +15,7 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 
 ## Defaults (this harness)
 
-Active memory **ships on**: `activeMemoryEnabled`, `activeMemoryStandingEnabled`, and `activeMemorySituationalEnabled` default to `true`. The template page describes an opt-in surface for conversational products; here the product choice is opt-**out** via PromptConfig (`memory.activeMemoryEnabled: false`, or per-lane flags).
+Active memory **ships on**: `activeMemoryEnabled`, `activeMemoryStandingEnabled`, and `activeMemorySituationalEnabled` default to `true`. The template page describes an opt-in surface for conversational products; here the product choice is opt-**out** via PromptConfig (`memory.activeMemoryEnabled: false`, or per-lane flags). Soft session/global toggles (below) pause recall without editing PromptConfig.
 
 The `chatType == direct` gate remains, but coding REPL/API sessions are constructed as `direct`, so that gate is not a product off-switch. Group/channel sessions still require an explicit non-direct `chatType` and stay skipped unless the host sets one.
 
@@ -24,7 +24,62 @@ Lanes (implementation):
 - **Standing** — `user` / `feedback` types (stable profile). Query-independent; no conversation transcript.
 - **Situational** — `project` / `reference` types relevant to the current conversation excerpt (see query modes below).
 
-## Situational query modes
+## Session toggle
+
+Pause or resume active memory without editing PromptConfig:
+
+```text
+/active-memory status
+/active-memory off
+/active-memory on
+```
+
+Session on/off writes conversation metadata (`sah.activeMemory.enabled`). Absent key ⇒ on.
+
+Global soft toggle (all sessions; does not rewrite PromptConfig):
+
+```text
+/active-memory status --global
+/active-memory off --global
+/active-memory on --global
+```
+
+Global soft state lives in `active-memory-control.json` under the memory config home (missing file ⇒ on). CLI: `memory active-memory status` (read-only).
+
+**Gates (all must pass):** `config.activeMemoryEnabled` AND global soft on AND session soft on AND existing lineage / `chatType == direct` / lane flags.
+
+## How to see it
+
+By default the recall note is a hidden pre-reply injection. For the tuning loop:
+
+```text
+/verbose on
+/trace on
+```
+
+After the main assistant reply, the harness appends follow-up lines (harness-injected; not model prompt pollution):
+
+```text
+Active Memory: status=ok elapsed=842ms query=recent summary=34 chars
+Active Memory Debug: <note text>
+```
+
+| status | Meaning |
+|--------|---------|
+| `ok` | Non-NONE note injected |
+| `none` | Lanes returned NONE / empty |
+| `disabled` | Config / global / session soft off |
+| `skipped` | Lineage / chatType / no query |
+| `timeout` / `error` | Spawn path failure |
+
+`activeMemoryLogging` (default `true`) emits structured debug logs: `active-memory: start|done …`.
+
+### Recommended tuning loop
+
+1. Start with `queryMode: recent`, `promptStyle: balanced`, compact `maxSummaryChars` (220), logging on.
+2. Use `/verbose on` and `/trace on` while tuning.
+3. Move to `message` for lower latency, or `full` (raise situational timeout) if extra context is worth it.
+4. If noisy → tighten `maxSummaryChars` / prefer `strict`; if slow → lower query mode / timeouts / recent turn+char caps.
 
 Follow-ups like “what about the second one?” need an antecedent. Situational recall therefore builds a **query payload** from the parent transcript (not a forked child history):
 

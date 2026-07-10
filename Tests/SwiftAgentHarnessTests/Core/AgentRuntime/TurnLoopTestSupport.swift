@@ -24,6 +24,10 @@ actor TurnLoopConversationState {
         conversation.model = model
     }
 
+    func setMetadata(_ metadata: JSON?) {
+        conversation.metadata = metadata
+    }
+
     func anchorUserMessageID() -> UUID? {
         conversation.messages.first(where: { $0.role == .user })?.id
     }

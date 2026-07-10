@@ -67,8 +67,15 @@ public enum MemoryCLI {
                     fputs("usage: memory dreaming status|explain\n", stderr)
                     exit(1)
                 }
+            case "active-memory":
+                let action = arguments.count >= 4 ? arguments[3].lowercased() : "status"
+                guard action == "status" else {
+                    fputs("usage: memory active-memory status\n", stderr)
+                    exit(1)
+                }
+                print(ActiveMemoryControlStore().statusSummary(config: config))
             default:
-                fputs("usage: memory list|show|remove|rem-backfill --rollback|dreaming status|explain\n", stderr)
+                fputs("usage: memory list|show|remove|rem-backfill --rollback|dreaming status|explain|active-memory status\n", stderr)
                 exit(1)
             }
         } catch {

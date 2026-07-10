@@ -131,11 +131,13 @@ protocol RuntimeMemoryPort: Sendable {
     func blockingRecallSummary(
         conversationID: UUID,
         messages: [Message],
-        anchorUserMessageID: UUID?
-    ) async -> String?
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
+    ) async -> ActiveMemoryRecallOutcome
     func prefetchRecall(
         conversationID: UUID,
         messages: [Message],
-        anchorUserMessageID: UUID?
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
     ) async
 }

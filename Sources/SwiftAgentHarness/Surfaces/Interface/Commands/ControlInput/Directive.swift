@@ -5,6 +5,7 @@ public enum DirectiveKind: String, Sendable, Equatable, CaseIterable {
     case think
     case model
     case verbose
+    case trace
     case reasoning
     case elevated
     case queue
@@ -19,6 +20,7 @@ public enum DirectiveValue: Sendable, Equatable {
     case thinkingLevel(ThinkingLevel)
     case modelSlug(String)
     case flag
+    case onOff(Bool)
 }
 
 public struct AppliedDirective: Sendable, Equatable {
@@ -46,6 +48,17 @@ public struct AppliedDirective: Sendable, Equatable {
     public var modelSlug: String? {
         guard kind == .model, case .modelSlug(let slug)? = value else { return nil }
         return slug
+    }
+
+    public var onOffFlag: Bool? {
+        switch value {
+        case .onOff(let enabled):
+            return enabled
+        case .flag:
+            return true
+        default:
+            return nil
+        }
     }
 }
 
@@ -80,14 +93,39 @@ public enum DirectiveCatalog {
         }
 
         switch kind {
-        case .verbose, .elevated, .queue:
-            let consumedPrefix = trimmed.prefix(while: { $0 != "\n" })
-            return (AppliedDirective(kind: kind, value: .flag, scope: .inlineHint), String(consumedPrefix))
+        case .verbose, .trace, .elevated, .queue:
+            return parseOnOffOrFlagDirective(kind: kind, remainder: remainder, rawName: rawName)
         case .think, .reasoning:
             return parseLevelDirective(kind: kind, remainder: remainder, trimmed: trimmed, rawName: rawName)
         case .model:
             return parseModelDirective(remainder: remainder, trimmed: trimmed, rawName: rawName)
         }
+    }
+
+    private static func parseOnOffOrFlagDirective(
+        kind: DirectiveKind,
+        remainder: String,
+        rawName: String
+    ) -> (AppliedDirective, String)? {
+        if remainder.isEmpty {
+            return (AppliedDirective(kind: kind, value: .flag, scope: .inlineHint), "/\(rawName)")
+        }
+        let parts = remainder.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let token = String(parts[0]).lowercased()
+        let enabled: Bool
+        switch token {
+        case "on", "true", "1":
+            enabled = true
+        case "off", "false", "0":
+            enabled = false
+        default:
+            // Bare `/verbose` with unrelated trailing prose — treat as flag toggle-on.
+            return (AppliedDirective(kind: kind, value: .flag, scope: .inlineHint), "/\(rawName)")
+        }
+        return (
+            AppliedDirective(kind: kind, value: .onOff(enabled), scope: .inlineHint),
+            "/\(rawName) \(token)"
+        )
     }
 
     private static func parseLevelDirective(
@@ -105,12 +143,7 @@ public enum DirectiveCatalog {
         guard let level = ThinkingLevel(rawValue: levelToken) else {
             return nil
         }
-        let consumed: String
-        if parts.count > 1 {
-            consumed = "/\(rawName) \(levelToken)"
-        } else {
-            consumed = "/\(rawName) \(levelToken)"
-        }
+        let consumed = "/\(rawName) \(levelToken)"
         return (AppliedDirective(kind: kind, value: .thinkingLevel(level), scope: .inlineHint), consumed)
     }
 
@@ -124,7 +157,7 @@ public enum DirectiveCatalog {
         }
         let parts = remainder.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
         let slug = String(parts[0])
-        let consumed = parts.count > 1 ? "/\(rawName) \(slug)" : "/\(rawName) \(slug)"
+        let consumed = "/\(rawName) \(slug)"
         return (AppliedDirective(kind: .model, value: .modelSlug(slug), scope: .inlineHint), consumed)
     }
 
@@ -142,7 +175,15 @@ public enum DirectiveCatalog {
                 }
                 return "Model directive acknowledged."
             case .verbose:
+                if let on = directive.onOffFlag {
+                    return on ? "Verbose mode on." : "Verbose mode off."
+                }
                 return "Verbose mode toggled."
+            case .trace:
+                if let on = directive.onOffFlag {
+                    return on ? "Trace mode on." : "Trace mode off."
+                }
+                return "Trace mode toggled."
             case .elevated:
                 return "Elevated execution toggled."
             case .queue:

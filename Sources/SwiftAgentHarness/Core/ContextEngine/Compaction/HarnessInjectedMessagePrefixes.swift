@@ -39,4 +39,15 @@ enum HarnessInjectedMessageMetadata {
             inputTrustRaw: inputTrustRaw
         )
     }
+
+    static func assistantMessage(id: UUID, content: String, timestamp: Date = Date()) -> Message {
+        Message(
+            id: id,
+            role: .assistant,
+            content: content,
+            timestamp: timestamp,
+            toolCalls: [],
+            inputTrustRaw: inputTrustRaw
+        )
+    }
 }

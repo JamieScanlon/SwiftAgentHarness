@@ -73,14 +73,21 @@ struct TurnLoop {
                 : .continuation(round: continuationsUsed)
             let compaction: CompactionHint = retriedCompactionThisIteration ? .forceCompaction : .normal
 
+            var activeMemoryDiagnostics: ActiveMemoryTurnDiagnostics?
+            let sessionActiveMemoryEnabled = ActiveMemorySessionFlags.isSessionEnabled(metadata: conv.metadata)
+            let sessionVerbose = ActiveMemorySessionFlags.isVerbose(metadata: conv.metadata)
+            let sessionTrace = ActiveMemorySessionFlags.isTrace(metadata: conv.metadata)
+
             // Fire situational prefetch before assembly so recall overlaps context assembly.
-            if isFirstModelCall, let memoryPort = ports.memory,
-               ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                await memoryPort.prefetchRecall(
-                    conversationID: conversationID,
-                    messages: conv.messages,
-                    anchorUserMessageID: anchorUserMessageID
-                )
+            if isFirstModelCall, let memoryPort = ports.memory {
+                if ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
+                    await memoryPort.prefetchRecall(
+                        conversationID: conversationID,
+                        messages: conv.messages,
+                        anchorUserMessageID: anchorUserMessageID,
+                        sessionEnabled: sessionActiveMemoryEnabled
+                    )
+                }
             }
 
             var messages: [Message]
@@ -109,22 +116,31 @@ struct TurnLoop {
                     messages = [reminderMessage] + messages
                 }
             }
-            if isFirstModelCall, let memoryPort = ports.memory,
-               ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                // Use persisted conversation messages (same as prefetch) so cache fingerprints match.
-                if let recall = await memoryPort.blockingRecallSummary(
-                    conversationID: conversationID,
-                    messages: conv.messages,
-                    anchorUserMessageID: anchorUserMessageID
-                ) {
-                    let recallMessage = HarnessInjectedMessageMetadata.systemMessage(
-                        id: UUID(),
-                        content: """
+            if isFirstModelCall, let memoryPort = ports.memory {
+                if ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
+                    // Use persisted conversation messages (same as prefetch) so cache fingerprints match.
+                    let outcome = await memoryPort.blockingRecallSummary(
+                        conversationID: conversationID,
+                        messages: conv.messages,
+                        anchorUserMessageID: anchorUserMessageID,
+                        sessionEnabled: sessionActiveMemoryEnabled
+                    )
+                    activeMemoryDiagnostics = outcome.diagnostics
+                    if let recall = outcome.note {
+                        let recallMessage = HarnessInjectedMessageMetadata.systemMessage(
+                            id: UUID(),
+                            content: """
 \(HarnessInjectedMessagePrefixes.activeMemoryRecall)
 \(recall)
 """
+                        )
+                        messages = [recallMessage] + messages
+                    }
+                } else {
+                    activeMemoryDiagnostics = .skipped(
+                        reason: "lineage",
+                        queryMode: MemoryConfiguration.default.activeMemoryQueryMode
                     )
-                    messages = [recallMessage] + messages
                 }
             }
             let handle = try await ports.model.resolve(for: conv, orchestrator: orchestrator)
@@ -277,6 +293,18 @@ struct TurnLoop {
             if !rejectedBareRequiredTurn {
                 try await ports.conversation.append(assistant, conversationID: conversationID, runID: runID)
                 hasTranscriptDeltaAcrossRun = true
+                if let diagnostics = activeMemoryDiagnostics,
+                   let followUp = diagnostics.followUpContent(verbose: sessionVerbose, trace: sessionTrace) {
+                    let followUpMessage = HarnessInjectedMessageMetadata.assistantMessage(
+                        id: UUID(),
+                        content: followUp
+                    )
+                    try await ports.conversation.append(
+                        followUpMessage,
+                        conversationID: conversationID,
+                        runID: runID
+                    )
+                }
             }
 
             await lifecycleEmitter.emit(

@@ -163,6 +163,16 @@ public struct SlashCommandRegistry: Sendable {
             ),
             SlashCommand(
                 base: SlashCommandBase(
+                    name: "active-memory",
+                    description: "Show or toggle pre-reply active memory (session or --global).",
+                    argumentHint: "status|on|off [--global]",
+                    hiddenKeywords: "recall pre-reply memory toggle",
+                    bypassTier: .queued
+                ),
+                kind: .local
+            ),
+            SlashCommand(
+                base: SlashCommandBase(
                     name: "init",
                     description: "Bootstrap AGENTS.md for the current workspace.",
                     argumentHint: "",

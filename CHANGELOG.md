@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Memory — active-memory session toggle and observability
+
+- **Slash:** `/active-memory status|on|off [--global]`; CLI `memory active-memory status`.
+- **Gates:** PromptConfig `activeMemoryEnabled` + global soft control file + session metadata soft flag (missing ⇒ on).
+- **Diagnostics:** `ActiveMemoryTurnDiagnostics` (`ok`/`none`/`disabled`/`skipped`/…); `activeMemoryLogging` default true (`active-memory: start|done` logs).
+- **Directives:** `/verbose on|off` and `/trace on|off` persist to conversation metadata and append post-reply status/debug follow-up lines.
+
 ### Memory — active-memory query modes and prompt styles
 
 - **Config:** `activeMemoryQueryMode` (default `recent`), `activeMemoryPromptStyle` (default `balanced`), plus recent-turn/char caps (`activeMemoryRecentUserTurns` 2 / `AssistantTurns` 1 / `UserChars` 220 / `AssistantChars` 180) with loader clamps.

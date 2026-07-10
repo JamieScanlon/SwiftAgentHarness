@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 
 public enum ControlInputBoundaryOutcome: Sendable {
@@ -137,10 +138,38 @@ extension SlashCommandDispatchService {
                 if let slug = directive.modelSlug {
                     try await persistModelDirective(slug: slug, conversationID: conversationID)
                 }
-            case .verbose, .elevated, .queue:
+            case .verbose:
+                try await persistBooleanSessionFlag(
+                    keyWriter: ActiveMemorySessionFlags.withVerbose,
+                    enabled: directive.onOffFlag ?? true,
+                    conversationID: conversationID
+                )
+            case .trace:
+                try await persistBooleanSessionFlag(
+                    keyWriter: ActiveMemorySessionFlags.withTrace,
+                    enabled: directive.onOffFlag ?? true,
+                    conversationID: conversationID
+                )
+            case .elevated, .queue:
                 break
             }
         }
+    }
+
+    private func persistBooleanSessionFlag(
+        keyWriter: (Bool, JSON?) -> JSON,
+        enabled: Bool,
+        conversationID: UUID
+    ) async throws {
+        guard let conv = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        let metadata = keyWriter(enabled, conv.metadata)
+        _ = try await deps.persistenceDomain.updateConversationMetadata(
+            conversationID: conversationID,
+            topic: conv.topic,
+            description: conv.description,
+            metadata: metadata,
+            allowHarnessMetadataKeys: true
+        )
     }
 
     private func persistModelDirective(slug: String, conversationID: UUID) async throws {

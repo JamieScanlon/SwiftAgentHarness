@@ -62,6 +62,15 @@ enum MemoryContextFencer {
             of: HarnessInjectedMessagePrefixes.activeMemoryRecall,
             with: ""
         )
+        // Post-reply observability follow-ups must not contaminate the next situational query.
+        text = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("Active Memory:")
+                    && !trimmed.hasPrefix("Active Memory Debug:")
+            }
+            .joined(separator: "\n")
         text = stripExistingFence(text)
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }

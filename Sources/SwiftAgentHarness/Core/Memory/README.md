@@ -16,7 +16,9 @@ Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply
 
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
 
-Active memory (pre-reply recall) **ships on**: `activeMemoryEnabled` and both standing/situational lane flags default `true`. Set PromptConfig `memory.activeMemoryEnabled: false` (or a per-lane `*Enabled: false`) to disable. Coding sessions are `chatType: direct`, so the direct-chat gate does not act as an off-switch; group/channel still skip unless the host sets a non-direct type.
+Active memory (pre-reply recall) **ships on**: `activeMemoryEnabled` and both standing/situational lane flags default `true`. Set PromptConfig `memory.activeMemoryEnabled: false` (or a per-lane `*Enabled: false`) to disable. Soft pause without redeploy: `/active-memory off` (session) or `/active-memory off --global`. Coding sessions are `chatType: direct`, so the direct-chat gate does not act as an off-switch; group/channel still skip unless the host sets a non-direct type.
+
+Operator observability: `/verbose on` and `/trace on` append post-reply `Active Memory: status=…` / `Active Memory Debug: …` lines; `activeMemoryLogging` (default true) emits `active-memory: start|done` debug logs.
 
 Active-memory **model** is pool-native: optional `memory.activeMemoryModelRef` pin → `ModelQuery` with `preferredUseClass: memory-recall` + `.completion`/`.tools` (provider trust tier matches the session by default; set `activeMemoryAllowCrossProviderTrust: true` to opt out) → parent session model if tools-capable → skip. No hardcoded Ollama-only default on the spawn path.
 
@@ -67,6 +69,9 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `ActiveMemoryRecallOutput.swift` | NONE-contract parse (`noteOrNil`) for pre-reply lanes |
 | `ActiveMemoryQueryMode.swift` | Situational `queryMode` / `promptStyle` enums |
 | `ActiveMemorySituationalQueryBuilder.swift` | Builds capped recent/full situational query payloads from transcript |
+| `ActiveMemoryControlStore.swift` | Global soft on/off (`/active-memory … --global`) |
+| `ActiveMemorySessionFlags.swift` | Session metadata keys for enable / verbose / trace |
+| `ActiveMemoryTurnDiagnostics.swift` | Per-turn status line + debug summary payload |
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |

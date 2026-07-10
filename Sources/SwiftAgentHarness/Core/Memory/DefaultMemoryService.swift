@@ -43,7 +43,7 @@ public actor DefaultMemoryService: MemoryServicing {
         self.recallSelector = MemoryRecallSelector(llmSelector: llmRecallSelector)
         self.extractor = BackgroundMemoryExtractor(config: config, logger: logger)
         self.search = HybridMemorySearch()
-        self.activeMemory = ActiveMemoryPreReplyService(config: config)
+        self.activeMemory = ActiveMemoryPreReplyService(config: config, logger: logger)
         self.dreaming = DreamingConsolidationScheduler(config: config, logger: logger)
         self.userConfigDir = userConfigDir ?? MemoryConfigHome.resolve().appendingPathComponent("user", isDirectory: true)
         self.providerRegistry = MemoryProviderRegistry(builtin: BuiltinFileMemoryProvider())
@@ -184,33 +184,43 @@ public actor DefaultMemoryService: MemoryServicing {
     func activeRecallSummary(
         session: MemorySessionContext,
         messages: [Message],
-        anchorUserMessageID: UUID?
-    ) async -> String? {
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool = true
+    ) async -> ActiveMemoryRecallOutcome {
         guard let query = ActiveMemorySituationalQueryBuilder.build(
             messages: messages,
             anchorUserMessageID: anchorUserMessageID,
             config: config
         ) else {
-            return nil
+            return .skipped(reason: "no_query", queryMode: config.activeMemoryQueryMode)
         }
-        return await activeMemory.recallSummaryIfEnabled(session: session, userQuery: query)
+        return await activeMemory.recallOutcomeIfEnabled(
+            session: session,
+            userQuery: query,
+            sessionEnabled: sessionEnabled
+        )
     }
 
-    func warmStandingRecall(session: MemorySessionContext) async {
-        await activeMemory.warmStanding(session: session)
+    func warmStandingRecall(session: MemorySessionContext, sessionEnabled: Bool = true) async {
+        await activeMemory.warmStanding(session: session, sessionEnabled: sessionEnabled)
     }
 
     func prefetchSituationalRecall(
         session: MemorySessionContext,
         messages: [Message],
-        anchorUserMessageID: UUID?
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool = true
     ) async {
         guard let query = ActiveMemorySituationalQueryBuilder.build(
             messages: messages,
             anchorUserMessageID: anchorUserMessageID,
             config: config
         ) else { return }
-        await activeMemory.prefetchSituational(session: session, userQuery: query)
+        await activeMemory.prefetchSituational(
+            session: session,
+            userQuery: query,
+            sessionEnabled: sessionEnabled
+        )
     }
 
     func appendSubdirectoryHintsIfNeeded(

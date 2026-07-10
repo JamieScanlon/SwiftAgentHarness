@@ -42,6 +42,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var activeMemoryRecentAssistantTurns: Int
     var activeMemoryRecentUserChars: Int
     var activeMemoryRecentAssistantChars: Int
+    /// Structured `active-memory: start|done` debug logs (default on for the tuning loop).
+    var activeMemoryLogging: Bool
 
     public static let `default` = MemoryConfiguration(
         enabled: true,
@@ -77,7 +79,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
         activeMemoryRecentUserTurns: 2,
         activeMemoryRecentAssistantTurns: 1,
         activeMemoryRecentUserChars: 220,
-        activeMemoryRecentAssistantChars: 180
+        activeMemoryRecentAssistantChars: 180,
+        activeMemoryLogging: true
     )
 }
 
@@ -163,6 +166,9 @@ public enum MemoryConfigurationLoader {
         }
         if let v = memory["activeMemoryRecentAssistantChars"] as? Int {
             config.activeMemoryRecentAssistantChars = min(1_000, max(40, v))
+        }
+        if let v = memory["activeMemoryLogging"] as? Bool {
+            config.activeMemoryLogging = v
         }
         return config
     }

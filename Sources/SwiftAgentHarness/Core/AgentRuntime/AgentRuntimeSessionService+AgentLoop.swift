@@ -607,18 +607,22 @@ extension AgentRuntimeSessionService {
             }
         )
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { [self] conversationID, messages, anchorUserMessageID in
+            recallFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled in
                 guard let memoryService = (self.deps.contextEngine as? DefaultContextEngine)?.memoryService,
                       let session = await memoryService.sessionContext(for: conversationID) else {
-                    return nil
+                    return .skipped(
+                        reason: "no_session",
+                        queryMode: MemoryConfiguration.default.activeMemoryQueryMode
+                    )
                 }
                 return await memoryService.activeRecallSummary(
                     session: session,
                     messages: messages,
-                    anchorUserMessageID: anchorUserMessageID
+                    anchorUserMessageID: anchorUserMessageID,
+                    sessionEnabled: sessionEnabled
                 )
             },
-            prefetchFn: { [self] conversationID, messages, anchorUserMessageID in
+            prefetchFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled in
                 guard let memoryService = (self.deps.contextEngine as? DefaultContextEngine)?.memoryService,
                       let session = await memoryService.sessionContext(for: conversationID) else {
                     return
@@ -626,7 +630,8 @@ extension AgentRuntimeSessionService {
                 await memoryService.prefetchSituationalRecall(
                     session: session,
                     messages: messages,
-                    anchorUserMessageID: anchorUserMessageID
+                    anchorUserMessageID: anchorUserMessageID,
+                    sessionEnabled: sessionEnabled
                 )
             }
         )

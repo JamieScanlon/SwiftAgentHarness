@@ -363,8 +363,13 @@ struct TurnLoopRecallNonFatalTests {
 
         let resolveCallCount = LockIsolated(0)
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { _, _, _ in nil },   // situational miss
-            prefetchFn: { _, _, _ in }
+            recallFn: { _, _, _, _ in
+                ActiveMemoryRecallOutcome.skipped(
+                    reason: "situational_miss",
+                    queryMode: .recent
+                )
+            },   // situational miss
+            prefetchFn: { _, _, _, _ in }
         )
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: { conv, _ in
