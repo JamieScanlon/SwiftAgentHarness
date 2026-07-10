@@ -5,7 +5,8 @@ public enum MemoryCLI {
         guard arguments.count >= 2, arguments[1] == "memory" else { return nil }
         let sub = arguments.count >= 3 ? arguments[2] : "list"
         let cwd = ProcessInfo.processInfo.environment["PWD"] ?? FileManager.default.currentDirectoryPath
-        let service = DefaultMemoryService(config: MemoryConfigurationLoader.loadFromPromptConfigBundle())
+        let config = MemoryConfigurationLoader.loadFromPromptConfigBundle()
+        let service = DefaultMemoryService(config: config)
         do {
             let context = try service.makeSessionContext(conversationID: UUID(), cwd: cwd)
             let store = AgentMemoryStore(memoryDirectory: context.memoryDirectory)
@@ -35,8 +36,19 @@ public enum MemoryCLI {
                 )
                 try FileManager.default.removeItem(atPath: path)
                 print("removed \(arguments[3])")
+            case "rem-backfill":
+                let flags = Set(arguments.dropFirst(3))
+                let wantsRollback = flags.contains("--rollback") || flags.contains("--rollback-short-term")
+                guard wantsRollback else {
+                    fputs("usage: memory rem-backfill --rollback|--rollback-short-term\n", stderr)
+                    exit(1)
+                }
+                try DreamingConsolidationScheduler.rollbackLastPromotionRun(
+                    memoryDirectory: context.memoryDirectory
+                )
+                print("rolled back last dreaming promotion run")
             default:
-                fputs("usage: memory list|show|remove\n", stderr)
+                fputs("usage: memory list|show|remove|rem-backfill --rollback\n", stderr)
                 exit(1)
             }
         } catch {

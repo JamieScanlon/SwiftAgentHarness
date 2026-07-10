@@ -31,7 +31,7 @@ actor DreamingConsolidationScheduler {
         let dreamsDir = memoryDirectory.appendingPathComponent(".dreams", isDirectory: true)
         try FileManager.default.createDirectory(at: dreamsDir, withIntermediateDirectories: true)
         if rollback {
-            try rollbackBackfill(dreamsDir: dreamsDir)
+            try rollbackLastPromotionRun(memoryDirectory: memoryDirectory)
             return
         }
         let candidates = try stageLightPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir)
@@ -142,7 +142,9 @@ actor DreamingConsolidationScheduler {
         dreamsDir: URL,
         candidates: [DreamCandidate]
     ) async throws {
+        _ = dreamsDir
         let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
+        let ledger = DreamPromotionLedger(memoryDirectory: memoryDirectory)
         let gated = candidates.filter { candidate in
             candidate.signal >= config.dreamingMinScore
                 && candidate.recallCount >= config.dreamingMinRecallCount
@@ -152,8 +154,12 @@ actor DreamingConsolidationScheduler {
         let ranked = gated.sorted { $0.signal > $1.signal }.prefix(3)
         guard !ranked.isEmpty else { return }
 
+        let runID = UUID().uuidString
+        let promotedAt = DreamRecallStore.isoString(from: now())
         var index = (try? String(contentsOf: store.indexURL, encoding: .utf8)) ?? ""
         var promotedTopics: [String] = []
+        var sourceDailies: [String] = []
+        var ledgerRecords: [DreamPromotionRecord] = []
 
         for candidate in ranked {
             switch candidate.source {
@@ -173,10 +179,13 @@ actor DreamingConsolidationScheduler {
                 name: \(title)
                 description: \(String(candidate.snippet.prefix(120)).replacingOccurrences(of: "\n", with: " "))
                 type: reference
+                origin: \(DreamPromotionRecord.originDreamingDeep)
+                sourceDaily: \(candidate.filename)
                 ---
                 \(candidate.snippet)
                 """
-                if (try? store.readTopicBody(filename: topicFilename)) == nil {
+                let createdNewFile = (try? store.readTopicBody(filename: topicFilename)) == nil
+                if createdNewFile {
                     try store.writeTopic(filename: topicFilename, content: topicContent)
                 }
                 let line = "- [\(title)](\(topicFilename)) — \(String(candidate.snippet.prefix(100)).replacingOccurrences(of: "\n", with: " "))"
@@ -184,12 +193,35 @@ actor DreamingConsolidationScheduler {
                     index += (index.isEmpty ? "" : "\n") + line
                 }
                 promotedTopics.append(topicFilename)
+                sourceDailies.append(candidate.filename)
+                ledgerRecords.append(
+                    DreamPromotionRecord(
+                        runID: runID,
+                        promotedAt: promotedAt,
+                        topicFilename: topicFilename,
+                        sourceDaily: candidate.filename,
+                        indexLine: line,
+                        createdNewFile: createdNewFile,
+                        origin: DreamPromotionRecord.originDreamingDeep
+                    )
+                )
             case .recall:
                 let line = "- [\(candidate.filename)](\(candidate.filename)) — \(candidate.snippet)"
                 if !index.contains(candidate.filename) {
                     index += (index.isEmpty ? "" : "\n") + line
                 }
                 promotedTopics.append(candidate.filename)
+                ledgerRecords.append(
+                    DreamPromotionRecord(
+                        runID: runID,
+                        promotedAt: promotedAt,
+                        topicFilename: candidate.filename,
+                        sourceDaily: nil,
+                        indexLine: line,
+                        createdNewFile: false,
+                        origin: DreamPromotionRecord.originDreamingDeep
+                    )
+                )
             }
         }
 
@@ -197,18 +229,84 @@ actor DreamingConsolidationScheduler {
         if let capFired = try store.writeIndex(content: index) {
             logger?.warning("[Dreaming] MEMORY.md truncated at write: \(capFired)")
         }
-        logger?.info("[Dreaming] promoted \(promotedTopics.count) candidate(s) to MEMORY.md")
-        let marker = dreamsDir.appendingPathComponent("last-deep.json")
-        let payload = ["promoted": promotedTopics]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: marker)
+        try ledger.append(ledgerRecords)
+        try ledger.writeLastDeepMarker(
+            DreamLastDeepMarker(
+                runID: runID,
+                promoted: promotedTopics,
+                sourceDailies: Array(Set(sourceDailies)).sorted()
+            )
+        )
+        logger?.info("[Dreaming] promoted \(promotedTopics.count) candidate(s) to MEMORY.md runID=\(runID)")
     }
 
-    private func rollbackBackfill(dreamsDir: URL) throws {
-        let marker = dreamsDir.appendingPathComponent("last-deep.json")
-        if FileManager.default.fileExists(atPath: marker.path) {
-            try FileManager.default.removeItem(at: marker)
+    /// Reverses the last tagged deep promotion run: deletes created topics, scrubs MEMORY.md, clears marker.
+    /// Nonisolated so CLI / sync callers can reverse without hopping through the actor.
+    nonisolated static func rollbackLastPromotionRun(
+        memoryDirectory: URL,
+        logger: Logger? = nil
+    ) throws {
+        let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
+        let ledger = DreamPromotionLedger(memoryDirectory: memoryDirectory)
+        guard let marker = ledger.readLastDeepMarker() else {
+            logger?.info("[Dreaming] rollback: no last-deep marker")
+            return
         }
+
+        let records: [DreamPromotionRecord]
+        if !marker.runID.isEmpty {
+            records = try ledger.records(forRunID: marker.runID)
+        } else {
+            // Legacy marker without runID / ledger rows: scrub index lines only; do not delete files.
+            records = marker.promoted.map {
+                DreamPromotionRecord(
+                    runID: "",
+                    promotedAt: "",
+                    topicFilename: $0,
+                    sourceDaily: nil,
+                    indexLine: "",
+                    createdNewFile: false,
+                    origin: DreamPromotionRecord.originDreamingDeep
+                )
+            }
+        }
+
+        var index = (try? String(contentsOf: store.indexURL, encoding: .utf8)) ?? ""
+        let filenames = Set(records.map(\.topicFilename) + marker.promoted)
+        if !filenames.isEmpty {
+            let kept = index
+                .components(separatedBy: .newlines)
+                .filter { line in
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty else { return false }
+                    return !filenames.contains { trimmed.contains($0) }
+                }
+            index = kept.joined(separator: "\n")
+            _ = try store.writeIndex(content: index)
+        }
+
+        for record in records where record.createdNewFile {
+            guard let body = try? store.readTopicBody(filename: record.topicFilename) else { continue }
+            guard DreamPromotionLedger.topicHasDreamingOrigin(body) else {
+                logger?.info("[Dreaming] rollback: leave \(record.topicFilename) (missing origin tag)")
+                continue
+            }
+            let path = try WorkspacePathPolicy.resolveMemoryRelativePath(
+                raw: record.topicFilename,
+                memoryDirectory: memoryDirectory,
+                requireExists: true
+            )
+            try FileManager.default.removeItem(atPath: path)
+            logger?.info("[Dreaming] rollback: deleted \(record.topicFilename)")
+        }
+
+        try ledger.clearLastDeepMarker()
+        logger?.info("[Dreaming] rollback: cleared last-deep marker runID=\(marker.runID)")
+    }
+
+    /// Instance wrapper used by `runSweep(rollback: true)`.
+    func rollbackLastPromotionRun(memoryDirectory: URL) throws {
+        try Self.rollbackLastPromotionRun(memoryDirectory: memoryDirectory, logger: logger)
     }
 
     private static func recentDailyFilenames(

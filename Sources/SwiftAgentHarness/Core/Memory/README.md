@@ -11,10 +11,12 @@ Normative spec: harness-template `core/memory/memory.md` and `core/memory/README
 | `memory/YYYY-MM-DD.md` | **Staging** — capture-cheap daily notes (no taxonomy frontmatter); light phase stages from these |
 | Typed topic `*.md` | **Curated** — four-type frontmatter; always-on recall via manifest |
 | `MEMORY.md` | **Index only** — one-line links to curated topics; deep promotion target |
-| `memory/.dreams/` | Machine state (recall store, last-deep marker) |
+| `memory/.dreams/` | Machine state (recall store, promotions ledger, last-deep marker) |
 | `DREAMS.md` | Optional human diary (not required for C3) |
 
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
+
+Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/promotions.jsonl`. `memory rem-backfill --rollback` (alias `--rollback-short-term`) reverses the last run’s created topics and `MEMORY.md` lines without touching dailies or recall traces.
 
 ## Boundary
 
@@ -42,6 +44,7 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `AgentMemoryPathResolver.swift` | Secure memory directory resolution |
 | `AgentMemoryStore.swift` | `MEMORY.md` + topic CRUD + daily staging append/read |
 | `DreamRecallStore.swift` | Append-only recall traces under `memory/.dreams/recalls.jsonl` |
+| `DreamPromotionLedger.swift` | Tagged promotion JSONL + last-deep marker (`runID`, `sourceDailies`) |
 | `DreamingConsolidationScheduler.swift` | Light / REM / deep consolidation over dailies + recall boosts |
 | `DreamingControlStore.swift` | On/off gate for dreaming (`/dreaming`); default on |
 | `MemoryDreamingBridge.swift` | Enumerates project memory dirs and runs due sweeps |

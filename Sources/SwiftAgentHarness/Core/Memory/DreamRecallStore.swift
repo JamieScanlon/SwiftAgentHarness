@@ -156,14 +156,7 @@ struct DreamRecallStore: Sendable {
     }
 
     func previouslyPromotedFilenames() -> Set<String> {
-        guard FileManager.default.fileExists(atPath: lastDeepURL.path),
-              let data = try? Data(contentsOf: lastDeepURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let promoted = json["promoted"] as? [String]
-        else {
-            return []
-        }
-        return Set(promoted)
+        DreamPromotionLedger(memoryDirectory: memoryDirectory).previouslyPromotedSourceFilenames()
     }
 
     private func append(_ entries: [DreamRecallEntry]) throws {
