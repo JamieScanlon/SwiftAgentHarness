@@ -45,6 +45,8 @@ Pre-compaction memory flush uses the existing `memory_injection_snapshot` checkp
 
 On the orchestrator path, memory injection + pre-flush rows persist only when **`assemble`** produced transform output (`result.transformOutput != nil` in **`ContextAssemblyPipeline`**).
 
+Plugin-visible compaction hooks (`before_compaction` / `after_compaction`) are not emitted by CE today; defer to the extensibility assessment (see harness-template `core/memory/memory-aware-compaction.md` § Observability (deferred)).
+
 ## Pluggability seams
 
 - **Context engine slot:** production composition resolves `ServerConfig.contextEngineSlotID` and injects either:

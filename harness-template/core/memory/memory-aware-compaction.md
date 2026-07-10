@@ -112,10 +112,19 @@ Soft-band dedupe (`softPreCompactionFlushCompleted`) still short-circuits repeat
 
 Provider `onPreCompress` extraction uses the same novel middle gate as flush (after flush attempt, before summarizer).
 
+## Observability (deferred)
+
+Cycle visibility today is limited to structured debug logs (`[PreCompactionMemoryFlush]`, `[ContextEngine]` compaction diagnostics) and persisted checkpoint events (`context_compaction_checkpoint`, pre-flush `memory_injection_snapshot`).
+
+**Not wired:** plugin SDK `before_compaction` / `after_compaction` and operator `session:compact:before` / `session:compact:after` (see [extensibility assessment](../../cross-cutting/extensibility/README.md) hook catalogs and [observability](../../cross-cutting/observability/README.md) span attachment).
+
+When implemented, hooks should fire around the **full hard cycle** (optional flush → provider extraction → summarizer → checkpoint) with **sanitized payloads** (conversation id, phase, middle message count, flush/skipped reason, checkpoint kind — not raw middle transcript unless gated by `hooks.allowConversationAccess`). Defer hook-bus implementation to the extensibility assessment (hook taxonomy, decision vs observation typing, priority semantics) and observability exporter attachment.
+
 ## Explicitly deferred
 
 - **Transcript-byte fallback** as an alternate flush/compaction trigger (token decision remains authoritative for M1).
 - **Cross-session / checkpoint-persisted flush dedupe** (M5 tracker is in-memory per memory session).
+- **Plugin-visible compaction hooks** (`before_compaction` / `after_compaction` and operator `session:compact:*`) — pending extensibility assessment; M1–M5 ship without them.
 
 ## Related
 

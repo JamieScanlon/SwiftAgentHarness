@@ -173,6 +173,8 @@ Before the summarizer runs, run a **silent turn** that reminds the agent to dump
 
 Soft-threshold headroom (`softThresholdTokens`, default 8k) can flush **before** the hard proactive compaction trigger so the flush sub-agent is not competing with a critically full context. Soft band: flush-only; hard band: flush then summarize. See [memory-aware-compaction.md](../memory/memory-aware-compaction.md).
 
+Compaction and flush observability is checkpoint- and log-based today; plugin hooks are spec'd but not emitted — see [memory-aware-compaction.md § Observability (deferred)](../memory/memory-aware-compaction.md#observability-deferred) and the [extensibility assessment](../../cross-cutting/extensibility/README.md).
+
 ### Identifier preservation
 
 Compaction silently mangles opaque identifiers (PR numbers, ticket IDs, file hashes, commit SHAs, error codes) into plausible-looking but wrong text more often than is widely acknowledged. Set an explicit policy:
