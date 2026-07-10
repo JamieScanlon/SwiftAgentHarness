@@ -65,6 +65,12 @@ enum MemorySubAgentSpawnWiring {
                 guard let ranked else { return [] }
                 return await ranked(ref)
             },
+            resolveFlushPlan: { manifestLines, middleTranscript in
+                await memoryService.resolveFlushPlan(
+                    manifestLines: manifestLines,
+                    middleTranscript: middleTranscript
+                )
+            },
             config: config,
             logger: deps.logger
         )

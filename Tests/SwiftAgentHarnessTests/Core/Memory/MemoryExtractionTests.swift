@@ -565,6 +565,10 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { manifest, transcript in
+                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            },
             config: .default,
             logger: nil
         )
@@ -610,6 +614,10 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { manifest, transcript in
+                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            },
             config: .default,
             logger: nil
         )
@@ -652,6 +660,10 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { manifest, transcript in
+                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            },
             config: .default,
             logger: nil
         )

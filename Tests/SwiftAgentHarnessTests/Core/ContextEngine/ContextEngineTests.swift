@@ -673,10 +673,6 @@ struct ContextEngineTests {
             .appendingPathComponent("ce-precompress-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let memoryService = DefaultMemoryService(userConfigDir: root.appendingPathComponent("user", isDirectory: true))
-        try await memoryService.registerExternalMemoryProvider(
-            id: "test-external",
-            provider: StubPreCompressMemoryProvider(note: "Durable fact from external provider.")
-        )
         let stubRunner = StubPreCompactionFlushRunner(
             result: PreCompactionMemoryFlushResult(
                 succeeded: true,
@@ -704,6 +700,12 @@ struct ContextEngineTests {
         conv.harnessPersistenceCwd = root.path
         let ctx = try memoryService.makeSessionContext(conversationID: conv.id, cwd: root.path)
         _ = try await memoryService.bootstrapSession(context: ctx)
+        await memoryService.registerActiveMemoryCapability(
+            MemoryCapability(
+                pluginID: "test-precompress",
+                runtime: StubPreCompressMemoryRuntime(note: "Durable fact from external provider.")
+            )
+        )
         let longBody = String(repeating: "token ", count: 8000)
         var messages: [Message] = []
         for index in 0..<12 {
@@ -1919,6 +1921,113 @@ private actor ProviderPreCompressNoteCapture {
     func set(_ notes: String?) {
         value = notes
     }
+}
+
+private struct StubPreCompressMemoryRuntime: MemoryRuntime {
+    let note: String
+
+    func initialize(sessionID: UUID, context: MemorySessionContext) async throws {
+        _ = sessionID
+        _ = context
+    }
+
+    func endSession(conversationID: UUID) async { _ = conversationID }
+
+    func shutdown() async {}
+
+    func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
+        _ = request
+        return MemoryRecallResult(selectedFilenames: [], recalledBodiesText: "")
+    }
+
+    func onTurnEnded(request: MemoryTurnEndedRequest) async { _ = request }
+
+    func onPreCompress(messages: [String]) async -> String {
+        _ = messages
+        return note
+    }
+
+    func refreshSnapshotAfterFlush(conversationID: UUID) async throws { _ = conversationID }
+
+    func systemPromptBlocks(conversationID: UUID) async -> MemorySystemPromptBlocks? {
+        _ = conversationID
+        return nil
+    }
+
+    func currentSnapshotGeneration(conversationID: UUID) async -> Int {
+        _ = conversationID
+        return 1
+    }
+
+    func invalidateSnapshot(conversationID: UUID) async { _ = conversationID }
+
+    func manifestEntries(conversationID: UUID) async -> [MemoryManifestEntry] {
+        _ = conversationID
+        return []
+    }
+
+    func hybridSearch() async -> HybridMemorySearch { HybridMemorySearch() }
+
+    func updateSnapshot(
+        conversationID: UUID,
+        blocks: MemorySystemPromptBlocks,
+        manifest: [MemoryManifestEntry]
+    ) async {
+        _ = conversationID
+        _ = blocks
+        _ = manifest
+    }
+
+    func runDreamingSweep(memoryDirectory: URL, rollback: Bool) async throws {
+        _ = memoryDirectory
+        _ = rollback
+    }
+
+    func bindSpawnPort(_ port: MemorySubAgentSpawnPort) async { _ = port }
+
+    func drainPendingWork(timeoutMs: Int) async { _ = timeoutMs }
+
+    func store(for conversationID: UUID) async -> AgentMemoryStore? {
+        _ = conversationID
+        return nil
+    }
+
+    func sessionContext(for conversationID: UUID) async -> MemorySessionContext? {
+        _ = conversationID
+        return nil
+    }
+
+    func activeRecallSummary(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
+    ) async -> ActiveMemoryRecallOutcome {
+        _ = session
+        _ = messages
+        _ = anchorUserMessageID
+        _ = sessionEnabled
+        return .skipped(reason: "stub", queryMode: .recent)
+    }
+
+    func warmStandingRecall(session: MemorySessionContext, sessionEnabled: Bool) async {
+        _ = session
+        _ = sessionEnabled
+    }
+
+    func prefetchSituationalRecall(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
+    ) async {
+        _ = session
+        _ = messages
+        _ = anchorUserMessageID
+        _ = sessionEnabled
+    }
+
+    func invalidateStandingRecall(conversationID: UUID) async { _ = conversationID }
 }
 
 private struct StubPreCompressMemoryProvider: MemoryProviding {

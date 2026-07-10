@@ -95,7 +95,7 @@ struct PreCompressProviderNotesTests {
         #expect(MemoryProviderPreCompressNotes.summarizerHandoffBlock(notes: "  ").isEmpty)
     }
 
-    @Test("DefaultMemoryService collectProviderPreCompressNotes uses active providers")
+    @Test("DefaultMemoryService collectProviderPreCompressNotes uses active backend only")
     func serviceCollectsFromRegisteredExternalProvider() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("precompress-notes-\(UUID().uuidString)", isDirectory: true)

@@ -6,7 +6,9 @@ Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply
 
 Pre-compaction flush is default-on on both Memory and Context Engine gates; soft-threshold flush-only runs with headroom before hard compaction (see `memory-aware-compaction.md`). Flush promotes to **curated typed topic files only** (append-only for existing topics and `MEMORY.md` index lines); daily staging is out of scope for flush (extraction/dreaming still use dailies). Optional `memory.preCompactionFlushSystemPromptPath` customizes flush task guidance; three harness-enforced safety hints (target / append-only / read-only scope) are always re-appended, with `PreCompactionFlushWriteGuard` at the tool layer.
 
-On hard compaction, after optional flush and before the summarizer, active memory providers run `onPreCompress(messages:)`; aggregated return strings are included in the compaction summarizer handoff prompt (see `memory-aware-compaction.md`). Flush dedupe (per-message ID coverage + middle fingerprint) prevents re-flushing overlapping middle segments within a compaction cycle. Plugin-visible compaction hooks (`before_compaction` / `after_compaction`) are deferred to the extensibility assessment (see `memory-aware-compaction.md` § Observability (deferred)).
+On hard compaction, after optional flush and before the summarizer, the **active** memory backend runs `onPreCompress(messages:)`; the return string is included in the compaction summarizer handoff prompt (see `memory-aware-compaction.md`). Flush dedupe (per-message ID coverage + middle fingerprint) prevents re-flushing overlapping middle segments within a compaction cycle. Plugin-visible compaction hooks (`before_compaction` / `after_compaction`) are deferred to the extensibility assessment (see `memory-aware-compaction.md` § Observability (deferred)).
+
+**Exclusive plugin slot (S1).** One active `MemoryCapability` owns recall, promotion, flush policy, and runtime hooks. `DefaultMemoryService` is an orchestrator: project-instruction loading, flush trigger/dedupe/write-guard, and write tracking stay in the service; everything else delegates to the active capability's slots. Default registration is `builtin-file` (`FileStoreMemoryBackend`). `registerActiveMemoryCapability(_:)` or `registerExternalMemoryProvider(id:provider:)` **replaces** the active backend (legacy `MemoryProviding` adapter is test/transition-only — hook-only, no recall ownership). Pre-compaction flush **policy** lives in `MemoryFlushPlanResolving`; flush **execution** (spawn, timeout, write guard) stays in the service.
 
 ## Layout (capture vs curate)
 
@@ -80,8 +82,10 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |
-| `MemoryProviderRegistry.swift` | Built-in + single external provider slot |
-| `MemoryProviderPreCompressNotes.swift` | Aggregates provider `onPreCompress` notes for compaction summarizer handoff |
+| `MemoryCapability.swift` | Exclusive capability record + slot protocols (`MemoryRuntime`, `MemoryPromptBuilding`, `MemoryFlushPlanResolving`, `MemoryPublicArtifactsProviding`) |
+| `MemoryCapabilityRegistry.swift` | Single active capability; `register` rejects duplicate plugin ID; `replaceActive` for hot-swap |
+| `FileStoreMemoryBackend.swift` | Default `builtin-file` backend (recall, snapshot, extraction, active memory, search, dreaming) |
+| `MemoryProviderPreCompressNotes.swift` | Formats active-backend `onPreCompress` notes for compaction summarizer handoff |
 | `PreCompactionFlushDedupeState.swift` | Per-cycle flush dedupe (message IDs + middle fingerprint) |
 
 Operator surface: `/dreaming status|explain|on|off` (CLI: `memory dreaming status|explain`). Opt-in via PromptConfig `memory.dreamingEnabled`. Triggers installs a permanent `dream` cron (`0 3 * * *` by default) only when dreaming is enabled in config.

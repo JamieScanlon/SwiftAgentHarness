@@ -170,7 +170,7 @@ Whichever you choose, log the threshold breach and the savings of each compactio
 
 ### Pre-compaction memory flush
 
-Before the summarizer runs, run a **silent turn** that reminds the agent to dump important notes to its durable memory file(s) first. Durable state gets promoted before any text is summarized away.
+Before the summarizer runs, run a **silent turn** that reminds the agent to dump important notes to its durable memory file(s) first. Durable state gets promoted before any text is summarized away. Full handshake — soft-threshold + transcript-byte triggers, once-per-cycle and context-hash dedupe guards, enforced safety hints, plugin-owned flush plans, post-compaction restore steps — in [memory/memory-aware-compaction.md](../memory/memory-aware-compaction.md).
 
 Soft-threshold headroom (`softThresholdTokens`, default 8k) can flush **before** the hard proactive compaction trigger so the flush sub-agent is not competing with a critically full context. Soft band: flush-only; hard band: flush then summarize. See [memory-aware-compaction.md](../memory/memory-aware-compaction.md).
 

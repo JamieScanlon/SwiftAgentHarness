@@ -18,6 +18,7 @@ enum MemorySubAgentSpawnAdapter {
         manifestLines: @escaping @Sendable (UUID) async -> [String],
         parentModel: @escaping @Sendable (UUID) async -> Model?,
         rankedRegistryEntries: @escaping @Sendable (ModelReference) async -> [ModelRegistryEntry],
+        resolveFlushPlan: @escaping @Sendable ([String], String) async -> MemoryFlushPlan?,
         config: MemoryConfiguration,
         logger: Logger?
     ) -> MemorySubAgentSpawnPort {
@@ -115,26 +116,18 @@ enum MemorySubAgentSpawnAdapter {
             spawnBlockingPreCompactionFlush: { parentConversationID, middleMessages, timeoutMs in
                 guard config.preCompactionFlushEnabled else { return false }
                 let manifest = await manifestLines(parentConversationID)
-                let customBody = PreCompactionFlushCustomPromptLoader.load(
-                    path: config.preCompactionFlushSystemPromptPath,
-                    logger: logger
-                )
-                let systemPrompt = MemoryPreCompactionFlushPrompts.systemPrompt(
-                    manifestLines: manifest,
-                    customBody: customBody,
-                    teamMemoryEnabled: config.teamMemoryEnabled
-                )
                 let transcript = MemoryExtractionPrompts.recentTranscriptSlice(
                     messages: middleMessages,
                     limit: middleMessages.count
                 )
                 guard !transcript.isEmpty else { return false }
+                guard let plan = await resolveFlushPlan(manifest, transcript) else { return false }
                 let spawnRequest = SubAgentSpawnRequest(
                     context: .isolated,
                     taskDescription: "memory-pre-compaction-flush",
-                    prompt: MemoryPreCompactionFlushPrompts.userPrompt(middleTranscript: transcript),
+                    prompt: plan.userPrompt,
                     runInBackground: false,
-                    userSystemPrompt: systemPrompt,
+                    userSystemPrompt: plan.systemPrompt,
                     topic: "memory-pre-compaction-flush",
                     metadata: .object([
                         "preCompactionFlushMaxIterations": .double(Double(config.preCompactionFlushMaxIterations)),
@@ -148,9 +141,8 @@ enum MemorySubAgentSpawnAdapter {
                     logger?.debug("[PreCompactionMemoryFlush] spawn failed: \(error)")
                     return false
                 }
-                let prompt = MemoryPreCompactionFlushPrompts.userPrompt(middleTranscript: transcript)
                 let completed = await runWithTimeout(timeoutMs: timeoutMs) {
-                    try await sendMessageAndRun(childID, prompt)
+                    try await sendMessageAndRun(childID, plan.userPrompt)
                 }
                 if completed == false {
                     logger?.debug("[PreCompactionMemoryFlush] timed out; cancelling child run")
