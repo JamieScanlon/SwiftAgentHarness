@@ -40,8 +40,11 @@ struct SubAgentPoolActiveMemoryRunner: ActiveMemoryPreReplyRunning {
 }
 
 enum ActiveMemoryPreReplyPrompts {
-    static func systemPrompt(maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars) -> String {
-        situationalSystemPrompt(maxSummaryChars: maxSummaryChars)
+    static func systemPrompt(
+        maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars,
+        promptStyle: ActiveMemoryPromptStyle = MemoryConfiguration.default.activeMemoryPromptStyle
+    ) -> String {
+        situationalSystemPrompt(maxSummaryChars: maxSummaryChars, promptStyle: promptStyle)
     }
 
     static func userPrompt(
@@ -54,7 +57,8 @@ enum ActiveMemoryPreReplyPrompts {
     static func prompts(
         for lane: RecallLane,
         query: String?,
-        maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars
+        maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars,
+        promptStyle: ActiveMemoryPromptStyle = MemoryConfiguration.default.activeMemoryPromptStyle
     ) -> (system: String, user: String) {
         switch lane {
         case .standing:
@@ -62,7 +66,7 @@ enum ActiveMemoryPreReplyPrompts {
         case .situational:
             let sanitized = MemoryContextFencer.stripInjectedRecallArtifacts(query ?? "")
             return (
-                situationalSystemPrompt(maxSummaryChars: maxSummaryChars),
+                situationalSystemPrompt(maxSummaryChars: maxSummaryChars, promptStyle: promptStyle),
                 situationalUserPrompt(query: sanitized, maxSummaryChars: maxSummaryChars)
             )
         }
@@ -91,6 +95,23 @@ enum ActiveMemoryPreReplyPrompts {
         """
     }
 
+    private static func styleGuidance(_ style: ActiveMemoryPromptStyle) -> String {
+        switch style {
+        case .balanced:
+            return "Style (balanced): Prefer a useful compact note when durable memory clearly helps; otherwise NONE. Use prior turns only to resolve references in the latest message."
+        case .strict:
+            return "Style (strict): Prefer NONE unless the match is obvious. Minimize bleed from nearby conversation context."
+        case .contextual:
+            return "Style (contextual): Lean on conversation continuity; use the recent tail to resolve pronouns and follow-ups when selecting durable memory."
+        case .recallHeavy:
+            return "Style (recall-heavy): Be willing to surface memory on softer but still plausible matches; still return NONE when nothing helps."
+        case .precisionHeavy:
+            return "Style (precision-heavy): Aggressively prefer NONE unless the durable-memory match is clear and specific."
+        case .preferenceOnly:
+            return "Style (preference-only): Focus on favorites, habits, routines, taste, and recurring personal/project preferences from durable memory."
+        }
+    }
+
     private static func standingSystemPrompt(maxSummaryChars: Int) -> String {
         """
         You are a memory recall assistant. Read durable memory files of type 'user' and 'feedback' only.
@@ -105,11 +126,15 @@ enum ActiveMemoryPreReplyPrompts {
         "Recall the user's profile, stable preferences, and feedback patterns from memory. Reply with a memory note or NONE."
     }
 
-    private static func situationalSystemPrompt(maxSummaryChars: Int) -> String {
+    private static func situationalSystemPrompt(
+        maxSummaryChars: Int,
+        promptStyle: ActiveMemoryPromptStyle
+    ) -> String {
         """
         You are a memory recall assistant. Search and read durable memory files of type 'project' and 'reference' relevant to the user's query.
         Use memory_search and memory_get only. Do not write memory or call other tools.
         Prefer silence when nothing in memory materially helps this query.
+        \(styleGuidance(promptStyle))
 
         \(sharedOutputContract(maxSummaryChars: maxSummaryChars))
         """
@@ -117,7 +142,7 @@ enum ActiveMemoryPreReplyPrompts {
 
     private static func situationalUserPrompt(query: String, maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars) -> String {
         """
-        Recall project and reference memory relevant to this user message (memory note under \(max(1, maxSummaryChars)) characters or NONE):
+        Recall project and reference memory relevant to this conversation excerpt (memory note under \(max(1, maxSummaryChars)) characters or NONE):
         \(query)
         """
     }

@@ -144,8 +144,8 @@ struct TurnLoopGapFixTests {
         let attempts = StreamAttemptCounter()
         let capture = TurnLoopStreamMessageCapture()
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { _, _ in MemoryContextFencer.fence("grafana dashboard summary") },
-            prefetchFn: { _, _ in }
+            recallFn: { _, _, _ in MemoryContextFencer.fence("grafana dashboard summary") },
+            prefetchFn: { _, _, _ in }
         )
         let ports = makeCompactionRetryCapturePorts(
             state: state,

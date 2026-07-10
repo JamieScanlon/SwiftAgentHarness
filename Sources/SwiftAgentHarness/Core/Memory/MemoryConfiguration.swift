@@ -34,6 +34,14 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var activeMemorySituationalEnabled: Bool
     var activeMemorySituationalTimeoutMs: Int
     var activeMemorySituationalTTLMs: Int
+    /// Situational lane conversation window (default `recent` for follow-up pronouns).
+    var activeMemoryQueryMode: ActiveMemoryQueryMode
+    /// Situational recall eagerness (default `balanced`).
+    var activeMemoryPromptStyle: ActiveMemoryPromptStyle
+    var activeMemoryRecentUserTurns: Int
+    var activeMemoryRecentAssistantTurns: Int
+    var activeMemoryRecentUserChars: Int
+    var activeMemoryRecentAssistantChars: Int
 
     public static let `default` = MemoryConfiguration(
         enabled: true,
@@ -63,7 +71,13 @@ public struct MemoryConfiguration: Sendable, Equatable {
         activeMemoryStandingBudgetMs: 15_000,
         activeMemorySituationalEnabled: true,
         activeMemorySituationalTimeoutMs: 2_500,
-        activeMemorySituationalTTLMs: 60_000
+        activeMemorySituationalTTLMs: 60_000,
+        activeMemoryQueryMode: .recent,
+        activeMemoryPromptStyle: .balanced,
+        activeMemoryRecentUserTurns: 2,
+        activeMemoryRecentAssistantTurns: 1,
+        activeMemoryRecentUserChars: 220,
+        activeMemoryRecentAssistantChars: 180
     )
 }
 
@@ -129,6 +143,26 @@ public enum MemoryConfigurationLoader {
             config.activeMemorySituationalTimeoutMs = max(1, v)
         } else {
             config.activeMemorySituationalTimeoutMs = config.activeMemoryTimeoutMs
+        }
+        if let raw = memory["activeMemoryQueryMode"] as? String,
+           let mode = ActiveMemoryQueryMode(rawValue: raw) {
+            config.activeMemoryQueryMode = mode
+        }
+        if let raw = memory["activeMemoryPromptStyle"] as? String,
+           let style = ActiveMemoryPromptStyle(rawValue: raw) {
+            config.activeMemoryPromptStyle = style
+        }
+        if let v = memory["activeMemoryRecentUserTurns"] as? Int {
+            config.activeMemoryRecentUserTurns = min(4, max(0, v))
+        }
+        if let v = memory["activeMemoryRecentAssistantTurns"] as? Int {
+            config.activeMemoryRecentAssistantTurns = min(3, max(0, v))
+        }
+        if let v = memory["activeMemoryRecentUserChars"] as? Int {
+            config.activeMemoryRecentUserChars = min(1_000, max(40, v))
+        }
+        if let v = memory["activeMemoryRecentAssistantChars"] as? Int {
+            config.activeMemoryRecentAssistantChars = min(1_000, max(40, v))
         }
         return config
     }

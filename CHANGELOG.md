@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Memory — active-memory query modes and prompt styles
+
+- **Config:** `activeMemoryQueryMode` (default `recent`), `activeMemoryPromptStyle` (default `balanced`), plus recent-turn/char caps (`activeMemoryRecentUserTurns` 2 / `AssistantTurns` 1 / `UserChars` 220 / `AssistantChars` 180) with loader clamps.
+- **Situational payload:** `ActiveMemorySituationalQueryBuilder` supplies latest user + capped prior turns (or `message` / bounded `full`) so follow-up pronouns resolve; prefetch and blocking share the same string.
+- **Affected prompts:** `ActiveMemoryPreReplyPrompts` situational system contract appends style guidance (`balanced` / `strict` / `contextual` / `recall-heavy` / `precision-heavy` / `preference-only`) without weakening NONE, char budget, or ignore-injected rules.
+
 ### Memory — active-memory model via Model Pool
 
 - **Config:** `activeMemoryModelRef` optional pin (slug/UUID); default is no pin. Legacy `activeMemoryModel` string maps to the pin. `activeMemoryAllowCrossProviderTrust` defaults false.

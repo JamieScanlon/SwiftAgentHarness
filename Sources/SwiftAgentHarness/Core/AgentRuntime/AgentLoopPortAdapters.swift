@@ -324,15 +324,23 @@ struct SessionRuntimeConversationPort: RuntimeConversationPort {
 }
 
 struct SessionRuntimeMemoryPort: RuntimeMemoryPort {
-    let recallFn: @Sendable (UUID, String) async -> String?
-    let prefetchFn: @Sendable (UUID, String) async -> Void
+    let recallFn: @Sendable (UUID, [Message], UUID?) async -> String?
+    let prefetchFn: @Sendable (UUID, [Message], UUID?) async -> Void
 
-    func blockingRecallSummary(conversationID: UUID, userQuery: String) async -> String? {
-        await recallFn(conversationID, userQuery)
+    func blockingRecallSummary(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?
+    ) async -> String? {
+        await recallFn(conversationID, messages, anchorUserMessageID)
     }
 
-    func prefetchRecall(conversationID: UUID, userQuery: String) async {
-        await prefetchFn(conversationID, userQuery)
+    func prefetchRecall(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?
+    ) async {
+        await prefetchFn(conversationID, messages, anchorUserMessageID)
     }
 }
 

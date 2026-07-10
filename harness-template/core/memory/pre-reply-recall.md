@@ -21,8 +21,44 @@ The `chatType == direct` gate remains, but coding REPL/API sessions are construc
 
 Lanes (implementation):
 
-- **Standing** — `user` / `feedback` types (stable profile).
-- **Situational** — `project` / `reference` types relevant to the current user message.
+- **Standing** — `user` / `feedback` types (stable profile). Query-independent; no conversation transcript.
+- **Situational** — `project` / `reference` types relevant to the current conversation excerpt (see query modes below).
+
+## Situational query modes
+
+Follow-ups like “what about the second one?” need an antecedent. Situational recall therefore builds a **query payload** from the parent transcript (not a forked child history):
+
+| `activeMemoryQueryMode` | Payload |
+|-------------------------|---------|
+| `message` | Latest user message only (legacy behavior) |
+| `recent` (**default**) | Latest user message + up to N prior user / M prior assistant turns (excluding the latest), each truncated to char caps |
+| `full` | Same builder with a bounded window (last 20 user + 20 assistant turns, still per-turn char-capped). May need a higher `activeMemorySituationalTimeoutMs`. |
+
+Defaults (OpenClaw-aligned):
+
+| Knob | Default | Clamp |
+|------|---------|-------|
+| `activeMemoryQueryMode` | `recent` | `message` \| `recent` \| `full` |
+| `activeMemoryPromptStyle` | `balanced` | see styles below |
+| `activeMemoryRecentUserTurns` | `2` | 0–4 |
+| `activeMemoryRecentAssistantTurns` | `1` | 0–3 |
+| `activeMemoryRecentUserChars` | `220` | 40–1000 |
+| `activeMemoryRecentAssistantChars` | `180` | 40–1000 |
+
+Harness-injected and empty messages are skipped. Each fragment is stripped of `<memory-context>` / `[Active Memory Recall]` before assembly. Prefetch and blocking recall use the **same** builder output so cache fingerprints match.
+
+## Prompt styles
+
+`activeMemoryPromptStyle` adjusts situational system-contract eagerness only (NONE / char budget / ignore-injected rules stay in force):
+
+| Style | Intent |
+|-------|--------|
+| `balanced` (default) | Useful note when memory clearly helps; use prior turns to resolve references |
+| `strict` | Prefer NONE unless the match is obvious; minimal bleed |
+| `contextual` | Lean on conversation continuity for pronouns / follow-ups |
+| `recall-heavy` | Softer but still plausible matches |
+| `precision-heavy` | Aggressively prefer NONE unless match is clear and specific |
+| `preference-only` | Favorites, habits, routines, taste, recurring preferences |
 
 ## Feedback-loop guard
 

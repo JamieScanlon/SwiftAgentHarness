@@ -31,8 +31,8 @@ struct TurnLoopActiveMemoryTests {
         let capture = TurnLoopStreamMessageCapture()
         let basePorts = TurnLoopTestPorts.make(state: state)
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { _, _ in MemoryContextFencer.fence("grafana dashboard summary") },
-            prefetchFn: { _, _ in }
+            recallFn: { _, _, _ in MemoryContextFencer.fence("grafana dashboard summary") },
+            prefetchFn: { _, _, _ in }
         )
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: { conv, _ in conv.model.id },

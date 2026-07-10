@@ -38,7 +38,8 @@ enum MemorySubAgentSpawnAdapter {
                 let (systemPrompt, userPromptText) = ActiveMemoryPreReplyPrompts.prompts(
                     for: lane,
                     query: sanitizedQuery,
-                    maxSummaryChars: maxSummaryChars
+                    maxSummaryChars: maxSummaryChars,
+                    promptStyle: config.activeMemoryPromptStyle
                 )
                 let spawnRequest = SubAgentSpawnRequest(
                     context: .isolated,

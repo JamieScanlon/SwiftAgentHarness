@@ -35,7 +35,7 @@ Promotions are tagged (`origin: dreaming-deep`) and ledgered under `.dreams/prom
 | Consumer | Uses Memory for |
 |----------|-----------------|
 | **Context Engine** | Frozen snapshot system prompt blocks at `assemble` |
-| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply (`NONE` → no injection; spawn `toolsAllow` + `memory-active-recall` mode profile gate tools at the gateway; note budget default 220 chars; ignore/strip prior `<memory-context>` to prevent feedback loops) |
+| **Agent Runtime** | `onTurnEnded` → background extraction; active-memory pre-reply (`NONE` → no injection; spawn `toolsAllow` + `memory-active-recall` mode profile gate tools at the gateway; note budget default 220 chars; situational `queryMode` default `recent` + `promptStyle` `balanced` with capped prior turns for follow-up pronouns; ignore/strip prior `<memory-context>` to prevent feedback loops) |
 | **Tool System** | Workspace file tools + memory write gates; `memory_search` / `memory_get` |
 | **Sub-Agent Pool** | Forked extraction subagent |
 | **Model Pool** | Cheap recall selector + active-memory model |
@@ -65,6 +65,8 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `MemoryDreamingCronInstaller.swift` | Permanent system cron `dream` consuming `dreamingCron` |
 | `MemoryDreamingDeliver.swift` | Cron deliver short-circuit (no LLM turn for dream fires) |
 | `ActiveMemoryRecallOutput.swift` | NONE-contract parse (`noteOrNil`) for pre-reply lanes |
+| `ActiveMemoryQueryMode.swift` | Situational `queryMode` / `promptStyle` enums |
+| `ActiveMemorySituationalQueryBuilder.swift` | Builds capped recent/full situational query payloads from transcript |
 | `MemorySessionSnapshot.swift` | Frozen per-session snapshot |
 | `MemoryRecallSelector.swift` | Turn recall (LLM + heuristic fallback) |
 | `BackgroundMemoryExtractor.swift` | Post-turn extraction subagent |

@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import CryptoKit
+import SwiftAgentKit
 
 public actor DefaultMemoryService: MemoryServicing {
     private let config: MemoryConfiguration
@@ -180,16 +181,36 @@ public actor DefaultMemoryService: MemoryServicing {
         ))
     }
 
-    func activeRecallSummary(session: MemorySessionContext, userQuery: String) async -> String? {
-        await activeMemory.recallSummaryIfEnabled(session: session, userQuery: userQuery)
+    func activeRecallSummary(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?
+    ) async -> String? {
+        guard let query = ActiveMemorySituationalQueryBuilder.build(
+            messages: messages,
+            anchorUserMessageID: anchorUserMessageID,
+            config: config
+        ) else {
+            return nil
+        }
+        return await activeMemory.recallSummaryIfEnabled(session: session, userQuery: query)
     }
 
     func warmStandingRecall(session: MemorySessionContext) async {
         await activeMemory.warmStanding(session: session)
     }
 
-    func prefetchSituationalRecall(session: MemorySessionContext, userQuery: String) async {
-        await activeMemory.prefetchSituational(session: session, userQuery: userQuery)
+    func prefetchSituationalRecall(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?
+    ) async {
+        guard let query = ActiveMemorySituationalQueryBuilder.build(
+            messages: messages,
+            anchorUserMessageID: anchorUserMessageID,
+            config: config
+        ) else { return }
+        await activeMemory.prefetchSituational(session: session, userQuery: query)
     }
 
     func appendSubdirectoryHintsIfNeeded(

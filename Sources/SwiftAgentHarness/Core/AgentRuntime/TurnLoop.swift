@@ -76,9 +76,11 @@ struct TurnLoop {
             // Fire situational prefetch before assembly so recall overlaps context assembly.
             if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                if let query = resolveUserQuery(from: conv.messages, anchorUserMessageID: anchorUserMessageID) {
-                    await memoryPort.prefetchRecall(conversationID: conversationID, userQuery: query)
-                }
+                await memoryPort.prefetchRecall(
+                    conversationID: conversationID,
+                    messages: conv.messages,
+                    anchorUserMessageID: anchorUserMessageID
+                )
             }
 
             var messages: [Message]
@@ -109,9 +111,12 @@ struct TurnLoop {
             }
             if isFirstModelCall, let memoryPort = ports.memory,
                ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                let userQuery = resolveUserQuery(from: messages, anchorUserMessageID: anchorUserMessageID)
-                if let query = userQuery,
-                   let recall = await memoryPort.blockingRecallSummary(conversationID: conversationID, userQuery: query) {
+                // Use persisted conversation messages (same as prefetch) so cache fingerprints match.
+                if let recall = await memoryPort.blockingRecallSummary(
+                    conversationID: conversationID,
+                    messages: conv.messages,
+                    anchorUserMessageID: anchorUserMessageID
+                ) {
                     let recallMessage = HarnessInjectedMessageMetadata.systemMessage(
                         id: UUID(),
                         content: """
@@ -930,14 +935,4 @@ struct TurnLoop {
         return [message]
     }
 
-    private func resolveUserQuery(from messages: [Message], anchorUserMessageID: UUID?) -> String? {
-        if let anchorUserMessageID,
-           let anchored = messages.first(where: { $0.id == anchorUserMessageID && $0.role == .user })?.content,
-           !anchored.isEmpty {
-            return anchored
-        }
-        guard let content = messages.last(where: { $0.role == .user })?.content,
-              !content.isEmpty else { return nil }
-        return content
-    }
 }

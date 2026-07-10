@@ -97,8 +97,8 @@ struct TurnLoopActiveMemoryNoneTests {
         let capture = TurnLoopNoneStreamCapture()
         let basePorts = TurnLoopTestPorts.make(state: state)
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { _, _ in nil },
-            prefetchFn: { _, _ in }
+            recallFn: { _, _, _ in nil },
+            prefetchFn: { _, _, _ in }
         )
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: { conv, _ in conv.model.id },
