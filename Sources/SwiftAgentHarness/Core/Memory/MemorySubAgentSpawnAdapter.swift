@@ -21,7 +21,11 @@ enum MemorySubAgentSpawnAdapter {
         MemorySubAgentSpawnPort(
             spawnBlockingRecall: { parentConversationID, userQuery, lane, timeoutMs, maxSummaryChars in
                 let model = activeMemoryModel(from: config)
-                let (systemPrompt, userPromptText) = ActiveMemoryPreReplyPrompts.prompts(for: lane, query: userQuery)
+                let (systemPrompt, userPromptText) = ActiveMemoryPreReplyPrompts.prompts(
+                    for: lane,
+                    query: userQuery,
+                    maxSummaryChars: maxSummaryChars
+                )
                 let spawnRequest = SubAgentSpawnRequest(
                     context: .isolated,
                     taskDescription: "memory-active-recall",
@@ -53,7 +57,7 @@ enum MemorySubAgentSpawnAdapter {
                 guard let note = ActiveMemoryRecallOutput.noteOrNil(raw) else {
                     return nil
                 }
-                let capped = String(note.prefix(maxSummaryChars))
+                let capped = ActiveMemoryRecallOutput.truncatedNote(note, maxChars: maxSummaryChars)
                 return MemoryContextFencer.fence(capped)
             },
             spawnBackgroundExtraction: { request in

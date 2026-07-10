@@ -10,7 +10,7 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 - **Model:** a separate, typically faster/cheaper recall model (or an explicit inherit of the session model).
 - **Chat types:** default to direct messages; group/channel sessions opt in explicitly.
 - **Agents:** per-agent allowlist in multi-agent setups.
-- **Budget:** hard timeout and a `maxSummaryChars` cap on any note handed to the main reply.
+- **Budget:** hard timeout and a `maxSummaryChars` cap on any note handed to the main reply. Default **220** (compact note, not an essay); PromptConfig clamp **40–1000**. Soft limit in the recall prompt; hard truncate with a trailing `…` when clipped.
 - **Isolation:** run on its own per-conversation execution context so it does not cancel the main in-flight model call.
 
 Lanes (implementation):

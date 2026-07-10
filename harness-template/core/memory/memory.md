@@ -347,7 +347,7 @@ Add a **pre-reply blocking memory sub-agent** as an opt-in surface for conversat
 - **Separate model.** A fast cheap recall model (Cerebras gpt-oss-120b, Gemini Flash, etc.) — latency matters more than quality on this path. Allow inheriting the session model when no override is set.
 - **Bounded by chat type.** Default to direct messages only (`allowedChatTypes: ["direct"]`). Group/channel sessions opt in explicitly because they're noisier and the recall trace gets less useful per turn.
 - **Per-agent allowlist.** In multi-agent setups, opt agents in by id (`agents: ["main"]`).
-- **Bounded budget.** Hard `timeoutMs` (15s default) and a `maxSummaryChars` cap on the recall summary handed to the main reply.
+- **Bounded budget.** Hard `timeoutMs` (15s default) and a `maxSummaryChars` cap on the recall summary handed to the main reply (default **220**, clamp **40–1000** — one compact note, not an essay).
 - **Isolated execution context.** Because this sub-agent runs on a *different* model and overlaps the main run (it fires before/around the main reply, often from inside the main loop), it must execute on its own per-conversation execution context, never a shared session-level orchestrator/model-client binding — otherwise the recall sub-agent and the main run thrash each other, each cancelling the other's in-flight model call. This is the canonical trigger for the session-singleton failure; see [agent-runtime § Pooling a heavy execution context](../agent-runtime/#pooling-a-heavy-execution-context).
 
 This pattern (the active-memory approach) generalizes — the principle is "guarantee one bounded retrieval pass per turn instead of relying on the main model to think to ask."

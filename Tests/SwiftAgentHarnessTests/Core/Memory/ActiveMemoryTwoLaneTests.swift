@@ -304,6 +304,11 @@ struct MemoryConfigurationTwoLaneTests {
     func timeoutDefaultLowered() {
         #expect(MemoryConfiguration.default.activeMemoryTimeoutMs == 2_500)
     }
+
+    @Test("activeMemoryMaxSummaryChars default is compact note budget")
+    func summaryCharsDefaultCompact() {
+        #expect(MemoryConfiguration.default.activeMemoryMaxSummaryChars == 220)
+    }
 }
 
 // MARK: - Non-fatal proceed test

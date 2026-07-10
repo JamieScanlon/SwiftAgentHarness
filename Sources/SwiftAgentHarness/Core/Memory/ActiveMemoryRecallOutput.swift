@@ -21,4 +21,13 @@ enum ActiveMemoryRecallOutput: Sendable {
         }
         return s.uppercased() == "NONE"
     }
+
+    /// Hard-caps a memory note; when clipped, appends `…` inside the budget so truncation is visible.
+    static func truncatedNote(_ note: String, maxChars: Int) -> String {
+        let limit = max(1, maxChars)
+        guard note.count > limit else { return note }
+        if limit == 1 { return "…" }
+        let bodyBudget = limit - 1
+        return String(note.prefix(bodyBudget)) + "…"
+    }
 }

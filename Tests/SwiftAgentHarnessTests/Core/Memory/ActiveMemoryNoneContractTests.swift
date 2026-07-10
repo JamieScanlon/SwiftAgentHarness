@@ -31,6 +31,7 @@ struct ActiveMemoryNoneContractTests {
             #expect(prompt.contains("NONE"))
             #expect(prompt.lowercased().contains("silence") || prompt.lowercased().contains("prefer silence"))
             #expect(prompt.lowercased().contains("third-person"))
+            #expect(prompt.contains("\(MemoryConfiguration.default.activeMemoryMaxSummaryChars)"))
             #expect(!prompt.contains("say so briefly"))
             #expect(prompt.contains("Bad:"))
             #expect(prompt.contains("Good:"))

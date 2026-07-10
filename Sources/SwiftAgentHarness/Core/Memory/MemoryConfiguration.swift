@@ -38,7 +38,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         extractionThrottleTurns: 1,
         activeMemoryEnabled: true,
         activeMemoryTimeoutMs: 2_500,
-        activeMemoryMaxSummaryChars: 4_000,
+        activeMemoryMaxSummaryChars: 220,
         teamMemoryEnabled: true,
         dreamingEnabled: false,
         dreamingCron: "0 3 * * *",
@@ -81,7 +81,9 @@ public enum MemoryConfigurationLoader {
         if let v = memory["extractionThrottleTurns"] as? Int { config.extractionThrottleTurns = max(1, v) }
         if let v = memory["activeMemoryEnabled"] as? Bool { config.activeMemoryEnabled = v }
         if let v = memory["activeMemoryTimeoutMs"] as? Int { config.activeMemoryTimeoutMs = max(1, v) }
-        if let v = memory["activeMemoryMaxSummaryChars"] as? Int { config.activeMemoryMaxSummaryChars = max(256, v) }
+        if let v = memory["activeMemoryMaxSummaryChars"] as? Int {
+            config.activeMemoryMaxSummaryChars = min(1_000, max(40, v))
+        }
         if let v = memory["teamMemoryEnabled"] as? Bool { config.teamMemoryEnabled = v }
         if let v = memory["dreamingEnabled"] as? Bool { config.dreamingEnabled = v }
         if let v = memory["dreamingCron"] as? String { config.dreamingCron = v }

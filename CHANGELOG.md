@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Memory — active-memory summary cap (220)
+
+- **Config:** `activeMemoryMaxSummaryChars` default **220** (was 4000); loader clamp **40–1000** (was floor 256).
+- **Affected prompts:** `ActiveMemoryPreReplyPrompts` standing + situational contracts now require one compact note under the configured character budget.
+- **Hard truncate:** over-budget notes are clipped with a trailing `…` counted inside the budget before fencing/injection.
+
 ### Memory — active-memory spawn tool allowlist
 
 - **API:** optional `SubAgentSpawnRequest.toolsAllow` applied on isolated spawn as child `routingPrefs.explicitToolPolicy` allowlist.
