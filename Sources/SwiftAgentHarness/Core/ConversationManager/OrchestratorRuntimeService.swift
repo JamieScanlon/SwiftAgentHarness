@@ -710,7 +710,12 @@ public actor OrchestratorRuntimeService {
                 )
             )
             if let memoryDirectory {
-                providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
+                if let memoryService, let conversationID,
+                   let searchDependencies = await memoryService.memorySearchToolDependencies(conversationID: conversationID) {
+                    providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, dependencies: searchDependencies))
+                } else {
+                    providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
+                }
             }
         }
         if deps.conversationTransformConfiguration.contextCompaction.manualToolEnabled {

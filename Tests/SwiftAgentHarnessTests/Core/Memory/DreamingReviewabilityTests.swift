@@ -23,7 +23,7 @@ struct DreamingReviewabilityTests {
         for query in queries {
             try recalls.recordSearchHits(
                 query: query,
-                hits: [MemorySearchHit(filename: dailyFilename, score: 10.0, snippet: snippet)]
+                hits: [MemorySearchHit.fixture(lookupID: dailyFilename, score: 10.0, snippet: snippet)]
             )
         }
     }

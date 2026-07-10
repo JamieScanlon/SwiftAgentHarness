@@ -14,6 +14,27 @@ struct DreamRecallEntry: Sendable, Codable, Equatable {
     let filename: String
     let score: Double
     let snippet: String
+    let corpus: String?
+
+    init(
+        recalledAt: String,
+        recallDay: String,
+        queryHash: String,
+        source: Source,
+        filename: String,
+        score: Double,
+        snippet: String,
+        corpus: String? = nil
+    ) {
+        self.recalledAt = recalledAt
+        self.recallDay = recallDay
+        self.queryHash = queryHash
+        self.source = source
+        self.filename = filename
+        self.score = score
+        self.snippet = snippet
+        self.corpus = corpus
+    }
 }
 
 struct DreamRecallStats: Sendable, Equatable {
@@ -92,7 +113,8 @@ struct DreamRecallStore: Sendable {
                 source: .memorySearch,
                 filename: hit.filename,
                 score: hit.score,
-                snippet: String(hit.snippet.prefix(Self.maxSnippetLength))
+                snippet: String(hit.snippet.prefix(Self.maxSnippetLength)),
+                corpus: hit.provenance.corpus
             )
         }
         try append(entries)

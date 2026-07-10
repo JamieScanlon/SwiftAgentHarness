@@ -129,12 +129,12 @@ struct DreamRecallStoreTests {
         for q in ["alpha one", "alpha two", "alpha three", "alpha four"] {
             try store.recordSearchHits(
                 query: q,
-                hits: [MemorySearchHit(filename: "2026-07-09.md", score: 8.0, snippet: "rich unique tokens dashboard metrics pipeline observability")]
+                hits: [MemorySearchHit.fixture(lookupID: "2026-07-09.md", score: 8.0, snippet: "rich unique tokens dashboard metrics pipeline observability")]
             )
         }
         try store.recordSearchHits(
             query: "only once",
-            hits: [MemorySearchHit(filename: "2026-06-29.md", score: 1.0, snippet: "plain note")]
+            hits: [MemorySearchHit.fixture(lookupID: "2026-06-29.md", score: 1.0, snippet: "plain note")]
         )
 
         var config = MemoryConfiguration.default
@@ -160,7 +160,7 @@ struct DreamRecallStoreTests {
         for q in ["once", "second", "third"] {
             try store.recordSearchHits(
                 query: q,
-                hits: [MemorySearchHit(filename: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
+                hits: [MemorySearchHit.fixture(lookupID: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
             )
         }
 

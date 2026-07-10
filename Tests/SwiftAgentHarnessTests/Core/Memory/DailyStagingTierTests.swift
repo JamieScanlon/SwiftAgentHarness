@@ -81,7 +81,7 @@ struct DailyStagingTierTests {
         )
         try DreamRecallStore(memoryDirectory: dir, calendar: calendar, now: { fixedNow }).recordSearchHits(
             query: "topic",
-            hits: [MemorySearchHit(filename: "topic_only.md", score: 9, snippet: "should not stage")]
+            hits: [MemorySearchHit.fixture(lookupID: "topic_only.md", score: 9, snippet: "should not stage")]
         )
 
         var config = MemoryConfiguration.default
@@ -108,7 +108,7 @@ struct DailyStagingTierTests {
         for query in queries {
             try recalls.recordSearchHits(
                 query: query,
-                hits: [MemorySearchHit(filename: dailyFilename, score: 10.0, snippet: snippet)]
+                hits: [MemorySearchHit.fixture(lookupID: dailyFilename, score: 10.0, snippet: snippet)]
             )
         }
     }

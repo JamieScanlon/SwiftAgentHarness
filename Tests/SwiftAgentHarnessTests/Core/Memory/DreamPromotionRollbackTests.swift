@@ -24,7 +24,7 @@ struct DreamPromotionRollbackTests {
         for q in ["alpha", "beta"] {
             try recalls.recordSearchHits(
                 query: q,
-                hits: [MemorySearchHit(filename: daily, score: 10, snippet: note)]
+                hits: [MemorySearchHit.fixture(lookupID: daily, score: 10, snippet: note)]
             )
         }
         return daily

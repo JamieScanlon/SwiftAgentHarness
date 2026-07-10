@@ -69,11 +69,11 @@ struct MemoryDreamingBridgeTests {
         try AgentMemoryStore(memoryDirectory: tree.memory).ensureLayout()
         try DreamRecallStore(memoryDirectory: tree.memory).recordSearchHits(
             query: "q1",
-            hits: [MemorySearchHit(filename: "t.md", score: 5, snippet: "rich distinctive conceptual tokens")]
+            hits: [MemorySearchHit.fixture(lookupID: "t.md", score: 5, snippet: "rich distinctive conceptual tokens")]
         )
         try DreamRecallStore(memoryDirectory: tree.memory).recordSearchHits(
             query: "q2",
-            hits: [MemorySearchHit(filename: "t.md", score: 5, snippet: "rich distinctive conceptual tokens")]
+            hits: [MemorySearchHit.fixture(lookupID: "t.md", score: 5, snippet: "rich distinctive conceptual tokens")]
         )
 
         var config = MemoryConfiguration.default
@@ -127,7 +127,7 @@ struct MemoryDreamingBridgeTests {
         for query in ["once", "twice"] {
             try recalls.recordSearchHits(
                 query: query,
-                hits: [MemorySearchHit(filename: dailyName, score: 10, snippet: note)]
+                hits: [MemorySearchHit.fixture(lookupID: dailyName, score: 10, snippet: note)]
             )
         }
 

@@ -12,6 +12,8 @@ On hard compaction, after optional flush and before the summarizer, the **active
 
 **Real capability seams (S2).** Slots are backend-resolved, not service-hardcoded: `MemoryFlushPlan` carries write-guard policy and entry-ID selection via the active `flushPlanResolver`; memory prompt sections come only from `promptBuilder` (project instructions remain a parallel service layer); `activePublicArtifacts(conversationID:)` exposes the active backend's `publicArtifacts` provider. Operator surface: `memory status [--deep]` prints active plugin ID and exported artifact paths.
 
+**Corpus supplements + search provenance (S3).** `MemorySearchHit` carries `lookupID`, score, snippet, and `MemorySearchProvenance` (corpus, label, source type/path, citation, updated-at, line range). `MemoryCorpusSupplementRegistry` is multi-entrant: plugins register `{search, get}` pairs keyed by `pluginID` (same ID replaces prior). `MemorySearchCoordinator` routes `corpus` on `searchMemory` / `getMemory`: omit or active backend name → active backend only; `"all"` → backend + every supplement, merged by score; specific name → that supplement only. `memory_search` / `memory_get` accept optional `corpus`; tool output uses `MemorySearchHitRenderer` (`corpus=`, `cite=`, etc.). Default file backend corpus is `builtin-file`.
+
 ## Layout (capture vs curate)
 
 | Artifact | Role |
@@ -89,6 +91,11 @@ Memory does **not** write to the conversation store; it reads transcripts via re
 | `FileStoreMemoryBackend.swift` | Default `builtin-file` backend (recall, snapshot, extraction, active memory, search, dreaming) |
 | `MemoryProviderPreCompressNotes.swift` | Formats active-backend `onPreCompress` notes for compaction summarizer handoff |
 | `PreCompactionFlushDedupeState.swift` | Per-cycle flush dedupe (message IDs + middle fingerprint) |
+| `MemorySearchProvenance.swift` | Provenance DTOs, enriched `MemorySearchHit`, renderer, line-range calculator |
+| `MemoryCorpusSupplement.swift` | `MemoryCorpusSupplementSearching` protocol |
+| `MemoryCorpusSupplementRegistry.swift` | Multi-entrant supplement registry (replace by plugin ID) |
+| `MemorySearchCoordinator.swift` | Federated search/get routing by `corpus` |
+| `HybridMemorySearch.swift` | File-backend hybrid search with provenance on topic + daily hits |
 
 Operator surface: `/dreaming status|explain|on|off` (CLI: `memory dreaming status|explain`). Opt-in via PromptConfig `memory.dreamingEnabled`. Triggers installs a permanent `dream` cron (`0 3 * * *` by default) only when dreaming is enabled in config.
 

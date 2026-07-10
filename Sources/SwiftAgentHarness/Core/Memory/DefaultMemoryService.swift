@@ -7,6 +7,7 @@ public actor DefaultMemoryService: MemoryServicing {
     private let logger: Logger?
     private let writeTracker: MemoryWriteTracker
     private let capabilityRegistry: MemoryCapabilityRegistry
+    private let corpusSupplementRegistry = MemoryCorpusSupplementRegistry()
     private let spawnPortBox = MemorySubAgentSpawnPortBox()
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
     private var softPreCompactionFlushCompleted: Set<UUID> = []
@@ -377,6 +378,39 @@ public actor DefaultMemoryService: MemoryServicing {
         await capabilityRegistry.activePluginID()
     }
 
+    func registerCorpusSupplement(_ supplement: any MemoryCorpusSupplementSearching) async {
+        await corpusSupplementRegistry.register(supplement)
+    }
+
+    func corpusSupplementNames() async -> [String] {
+        await corpusSupplementRegistry.corpusNames()
+    }
+
+    func searchMemory(conversationID: UUID, query: String, corpus: String?, limit: Int = 10) async -> [MemorySearchHit] {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return [] }
+        return await coordinator.search(query: query, corpus: corpus, limit: limit)
+    }
+
+    func getMemory(conversationID: UUID, lookupID: String, corpus: String?) async -> String? {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return nil }
+        return await coordinator.get(lookupID: lookupID, corpus: corpus)
+    }
+
+    func memorySearchToolDependencies(conversationID: UUID) async -> MemorySearchToolDependencies? {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return nil }
+        let activeCorpus = await activeMemoryPluginID()
+        return MemorySearchToolDependencies(
+            search: { query, corpus, limit in
+                await coordinator.search(query: query, corpus: corpus, limit: limit)
+            },
+            get: { lookupID, corpus in
+                await coordinator.get(lookupID: lookupID, corpus: corpus)
+            },
+            activeCorpusName: { activeCorpus },
+            availableCorpora: { await coordinator.availableCorpora() }
+        )
+    }
+
     func preCompactionFlushTimeoutMs() -> Int {
         config.preCompactionFlushTimeoutMs
     }
@@ -478,5 +512,27 @@ public actor DefaultMemoryService: MemoryServicing {
         let created = SubdirectoryHintTracker()
         hintTrackerByConversation[conversationID] = created
         return created
+    }
+
+    private func makeSearchCoordinator(conversationID: UUID) async -> MemorySearchCoordinator? {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let session = await capability.runtime.sessionContext(for: conversationID) else { return nil }
+        let searchEngine = await capability.runtime.hybridSearch()
+        let activeCorpus = await activeMemoryPluginID()
+        let memoryDirectory = session.memoryDirectory
+        return MemorySearchCoordinator(
+            activeCorpusName: activeCorpus,
+            backendSearch: { query, limit in
+                await searchEngine.search(query: query, memoryDirectory: memoryDirectory, limit: limit)
+            },
+            backendGet: { lookupID in
+                guard let store = await capability.runtime.store(for: conversationID) else { return nil }
+                if let topic = try? store.readTopicBody(filename: lookupID) {
+                    return topic
+                }
+                return try? store.readDailyBody(filename: lookupID)
+            },
+            supplementRegistry: corpusSupplementRegistry
+        )
     }
 }
