@@ -128,6 +128,26 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.reinjectFileContentEnabled == false)
     }
 
+    @Test("Instruction section re-injection fields decode and default")
+    func decodesInstructionSectionReinjection() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "reinjection_instruction_sections_enabled": false,
+                "reinjectionInstructionSectionNames": ["Custom Section"],
+                "reinjection_instruction_section_max_characters": 1_500,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        #expect(config.reinjectionInstructionSectionsEnabled == false)
+        #expect(config.reinjectionInstructionSectionNames == ["Custom Section"])
+        #expect(config.reinjectionInstructionSectionMaxCharacters == 1_500)
+
+        let defaults = ContextCompactionConfiguration.default
+        #expect(defaults.reinjectionInstructionSectionsEnabled == true)
+        #expect(defaults.reinjectionInstructionSectionNames == ["Session Startup", "Red Lines"])
+        #expect(defaults.reinjectionInstructionSectionMaxCharacters == 3_000)
+    }
+
     @Test("Absent re-injection budgets fall back to spec defaults")
     func reinjectionBudgetDefaults() {
         let config = ContextCompactionConfiguration.default

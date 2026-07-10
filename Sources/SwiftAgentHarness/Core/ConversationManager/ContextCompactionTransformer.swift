@@ -495,6 +495,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: middleAfterMemorySwap,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(
@@ -534,6 +535,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: deterministicMiddle,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(
@@ -598,6 +600,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: composedMiddle,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(

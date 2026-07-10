@@ -241,6 +241,8 @@ public struct ContextTransformInput: Sendable {
     let compactionInjectedPrefixMessages: [Message]?
     /// Active skills (name + content) resolved upstream for budgeted post-compaction re-injection.
     let compactionReinjectableSkills: [ReinjectableSkill]
+    /// Formatted post-compaction instruction sections from the nearest project instruction file.
+    let compactionPostCompactionInstructionContext: String?
     /// Tool names whose compaction hygiene must never clear tool-result content (e.g. sub-agent delegates).
     let compactionProtectedToolNames: Set<String>
 
@@ -269,6 +271,7 @@ public struct ContextTransformInput: Sendable {
         compactionSplitBaseMessages: [Message]? = nil,
         compactionInjectedPrefixMessages: [Message]? = nil,
         compactionReinjectableSkills: [ReinjectableSkill] = [],
+        compactionPostCompactionInstructionContext: String? = nil,
         compactionProtectedToolNames: Set<String> = []
     ) {
         self.messages = messages
@@ -295,6 +298,7 @@ public struct ContextTransformInput: Sendable {
         self.compactionSplitBaseMessages = compactionSplitBaseMessages
         self.compactionInjectedPrefixMessages = compactionInjectedPrefixMessages
         self.compactionReinjectableSkills = compactionReinjectableSkills
+        self.compactionPostCompactionInstructionContext = compactionPostCompactionInstructionContext
         self.compactionProtectedToolNames = compactionProtectedToolNames
     }
 
@@ -324,6 +328,7 @@ public struct ContextTransformInput: Sendable {
             compactionSplitBaseMessages: compactionSplitBaseMessages,
             compactionInjectedPrefixMessages: compactionInjectedPrefixMessages,
             compactionReinjectableSkills: compactionReinjectableSkills,
+            compactionPostCompactionInstructionContext: compactionPostCompactionInstructionContext,
             compactionProtectedToolNames: compactionProtectedToolNames
         )
     }

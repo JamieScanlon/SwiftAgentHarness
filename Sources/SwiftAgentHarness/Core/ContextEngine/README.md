@@ -47,6 +47,8 @@ On the orchestrator path, memory injection + pre-flush rows persist only when **
 
 Plugin-visible compaction hooks (`before_compaction` / `after_compaction`) are not emitted by CE today; defer to the extensibility assessment (see harness-template `core/memory/memory-aware-compaction.md` § Observability (deferred)).
 
+Post-compaction re-injection includes named H2/H3 sections from the nearest project instruction file (default `Session Startup`, `Red Lines`; config: `reinjectionInstructionSectionsEnabled`, `reinjectionInstructionSectionNames`, `reinjectionInstructionSectionMaxCharacters`) alongside files and active skills.
+
 ## Pluggability seams
 
 - **Context engine slot:** production composition resolves `ServerConfig.contextEngineSlotID` and injects either:

@@ -13,6 +13,7 @@ enum ContextCompactionReinjectionCollector: Sendable {
         middle: [Message],
         tail: [Message],
         skills: [ReinjectableSkill],
+        instructionContext: String?,
         config: ContextCompactionConfiguration
     ) -> [Message] {
         guard config.compactionReinjectionEnabled else { return [] }
@@ -23,9 +24,25 @@ enum ContextCompactionReinjectionCollector: Sendable {
         if let asyncLine = asyncTaskStatusLine(head: head, middle: middle, tail: tail) {
             out.append(asyncLine)
         }
+        if let instructionContext,
+           let instructionLine = instructionReinjectionMessage(context: instructionContext) {
+            out.append(instructionLine)
+        }
         out.append(contentsOf: fileReinjectionMessages(head: head, middle: middle, tail: tail, config: config))
         out.append(contentsOf: skillReinjectionMessages(skills: skills, config: config))
         return out
+    }
+
+    private static func instructionReinjectionMessage(context: String) -> Message? {
+        let trimmed = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Message(
+            id: UUID(),
+            role: .system,
+            content: trimmed,
+            timestamp: Date(),
+            toolCalls: []
+        )
     }
 
     // MARK: - File re-injection

@@ -108,6 +108,12 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     /// When true (default), re-inject the recent files' truncated content (spec primary). When false,
     /// fall back to the path-only list (re-read with tools), the spec's cheaper alternative.
     public var reinjectFileContentEnabled: Bool
+    /// When true (default), re-inject named H2/H3 sections from the nearest project instruction file after compaction.
+    public var reinjectionInstructionSectionsEnabled: Bool
+    /// H2/H3 section names to extract (default: Session Startup + Red Lines).
+    public var reinjectionInstructionSectionNames: [String]
+    /// Total character budget for re-injected instruction sections (OpenClaw default: 3000).
+    public var reinjectionInstructionSectionMaxCharacters: Int
     public var compactionCircuitBreakerMaxFailures: Int
     /// Minimum fractional prompt-token reduction required to persist a compaction checkpoint (0 = disabled).
     public var compactionMinPromptTokenSavingsFraction: Double
@@ -213,6 +219,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         reinjectionPerSkillTokenBudget: 5_000,
         reinjectionTotalSkillTokenBudget: 25_000,
         reinjectFileContentEnabled: true,
+        reinjectionInstructionSectionsEnabled: true,
+        reinjectionInstructionSectionNames: ["Session Startup", "Red Lines"],
+        reinjectionInstructionSectionMaxCharacters: 3_000,
         compactionCircuitBreakerMaxFailures: 3,
         compactionMinPromptTokenSavingsFraction: 0.03,
         useSessionTreeProjection: true
@@ -276,6 +285,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         reinjectionPerSkillTokenBudget: Int = 5_000,
         reinjectionTotalSkillTokenBudget: Int = 25_000,
         reinjectFileContentEnabled: Bool = true,
+        reinjectionInstructionSectionsEnabled: Bool = true,
+        reinjectionInstructionSectionNames: [String] = ["Session Startup", "Red Lines"],
+        reinjectionInstructionSectionMaxCharacters: Int = 3_000,
         compactionCircuitBreakerMaxFailures: Int = 3,
         compactionMinPromptTokenSavingsFraction: Double = 0.03,
         useSessionTreeProjection: Bool = true
@@ -337,6 +349,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.reinjectionPerSkillTokenBudget = reinjectionPerSkillTokenBudget
         self.reinjectionTotalSkillTokenBudget = reinjectionTotalSkillTokenBudget
         self.reinjectFileContentEnabled = reinjectFileContentEnabled
+        self.reinjectionInstructionSectionsEnabled = reinjectionInstructionSectionsEnabled
+        self.reinjectionInstructionSectionNames = reinjectionInstructionSectionNames
+        self.reinjectionInstructionSectionMaxCharacters = reinjectionInstructionSectionMaxCharacters
         self.compactionCircuitBreakerMaxFailures = compactionCircuitBreakerMaxFailures
         self.compactionMinPromptTokenSavingsFraction = compactionMinPromptTokenSavingsFraction
         self.useSessionTreeProjection = useSessionTreeProjection
@@ -976,6 +991,15 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 reinjectFileContentEnabled: (payload["reinjectFileContentEnabled"] as? Bool)
                     ?? (payload["reinject_file_content_enabled"] as? Bool)
                     ?? def.reinjectFileContentEnabled,
+                reinjectionInstructionSectionsEnabled: (payload["reinjectionInstructionSectionsEnabled"] as? Bool)
+                    ?? (payload["reinjection_instruction_sections_enabled"] as? Bool)
+                    ?? def.reinjectionInstructionSectionsEnabled,
+                reinjectionInstructionSectionNames: (payload["reinjectionInstructionSectionNames"] as? [String])
+                    ?? (payload["reinjection_instruction_section_names"] as? [String])
+                    ?? def.reinjectionInstructionSectionNames,
+                reinjectionInstructionSectionMaxCharacters: (payload["reinjectionInstructionSectionMaxCharacters"] as? Int)
+                    ?? (payload["reinjection_instruction_section_max_characters"] as? Int)
+                    ?? def.reinjectionInstructionSectionMaxCharacters,
                 compactionCircuitBreakerMaxFailures: (payload["compactionCircuitBreakerMaxFailures"] as? Int)
                     ?? def.compactionCircuitBreakerMaxFailures,
                 compactionMinPromptTokenSavingsFraction: (payload["compactionMinPromptTokenSavingsFraction"] as? Double)

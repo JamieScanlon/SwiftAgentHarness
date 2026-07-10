@@ -10,6 +10,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     public let memoryService: DefaultMemoryService?
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
     private let reinjectionSkillProvider: any CompactionReinjectionSkillProviding
+    private let reinjectionInstructionProvider: any CompactionReinjectionInstructionProviding
     private let logger: Logger?
 
     public init(
@@ -22,6 +23,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             memoryService: memoryService,
             preCompactionMemoryFlushRunner: nil,
             reinjectionSkillProvider: nil,
+            reinjectionInstructionProvider: nil,
             logger: logger
         )
     }
@@ -31,6 +33,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         memoryService: DefaultMemoryService? = nil,
         preCompactionMemoryFlushRunner: (any PreCompactionMemoryFlushRunning)? = nil,
         reinjectionSkillProvider: (any CompactionReinjectionSkillProviding)? = nil,
+        reinjectionInstructionProvider: (any CompactionReinjectionInstructionProviding)? = nil,
         logger: Logger? = nil
     ) {
         self.compactionCoordinator = compactionCoordinator
@@ -44,6 +47,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         }
         self.reinjectionSkillProvider = reinjectionSkillProvider
             ?? DefaultCompactionReinjectionSkillProvider(logger: logger)
+        self.reinjectionInstructionProvider = reinjectionInstructionProvider
+            ?? DefaultCompactionReinjectionInstructionProvider()
         self.logger = logger
     }
 
@@ -324,6 +329,13 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             let reinjectableSkills = await reinjectionSkillProvider.reinjectableSkillContent(
                 activatedSkillNames: activatedSkillNames
             )
+            let cwd = request.conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
+            let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
+            let postCompactionInstructionContext = await reinjectionInstructionProvider.postCompactionInstructionContext(
+                cwd: cwd,
+                canonicalGitRoot: gitRoot,
+                config: request.compactionConfig
+            )
             let initial = ContextCompactionInputBuilder.buildInitialPhaseInput(
                 messages: compactionTranscript,
                 conversation: request.conversation,
@@ -339,7 +351,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
                 sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction,
                 compactionInjectedPrefix: compactionInjectedPrefix,
-                reinjectableSkills: reinjectableSkills
+                reinjectableSkills: reinjectableSkills,
+                postCompactionInstructionContext: postCompactionInstructionContext
             )
             switch initial {
             case .passthrough(let reason):
@@ -428,6 +441,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 compactionSplitBaseMessages: input.compactionSplitBaseMessages,
                 compactionInjectedPrefixMessages: input.compactionInjectedPrefixMessages,
                 compactionReinjectableSkills: input.compactionReinjectableSkills,
+                compactionPostCompactionInstructionContext: input.compactionPostCompactionInstructionContext,
                 compactionProtectedToolNames: input.compactionProtectedToolNames
             )
         } else {

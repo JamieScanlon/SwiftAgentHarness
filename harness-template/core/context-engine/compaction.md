@@ -126,6 +126,7 @@ Without this framing, models will sometimes re-execute work the summary describe
 
 - The 5 most-recently-accessed files, **re-read fresh**, total budget ~50k tokens (5k per file). This is the most reliable way to keep file content in scope.
 - Invoked-skill bodies, total budget ~25k tokens (5k per skill).
+- Named H2/H3 sections from the nearest project `AGENTS.md` / `CLAUDE.md` (default: `Session Startup`, `Red Lines`; legacy fallback `Every Session`, `Safety`), total budget ~3k characters. Configurable via `reinjectionInstructionSectionNames`; set `reinjectionInstructionSectionsEnabled: false` to disable.
 - Any async-agent task statuses.
 - A plan-mode flag if you have one.
 - Recently-discovered tools / MCP delta announcements.
