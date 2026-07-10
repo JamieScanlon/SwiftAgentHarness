@@ -44,6 +44,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var activeMemoryRecentAssistantChars: Int
     /// Structured `active-memory: start|done` debug logs (default on for the tuning loop).
     var activeMemoryLogging: Bool
+    /// Per-conversation recall cache bound (LRU; situational preferred for eviction).
+    var activeMemoryRecallCacheMaxEntries: Int
 
     public static let `default` = MemoryConfiguration(
         enabled: true,
@@ -80,7 +82,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
         activeMemoryRecentAssistantTurns: 1,
         activeMemoryRecentUserChars: 220,
         activeMemoryRecentAssistantChars: 180,
-        activeMemoryLogging: true
+        activeMemoryLogging: true,
+        activeMemoryRecallCacheMaxEntries: 1_000
     )
 }
 
@@ -169,6 +172,10 @@ public enum MemoryConfigurationLoader {
         }
         if let v = memory["activeMemoryLogging"] as? Bool {
             config.activeMemoryLogging = v
+        }
+        if let v = memory["activeMemoryRecallCacheMaxEntries"] as? Int {
+            // Never disable the safety cap: 0 and negatives clamp to 1.
+            config.activeMemoryRecallCacheMaxEntries = min(100_000, max(1, v))
         }
         return config
     }

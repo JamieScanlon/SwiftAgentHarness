@@ -12,6 +12,7 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 - **Agents:** per-agent allowlist in multi-agent setups.
 - **Budget:** hard timeout and a `maxSummaryChars` cap on any note handed to the main reply. Default **220** (compact note, not an essay); PromptConfig clamp **40–1000**. Soft limit in the recall prompt; hard truncate with a trailing `…` when clipped.
 - **Isolation:** run on its own per-conversation execution context so it does not cancel the main in-flight model call.
+- **Recall cache:** per-conversation bound `activeMemoryRecallCacheMaxEntries` (default **1000**, clamp **1–100000**). LRU eviction prefers situational keys so standing stays sticky.
 
 ## Defaults (this harness)
 

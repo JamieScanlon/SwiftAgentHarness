@@ -6,7 +6,7 @@ actor ActiveMemoryPreReplyService {
     private let controlStore: ActiveMemoryControlStore
     private let logger: Logger?
     private var runner: ActiveMemoryPreReplyRunning?
-    private let cache = ActiveMemoryRecallCache()
+    private let cache: ActiveMemoryRecallCache
 
     init(
         config: MemoryConfiguration,
@@ -16,6 +16,7 @@ actor ActiveMemoryPreReplyService {
         self.config = config
         self.controlStore = controlStore
         self.logger = logger
+        self.cache = ActiveMemoryRecallCache(maxEntries: config.activeMemoryRecallCacheMaxEntries)
     }
 
     func setRunner(_ runner: ActiveMemoryPreReplyRunning) {

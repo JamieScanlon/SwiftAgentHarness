@@ -107,4 +107,96 @@ struct ActiveMemoryRecallCacheTests {
         #expect(await cache.fresh(mine, ttlMs: 60_000) == nil)
         #expect(await cache.fresh(other, ttlMs: 60_000) == "other")
     }
+
+    @Test("cap eviction drops LRU situational when over maxEntries")
+    func capEvictsLRUSituational() async {
+        let convID = UUID()
+        let cache = ActiveMemoryRecallCache(maxEntries: 2)
+        let a = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "a")
+        let b = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "b")
+        let c = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "c")
+        await cache.store(a, summary: "a")
+        await cache.store(b, summary: "b")
+        await cache.store(c, summary: "c")
+        #expect(await cache.entryCount(for: convID) == 2)
+        #expect(await cache.fresh(a, ttlMs: 60_000) == nil)
+        #expect(await cache.fresh(b, ttlMs: 60_000) == "b")
+        #expect(await cache.fresh(c, ttlMs: 60_000) == "c")
+    }
+
+    @Test("standing survives eviction when situational overflows")
+    func standingStickyUnderPressure() async {
+        let convID = UUID()
+        let cache = ActiveMemoryRecallCache(maxEntries: 2)
+        let standing = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .standing, queryFingerprint: nil)
+        let s1 = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "s1")
+        let s2 = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "s2")
+        let s3 = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "s3")
+        await cache.store(standing, summary: "prefs")
+        await cache.store(s1, summary: "one")
+        // At cap (2). Next store must evict situational, not standing.
+        await cache.store(s2, summary: "two")
+        #expect(await cache.fresh(standing, ttlMs: 60_000) == "prefs")
+        #expect(await cache.entryCount(for: convID) == 2)
+        await cache.store(s3, summary: "three")
+        #expect(await cache.fresh(standing, ttlMs: 60_000) == "prefs")
+        #expect(await cache.entryCount(for: convID) == 2)
+        #expect(await cache.fresh(s1, ttlMs: 60_000) == nil)
+    }
+
+    @Test("fresh touch protects a situational key from next eviction")
+    func freshTouchesLRU() async {
+        let convID = UUID()
+        let cache = ActiveMemoryRecallCache(maxEntries: 2)
+        let a = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "a")
+        let b = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "b")
+        let c = ActiveMemoryRecallCache.Key(conversationID: convID, lane: .situational, queryFingerprint: "c")
+        await cache.store(a, summary: "a")
+        await cache.store(b, summary: "b")
+        // Touch a so b becomes LRU.
+        #expect(await cache.fresh(a, ttlMs: 60_000) == "a")
+        await cache.store(c, summary: "c")
+        #expect(await cache.fresh(a, ttlMs: 60_000) == "a")
+        #expect(await cache.fresh(b, ttlMs: 60_000) == nil)
+        #expect(await cache.fresh(c, ttlMs: 60_000) == "c")
+    }
+
+    @Test("overflow in one conversation does not evict another")
+    func perConversationIsolation() async {
+        let aID = UUID()
+        let bID = UUID()
+        let cache = ActiveMemoryRecallCache(maxEntries: 2)
+        let a1 = ActiveMemoryRecallCache.Key(conversationID: aID, lane: .situational, queryFingerprint: "1")
+        let a2 = ActiveMemoryRecallCache.Key(conversationID: aID, lane: .situational, queryFingerprint: "2")
+        let a3 = ActiveMemoryRecallCache.Key(conversationID: aID, lane: .situational, queryFingerprint: "3")
+        let b1 = ActiveMemoryRecallCache.Key(conversationID: bID, lane: .situational, queryFingerprint: "1")
+        await cache.store(b1, summary: "b-keep")
+        await cache.store(a1, summary: "a1")
+        await cache.store(a2, summary: "a2")
+        await cache.store(a3, summary: "a3")
+        #expect(await cache.fresh(b1, ttlMs: 60_000) == "b-keep")
+        #expect(await cache.entryCount(for: aID) == 2)
+        #expect(await cache.entryCount(for: bID) == 1)
+    }
+
+    @Test("loader clamps activeMemoryRecallCacheMaxEntries")
+    func loaderClampsMaxEntries() {
+        #expect(MemoryConfiguration.default.activeMemoryRecallCacheMaxEntries == 1_000)
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryRecallCacheMaxEntries": 0])
+                .activeMemoryRecallCacheMaxEntries == 1
+        )
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryRecallCacheMaxEntries": -5])
+                .activeMemoryRecallCacheMaxEntries == 1
+        )
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryRecallCacheMaxEntries": 1_000])
+                .activeMemoryRecallCacheMaxEntries == 1_000
+        )
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryRecallCacheMaxEntries": 200_000])
+                .activeMemoryRecallCacheMaxEntries == 100_000
+        )
+    }
 }
