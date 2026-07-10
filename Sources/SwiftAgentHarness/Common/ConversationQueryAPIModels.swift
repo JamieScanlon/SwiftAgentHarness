@@ -264,6 +264,9 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
     public var description: String?
     public var metadata: JSON?
     public var interactionMode: String?
+    /// Optional closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`.
+    /// `nil` leaves routing policy unset (mode profile alone). Empty array denies all tools.
+    public var toolsAllow: [String]?
 
     private enum CodingKeys: String, CodingKey {
         case context
@@ -286,6 +289,7 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
         case description
         case metadata
         case interactionMode
+        case toolsAllow
     }
 
     public init(
@@ -307,7 +311,8 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
         topic: String? = nil,
         description: String? = nil,
         metadata: JSON? = nil,
-        interactionMode: String? = nil
+        interactionMode: String? = nil,
+        toolsAllow: [String]? = nil
     ) {
         self.context = context
         self.userMessageID = userMessageID
@@ -328,6 +333,7 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
         self.description = description
         self.metadata = metadata
         self.interactionMode = interactionMode
+        self.toolsAllow = toolsAllow
     }
 
     public func resolvedContext() -> SubAgentLaunchContext {
@@ -360,6 +366,7 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
         description = try c.decodeIfPresent(String.self, forKey: .description)
         metadata = try c.decodeIfPresent(JSON.self, forKey: .metadata)
         interactionMode = try c.decodeIfPresent(String.self, forKey: .interactionMode)
+        toolsAllow = try c.decodeIfPresent([String].self, forKey: .toolsAllow)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -383,6 +390,7 @@ public struct SubAgentSpawnRequest: Codable, Sendable {
         try c.encodeIfPresent(description, forKey: .description)
         try c.encodeIfPresent(metadata, forKey: .metadata)
         try c.encodeIfPresent(interactionMode, forKey: .interactionMode)
+        try c.encodeIfPresent(toolsAllow, forKey: .toolsAllow)
     }
 }
 

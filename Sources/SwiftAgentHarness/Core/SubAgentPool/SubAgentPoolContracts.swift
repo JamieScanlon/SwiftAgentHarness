@@ -447,6 +447,8 @@ struct SubAgentLaunchRequest: Sendable {
     var description: String?
     var metadata: JSON?
     var interactionMode: String?
+    /// Optional closed-world tool allowlist → child `routingPrefs.explicitToolPolicy`.
+    var toolsAllow: [String]?
     /// Harness-internal trust signal: delegate tool approval already cleared upstream (model-turn path only).
     var permissionAlreadyGranted: Bool
 
@@ -467,6 +469,7 @@ struct SubAgentLaunchRequest: Sendable {
         description: String? = nil,
         metadata: JSON? = nil,
         interactionMode: String? = nil,
+        toolsAllow: [String]? = nil,
         permissionAlreadyGranted: Bool = false
     ) {
         self.context = context
@@ -485,6 +488,7 @@ struct SubAgentLaunchRequest: Sendable {
         self.description = description
         self.metadata = metadata
         self.interactionMode = interactionMode
+        self.toolsAllow = toolsAllow
         self.permissionAlreadyGranted = permissionAlreadyGranted
     }
 
@@ -511,6 +515,7 @@ struct SubAgentLaunchRequest: Sendable {
             description: request.description,
             metadata: Self.sanitizedClientMetadata(request.metadata),
             interactionMode: request.interactionMode,
+            toolsAllow: request.toolsAllow,
             permissionAlreadyGranted: false
         )
     }

@@ -3,6 +3,12 @@ import Logging
 import SwiftAgentKit
 
 enum MemorySubAgentSpawnAdapter {
+    /// Gateway-enforced closed world for active-memory recall (also mirrored on `memory-active-recall` mode profile).
+    static let activeMemoryToolsAllow: [String] = [
+        MemorySearchToolProvider.searchToolName,
+        MemorySearchToolProvider.getToolName,
+    ]
+
     static func makePort(
         spawnSubAgent: @escaping @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID,
         sendMessageAndRun: @escaping @Sendable (UUID, String) async throws -> Void,
@@ -23,7 +29,8 @@ enum MemorySubAgentSpawnAdapter {
                     runInBackground: false,
                     userSystemPrompt: systemPrompt,
                     topic: "memory-active-recall",
-                    interactionMode: "memory-active-recall"
+                    interactionMode: "memory-active-recall",
+                    toolsAllow: Self.activeMemoryToolsAllow
                 )
                 let childID: UUID
                 do {

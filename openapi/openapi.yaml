@@ -2196,6 +2196,13 @@ components:
           $ref: "#/components/schemas/WireJSONObject"
         interactionMode:
           type: string
+        toolsAllow:
+          type: array
+          items: { type: string }
+          description: >
+            Optional closed-world tool allowlist applied to the child conversation as
+            routingPrefs.explicitToolPolicy. Omit to leave routing policy unset (mode profile alone).
+            An empty array denies all tools.
     SubAgentQuery:
       type: object
       properties:

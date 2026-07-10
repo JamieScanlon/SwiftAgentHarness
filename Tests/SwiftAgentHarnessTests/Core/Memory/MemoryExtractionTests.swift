@@ -494,8 +494,48 @@ struct MemorySubAgentSpawnAdapterTests {
         #expect(spawn.context == .isolated)
         #expect(spawn.userMessageID == nil)
         #expect(spawn.interactionMode == "memory-extraction")
+        #expect(spawn.toolsAllow == nil)
         #expect(spawn.prompt?.contains("<extraction-input>") == true)
         #expect(runPayload?.contains("<extraction-input>") == true)
+    }
+
+    @Test("Active recall spawn sets toolsAllow to memory_search and memory_get")
+    func activeRecallSpawnSetsToolsAllow() async throws {
+        let capture = ExtractionSpawnCapture()
+        let session = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: "/tmp",
+            canonicalGitRoot: nil,
+            memoryDirectory: URL(fileURLWithPath: "/tmp/memory")
+        )
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, request, _ in
+                await capture.recordSpawn(request)
+                return UUID()
+            },
+            sendMessageAndRun: { _, _ in },
+            cancelChildRun: { _ in },
+            lastAssistantText: { _ in "NONE" },
+            manifestLines: { _ in [] },
+            config: .default,
+            logger: nil
+        )
+        let summary = await port.spawnBlockingRecall(
+            session.conversationID,
+            "preferences?",
+            .standing,
+            5_000,
+            200
+        )
+        #expect(summary == nil)
+        let spawn = try #require(await capture.spawnRequest)
+        #expect(spawn.context == .isolated)
+        #expect(spawn.interactionMode == "memory-active-recall")
+        #expect(spawn.toolsAllow == MemorySubAgentSpawnAdapter.activeMemoryToolsAllow)
+        #expect(spawn.toolsAllow == [
+            MemorySearchToolProvider.searchToolName,
+            MemorySearchToolProvider.getToolName,
+        ])
     }
 
     @Test("extraction prompt scopes file tools to memory directory and cold start")

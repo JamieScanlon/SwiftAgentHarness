@@ -6,7 +6,7 @@ Normative companion to [memory.md](./memory.md) § Pre-reply blocking memory rec
 
 ## Constraints
 
-- **Tools:** only `memory_search` and `memory_get`. No write, edit, or other tools.
+- **Tools:** only `memory_search` and `memory_get`. No write, edit, or other tools. Restriction is **gateway-enforced** via spawn `toolsAllow` (child `routingPrefs.explicitToolPolicy`) plus the `memory-active-recall` mode profile allowlist — not prompt hope alone.
 - **Model:** a separate, typically faster/cheaper recall model (or an explicit inherit of the session model).
 - **Chat types:** default to direct messages; group/channel sessions opt in explicitly.
 - **Agents:** per-agent allowlist in multi-agent setups.

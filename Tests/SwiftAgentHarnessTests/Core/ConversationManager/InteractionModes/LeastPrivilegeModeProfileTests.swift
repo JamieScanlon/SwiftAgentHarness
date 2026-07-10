@@ -12,6 +12,11 @@ struct LeastPrivilegeModeProfileTests {
         "edit_file", "read_file", "write_file",
     ]
 
+    private static let memoryActiveRecallAllowedTools = [
+        MemorySearchToolProvider.searchToolName,
+        MemorySearchToolProvider.getToolName,
+    ]
+
     private static let privilegedCandidateTools = [
         "read_file", "write_file", "edit_file", "glob", "grep", "bash",
         AgentPlanToolProvider.getPlanToolName,
@@ -19,6 +24,7 @@ struct LeastPrivilegeModeProfileTests {
         ConversationsToolProvider.listConversationsToolName,
         "schedule_create",
         "memory_search",
+        "memory_get",
         "memory_write",
     ]
 
@@ -74,8 +80,28 @@ struct LeastPrivilegeModeProfileTests {
         let ids = Set(await registry.registeredModeIDs())
         #expect(ids.contains(Self.defaultMachineSpawnProfileID))
         #expect(ids.contains("memory-extraction"))
+        #expect(ids.contains("memory-active-recall"))
         #expect(ids.contains("memory-pre-compaction-flush"))
         #expect(ids.contains("trigger-host"))
+    }
+
+    @Test("memory-active-recall profile allows memory_search and memory_get only")
+    func memoryActiveRecallLockedDownToolset() async throws {
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
+        let profile = try await registry.resolve(modeId: "memory-active-recall")
+        #expect(profile.tools.allow?.sorted() == Self.memoryActiveRecallAllowedTools.sorted())
+        #expect(profile.subAgents.allow == [])
+
+        let conversation = makeConversation(
+            modeProfileID: "memory-active-recall",
+            interactionMode: profile.interactionMode
+        )
+        let effective = effectiveToolNames(profile: profile, conversation: conversation)
+        #expect(effective == Set(Self.memoryActiveRecallAllowedTools))
+        #expect(!effective.contains("write_file"))
+        #expect(!effective.contains("bash"))
+        #expect(!effective.contains("memory_write"))
+        #expect(!effective.contains("spawn_sub_agent"))
     }
 
     @Test("subagent-minimal default machine spawn profile denies all tools and sub-agents")

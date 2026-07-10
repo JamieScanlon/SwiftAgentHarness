@@ -324,8 +324,18 @@ public actor SubAgentSpawnService {
                 interactionMode: interactionMode,
                 modeProfileID: modeProfileIDForChild
             )
-            guard let child = await deps.persistenceDomain.modelConversation(id: newConv.id) else {
+            guard var child = await deps.persistenceDomain.modelConversation(id: newConv.id) else {
                 throw ConversationServiceError.conversationNotFound
+            }
+            if let toolsAllow = launchPlan.request.toolsAllow {
+                var prefs = child.routingPrefs ?? ConversationRoutingPrefs()
+                prefs.explicitToolPolicy = .allowlist(tools: toolsAllow, skills: [])
+                child.routingPrefs = prefs
+                await deps.persistenceDomain.replaceConversationInRegistry(child)
+                if let refreshed = await deps.persistenceDomain.modelConversation(id: newConv.id) {
+                    try? await deps.persistenceDomain.syncConversationCatalogStateToSessionBackend(conversation: refreshed)
+                    child = refreshed
+                }
             }
             await messaging.update(conversation: child)
             await linkDelegateCost(childConversationID: newConv.id, parentConversationID: parentConversationID)

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Memory — active-memory spawn tool allowlist
+
+- **API:** optional `SubAgentSpawnRequest.toolsAllow` applied on isolated spawn as child `routingPrefs.explicitToolPolicy` allowlist.
+- **Active memory:** recall spawn sets `toolsAllow` to `memory_search` + `memory_get` (with `interactionMode: memory-active-recall`) so the gateway enforces the closed world, not prompt text alone.
+
 ### Memory — active-memory NONE contract (pre-reply recall)
 
 - **Affected prompts:** `ActiveMemoryPreReplyPrompts` standing + situational system/user prompts (model-facing active-memory recall; not `ToolDefinition.description` fields).
