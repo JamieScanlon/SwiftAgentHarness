@@ -4,7 +4,7 @@ Cross-session durable knowledge: project-instruction files (`AGENTS.md` / `CLAUD
 
 Normative spec: harness-template `core/memory/memory.md`, `core/memory/pre-reply-recall.md`, `core/memory/memory-aware-compaction.md`, and `core/memory/README.md`.
 
-Pre-compaction flush is default-on on both Memory and Context Engine gates; soft-threshold flush-only runs with headroom before hard compaction (see `memory-aware-compaction.md`). Flush promotes to **curated typed topic files only** (append-only for existing topics and `MEMORY.md` index lines); daily staging is out of scope for flush (extraction/dreaming still use dailies).
+Pre-compaction flush is default-on on both Memory and Context Engine gates; soft-threshold flush-only runs with headroom before hard compaction (see `memory-aware-compaction.md`). Flush promotes to **curated typed topic files only** (append-only for existing topics and `MEMORY.md` index lines); daily staging is out of scope for flush (extraction/dreaming still use dailies). Optional `memory.preCompactionFlushSystemPromptPath` customizes flush task guidance; three harness-enforced safety hints (target / append-only / read-only scope) are always re-appended, with `PreCompactionFlushWriteGuard` at the tool layer.
 
 ## Layout (capture vs curate)
 

@@ -28,6 +28,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var preCompactionFlushEnabled: Bool
     var preCompactionFlushTimeoutMs: Int
     var preCompactionFlushMaxIterations: Int
+    var preCompactionFlushSystemPromptPath: String?
     var activeMemoryStandingEnabled: Bool
     var activeMemoryStandingTTLMs: Int
     var activeMemoryStandingBudgetMs: Int
@@ -70,6 +71,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         preCompactionFlushEnabled: true,
         preCompactionFlushTimeoutMs: 30_000,
         preCompactionFlushMaxIterations: 2,
+        preCompactionFlushSystemPromptPath: nil,
         activeMemoryStandingEnabled: true,
         activeMemoryStandingTTLMs: 3_600_000,
         activeMemoryStandingBudgetMs: 15_000,
@@ -139,6 +141,9 @@ public enum MemoryConfigurationLoader {
         if let v = memory["preCompactionFlushEnabled"] as? Bool { config.preCompactionFlushEnabled = v }
         if let v = memory["preCompactionFlushTimeoutMs"] as? Int { config.preCompactionFlushTimeoutMs = max(1, v) }
         if let v = memory["preCompactionFlushMaxIterations"] as? Int { config.preCompactionFlushMaxIterations = max(1, v) }
+        if let path = memory["preCompactionFlushSystemPromptPath"] as? String {
+            config.preCompactionFlushSystemPromptPath = path.nilIfEmpty
+        }
         if let v = memory["activeMemoryStandingEnabled"] as? Bool { config.activeMemoryStandingEnabled = v }
         if let v = memory["activeMemoryStandingTTLMs"] as? Int { config.activeMemoryStandingTTLMs = max(1, v) }
         if let v = memory["activeMemoryStandingBudgetMs"] as? Int { config.activeMemoryStandingBudgetMs = max(1, v) }

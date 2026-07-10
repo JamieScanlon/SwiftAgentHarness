@@ -52,8 +52,21 @@ Dual gate: **both** Context Engine and Memory knobs must allow flush.
 | `memory.preCompactionFlushEnabled` | Memory | `true` | Memory service / spawn path may execute flush |
 | `memory.preCompactionFlushTimeoutMs` | Memory | `30_000` | Flush sub-agent timeout |
 | `memory.preCompactionFlushMaxIterations` | Memory | `2` | Flush sub-agent iteration bound |
+| `memory.preCompactionFlushSystemPromptPath` | Memory | unset | Optional file path for custom flush system prompt body; built-in default when unset |
 
 Loader clamp for `softThresholdTokens`: `max(0, v)` with upper bound `min(100_000, proactiveSafetyBufferTokens * 2)`.
+
+## Enforced safety hints
+
+Operators may replace the flush sub-agent task guidance via `memory.preCompactionFlushSystemPromptPath` (UTF-8 file). The harness **always** injects the live curated manifest and re-appends three non-negotiable safety hints after any custom or default body:
+
+| Hint | Role |
+|------|------|
+| **Target** | Curated typed topic files only; no daily staging (`YYYY-MM-DD.md`) |
+| **Append-only** | Existing manifest topics and `MEMORY.md` index: read first, append via `edit_file` only |
+| **Read-only scope** | File tools limited to the memory directory; parallel read-then-write turn budget |
+
+Dual enforcement: hints are prompt-layer guardrails; `PreCompactionFlushWriteGuard` validates `write_file` / `edit_file` at the tool layer during flush.
 
 ## Flush write targets (curated only)
 

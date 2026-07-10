@@ -115,8 +115,13 @@ enum MemorySubAgentSpawnAdapter {
             spawnBlockingPreCompactionFlush: { parentConversationID, middleMessages, timeoutMs in
                 guard config.preCompactionFlushEnabled else { return false }
                 let manifest = await manifestLines(parentConversationID)
+                let customBody = PreCompactionFlushCustomPromptLoader.load(
+                    path: config.preCompactionFlushSystemPromptPath,
+                    logger: logger
+                )
                 let systemPrompt = MemoryPreCompactionFlushPrompts.systemPrompt(
                     manifestLines: manifest,
+                    customBody: customBody,
                     teamMemoryEnabled: config.teamMemoryEnabled
                 )
                 let transcript = MemoryExtractionPrompts.recentTranscriptSlice(

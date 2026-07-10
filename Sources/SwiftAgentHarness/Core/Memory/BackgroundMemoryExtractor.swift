@@ -130,30 +130,16 @@ When no memory files exist yet (blank manifest above), create them using write_f
 }
 
 enum MemoryPreCompactionFlushPrompts {
-    static func systemPrompt(manifestLines: [String], teamMemoryEnabled: Bool = false) -> String {
-        let manifestBlock = manifestLines.isEmpty
-            ? "(none yet — create new typed topic files with YAML frontmatter)"
-            : manifestLines.joined(separator: "\n")
-        var prompt = """
-You promote durable cross-session memories from conversation messages before context compaction summarizes them away.
-
-Existing curated memory manifest:
-\(manifestBlock)
-
-File tools are scoped to the memory directory. Use bare filenames only (typed topic `.md` files and `MEMORY.md`). Do not attempt to read project or source files referenced in the transcript — they are not accessible.
-When no topic files exist yet, create new typed topic files using write_file with valid YAML frontmatter (type: user | feedback | project | reference).
-
-\(MemoryTypeTaxonomy.preCompactionFlushConstraintsPrompt)
-\(MemoryTypeTaxonomy.twoStepWriteRulePrompt)
-\(MemoryTypeTaxonomy.whatNotToSavePrompt)
-\(MemoryTypeTaxonomy.indexUsagePrompt)
-
-URGENT: Context compaction is about to summarize away the conversation below. Promote any durable facts to curated typed topic files NOW before they are lost. Do not write daily staging files.
-"""
-        if teamMemoryEnabled {
-            prompt += "\n" + MemoryTypeTaxonomy.teamSensitiveDataPrompt
-        }
-        return prompt
+    static func systemPrompt(
+        manifestLines: [String],
+        customBody: String? = nil,
+        teamMemoryEnabled: Bool = false
+    ) -> String {
+        MemoryPreCompactionFlushPromptComposer.systemPrompt(
+            manifestLines: manifestLines,
+            customBody: customBody,
+            teamMemoryEnabled: teamMemoryEnabled
+        )
     }
 
     static func userPrompt(middleTranscript: String) -> String {

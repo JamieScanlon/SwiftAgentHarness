@@ -311,7 +311,8 @@ struct DailyStagingTierTests {
         #expect(!flush.contains("Prefer appending durable-but-not-yet-curated"))
         #expect(flush.contains("Do NOT write daily staging"))
         #expect(flush.contains("curated promotion only"))
+        #expect(flush.contains("## Non-negotiable flush constraints"))
         #expect(flush.contains("two steps"))
-        #expect(flush.contains("append-only"))
+        #expect(flush.contains("Append-only"))
     }
 }
