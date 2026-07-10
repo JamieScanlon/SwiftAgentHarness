@@ -40,6 +40,15 @@ You MUST avoid saving sensitive data within shared team memories. For example, n
 `MEMORY.md` is an index, not a memory. Each entry should be one line under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
 """
 
+    /// Capture-cheap staging: prefer today's daily note; reserve typed topics for curated durable entries.
+    static let dailyCapturePrompt = """
+## Capture vs curate
+
+Prefer appending durable-but-not-yet-curated notes to today's daily staging file `YYYY-MM-DD.md` (e.g. today's date). Daily notes have no YAML frontmatter — append plain markdown sections.
+
+Reserve typed topic files (`user` / `feedback` / `project` / `reference` with frontmatter) plus a one-line `MEMORY.md` index entry for curated durable memories you are ready to promote now. Do not write memory content into `MEMORY.md` itself.
+"""
+
     static let persistenceDistinctionPrompt = """
 Memory is for information that will be useful in *future* conversations. Do not save approach decisions to memory when a plan exists; do not save in-progress task lists to memory.
 """
@@ -116,7 +125,12 @@ enum MemoryManifestScanner {
             return []
         }
         return files
-            .filter { $0.pathExtension == "md" && $0.lastPathComponent != "MEMORY.md" && $0.lastPathComponent != "DREAMS.md" }
+            .filter {
+                $0.pathExtension == "md"
+                    && $0.lastPathComponent != "MEMORY.md"
+                    && $0.lastPathComponent != "DREAMS.md"
+                    && !AgentMemoryStore.isDailyFilename($0.lastPathComponent)
+            }
             .compactMap { url -> MemoryManifestEntry? in
                 guard let content = try? String(contentsOf: url, encoding: .utf8),
                       let fm = MemoryTopicFrontmatterParser.parse(from: content) else { return nil }

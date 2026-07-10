@@ -94,29 +94,13 @@ struct MemoryDreamingBridgeTests {
         try control.setEnabled(true)
         let agentStore = AgentMemoryStore(memoryDirectory: tree.memory)
         try agentStore.ensureLayout()
-        try agentStore.writeTopic(
-            filename: "gated.md",
-            content: """
-            ---
-            name: gated
-            description: gated topic
-            type: reference
-            ---
-            rich distinctive conceptual tokens here
-            """
+        try agentStore.appendDailyNote(
+            "rich distinctive conceptual tokens here for promotion",
+            date: Date()
         )
-        let recalls = DreamRecallStore(memoryDirectory: tree.memory)
-        for q in ["once", "twice", "thrice"] {
-            try recalls.recordSearchHits(
-                query: q,
-                hits: [MemorySearchHit(filename: "gated.md", score: 10, snippet: "rich distinctive conceptual tokens here")]
-            )
-        }
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0
-        config.dreamingMinRecallCount = 2
-        config.dreamingMinUniqueQueries = 2
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: control,
@@ -125,7 +109,10 @@ struct MemoryDreamingBridgeTests {
         let swept = try await bridge.runDueSweeps()
         #expect(swept == 1)
         let index = try String(contentsOf: tree.memory.appendingPathComponent("MEMORY.md"), encoding: .utf8)
-        #expect(index.contains("gated.md"))
+        #expect(!index.isEmpty)
+        #expect(!index.contains(AgentMemoryStore.dailyFilename(for: Date())))
+        let topics = agentStore.listTopicFilenames()
+        #expect(!topics.isEmpty)
     }
 
     @Test("empty projects tree returns zero")

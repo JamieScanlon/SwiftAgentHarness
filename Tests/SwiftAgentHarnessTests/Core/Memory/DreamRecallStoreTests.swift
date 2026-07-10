@@ -102,7 +102,7 @@ struct DreamRecallStoreTests {
         #expect(entries.allSatisfy { !$0.filename.isEmpty })
     }
 
-    @Test("light scores differ across files given different recall signals")
+    @Test("light scores differ across dailies given different recall boosts")
     func lightScoresReflectSignals() async throws {
         let dir = try makeMemoryDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -110,69 +110,68 @@ struct DreamRecallStoreTests {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
 
+        let agent = AgentMemoryStore(memoryDirectory: dir)
+        try agent.appendDailyNote(
+            "rich unique tokens dashboard metrics pipeline observability",
+            date: fixedNow,
+            calendar: calendar,
+            now: fixedNow
+        )
+        let coldDay = calendar.date(byAdding: .day, value: -10, to: fixedNow)!
+        try agent.appendDailyNote(
+            "plain note",
+            date: coldDay,
+            calendar: calendar,
+            now: coldDay
+        )
+
         let store = DreamRecallStore(memoryDirectory: dir, calendar: calendar, now: { fixedNow })
-        // Hot file: many recalls, diverse queries, high scores, recent
         for q in ["alpha one", "alpha two", "alpha three", "alpha four"] {
             try store.recordSearchHits(
                 query: q,
-                hits: [MemorySearchHit(filename: "hot.md", score: 8.0, snippet: "rich unique tokens dashboard metrics pipeline")]
+                hits: [MemorySearchHit(filename: "2026-07-09.md", score: 8.0, snippet: "rich unique tokens dashboard metrics pipeline observability")]
             )
         }
-        // Cold file: single low-score recall with a backdated day via direct append path
-        // Use search with one query then overwrite day by constructing entry through recordGet + additional searches
         try store.recordSearchHits(
             query: "only once",
-            hits: [MemorySearchHit(filename: "cold.md", score: 1.0, snippet: "plain note")]
+            hits: [MemorySearchHit(filename: "2026-06-29.md", score: 1.0, snippet: "plain note")]
         )
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0.0
-        config.dreamingMinRecallCount = 1
-        config.dreamingMinUniqueQueries = 1
         let scheduler = DreamingConsolidationScheduler(config: config, calendar: calendar, now: { fixedNow })
         let scored = try await scheduler.stageCandidatesForTesting(memoryDirectory: dir)
-        let hot = scored.first { $0.filename == "hot.md" }
-        let cold = scored.first { $0.filename == "cold.md" }
+        let hot = scored.first { $0.filename == "2026-07-09.md" }
+        let cold = scored.first { $0.filename == "2026-06-29.md" }
         #expect(hot != nil)
         #expect(cold != nil)
+        #expect(hot?.source == .daily)
+        #expect(cold?.source == .daily)
         #expect((hot?.signal ?? 0) > (cold?.signal ?? 1))
     }
 
-    @Test("deep respects minRecallCount and minUniqueQueries gates")
-    func deepRespectsGates() async throws {
+    @Test("deep does not promote curated topic recalls without a daily staging file")
+    func deepDoesNotPromoteTopicRecalls() async throws {
         let dir = try makeMemoryDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try writeTopic(dir: dir, filename: "gated.md", body: "gated topic content")
 
         let store = DreamRecallStore(memoryDirectory: dir)
-        // One recall, one unique query — below gates
-        try store.recordSearchHits(
-            query: "once",
-            hits: [MemorySearchHit(filename: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
-        )
+        for q in ["once", "second", "third"] {
+            try store.recordSearchHits(
+                query: q,
+                hits: [MemorySearchHit(filename: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
+            )
+        }
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0.0
-        config.dreamingMinRecallCount = 3
-        config.dreamingMinUniqueQueries = 2
-        let scheduler = DreamingConsolidationScheduler(config: config)
-        try await scheduler.runSweep(memoryDirectory: dir)
+        config.dreamingMinRecallCount = 1
+        config.dreamingMinUniqueQueries = 1
+        try await DreamingConsolidationScheduler(config: config).runSweep(memoryDirectory: dir)
 
         let index = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
         #expect(!index.contains("gated.md"))
-
-        // Satisfy gates
-        try store.recordSearchHits(
-            query: "second",
-            hits: [MemorySearchHit(filename: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
-        )
-        try store.recordSearchHits(
-            query: "third",
-            hits: [MemorySearchHit(filename: "gated.md", score: 10.0, snippet: "rich distinctive conceptual tokens here")]
-        )
-        try await scheduler.runSweep(memoryDirectory: dir)
-        let promoted = try String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)
-        #expect(promoted.contains("gated.md"))
     }
 
     @Test("empty recall store does not promote from bare topic manifest")
@@ -183,8 +182,6 @@ struct DreamRecallStoreTests {
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0.0
-        config.dreamingMinRecallCount = 1
-        config.dreamingMinUniqueQueries = 1
         try await DreamingConsolidationScheduler(config: config).runSweep(memoryDirectory: dir)
 
         let indexExists = FileManager.default.fileExists(atPath: dir.appendingPathComponent("MEMORY.md").path)

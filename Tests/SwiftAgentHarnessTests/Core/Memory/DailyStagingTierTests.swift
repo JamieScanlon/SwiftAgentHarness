@@ -1,0 +1,195 @@
+import Foundation
+import Testing
+@testable import SwiftAgentHarness
+
+@Suite("Daily staging tier")
+struct DailyStagingTierTests {
+    private func makeMemoryDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("daily-stage-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @Test("appendDailyNote creates and appends YYYY-MM-DD.md")
+    func appendRoundTrip() throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote("first note about grafana", date: day, calendar: calendar, now: day)
+        try store.appendDailyNote("second note about metrics", date: day, calendar: calendar, now: day)
+
+        let filename = AgentMemoryStore.dailyFilename(for: day, calendar: calendar)
+        #expect(filename == "2026-07-09.md")
+        let body = try #require(try store.readDailyBody(date: day, calendar: calendar))
+        #expect(body.contains("first note about grafana"))
+        #expect(body.contains("second note about metrics"))
+        #expect(AgentMemoryStore.isDailyFilename(filename))
+    }
+
+    @Test("manifest excludes daily files even with fake frontmatter-looking content")
+    func manifestExcludesDailies() throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote("staging only content with unique tokens", date: Date())
+        try store.writeTopic(
+            filename: "reference_keep.md",
+            content: """
+            ---
+            name: Keep
+            description: curated topic
+            type: reference
+            ---
+            body
+            """
+        )
+        let manifest = store.manifest()
+        #expect(manifest.contains { $0.filename == "reference_keep.md" })
+        #expect(!manifest.contains { AgentMemoryStore.isDailyFilename($0.filename) })
+    }
+
+    @Test("light stages daily without prior search; topic recalls are not candidates")
+    func lightStagesDailyWithoutSearch() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote(
+            "rich distinctive conceptual tokens for staging",
+            date: fixedNow,
+            calendar: calendar,
+            now: fixedNow
+        )
+        try store.writeTopic(
+            filename: "topic_only.md",
+            content: """
+            ---
+            name: Topic
+            description: curated
+            type: reference
+            ---
+            should not stage
+            """
+        )
+        try DreamRecallStore(memoryDirectory: dir, calendar: calendar, now: { fixedNow }).recordSearchHits(
+            query: "topic",
+            hits: [MemorySearchHit(filename: "topic_only.md", score: 9, snippet: "should not stage")]
+        )
+
+        var config = MemoryConfiguration.default
+        config.dreamingMinScore = 0
+        let scored = try await DreamingConsolidationScheduler(
+            config: config,
+            calendar: calendar,
+            now: { fixedNow }
+        ).stageCandidatesForTesting(memoryDirectory: dir)
+
+        #expect(scored.contains { $0.filename == "2026-07-09.md" && $0.source == .daily && $0.signal > 0 })
+        #expect(!scored.contains { $0.filename == "topic_only.md" })
+    }
+
+    @Test("deep skips when daily deleted before promote")
+    func deepRehydrateSkip() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote(
+            "rich distinctive conceptual tokens original",
+            date: fixedNow,
+            calendar: calendar,
+            now: fixedNow
+        )
+
+        var config = MemoryConfiguration.default
+        config.dreamingMinScore = 0
+        let scheduler = DreamingConsolidationScheduler(config: config, calendar: calendar, now: { fixedNow })
+        let candidates = try await scheduler.stageCandidatesForTesting(memoryDirectory: dir)
+        #expect(!candidates.isEmpty)
+
+        try FileManager.default.removeItem(at: store.dailyURL(for: fixedNow, calendar: calendar))
+        try await scheduler.promoteCandidatesForTesting(memoryDirectory: dir, candidates: candidates)
+        let indexAfterDelete = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+        #expect(indexAfterDelete.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(store.listTopicFilenames().isEmpty)
+    }
+
+    @Test("deep skips when staged snippet no longer present in daily")
+    func deepStaleSnippetSkip() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote(
+            "rich distinctive conceptual tokens original",
+            date: fixedNow,
+            calendar: calendar,
+            now: fixedNow
+        )
+
+        var config = MemoryConfiguration.default
+        config.dreamingMinScore = 0
+        let scheduler = DreamingConsolidationScheduler(config: config, calendar: calendar, now: { fixedNow })
+        let candidates = try await scheduler.stageCandidatesForTesting(memoryDirectory: dir)
+        #expect(!candidates.isEmpty)
+
+        let url = store.dailyURL(for: fixedNow, calendar: calendar)
+        try MemoryFileLock.atomicWrite(text: "# Daily notes\n\nreplaced content only\n", to: url)
+        try await scheduler.promoteCandidatesForTesting(memoryDirectory: dir, candidates: candidates)
+        let index = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+        #expect(index.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test("deep promotes daily into curated topic + MEMORY.md index line")
+    func deepPromotesToTopic() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        let note = "rich distinctive conceptual tokens grafana dashboard pipeline"
+        try store.appendDailyNote(note, date: fixedNow, calendar: calendar, now: fixedNow)
+
+        var config = MemoryConfiguration.default
+        config.dreamingMinScore = 0
+        try await DreamingConsolidationScheduler(
+            config: config,
+            calendar: calendar,
+            now: { fixedNow }
+        ).runSweep(memoryDirectory: dir)
+
+        let index = try String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)
+        #expect(!index.contains("2026-07-09.md"))
+        #expect(index.contains("reference_2026-07-09_"))
+        let topics = store.listTopicFilenames()
+        #expect(topics.contains { $0.hasPrefix("reference_2026-07-09_") })
+        let topicBody = try #require(try store.readTopicBody(filename: topics.first { $0.hasPrefix("reference_") }!))
+        #expect(topicBody.contains(note) || topicBody.contains("grafana"))
+    }
+
+    @Test("extraction and flush prompts include daily capture guidance")
+    func promptsIncludeDailyGuidance() {
+        let extraction = MemoryExtractionPrompts.systemPrompt(manifestLines: [])
+        #expect(extraction.contains("YYYY-MM-DD.md"))
+        #expect(extraction.contains("Capture vs curate"))
+        let flush = MemoryPreCompactionFlushPrompts.systemPrompt(manifestLines: [])
+        #expect(flush.contains("YYYY-MM-DD.md"))
+        #expect(flush.contains("daily staging"))
+    }
+}

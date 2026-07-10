@@ -68,4 +68,58 @@ struct AgentMemoryStore: Sendable {
     func listTopicFilenames() -> [String] {
         manifest().map(\.filename)
     }
+
+    // MARK: - Daily staging notes (`YYYY-MM-DD.md`)
+
+    static func isDailyFilename(_ filename: String) -> Bool {
+        filename.wholeMatch(of: /^(\d{4})-(\d{2})-(\d{2})\.md$/) != nil
+    }
+
+    static func dailyFilename(
+        for date: Date,
+        calendar: Calendar = Calendar(identifier: .gregorian)
+    ) -> String {
+        DreamRecallStore.dayString(from: date, calendar: calendar) + ".md"
+    }
+
+    func dailyURL(for date: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> URL {
+        memoryDirectory.appendingPathComponent(Self.dailyFilename(for: date, calendar: calendar))
+    }
+
+    func readDailyBody(date: Date, calendar: Calendar = Calendar(identifier: .gregorian)) throws -> String? {
+        try readDailyBody(filename: Self.dailyFilename(for: date, calendar: calendar))
+    }
+
+    func readDailyBody(filename: String) throws -> String? {
+        guard Self.isDailyFilename(filename) else { return nil }
+        let url = memoryDirectory.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Appends a timestamped note to the daily staging file (no taxonomy frontmatter).
+    func appendDailyNote(
+        _ text: String,
+        date: Date = Date(),
+        calendar: Calendar = Calendar(identifier: .gregorian),
+        now: Date = Date()
+    ) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try MemoryContentScanner.validateWrite(trimmed).get()
+        try ensureLayout()
+        let filename = Self.dailyFilename(for: date, calendar: calendar)
+        let url = memoryDirectory.appendingPathComponent(filename)
+        let stamp = ISO8601DateFormatter().string(from: now)
+        let block = "\n## \(stamp)\n\n\(trimmed)\n"
+        try MemoryFileLock.withLock(memoryDirectory: memoryDirectory, fileManager: .default) {
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                try MemoryFileLock.atomicWrite(text: existing + block, to: url)
+            } else {
+                let header = "# Daily notes \(Self.dailyFilename(for: date, calendar: calendar).replacingOccurrences(of: ".md", with: ""))\n"
+                try MemoryFileLock.atomicWrite(text: header + block, to: url)
+            }
+        }
+    }
 }

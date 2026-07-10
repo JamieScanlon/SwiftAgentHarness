@@ -50,25 +50,58 @@ actor DreamingConsolidationScheduler {
         return try stageLightPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir)
     }
 
+    /// Test seam: REM + deep on pre-staged candidates (for rehydrate / promote assertions).
+    func promoteCandidatesForTesting(memoryDirectory: URL, candidates: [DreamCandidate]) async throws {
+        let dreamsDir = memoryDirectory.appendingPathComponent(".dreams", isDirectory: true)
+        try FileManager.default.createDirectory(at: dreamsDir, withIntermediateDirectories: true)
+        let themes = remPhase(candidates: candidates)
+        try await deepPhase(memoryDirectory: memoryDirectory, dreamsDir: dreamsDir, candidates: themes)
+    }
+
     private func stageLightPhase(memoryDirectory: URL, dreamsDir: URL) throws -> [DreamCandidate] {
         _ = dreamsDir
         let recallStore = DreamRecallStore(memoryDirectory: memoryDirectory, calendar: calendar, now: now)
-        let stats = try recallStore.aggregateStats()
+        let statsByFile = Dictionary(
+            uniqueKeysWithValues: try recallStore.aggregateStats().map { ($0.filename, $0) }
+        )
         let promoted = recallStore.previouslyPromotedFilenames()
         let today = DreamRecallStore.dayString(from: now(), calendar: calendar)
 
-        let maxCount = max(1, stats.map(\.recallCount).max() ?? 1)
-        let maxUnique = max(1, stats.map(\.uniqueQueryCount).max() ?? 1)
-        let maxMean = max(1e-9, stats.map(\.meanScore).max() ?? 1)
+        let dailies = Self.recentDailyFilenames(
+            in: memoryDirectory,
+            lookbackDays: DreamRecallStore.defaultLookbackDays,
+            calendar: calendar,
+            now: now()
+        )
+        guard !dailies.isEmpty else { return [] }
 
-        var byFilename: [String: DreamCandidate] = [:]
-        for stat in stats {
-            let frequency = Double(stat.recallCount) / Double(maxCount)
-            let relevance = min(1.0, stat.meanScore / maxMean)
-            let diversity = Double(stat.uniqueQueryCount) / Double(maxUnique)
-            let recency = DreamRecallStore.recencySignal(latestRecallDay: stat.latestRecallDay, today: today)
-            let consolidation = promoted.contains(stat.filename) ? 1.0 : 0.0
-            let richness = DreamRecallStore.conceptualRichness(snippet: stat.snippet)
+        let dailyStats = dailies.compactMap { statsByFile[$0.filename] }
+        let maxCount = max(1, dailyStats.map(\.recallCount).max() ?? 1)
+        let maxUnique = max(1, dailyStats.map(\.uniqueQueryCount).max() ?? 1)
+        let maxMean = max(1e-9, dailyStats.map(\.meanScore).max() ?? 1)
+
+        var candidates: [DreamCandidate] = []
+        for daily in dailies {
+            let snippet = Self.richestSnippet(from: daily.body)
+            guard !snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let richness = DreamRecallStore.conceptualRichness(snippet: snippet)
+            let dayKey = String(daily.filename.dropLast(3)) // strip .md
+            let recency = DreamRecallStore.recencySignal(latestRecallDay: dayKey, today: today)
+            let consolidation = promoted.contains(daily.filename) ? 1.0 : 0.0
+
+            var frequency = 0.0
+            var relevance = 0.0
+            var diversity = 0.0
+            var recallCount = 0
+            var uniqueQueryCount = 0
+            if let stat = statsByFile[daily.filename] {
+                frequency = Double(stat.recallCount) / Double(maxCount)
+                relevance = min(1.0, stat.meanScore / maxMean)
+                diversity = Double(stat.uniqueQueryCount) / Double(maxUnique)
+                recallCount = stat.recallCount
+                uniqueQueryCount = stat.uniqueQueryCount
+            }
+
             let signal =
                 Self.frequencyWeight * frequency
                 + Self.relevanceWeight * relevance
@@ -76,35 +109,19 @@ actor DreamingConsolidationScheduler {
                 + Self.recencyWeight * recency
                 + Self.consolidationWeight * consolidation
                 + Self.richnessWeight * richness
-            byFilename[stat.filename] = DreamCandidate(
-                filename: stat.filename,
-                signal: signal,
-                snippet: stat.snippet,
-                recallCount: stat.recallCount,
-                uniqueQueryCount: stat.uniqueQueryCount
+
+            candidates.append(
+                DreamCandidate(
+                    filename: daily.filename,
+                    signal: signal,
+                    snippet: snippet,
+                    recallCount: recallCount,
+                    uniqueQueryCount: uniqueQueryCount,
+                    source: .daily
+                )
             )
         }
-
-        // Optional daily notes: seed with richness-only if not already recalled.
-        for daily in Self.recentDailyFilenames(
-            in: memoryDirectory,
-            lookbackDays: DreamRecallStore.defaultLookbackDays,
-            calendar: calendar,
-            now: now()
-        ) {
-            guard byFilename[daily.filename] == nil else { continue }
-            let richness = DreamRecallStore.conceptualRichness(snippet: daily.snippet)
-            guard richness > 0 else { continue }
-            byFilename[daily.filename] = DreamCandidate(
-                filename: daily.filename,
-                signal: Self.richnessWeight * richness,
-                snippet: daily.snippet,
-                recallCount: 0,
-                uniqueQueryCount: 0
-            )
-        }
-
-        return Array(byFilename.values).sorted { $0.signal > $1.signal }
+        return candidates.sorted { $0.signal > $1.signal }
     }
 
     private func remPhase(candidates: [DreamCandidate]) -> [DreamCandidate] {
@@ -114,7 +131,8 @@ actor DreamingConsolidationScheduler {
                 signal: c.signal + Self.remPhaseBoost,
                 snippet: c.snippet,
                 recallCount: c.recallCount,
-                uniqueQueryCount: c.uniqueQueryCount
+                uniqueQueryCount: c.uniqueQueryCount,
+                source: c.source
             )
         }
     }
@@ -126,25 +144,66 @@ actor DreamingConsolidationScheduler {
     ) async throws {
         let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
         let gated = candidates.filter { candidate in
-            candidate.signal >= config.dreamingMinScore
-                && candidate.recallCount >= config.dreamingMinRecallCount
-                && candidate.uniqueQueryCount >= config.dreamingMinUniqueQueries
+            guard candidate.signal >= config.dreamingMinScore else { return false }
+            switch candidate.source {
+            case .daily:
+                return !candidate.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .recall:
+                return candidate.recallCount >= config.dreamingMinRecallCount
+                    && candidate.uniqueQueryCount >= config.dreamingMinUniqueQueries
+            }
         }
         let ranked = gated.sorted { $0.signal > $1.signal }.prefix(3)
         guard !ranked.isEmpty else { return }
+
         var index = (try? String(contentsOf: store.indexURL, encoding: .utf8)) ?? ""
+        var promotedTopics: [String] = []
+
         for candidate in ranked {
-            let line = "- [\(candidate.filename)](\(candidate.filename)) — \(candidate.snippet)"
-            if !index.contains(candidate.filename) {
-                index += (index.isEmpty ? "" : "\n") + line
+            switch candidate.source {
+            case .daily:
+                guard let liveBody = try store.readDailyBody(filename: candidate.filename) else {
+                    logger?.info("[Dreaming] skip \(candidate.filename): daily missing")
+                    continue
+                }
+                guard liveBody.contains(candidate.snippet) else {
+                    logger?.info("[Dreaming] skip \(candidate.filename): staged snippet stale")
+                    continue
+                }
+                let topicFilename = Self.promotedTopicFilename(from: candidate)
+                let title = Self.promotedTitle(from: candidate.snippet)
+                let topicContent = """
+                ---
+                name: \(title)
+                description: \(String(candidate.snippet.prefix(120)).replacingOccurrences(of: "\n", with: " "))
+                type: reference
+                ---
+                \(candidate.snippet)
+                """
+                if (try? store.readTopicBody(filename: topicFilename)) == nil {
+                    try store.writeTopic(filename: topicFilename, content: topicContent)
+                }
+                let line = "- [\(title)](\(topicFilename)) — \(String(candidate.snippet.prefix(100)).replacingOccurrences(of: "\n", with: " "))"
+                if !index.contains(topicFilename) {
+                    index += (index.isEmpty ? "" : "\n") + line
+                }
+                promotedTopics.append(topicFilename)
+            case .recall:
+                let line = "- [\(candidate.filename)](\(candidate.filename)) — \(candidate.snippet)"
+                if !index.contains(candidate.filename) {
+                    index += (index.isEmpty ? "" : "\n") + line
+                }
+                promotedTopics.append(candidate.filename)
             }
         }
+
+        guard !promotedTopics.isEmpty else { return }
         if let capFired = try store.writeIndex(content: index) {
             logger?.warning("[Dreaming] MEMORY.md truncated at write: \(capFired)")
         }
-        logger?.info("[Dreaming] promoted \(ranked.count) candidate(s) to MEMORY.md")
+        logger?.info("[Dreaming] promoted \(promotedTopics.count) candidate(s) to MEMORY.md")
         let marker = dreamsDir.appendingPathComponent("last-deep.json")
-        let payload = ["promoted": ranked.map(\.filename)]
+        let payload = ["promoted": promotedTopics]
         let data = try JSONSerialization.data(withJSONObject: payload)
         try data.write(to: marker)
     }
@@ -161,7 +220,7 @@ actor DreamingConsolidationScheduler {
         lookbackDays: Int,
         calendar: Calendar,
         now: Date
-    ) -> [(filename: String, snippet: String)] {
+    ) -> [(filename: String, body: String, snippet: String)] {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(
             at: memoryDirectory,
@@ -173,18 +232,66 @@ actor DreamingConsolidationScheduler {
             from: calendar.date(byAdding: .day, value: -lookbackDays, to: now) ?? now,
             calendar: calendar
         )
-        let pattern = /^(\d{4})-(\d{2})-(\d{2})\.md$/
-        var results: [(filename: String, snippet: String)] = []
+        var results: [(filename: String, body: String, snippet: String)] = []
         for url in contents {
             let name = url.lastPathComponent
-            guard let match = name.wholeMatch(of: pattern) else { continue }
-            let day = "\(match.1)-\(match.2)-\(match.3)"
+            guard AgentMemoryStore.isDailyFilename(name) else { continue }
+            let day = String(name.dropLast(3))
             guard day >= cutoff else { continue }
             let body = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            results.append((filename: name, snippet: String(body.prefix(DreamRecallStore.maxSnippetLength))))
+            let snippet = String(richestSnippet(from: body).prefix(DreamRecallStore.maxSnippetLength))
+            results.append((filename: name, body: body, snippet: snippet))
         }
         return results
     }
+
+    private static func richestSnippet(from body: String) -> String {
+        let paragraphs = body
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        guard !paragraphs.isEmpty else {
+            return String(body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(DreamRecallStore.maxSnippetLength))
+        }
+        let best = paragraphs.max { a, b in
+            DreamRecallStore.conceptualRichness(snippet: a) < DreamRecallStore.conceptualRichness(snippet: b)
+        } ?? paragraphs[0]
+        return String(best.prefix(DreamRecallStore.maxSnippetLength))
+    }
+
+    private static func promotedTitle(from snippet: String) -> String {
+        let firstLine = snippet
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? "Promoted note"
+        let cleaned = firstLine
+            .replacingOccurrences(of: "#", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return String(cleaned.prefix(80))
+    }
+
+    private static func promotedTopicFilename(from candidate: DreamCandidate) -> String {
+        let day = String(candidate.filename.dropLast(3))
+        let slugSource = promotedTitle(from: candidate.snippet)
+            .lowercased()
+            .map { ch -> Character in
+                if ch.isLetter || ch.isNumber { return ch }
+                return "-"
+            }
+        var slug = String(slugSource)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        if slug.isEmpty { slug = "note" }
+        slug = String(slug.prefix(48))
+        let digest = DreamRecallStore.queryHash(for: candidate.snippet)
+        let hash = String(digest.prefix(6))
+        return "reference_\(day)_\(slug)_\(hash).md"
+    }
+}
+
+enum DreamCandidateSource: String, Sendable, Equatable {
+    case daily
+    case recall
 }
 
 struct DreamCandidate: Sendable, Equatable {
@@ -193,4 +300,5 @@ struct DreamCandidate: Sendable, Equatable {
     let snippet: String
     let recallCount: Int
     let uniqueQueryCount: Int
+    let source: DreamCandidateSource
 }
