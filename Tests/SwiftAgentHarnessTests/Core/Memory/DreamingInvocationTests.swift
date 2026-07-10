@@ -94,13 +94,22 @@ struct MemoryDreamingBridgeTests {
         try control.setEnabled(true)
         let agentStore = AgentMemoryStore(memoryDirectory: tree.memory)
         try agentStore.ensureLayout()
-        try agentStore.appendDailyNote(
-            "rich distinctive conceptual tokens here for promotion",
-            date: Date()
-        )
+        let note = "rich distinctive conceptual tokens here for promotion"
+        let day = Date()
+        try agentStore.appendDailyNote(note, date: day)
+        let dailyName = AgentMemoryStore.dailyFilename(for: day)
+        let recalls = DreamRecallStore(memoryDirectory: tree.memory)
+        for query in ["once", "twice"] {
+            try recalls.recordSearchHits(
+                query: query,
+                hits: [MemorySearchHit(filename: dailyName, score: 10, snippet: note)]
+            )
+        }
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0
+        config.dreamingMinRecallCount = 2
+        config.dreamingMinUniqueQueries = 2
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: control,
@@ -110,7 +119,7 @@ struct MemoryDreamingBridgeTests {
         #expect(swept == 1)
         let index = try String(contentsOf: tree.memory.appendingPathComponent("MEMORY.md"), encoding: .utf8)
         #expect(!index.isEmpty)
-        #expect(!index.contains(AgentMemoryStore.dailyFilename(for: Date())))
+        #expect(!index.contains(dailyName))
         let topics = agentStore.listTopicFilenames()
         #expect(!topics.isEmpty)
     }

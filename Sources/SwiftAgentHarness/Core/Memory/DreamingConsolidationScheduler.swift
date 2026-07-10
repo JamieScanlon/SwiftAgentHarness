@@ -144,14 +144,10 @@ actor DreamingConsolidationScheduler {
     ) async throws {
         let store = AgentMemoryStore(memoryDirectory: memoryDirectory)
         let gated = candidates.filter { candidate in
-            guard candidate.signal >= config.dreamingMinScore else { return false }
-            switch candidate.source {
-            case .daily:
-                return !candidate.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .recall:
-                return candidate.recallCount >= config.dreamingMinRecallCount
-                    && candidate.uniqueQueryCount >= config.dreamingMinUniqueQueries
-            }
+            candidate.signal >= config.dreamingMinScore
+                && candidate.recallCount >= config.dreamingMinRecallCount
+                && candidate.uniqueQueryCount >= config.dreamingMinUniqueQueries
+                && !candidate.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         let ranked = gated.sorted { $0.signal > $1.signal }.prefix(3)
         guard !ranked.isEmpty else { return }

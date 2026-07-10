@@ -96,6 +96,23 @@ struct DailyStagingTierTests {
         #expect(!scored.contains { $0.filename == "topic_only.md" })
     }
 
+    private func seedDailyRecalls(
+        memoryDirectory: URL,
+        dailyFilename: String,
+        snippet: String,
+        queries: [String],
+        calendar: Calendar,
+        now: Date
+    ) throws {
+        let recalls = DreamRecallStore(memoryDirectory: memoryDirectory, calendar: calendar, now: { now })
+        for query in queries {
+            try recalls.recordSearchHits(
+                query: query,
+                hits: [MemorySearchHit(filename: dailyFilename, score: 10.0, snippet: snippet)]
+            )
+        }
+    }
+
     @Test("deep skips when daily deleted before promote")
     func deepRehydrateSkip() async throws {
         let dir = try makeMemoryDir()
@@ -105,18 +122,24 @@ struct DailyStagingTierTests {
         let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
 
         let store = AgentMemoryStore(memoryDirectory: dir)
-        try store.appendDailyNote(
-            "rich distinctive conceptual tokens original",
-            date: fixedNow,
+        let note = "rich distinctive conceptual tokens original"
+        try store.appendDailyNote(note, date: fixedNow, calendar: calendar, now: fixedNow)
+        try seedDailyRecalls(
+            memoryDirectory: dir,
+            dailyFilename: "2026-07-09.md",
+            snippet: note,
+            queries: ["q1", "q2"],
             calendar: calendar,
             now: fixedNow
         )
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0
+        config.dreamingMinRecallCount = 2
+        config.dreamingMinUniqueQueries = 2
         let scheduler = DreamingConsolidationScheduler(config: config, calendar: calendar, now: { fixedNow })
         let candidates = try await scheduler.stageCandidatesForTesting(memoryDirectory: dir)
-        #expect(!candidates.isEmpty)
+        #expect(candidates.contains { $0.recallCount >= 2 })
 
         try FileManager.default.removeItem(at: store.dailyURL(for: fixedNow, calendar: calendar))
         try await scheduler.promoteCandidatesForTesting(memoryDirectory: dir, candidates: candidates)
@@ -134,15 +157,21 @@ struct DailyStagingTierTests {
         let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
 
         let store = AgentMemoryStore(memoryDirectory: dir)
-        try store.appendDailyNote(
-            "rich distinctive conceptual tokens original",
-            date: fixedNow,
+        let note = "rich distinctive conceptual tokens original"
+        try store.appendDailyNote(note, date: fixedNow, calendar: calendar, now: fixedNow)
+        try seedDailyRecalls(
+            memoryDirectory: dir,
+            dailyFilename: "2026-07-09.md",
+            snippet: note,
+            queries: ["q1", "q2"],
             calendar: calendar,
             now: fixedNow
         )
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0
+        config.dreamingMinRecallCount = 2
+        config.dreamingMinUniqueQueries = 2
         let scheduler = DreamingConsolidationScheduler(config: config, calendar: calendar, now: { fixedNow })
         let candidates = try await scheduler.stageCandidatesForTesting(memoryDirectory: dir)
         #expect(!candidates.isEmpty)
@@ -150,6 +179,67 @@ struct DailyStagingTierTests {
         let url = store.dailyURL(for: fixedNow, calendar: calendar)
         try MemoryFileLock.atomicWrite(text: "# Daily notes\n\nreplaced content only\n", to: url)
         try await scheduler.promoteCandidatesForTesting(memoryDirectory: dir, candidates: candidates)
+        let index = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+        #expect(index.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test("unsearched daily does not promote under default threshold gates")
+    func unsearchedDailyBlockedByDefaultGates() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        try store.appendDailyNote(
+            "rich distinctive conceptual tokens grafana dashboard pipeline",
+            date: fixedNow,
+            calendar: calendar,
+            now: fixedNow
+        )
+
+        try await DreamingConsolidationScheduler(
+            config: .default,
+            calendar: calendar,
+            now: { fixedNow }
+        ).runSweep(memoryDirectory: dir)
+
+        let index = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+        #expect(index.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(store.listTopicFilenames().isEmpty)
+    }
+
+    @Test("daily below minRecallCount / minUniqueQueries does not promote")
+    func belowRecallGatesBlocked() async throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let fixedNow = calendar.date(from: DateComponents(year: 2026, month: 7, day: 9))!
+
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        let note = "rich distinctive conceptual tokens grafana dashboard pipeline"
+        try store.appendDailyNote(note, date: fixedNow, calendar: calendar, now: fixedNow)
+        try seedDailyRecalls(
+            memoryDirectory: dir,
+            dailyFilename: "2026-07-09.md",
+            snippet: note,
+            queries: ["only-one"],
+            calendar: calendar,
+            now: fixedNow
+        )
+
+        var config = MemoryConfiguration.default
+        config.dreamingMinScore = 0
+        config.dreamingMinRecallCount = 2
+        config.dreamingMinUniqueQueries = 2
+        try await DreamingConsolidationScheduler(
+            config: config,
+            calendar: calendar,
+            now: { fixedNow }
+        ).runSweep(memoryDirectory: dir)
+
         let index = (try? String(contentsOf: dir.appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
         #expect(index.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
@@ -165,9 +255,19 @@ struct DailyStagingTierTests {
         let store = AgentMemoryStore(memoryDirectory: dir)
         let note = "rich distinctive conceptual tokens grafana dashboard pipeline"
         try store.appendDailyNote(note, date: fixedNow, calendar: calendar, now: fixedNow)
+        try seedDailyRecalls(
+            memoryDirectory: dir,
+            dailyFilename: "2026-07-09.md",
+            snippet: note,
+            queries: ["alpha", "beta"],
+            calendar: calendar,
+            now: fixedNow
+        )
 
         var config = MemoryConfiguration.default
         config.dreamingMinScore = 0
+        config.dreamingMinRecallCount = 2
+        config.dreamingMinUniqueQueries = 2
         try await DreamingConsolidationScheduler(
             config: config,
             calendar: calendar,
@@ -181,6 +281,13 @@ struct DailyStagingTierTests {
         #expect(topics.contains { $0.hasPrefix("reference_2026-07-09_") })
         let topicBody = try #require(try store.readTopicBody(filename: topics.first { $0.hasPrefix("reference_") }!))
         #expect(topicBody.contains(note) || topicBody.contains("grafana"))
+    }
+
+    @Test("default dreamingMinScore is 0.75")
+    func defaultMinScore() {
+        #expect(MemoryConfiguration.default.dreamingMinScore == 0.75)
+        #expect(MemoryConfiguration.default.dreamingMinRecallCount == 2)
+        #expect(MemoryConfiguration.default.dreamingMinUniqueQueries == 2)
     }
 
     @Test("extraction and flush prompts include daily capture guidance")

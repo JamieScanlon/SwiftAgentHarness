@@ -39,7 +39,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         activeMemoryMaxSummaryChars: 4_000,
         teamMemoryEnabled: true,
         dreamingCron: "0 3 * * *",
-        dreamingMinScore: 0.55,
+        dreamingMinScore: 0.75,
         dreamingMinRecallCount: 2,
         dreamingMinUniqueQueries: 2,
         recallSelectorModel: "llama3.2:3b",

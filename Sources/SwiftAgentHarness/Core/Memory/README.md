@@ -14,6 +14,8 @@ Normative spec: harness-template `core/memory/memory.md` and `core/memory/README
 | `memory/.dreams/` | Machine state (recall store, last-deep marker) |
 | `DREAMS.md` | Optional human diary (not required for C3) |
 
+Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
+
 ## Boundary
 
 | Consumer | Uses Memory for |
