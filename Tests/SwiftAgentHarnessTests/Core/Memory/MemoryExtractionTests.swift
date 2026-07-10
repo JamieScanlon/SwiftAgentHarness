@@ -112,6 +112,20 @@ struct BackgroundMemoryExtractorTests {
 
 @Suite("Pre-compaction memory flush")
 struct PreCompactionMemoryFlushTests {
+    private static func validTopicFile(named filename: String, in memoryDir: URL) throws -> String {
+        let body = """
+---
+name: Flush topic
+description: durable hook
+type: user
+---
+Promoted before compaction.
+"""
+        let url = memoryDir.appendingPathComponent(filename)
+        try body.write(to: url, atomically: true, encoding: .utf8)
+        return url.path
+    }
+
     @Test("Pre-compaction flush invokes spawn port with middle messages")
     func preCompactionFlushInvokesSpawnPort() async throws {
         let dir = FileManager.default.temporaryDirectory
@@ -133,7 +147,10 @@ struct PreCompactionMemoryFlushTests {
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, middle, _ in
                 await gate.record(middleCount: middle.count)
-                await service.recordAuxiliaryMemoryWrite(path: memoryDir.appendingPathComponent("note.md").path, conversationID: conversationID)
+                guard let path = try? Self.validTopicFile(named: "note.md", in: memoryDir) else {
+                    return false
+                }
+                await service.recordAuxiliaryMemoryWrite(path: path, conversationID: conversationID)
                 return true
             }
         )
@@ -214,7 +231,7 @@ struct PreCompactionMemoryFlushTests {
         _ = try await service.bootstrapSession(context: context)
         let mainPath = memoryDir.appendingPathComponent("main-note.md").path
         await service.recordMemoryWrite(path: mainPath, conversationID: conversationID)
-        let flushPath = memoryDir.appendingPathComponent("flush-note.md").path
+        let flushPath = try Self.validTopicFile(named: "flush-note.md", in: memoryDir)
         let port = MemorySubAgentSpawnPort(
             spawnBlockingRecall: { _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
@@ -239,6 +256,78 @@ struct PreCompactionMemoryFlushTests {
         #expect(result.flushedMemoryEntryIDs.count == 1)
         #expect(result.flushedMemoryEntryIDs.first == DefaultMemoryService.manifestEntryID(filename: "flush-note.md"))
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    @Test("Pre-compaction flush entry IDs exclude daily and MEMORY.md auxiliary writes")
+    func flushEntryIDsExcludeDailyAndIndex() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mem-flush-filter-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let memoryDir = dir.appendingPathComponent("memory", isDirectory: true)
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: dir.path,
+            canonicalGitRoot: dir.path,
+            memoryDirectory: memoryDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+        let curatedPath = try Self.validTopicFile(named: "curated.md", in: memoryDir)
+        let port = MemorySubAgentSpawnPort(
+            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBackgroundExtraction: { _ in },
+            spawnBlockingPreCompactionFlush: { _, _, _ in
+                await service.recordAuxiliaryMemoryWrite(
+                    path: memoryDir.appendingPathComponent("2026-07-10.md").path,
+                    conversationID: conversationID
+                )
+                await service.recordAuxiliaryMemoryWrite(
+                    path: memoryDir.appendingPathComponent("MEMORY.md").path,
+                    conversationID: conversationID
+                )
+                await service.recordAuxiliaryMemoryWrite(path: curatedPath, conversationID: conversationID)
+                return true
+            }
+        )
+        await service.bindSpawnPort(port)
+        let middle = [Message(id: UUID(), role: .user, content: "msg", timestamp: Date(), toolCalls: [])]
+        let result = await service.runPreCompactionFlush(
+            context: PreCompactionMemoryFlushContext(
+                conversationID: conversationID,
+                middleMessages: middle,
+                maxFlushedMemoryEntries: 8,
+                timeoutMs: 1000
+            ),
+            spawnPort: port,
+            logger: nil
+        )
+        #expect(result.succeeded)
+        #expect(result.flushedMemoryEntryIDs.count == 1)
+        #expect(result.flushedMemoryEntryIDs.first == DefaultMemoryService.manifestEntryID(filename: "curated.md"))
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    @Test("Pre-compaction flush write guard clears after run")
+    func flushWriteGuardClearsAfterRun() async {
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        await service.registerPreCompactionFlushWriteGuard(conversationID: conversationID, manifestTopicFilenames: [])
+        let blocked = await service.validatePreCompactionFlushWrite(
+            conversationID: conversationID,
+            absolutePath: "/tmp/memory/2026-07-10.md",
+            priorContent: nil,
+            newContent: "daily"
+        )
+        #expect(blocked != nil)
+        await service.clearPreCompactionFlushWriteGuard(conversationID: conversationID)
+        let allowed = await service.validatePreCompactionFlushWrite(
+            conversationID: conversationID,
+            absolutePath: "/tmp/memory/2026-07-10.md",
+            priorContent: nil,
+            newContent: "daily"
+        )
+        #expect(allowed == nil)
     }
 
     @Test("Flush-only auxiliary writes do not mark main agent wrote memory")

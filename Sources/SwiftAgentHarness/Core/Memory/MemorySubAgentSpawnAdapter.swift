@@ -1,3 +1,4 @@
+import EasyJSON
 import Foundation
 import Logging
 import SwiftAgentKit
@@ -130,6 +131,9 @@ enum MemorySubAgentSpawnAdapter {
                     runInBackground: false,
                     userSystemPrompt: systemPrompt,
                     topic: "memory-pre-compaction-flush",
+                    metadata: .object([
+                        "preCompactionFlushMaxIterations": .double(Double(config.preCompactionFlushMaxIterations)),
+                    ]),
                     interactionMode: "memory-pre-compaction-flush"
                 )
                 let childID: UUID

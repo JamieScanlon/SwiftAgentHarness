@@ -55,6 +55,21 @@ Dual gate: **both** Context Engine and Memory knobs must allow flush.
 
 Loader clamp for `softThresholdTokens`: `max(0, v)` with upper bound `min(100_000, proactiveSafetyBufferTokens * 2)`.
 
+## Flush write targets (curated only)
+
+Pre-compaction flush promotes durable facts to **curated typed topic files** (`user` / `feedback` / `project` / `reference` with YAML frontmatter). It does **not** target daily staging files (`YYYY-MM-DD.md`) — that tier remains for background extraction and dreaming (C3).
+
+| Target | Flush behavior |
+|--------|----------------|
+| New typed topic `.md` | `write_file` with valid frontmatter |
+| Existing manifest topic | **Append-only** via `edit_file` (read first) |
+| `MEMORY.md` | **Append-only** one index hook line via `edit_file` (never `write_file`) |
+| Daily staging / `DREAMS.md` / `.dreams/*` | Rejected at tool layer |
+
+Prompt + runtime guard: the flush sub-agent gets a dedicated curated-only prompt (not the extraction/daily-capture prompt). While flush runs, `PreCompactionFlushWriteGuard` validates `write_file` / `edit_file` mutations. Successful flush checkpoints count **validated curated topic** writes only (`MEMORY.md` and daily paths are excluded from entry IDs).
+
+Background extraction may still append to daily staging; only the pre-compaction flush path is curated-only.
+
 ## Explicitly deferred
 
 - **Transcript-byte fallback** as an alternate flush/compaction trigger (token decision remains authoritative for M1).

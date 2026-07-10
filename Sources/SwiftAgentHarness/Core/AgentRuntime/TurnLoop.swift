@@ -775,6 +775,13 @@ struct TurnLoop {
             modeRegistry: ports.modeRegistry,
             logger: ports.logger
         )
+        if conv.modeProfileID == "memory-pre-compaction-flush",
+           let metadata = conv.metadata,
+           case .object(let object) = metadata,
+           let raw = object["preCompactionFlushMaxIterations"],
+           case .double(let value) = raw {
+            return max(1, Int(value))
+        }
         guard let configured = profile.runtime.maxIterations else {
             return Self.defaultTurnLoopMaxIterations
         }

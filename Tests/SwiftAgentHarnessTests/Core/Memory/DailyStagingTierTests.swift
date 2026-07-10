@@ -301,13 +301,17 @@ struct DailyStagingTierTests {
         #expect(missing.dreamingEnabled == false)
     }
 
-    @Test("extraction and flush prompts include daily capture guidance")
-    func promptsIncludeDailyGuidance() {
+    @Test("extraction prompt includes daily capture guidance; flush prompt does not")
+    func extractionIncludesDailyGuidanceFlushDoesNot() {
         let extraction = MemoryExtractionPrompts.systemPrompt(manifestLines: [])
         #expect(extraction.contains("YYYY-MM-DD.md"))
         #expect(extraction.contains("Capture vs curate"))
         let flush = MemoryPreCompactionFlushPrompts.systemPrompt(manifestLines: [])
-        #expect(flush.contains("YYYY-MM-DD.md"))
-        #expect(flush.contains("daily staging"))
+        #expect(!flush.contains("Capture vs curate"))
+        #expect(!flush.contains("Prefer appending durable-but-not-yet-curated"))
+        #expect(flush.contains("Do NOT write daily staging"))
+        #expect(flush.contains("curated promotion only"))
+        #expect(flush.contains("two steps"))
+        #expect(flush.contains("append-only"))
     }
 }

@@ -21,6 +21,7 @@ public actor DefaultMemoryService: MemoryServicing {
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
     /// Conversations that already completed a soft-threshold flush since the last hard compaction.
     private var softPreCompactionFlushCompleted: Set<UUID> = []
+    private var preCompactionFlushWriteGuardByConversation: [UUID: PreCompactionFlushWriteGuard.Policy] = [:]
     private let userConfigDir: URL
 
     /// Silenia / composition-root entry: caller supplies resolved memory configuration explicitly.
@@ -118,6 +119,15 @@ public actor DefaultMemoryService: MemoryServicing {
         guard let session = sessionByConversation[context.conversationID],
               let store = storeByConversation[context.conversationID] else { return .skipped }
 
+        let manifestTopics = Set(store.listTopicFilenames())
+        registerPreCompactionFlushWriteGuard(
+            conversationID: context.conversationID,
+            manifestTopicFilenames: manifestTopics
+        )
+        defer {
+            clearPreCompactionFlushWriteGuard(conversationID: context.conversationID)
+        }
+
         let pathsBefore = Set(await writeTracker.auxiliaryWrittenPaths(conversationID: context.conversationID))
         let messageStrings = context.middleMessages.map(\.content)
         let providers = await providerRegistry.activeProviders()
@@ -155,9 +165,11 @@ public actor DefaultMemoryService: MemoryServicing {
         }
 
         let version = await snapshotStore.generation(for: context.conversationID)
-        let entryIDs = flushPaths.sorted()
-            .map { URL(fileURLWithPath: $0).lastPathComponent }
-            .filter { !$0.isEmpty && $0 != "MEMORY.md" }
+        let curatedBasenames = PreCompactionFlushWriteGuard.curatedTopicBasenames(
+            fromAbsolutePaths: flushPaths,
+            memoryDirectory: session.memoryDirectory
+        )
+        let entryIDs = curatedBasenames
             .prefix(context.maxFlushedMemoryEntries)
             .map { Self.manifestEntryID(filename: $0) }
 
@@ -285,6 +297,7 @@ public actor DefaultMemoryService: MemoryServicing {
         storeByConversation.removeValue(forKey: conversationID)
         hintTrackerByConversation.removeValue(forKey: conversationID)
         softPreCompactionFlushCompleted.remove(conversationID)
+        preCompactionFlushWriteGuardByConversation.removeValue(forKey: conversationID)
         await snapshotStore.endSession(conversationID: conversationID)
         await writeTracker.removeConversation(conversationID: conversationID)
         await activeMemory.endSession(conversationID: conversationID)
@@ -302,6 +315,51 @@ public actor DefaultMemoryService: MemoryServicing {
 
     func clearSoftPreCompactionFlush(conversationID: UUID) {
         softPreCompactionFlushCompleted.remove(conversationID)
+    }
+
+    func registerPreCompactionFlushWriteGuard(
+        conversationID: UUID,
+        manifestTopicFilenames: Set<String>
+    ) {
+        preCompactionFlushWriteGuardByConversation[conversationID] = PreCompactionFlushWriteGuard.Policy(
+            manifestTopicFilenames: manifestTopicFilenames
+        )
+    }
+
+    func clearPreCompactionFlushWriteGuard(conversationID: UUID) {
+        preCompactionFlushWriteGuardByConversation.removeValue(forKey: conversationID)
+    }
+
+    /// Returns a user-facing error when an active flush guard rejects the write; `nil` when guard is inactive or write is allowed.
+    func validatePreCompactionFlushWrite(
+        conversationID: UUID,
+        absolutePath: String,
+        priorContent: String?,
+        newContent: String
+    ) -> String? {
+        guard let policy = preCompactionFlushWriteGuardByConversation[conversationID] else { return nil }
+        let basename = URL(fileURLWithPath: absolutePath).lastPathComponent
+        let result: Result<Void, PreCompactionFlushWriteGuard.Violation>
+        if let priorContent {
+            result = PreCompactionFlushWriteGuard.validateEditFile(
+                basename: basename,
+                priorContent: priorContent,
+                newContent: newContent,
+                policy: policy
+            )
+        } else {
+            result = PreCompactionFlushWriteGuard.validateWriteFile(
+                basename: basename,
+                content: newContent,
+                policy: policy
+            )
+        }
+        switch result {
+        case .success:
+            return nil
+        case .failure(let violation):
+            return violation.userMessage
+        }
     }
 
     func currentSnapshotGeneration(conversationID: UUID) async -> Int {

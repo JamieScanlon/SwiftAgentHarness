@@ -691,6 +691,18 @@ public actor OrchestratorRuntimeService {
                             await memoryService.recordMemoryWrite(path: path, conversationID: conv.id)
                         }
                     },
+                    validatePreCompactionFlushWrite: { path, priorContent, newContent in
+                        guard let memoryService, let conv = activeConversation else { return }
+                        let guardConversationID = conv.parentConversationID ?? conv.id
+                        if let message = await memoryService.validatePreCompactionFlushWrite(
+                            conversationID: guardConversationID,
+                            absolutePath: path,
+                            priorContent: priorContent,
+                            newContent: newContent
+                        ) {
+                            throw PreCompactionFlushWriteToolError(message: message)
+                        }
+                    },
                     logger: logger,
                     sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
                     sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,

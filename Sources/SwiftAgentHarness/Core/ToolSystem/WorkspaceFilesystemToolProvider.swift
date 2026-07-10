@@ -21,6 +21,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let elevatedAllowlist: ElevatedAllowlist
     private let resolveSenderIdentity: @Sendable () async -> ExecSenderIdentity
     private let onMemoryWrite: (@Sendable (String) async -> Void)?
+    private let validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)?
     private let logger: Logger?
     private let bashRunnerFactory: @Sendable (ExecRuntimeContext) -> any BashShellRunning
     private let grepForceInProcess: Bool
@@ -50,6 +51,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
+        validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
         logger: Logger? = nil,
         grepForceInProcess: Bool = false,
         sessionStoreRoot: URL? = SessionPersistenceConfiguration.sessionStoreRoot,
@@ -64,6 +66,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             elevatedAllowlist: elevatedAllowlist,
             resolveSenderIdentity: resolveSenderIdentity,
             onMemoryWrite: onMemoryWrite,
+            validatePreCompactionFlushWrite: validatePreCompactionFlushWrite,
             logger: logger,
             bashRunnerFactory: nil,
             grepForceInProcess: grepForceInProcess,
@@ -81,6 +84,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         elevatedAllowlist: ElevatedAllowlist = .cliDefault,
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
+        validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
         logger: Logger? = nil,
         bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?,
         grepForceInProcess: Bool = false,
@@ -95,6 +99,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.elevatedAllowlist = elevatedAllowlist
         self.resolveSenderIdentity = resolveSenderIdentity
         self.onMemoryWrite = onMemoryWrite
+        self.validatePreCompactionFlushWrite = validatePreCompactionFlushWrite
         self.logger = logger
         self.grepForceInProcess = grepForceInProcess
         self.sessionStoreRoot = sessionStoreRoot
@@ -327,6 +332,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 memoryDirectory: memoryDirectoryURL(),
                 content: content
             ).get()
+            try await validatePreCompactionFlushWriteIfNeeded(
+                path: path,
+                priorContent: nil,
+                newContent: content
+            )
             try await writeFileTakingMemoryLockIfNeeded(
                 bridge: bridge,
                 rawPath: raw,
@@ -349,6 +359,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             let path = try resolveToolPath(raw: raw, requireExists: true)
             let fileData = try await bridge.readFile(path: raw)
             var content = String(data: fileData, encoding: .utf8) ?? ""
+            let priorContent = content
             guard content.contains(oldString) else {
                 return err(toolCall, "old_string not found")
             }
@@ -358,6 +369,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 memoryDirectory: memoryDirectoryURL(),
                 content: content
             ).get()
+            try await validatePreCompactionFlushWriteIfNeeded(
+                path: path,
+                priorContent: priorContent,
+                newContent: content
+            )
             try await writeFileTakingMemoryLockIfNeeded(
                 bridge: bridge,
                 rawPath: raw,
@@ -390,6 +406,15 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func memoryDirectoryURL() -> URL? {
         runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func validatePreCompactionFlushWriteIfNeeded(
+        path: String,
+        priorContent: String?,
+        newContent: String
+    ) async throws {
+        guard let validatePreCompactionFlushWrite else { return }
+        try await validatePreCompactionFlushWrite(path, priorContent, newContent)
     }
 
     private func resolveToolPath(raw: String, requireExists: Bool) throws -> String {
@@ -659,6 +684,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             return "File not found: \(path)"
         case WorkspaceFilesystemError.readWindowRequired(let message):
             return message
+        case let error as PreCompactionFlushWriteToolError:
+            return error.message
         case SandboxBackendError.pathEscapes:
             return "Path escapes workspace boundary"
         default:

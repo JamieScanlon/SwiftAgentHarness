@@ -40,6 +40,24 @@ You MUST avoid saving sensitive data within shared team memories. For example, n
 `MEMORY.md` is an index, not a memory. Each entry should be one line under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
 """
 
+    static let twoStepWriteRulePrompt = """
+Saving durable memory is two steps:
+1. Write or append the full memory body to a typed topic `.md` file (YAML frontmatter with name, description, and type required).
+2. Append exactly one one-line index hook to `MEMORY.md` linking to that topic file.
+"""
+
+    static let preCompactionFlushConstraintsPrompt = """
+## Pre-compaction flush (curated promotion only)
+
+Do NOT write daily staging files (`YYYY-MM-DD.md` or any date-named note). Pre-compaction flush promotes directly to curated typed topic files only.
+
+Existing manifest topic files listed above are append-only: read them first, then append new sections at the end. Never replace or truncate existing curated content.
+
+`MEMORY.md` is append-only for a single index line per new topic. Never use write_file on `MEMORY.md`; use edit_file to append one `- [Title](file.md) — hook` line at the end.
+
+Turn 1 — issue all Read calls in parallel for every file you might update; turn 2 — issue all Write/Edit calls in parallel. Do not interleave reads and writes across multiple turns.
+"""
+
     /// Capture-cheap staging: prefer today's daily note; reserve typed topics for curated durable entries.
     static let dailyCapturePrompt = """
 ## Capture vs curate

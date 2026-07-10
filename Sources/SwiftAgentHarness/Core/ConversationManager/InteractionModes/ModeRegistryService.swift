@@ -703,7 +703,11 @@ enum ModeProfileBuiltInCatalog {
         // Suppress (not just empty) the skills + tool-guidance prompt sections so the chat preamble carries no dead tokens.
         let leanMachineContext = ModeProfileContextSlice(includeSkills: false, includeToolGuidance: false)
 
-        func memoryChatProfile(id: String, tools: ModeProfileToolsSlice) -> ResolvedModeProfile {
+        func memoryChatProfile(
+            id: String,
+            tools: ModeProfileToolsSlice,
+            maxIterations: Int = 5
+        ) -> ResolvedModeProfile {
             ResolvedModeProfile(
                 id: id,
                 interactionMode: .chat,
@@ -714,7 +718,7 @@ enum ModeProfileBuiltInCatalog {
                 semanticLayerTags: [],
                 tools: tools,
                 context: leanMachineContext,
-                runtime: ModeProfileRuntimeSlice(maxIterations: 5),
+                runtime: ModeProfileRuntimeSlice(maxIterations: max(1, maxIterations)),
                 model: disabledModel,
                 subAgents: denyAllSubAgents
             )
@@ -739,7 +743,11 @@ enum ModeProfileBuiltInCatalog {
                 tools: ModeProfileToolsSlice(allow: ["memory_search", "memory_get"], deny: [])
             ),
             memoryChatProfile(id: "memory-extraction", tools: memoryFileTools),
-            memoryChatProfile(id: "memory-pre-compaction-flush", tools: memoryFileTools),
+            memoryChatProfile(
+                id: "memory-pre-compaction-flush",
+                tools: memoryFileTools,
+                maxIterations: MemoryConfiguration.default.preCompactionFlushMaxIterations
+            ),
             ResolvedModeProfile(
                 id: "trigger-delegate",
                 interactionMode: .agent,
