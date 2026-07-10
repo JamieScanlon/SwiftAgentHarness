@@ -14,7 +14,7 @@ This folder implements the harness **Tool System** spec. Model-driven tool visib
 - Canonicalization invariant: `ToolRegistryEntry(descriptor:)` is a pure projection; Tool System no longer applies name-based fallback metadata inference or app-layer descriptor reconstruction from raw `ToolDefinition`.
 - Parallel dispatch matrix invariant: host parallel execution is enabled when `toolPolicy.parallelDispatchEnabled` is true and no effective entry has unknown static capability metadata; per-call `parallelSafety(for:)` predicates (via `ToolCallCapabilityClassifier` for polymorphic tools like `bash` and `process`) drive `mixedDeterministic` batch planning in SwiftAgentKit. Static registration metadata remains fail-closed for polymorphic tools; call-time classification determines read fan-out and call-level approval severity.
 
-### Production gate (X2 batch parallelism)
+### Production gate (batch parallelism)
 
 Batch-level parallelism is **opt-in**. Defaults remain conservative:
 
@@ -36,7 +36,7 @@ When enabling in PromptConfig:
 
 **Supported planner modes for hosts:** `serial` and `mixedDeterministic` (partition semantics — order-preserving groups of contiguous concurrency-safe calls). `allParallel` is **deprecated and ignored**: it still parses from PromptConfig for backward compatibility but is always remapped to `mixedDeterministic` at the harness dispatch boundary with a structured warning. No model-turn batch reaches Kit with `plannerMode: allParallel`. See [parallel-execution.md](../../../../harness-template/core/tool-system/parallel-execution.md) for floor vs partition semantics.
 
-## Description change control (S4)
+## Description change control
 
 Tool `description` strings are **behavioral surface**, not documentation polish. They are sent to the model in the tool block and can change tool-selection behavior with no test failure. Treat edits like system-prompt changes: review for scope, safety, and confusion with sibling tools. MCP/A2A descriptions are third-party passthrough unless the harness explicitly overrides them.
 
