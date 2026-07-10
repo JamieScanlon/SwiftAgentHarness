@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import CryptoKit
 import SwiftAgentKit
 
 public actor DefaultMemoryService: MemoryServicing {
@@ -74,11 +73,35 @@ public actor DefaultMemoryService: MemoryServicing {
         spawnPortBox.get()
     }
 
-    func resolveFlushPlan(manifestLines: [String], middleTranscript: String) async -> MemoryFlushPlan? {
+    func resolveFlushPlan(
+        conversationID: UUID,
+        manifestLines: [String],
+        middleTranscript: String
+    ) async -> MemoryFlushPlan? {
         let capability = await capabilityRegistry.activeCapability()
-        return capability.flushPlanResolver?.resolveFlushPlan(
+        guard let resolver = capability.flushPlanResolver,
+              let session = await capability.runtime.sessionContext(for: conversationID),
+              let store = await capability.runtime.store(for: conversationID) else { return nil }
+        return resolver.resolveFlushPlan(
             manifestLines: manifestLines,
-            middleTranscript: middleTranscript
+            middleTranscript: middleTranscript,
+            session: session,
+            store: store
+        )
+    }
+
+    func flushedMemoryEntryIDs(
+        conversationID: UUID,
+        flushPaths: Set<String>,
+        maxEntries: Int
+    ) async -> [UUID] {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let resolver = capability.flushPlanResolver,
+              let session = await capability.runtime.sessionContext(for: conversationID) else { return [] }
+        return resolver.flushedMemoryEntryIDs(
+            from: flushPaths,
+            session: session,
+            maxEntries: maxEntries
         )
     }
 
@@ -93,10 +116,22 @@ public actor DefaultMemoryService: MemoryServicing {
         guard let session = await capability.runtime.sessionContext(for: context.conversationID),
               let store = await capability.runtime.store(for: context.conversationID) else { return .skipped }
 
-        let manifestTopics = Set(store.listTopicFilenames())
+        let manifestLines = store.manifest().map(MemoryManifestScanner.formatManifestLine)
+        let middleTranscript = MemoryExtractionPrompts.recentTranscriptSlice(
+            messages: context.middleMessages,
+            limit: context.middleMessages.count
+        )
+        guard !middleTranscript.isEmpty,
+              let plan = capability.flushPlanResolver?.resolveFlushPlan(
+                manifestLines: manifestLines,
+                middleTranscript: middleTranscript,
+                session: session,
+                store: store
+              ) else { return .skipped }
+
         registerPreCompactionFlushWriteGuard(
             conversationID: context.conversationID,
-            manifestTopicFilenames: manifestTopics
+            policy: plan.writeGuardPolicy
         )
         defer {
             clearPreCompactionFlushWriteGuard(conversationID: context.conversationID)
@@ -132,13 +167,11 @@ public actor DefaultMemoryService: MemoryServicing {
         }
 
         let version = await capability.runtime.currentSnapshotGeneration(conversationID: context.conversationID)
-        let curatedBasenames = PreCompactionFlushWriteGuard.curatedTopicBasenames(
-            fromAbsolutePaths: flushPaths,
-            memoryDirectory: session.memoryDirectory
+        let entryIDs = await flushedMemoryEntryIDs(
+            conversationID: context.conversationID,
+            flushPaths: flushPaths,
+            maxEntries: context.maxFlushedMemoryEntries
         )
-        let entryIDs = curatedBasenames
-            .prefix(context.maxFlushedMemoryEntries)
-            .map { Self.manifestEntryID(filename: $0) }
 
         guard !entryIDs.isEmpty else { return .skipped }
         logger?.info("[PreCompactionMemoryFlush] flushed \(entryIDs.count) entries conversation=\(context.conversationID)")
@@ -147,19 +180,6 @@ public actor DefaultMemoryService: MemoryServicing {
             memoryStoreVersion: version,
             flushedMemoryEntryIDs: Array(entryIDs)
         )
-    }
-
-    nonisolated static func manifestEntryID(filename: String) -> UUID {
-        let digest = SHA256.hash(data: Data("memory-manifest:\(filename)".utf8))
-        var bytes = Array(digest.prefix(16))
-        bytes[6] = (bytes[6] & 0x0F) | 0x40
-        bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
     }
 
     func activeRecallSummary(
@@ -284,13 +304,19 @@ public actor DefaultMemoryService: MemoryServicing {
         clearPreCompactionFlushCycle(conversationID: conversationID)
     }
 
+    func activePublicArtifacts(conversationID: UUID) async -> [MemoryArtifact] {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let provider = capability.publicArtifacts,
+              let session = await capability.runtime.sessionContext(for: conversationID),
+              let store = await capability.runtime.store(for: conversationID) else { return [] }
+        return provider.publicArtifacts(context: session, store: store)
+    }
+
     func registerPreCompactionFlushWriteGuard(
         conversationID: UUID,
-        manifestTopicFilenames: Set<String>
+        policy: PreCompactionFlushWriteGuard.Policy
     ) {
-        preCompactionFlushWriteGuardByConversation[conversationID] = PreCompactionFlushWriteGuard.Policy(
-            manifestTopicFilenames: manifestTopicFilenames
-        )
+        preCompactionFlushWriteGuardByConversation[conversationID] = policy
     }
 
     func clearPreCompactionFlushWriteGuard(conversationID: UUID) {
@@ -426,8 +452,13 @@ public actor DefaultMemoryService: MemoryServicing {
                 snapshotGeneration: 0
             )
         }
-        let promptBuilder = capability.promptBuilder ?? FileStoreMemoryPromptBuilder(config: config)
-        let sections = try promptBuilder.buildPromptSections(context: context, store: store, recalled: recalled)
+        let promptBuilder = capability.promptBuilder ?? EmptyMemoryPromptBuilder()
+        let sections = try promptBuilder.buildPromptSections(
+            context: context,
+            store: store,
+            recalled: recalled,
+            availableToolNames: []
+        )
         return MemorySystemPromptBlocks(
             projectInstructionsText: project.text,
             memoryIndexText: sections.memoryIndexText,

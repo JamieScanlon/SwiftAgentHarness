@@ -1,11 +1,5 @@
 # Memory as an exclusive plugin slot with parallel knowledge layers
 
-## Implementation (S1)
-
-The exclusive capability record and registry are implemented: `MemoryCapability` (four optional slots), `MemoryCapabilityRegistry` (one active backend; registration replaces the default `builtin-file` file-store backend), and `FileStoreMemoryBackend` as the default owner of recall, snapshot, extraction, active memory, search, and dreaming. `DefaultMemoryService` orchestrates project instructions, flush trigger/dedupe/write-guard, and delegates runtime work to the active capability. Corpus supplements, prompt supplements, plugin manifest auto-loading, and full `publicArtifacts` consumers (wiki bridge) are deferred to follow-on work.
-
----
-
 ## TL;DR
 
 When a harness supports multiple memory backends (built-in SQLite, local sidecar indexes, hosted memory services), don't federate them — make memory an **exclusive plugin slot**: exactly one active backend registers a **capability record** with four optional slots (`promptBuilder`, `flushPlanResolver`, `runtime`, `publicArtifacts`) and owns recall, promotion, flush policy, and consolidation outright. Around that exclusive slot, provide two **non-exclusive supplement surfaces**: *corpus supplements* (parallel searchable corpora reachable through the shared `memory_search` via corpus selection) and *prompt supplements* (extra prompt sections, sorted deterministically). This is what lets a provenance-rich **wiki layer** — compiled pages, structured claims with evidence, contradiction and freshness tracking, dashboards — sit *beside* the active backend without competing with it. The wiki reads the backend's exports through a **public-artifacts seam**, never private internals; agents consume it through compiled machine digests, never by scraping markdown.

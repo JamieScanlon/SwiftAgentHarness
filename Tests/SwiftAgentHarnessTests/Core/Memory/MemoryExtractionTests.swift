@@ -254,7 +254,7 @@ Promoted before compaction.
         )
         #expect(result.succeeded)
         #expect(result.flushedMemoryEntryIDs.count == 1)
-        #expect(result.flushedMemoryEntryIDs.first == DefaultMemoryService.manifestEntryID(filename: "flush-note.md"))
+        #expect(result.flushedMemoryEntryIDs.first == FileStoreMemoryManifestEntryID.entryID(filename: "flush-note.md"))
         try? FileManager.default.removeItem(at: dir)
     }
 
@@ -304,7 +304,7 @@ Promoted before compaction.
         )
         #expect(result.succeeded)
         #expect(result.flushedMemoryEntryIDs.count == 1)
-        #expect(result.flushedMemoryEntryIDs.first == DefaultMemoryService.manifestEntryID(filename: "curated.md"))
+        #expect(result.flushedMemoryEntryIDs.first == FileStoreMemoryManifestEntryID.entryID(filename: "curated.md"))
         try? FileManager.default.removeItem(at: dir)
     }
 
@@ -312,7 +312,10 @@ Promoted before compaction.
     func flushWriteGuardClearsAfterRun() async {
         let service = DefaultMemoryService(config: .default)
         let conversationID = UUID()
-        await service.registerPreCompactionFlushWriteGuard(conversationID: conversationID, manifestTopicFilenames: [])
+        await service.registerPreCompactionFlushWriteGuard(
+            conversationID: conversationID,
+            policy: PreCompactionFlushWriteGuard.Policy(manifestTopicFilenames: [])
+        )
         let blocked = await service.validatePreCompactionFlushWrite(
             conversationID: conversationID,
             absolutePath: "/tmp/memory/2026-07-10.md",
@@ -565,9 +568,15 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
-            resolveFlushPlan: { manifest, transcript in
-                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
-                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
             },
             config: .default,
             logger: nil
@@ -614,9 +623,15 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
-            resolveFlushPlan: { manifest, transcript in
-                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
-                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
             },
             config: .default,
             logger: nil
@@ -642,6 +657,12 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("Situational recall spawn strips injected memory-context from contaminated userQuery")
     func situationalRecallSpawnStripsInjectedContextFromQuery() async throws {
         let capture = ExtractionSpawnCapture()
+        let session = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: "/tmp",
+            canonicalGitRoot: nil,
+            memoryDirectory: URL(fileURLWithPath: "/tmp/memory")
+        )
         let prior = MemoryContextFencer.fence("User prefers Grafana dashboards.")
         let contaminated = """
         \(HarnessInjectedMessagePrefixes.activeMemoryRecall)
@@ -660,9 +681,15 @@ struct MemorySubAgentSpawnAdapterTests {
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
             rankedRegistryEntries: { _ in [] },
-            resolveFlushPlan: { manifest, transcript in
-                FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
-                    .resolveFlushPlan(manifestLines: manifest, middleTranscript: transcript)
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
             },
             config: .default,
             logger: nil

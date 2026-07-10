@@ -21,6 +21,7 @@ struct MemoryBackendPromptSections: Sendable, Equatable {
 struct MemoryFlushPlan: Sendable, Equatable {
     let systemPrompt: String
     let userPrompt: String
+    let writeGuardPolicy: PreCompactionFlushWriteGuard.Policy
 }
 
 struct MemoryCapability: Sendable {
@@ -57,11 +58,27 @@ struct MemoryCapability: Sendable {
 }
 
 protocol MemoryPromptBuilding: Sendable {
-    func buildPromptSections(context: MemorySessionContext, store: AgentMemoryStore, recalled: String) throws -> MemoryBackendPromptSections
+    func buildPromptSections(
+        context: MemorySessionContext,
+        store: AgentMemoryStore,
+        recalled: String,
+        availableToolNames: [String]
+    ) throws -> MemoryBackendPromptSections
 }
 
 protocol MemoryFlushPlanResolving: Sendable {
-    func resolveFlushPlan(manifestLines: [String], middleTranscript: String) -> MemoryFlushPlan
+    func resolveFlushPlan(
+        manifestLines: [String],
+        middleTranscript: String,
+        session: MemorySessionContext,
+        store: AgentMemoryStore
+    ) -> MemoryFlushPlan
+
+    func flushedMemoryEntryIDs(
+        from flushPaths: Set<String>,
+        session: MemorySessionContext,
+        maxEntries: Int
+    ) -> [UUID]
 }
 
 protocol MemoryPublicArtifactsProviding: Sendable {
@@ -104,10 +121,16 @@ protocol MemoryRuntime: Sendable {
 }
 
 struct EmptyMemoryPromptBuilder: MemoryPromptBuilding {
-    func buildPromptSections(context: MemorySessionContext, store: AgentMemoryStore, recalled: String) throws -> MemoryBackendPromptSections {
+    func buildPromptSections(
+        context: MemorySessionContext,
+        store: AgentMemoryStore,
+        recalled: String,
+        availableToolNames: [String]
+    ) throws -> MemoryBackendPromptSections {
         _ = context
         _ = store
         _ = recalled
+        _ = availableToolNames
         return MemoryBackendPromptSections(
             memoryIndexText: "",
             recalledTopicBodiesText: "",

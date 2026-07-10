@@ -18,7 +18,7 @@ enum MemorySubAgentSpawnAdapter {
         manifestLines: @escaping @Sendable (UUID) async -> [String],
         parentModel: @escaping @Sendable (UUID) async -> Model?,
         rankedRegistryEntries: @escaping @Sendable (ModelReference) async -> [ModelRegistryEntry],
-        resolveFlushPlan: @escaping @Sendable ([String], String) async -> MemoryFlushPlan?,
+        resolveFlushPlan: @escaping @Sendable (UUID, [String], String) async -> MemoryFlushPlan?,
         config: MemoryConfiguration,
         logger: Logger?
     ) -> MemorySubAgentSpawnPort {
@@ -121,7 +121,7 @@ enum MemorySubAgentSpawnAdapter {
                     limit: middleMessages.count
                 )
                 guard !transcript.isEmpty else { return false }
-                guard let plan = await resolveFlushPlan(manifest, transcript) else { return false }
+                guard let plan = await resolveFlushPlan(parentConversationID, manifest, transcript) else { return false }
                 let spawnRequest = SubAgentSpawnRequest(
                     context: .isolated,
                     taskDescription: "memory-pre-compaction-flush",

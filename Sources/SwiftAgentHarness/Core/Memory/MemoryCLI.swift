@@ -74,8 +74,26 @@ public enum MemoryCLI {
                     exit(1)
                 }
                 print(ActiveMemoryControlStore().statusSummary(config: config))
+            case "status":
+                let deep = arguments.contains("--deep")
+                let errorBox = StatusErrorBox()
+                let semaphore = DispatchSemaphore(value: 0)
+                Task {
+                    defer { semaphore.signal() }
+                    do {
+                        try await printStatus(service: service, context: context, deep: deep)
+                    } catch {
+                        errorBox.error = error
+                    }
+                }
+                semaphore.wait()
+                if let statusError = errorBox.error {
+                    fputs("memory status error: \(statusError)\n", stderr)
+                    exit(1)
+                }
+                exit(0)
             default:
-                fputs("usage: memory list|show|remove|rem-backfill --rollback|dreaming status|explain|active-memory status\n", stderr)
+                fputs("usage: memory list|show|remove|rem-backfill --rollback|dreaming status|explain|active-memory status|status [--deep]\n", stderr)
                 exit(1)
             }
         } catch {
@@ -83,5 +101,26 @@ public enum MemoryCLI {
             exit(1)
         }
         exit(0)
+    }
+
+    private final class StatusErrorBox: @unchecked Sendable {
+        var error: Error?
+    }
+
+    private static func printStatus(
+        service: DefaultMemoryService,
+        context: MemorySessionContext,
+        deep: Bool
+    ) async throws {
+        let pluginID = await service.activeMemoryPluginID()
+        print("active-memory-plugin: \(pluginID)")
+        if deep {
+            _ = try await service.bootstrapSession(context: context)
+            let artifacts = await service.activePublicArtifacts(conversationID: context.conversationID)
+            print("public-artifacts: \(artifacts.count)")
+            for artifact in artifacts {
+                print("\(artifact.kind)\t\(artifact.relativePath)\t\(artifact.absolutePath)")
+            }
+        }
     }
 }

@@ -1,11 +1,33 @@
 import Foundation
 import Logging
+import CryptoKit
 import SwiftAgentKit
+
+enum FileStoreMemoryManifestEntryID {
+    static func entryID(filename: String) -> UUID {
+        let digest = SHA256.hash(data: Data("memory-manifest:\(filename)".utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x40
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+}
 
 struct FileStoreMemoryPromptBuilder: MemoryPromptBuilding {
     let config: MemoryConfiguration
 
-    func buildPromptSections(context: MemorySessionContext, store: AgentMemoryStore, recalled: String) throws -> MemoryBackendPromptSections {
+    func buildPromptSections(
+        context: MemorySessionContext,
+        store: AgentMemoryStore,
+        recalled: String,
+        availableToolNames: [String]
+    ) throws -> MemoryBackendPromptSections {
+        _ = availableToolNames
         let index = try store.readIndexSnapshot()
         let taxonomy = """
 \(MemoryTypeTaxonomy.indexUsagePrompt)
@@ -34,7 +56,13 @@ struct FileStoreMemoryFlushPlanResolver: MemoryFlushPlanResolving {
     let config: MemoryConfiguration
     let logger: Logger?
 
-    func resolveFlushPlan(manifestLines: [String], middleTranscript: String) -> MemoryFlushPlan {
+    func resolveFlushPlan(
+        manifestLines: [String],
+        middleTranscript: String,
+        session: MemorySessionContext,
+        store: AgentMemoryStore
+    ) -> MemoryFlushPlan {
+        _ = session
         let customBody = PreCompactionFlushCustomPromptLoader.load(
             path: config.preCompactionFlushSystemPromptPath,
             logger: logger
@@ -45,7 +73,27 @@ struct FileStoreMemoryFlushPlanResolver: MemoryFlushPlanResolving {
             teamMemoryEnabled: config.teamMemoryEnabled
         )
         let userPrompt = MemoryPreCompactionFlushPrompts.userPrompt(middleTranscript: middleTranscript)
-        return MemoryFlushPlan(systemPrompt: systemPrompt, userPrompt: userPrompt)
+        return MemoryFlushPlan(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            writeGuardPolicy: PreCompactionFlushWriteGuard.Policy(
+                manifestTopicFilenames: Set(store.listTopicFilenames())
+            )
+        )
+    }
+
+    func flushedMemoryEntryIDs(
+        from flushPaths: Set<String>,
+        session: MemorySessionContext,
+        maxEntries: Int
+    ) -> [UUID] {
+        let curatedBasenames = PreCompactionFlushWriteGuard.curatedTopicBasenames(
+            fromAbsolutePaths: flushPaths,
+            memoryDirectory: session.memoryDirectory
+        )
+        return curatedBasenames
+            .prefix(maxEntries)
+            .map { FileStoreMemoryManifestEntryID.entryID(filename: $0) }
     }
 }
 
@@ -76,6 +124,20 @@ struct FileStoreMemoryPublicArtifactsProvider: MemoryPublicArtifactsProviding {
                     contentType: "text/markdown"
                 )
             )
+        }
+        if let dailyNames = try? FileManager.default.contentsOfDirectory(atPath: memoryRoot) {
+            for name in dailyNames.sorted() where AgentMemoryStore.isDailyFilename(name) {
+                let absolute = context.memoryDirectory.appendingPathComponent(name).path
+                artifacts.append(
+                    MemoryArtifact(
+                        kind: "memory-daily",
+                        workspaceDir: memoryRoot,
+                        relativePath: name,
+                        absolutePath: absolute,
+                        contentType: "text/markdown"
+                    )
+                )
+            }
         }
         return artifacts
     }
@@ -115,20 +177,6 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         let store = AgentMemoryStore(memoryDirectory: context.memoryDirectory)
         try store.ensureLayout()
         storeByConversation[context.conversationID] = store
-        let promptBuilder = FileStoreMemoryPromptBuilder(config: config)
-        let sections = try promptBuilder.buildPromptSections(context: context, store: store, recalled: "")
-        let blocks = MemorySystemPromptBlocks(
-            projectInstructionsText: "",
-            memoryIndexText: sections.memoryIndexText,
-            recalledTopicBodiesText: sections.recalledTopicBodiesText,
-            taxonomyPromptText: sections.taxonomyPromptText,
-            driftGuardText: sections.driftGuardText,
-            sensitiveDataPromptText: sections.sensitiveDataPromptText,
-            memoryPathDisclosureText: sections.memoryPathDisclosureText,
-            snapshotGeneration: 0
-        )
-        let manifest = store.manifest()
-        await snapshotStore.capture(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
         Task { await self.activeMemory.warmStanding(session: context) }
     }
 
@@ -169,22 +217,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     }
 
     func refreshSnapshotAfterFlush(conversationID: UUID) async throws {
-        guard let session = sessionByConversation[conversationID],
-              let store = storeByConversation[conversationID] else { return }
-        let promptBuilder = FileStoreMemoryPromptBuilder(config: config)
-        let sections = try promptBuilder.buildPromptSections(context: session, store: store, recalled: "")
-        let blocks = MemorySystemPromptBlocks(
-            projectInstructionsText: "",
-            memoryIndexText: sections.memoryIndexText,
-            recalledTopicBodiesText: sections.recalledTopicBodiesText,
-            taxonomyPromptText: sections.taxonomyPromptText,
-            driftGuardText: sections.driftGuardText,
-            sensitiveDataPromptText: sections.sensitiveDataPromptText,
-            memoryPathDisclosureText: sections.memoryPathDisclosureText,
-            snapshotGeneration: 0
-        )
-        let manifest = store.manifest()
-        await snapshotStore.capture(conversationID: conversationID, blocks: blocks, manifest: manifest)
+        _ = conversationID
     }
 
     func systemPromptBlocks(conversationID: UUID) async -> MemorySystemPromptBlocks? {

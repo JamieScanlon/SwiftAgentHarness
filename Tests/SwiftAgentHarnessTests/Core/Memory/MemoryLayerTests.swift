@@ -205,7 +205,7 @@ Body
         #expect(await service.writeObserver().hadWrites(conversationID: conversationID) == false)
 
         _ = try await service.bootstrapSession(context: context)
-        #expect(await service.currentSnapshotGeneration(conversationID: conversationID) == 2)
+        #expect(await service.currentSnapshotGeneration(conversationID: conversationID) == 1)
     }
 }
 
