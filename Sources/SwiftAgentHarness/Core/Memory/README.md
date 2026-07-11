@@ -24,6 +24,8 @@ On hard compaction, after optional flush and before the summarizer, the **active
 | `memory/.dreams/` | Machine state (recall store, promotions ledger, last-deep marker, `last-sweep.json`) — never a promotion candidate |
 | `DREAMS.md` | Human-readable dreaming diary — appended each sweep; excluded from candidates |
 
+**Declarative vs procedural routing.** Background extraction, pre-compaction flush, and main-agent memory taxonomy inject a shared routing rule (`MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt`): facts, preferences, and context belong in typed memory topics; multi-step repeatable procedures must not accumulate as sprawling `feedback` runbooks. Extraction subagents (memory file tools only) skip procedures; when `skill_workshop` is enabled on the main agent, durable procedures route there instead.
+
 Deep promotion requires all three threshold gates (defaults: `dreamingMinScore` ≥ 0.75, `dreamingMinRecallCount` ≥ 2, `dreamingMinUniqueQueries` ≥ 2). Staged dailies must accumulate enough recall traces before they can promote.
 
 Active memory (pre-reply recall) **ships on**: `activeMemoryEnabled` and both standing/situational lane flags default `true`. Set PromptConfig `memory.activeMemoryEnabled: false` (or a per-lane `*Enabled: false`) to disable. Soft pause without redeploy: `/active-memory off` (session) or `/active-memory off --global`. Coding sessions are `chatType: direct`, so the direct-chat gate does not act as an off-switch; group/channel still skip unless the host sets a non-direct type.

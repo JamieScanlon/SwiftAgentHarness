@@ -109,6 +109,7 @@ File tools are scoped to the memory directory. Use bare filenames only (e.g. tod
 When no memory files exist yet (blank manifest above), create them using write_file rather than reading first.
 
 \(MemoryTypeTaxonomy.dailyCapturePrompt)
+\(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.indexUsagePrompt)
 """

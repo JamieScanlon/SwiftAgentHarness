@@ -62,6 +62,17 @@ Reserve typed topic files (`user` / `feedback` / `project` / `reference` with fr
     static let persistenceDistinctionPrompt = """
 Memory is for information that will be useful in *future* conversations. Do not save approach decisions to memory when a plan exists; do not save in-progress task lists to memory.
 """
+
+    static let declarativeVsProceduralRoutingPrompt = """
+## Memory vs skills (routing)
+
+- **Memory** — facts, preferences, entities, and past context. Use typed topics (`user`, `project`, `reference`) or narrow corrective **feedback** (how to approach work — not step-by-step runbooks).
+- **Skills** — multi-step, repeatable procedures ("how to validate…", "how to debug…").
+
+Do **not** save procedures as memory — especially sprawling `feedback` topic files. If this task only has memory file tools, **skip** procedures; do not encode them as feedback memories.
+
+When `skill_workshop` is available, propose durable procedures there instead of writing them to memory.
+"""
 }
 
 enum MemoryIndexTruncator {

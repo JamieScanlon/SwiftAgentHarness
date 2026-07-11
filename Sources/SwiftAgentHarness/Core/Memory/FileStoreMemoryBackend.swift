@@ -33,6 +33,7 @@ struct FileStoreMemoryPromptBuilder: MemoryPromptBuilding {
 \(MemoryTypeTaxonomy.indexUsagePrompt)
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.persistenceDistinctionPrompt)
+\(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
 """
         var sensitive = MemoryTypeTaxonomy.sensitiveDataPrompt
         if config.teamMemoryEnabled {

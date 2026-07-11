@@ -717,6 +717,9 @@ struct MemorySubAgentSpawnAdapterTests {
         #expect(prompt.contains("File tools are scoped to the memory directory"))
         #expect(prompt.contains("write_file rather than reading first"))
         #expect(prompt.contains("they are not accessible"))
+        #expect(prompt.contains("## Memory vs skills (routing)"))
+        #expect(prompt.contains("Do **not** save procedures as memory"))
+        #expect(prompt.contains("skill_workshop"))
     }
 }
 

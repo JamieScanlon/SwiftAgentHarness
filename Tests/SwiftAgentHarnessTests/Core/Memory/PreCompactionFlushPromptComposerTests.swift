@@ -15,6 +15,8 @@ struct PreCompactionFlushPromptComposerTests {
         #expect(prompt.contains("curated promotion only"))
         #expect(prompt.contains("two steps"))
         #expect(prompt.contains("memory directory"))
+        #expect(prompt.contains("## Memory vs skills (routing)"))
+        #expect(prompt.contains("Do **not** save procedures as memory"))
     }
 
     @Test("custom body is preserved and enforced hints still appended")

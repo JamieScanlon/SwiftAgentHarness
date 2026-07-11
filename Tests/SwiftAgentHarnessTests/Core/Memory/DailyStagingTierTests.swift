@@ -306,6 +306,7 @@ struct DailyStagingTierTests {
         let extraction = MemoryExtractionPrompts.systemPrompt(manifestLines: [])
         #expect(extraction.contains("YYYY-MM-DD.md"))
         #expect(extraction.contains("Capture vs curate"))
+        #expect(extraction.contains("## Memory vs skills (routing)"))
         let flush = MemoryPreCompactionFlushPrompts.systemPrompt(manifestLines: [])
         #expect(!flush.contains("Capture vs curate"))
         #expect(!flush.contains("Prefer appending durable-but-not-yet-curated"))
@@ -314,5 +315,30 @@ struct DailyStagingTierTests {
         #expect(flush.contains("## Non-negotiable flush constraints"))
         #expect(flush.contains("two steps"))
         #expect(flush.contains("Append-only"))
+        #expect(flush.contains("## Memory vs skills (routing)"))
+        #expect(flush.contains("Do **not** save procedures as memory"))
+    }
+
+    @Test("main-agent taxonomy prompt includes declarative vs procedural routing")
+    func mainAgentTaxonomyIncludesRouting() throws {
+        let dir = try makeMemoryDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let context = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: dir.deletingLastPathComponent().path,
+            canonicalGitRoot: nil,
+            memoryDirectory: dir
+        )
+        let store = AgentMemoryStore(memoryDirectory: dir)
+        let builder = FileStoreMemoryPromptBuilder(config: .default)
+        let sections = try builder.buildPromptSections(
+            context: context,
+            store: store,
+            recalled: "",
+            availableToolNames: []
+        )
+        #expect(sections.taxonomyPromptText.contains("## Memory vs skills (routing)"))
+        #expect(sections.taxonomyPromptText.contains("Do **not** save procedures as memory"))
+        #expect(sections.taxonomyPromptText.contains("skill_workshop"))
     }
 }
