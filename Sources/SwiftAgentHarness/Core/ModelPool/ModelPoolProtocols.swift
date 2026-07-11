@@ -182,6 +182,8 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
     public var promptCacheEstimatedCachedInputTokens: Int?
     public var promptCacheEstimatedCacheWriteTokens: Int?
     public var promptCacheEstimatedSavingsUSD: Double?
+    public var promptCacheValuesAreProviderReported: Bool?
+    public var promptCacheUnexpectedCacheWrite: Bool?
     public var latencyMs: Double?
     public var authProfileCredentialID: String?
     public var observedAt: Date
@@ -204,6 +206,8 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
         promptCacheEstimatedCachedInputTokens: Int? = nil,
         promptCacheEstimatedCacheWriteTokens: Int? = nil,
         promptCacheEstimatedSavingsUSD: Double? = nil,
+        promptCacheValuesAreProviderReported: Bool? = nil,
+        promptCacheUnexpectedCacheWrite: Bool? = nil,
         latencyMs: Double? = nil,
         authProfileCredentialID: String? = nil,
         observedAt: Date = Date()
@@ -225,6 +229,8 @@ public struct ModelCallAttemptObservation: Sendable, Equatable {
         self.promptCacheEstimatedCachedInputTokens = promptCacheEstimatedCachedInputTokens
         self.promptCacheEstimatedCacheWriteTokens = promptCacheEstimatedCacheWriteTokens
         self.promptCacheEstimatedSavingsUSD = promptCacheEstimatedSavingsUSD
+        self.promptCacheValuesAreProviderReported = promptCacheValuesAreProviderReported
+        self.promptCacheUnexpectedCacheWrite = promptCacheUnexpectedCacheWrite
         self.latencyMs = latencyMs
         self.authProfileCredentialID = authProfileCredentialID
         self.observedAt = observedAt

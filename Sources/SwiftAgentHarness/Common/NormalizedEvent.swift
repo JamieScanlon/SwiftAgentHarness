@@ -74,22 +74,41 @@ struct NormalizedStreamTail: Sendable, Equatable {
     var stop: NormalizedStopReason?
 
     func apply(to metadata: LLMMetadata?) -> LLMMetadata {
-        let inputTokens = usage?.inputTokens ?? metadata?.promptTokens
-        let outputTokens = usage?.outputTokens ?? metadata?.completionTokens
-        let totalTokens: Int?
-        if let inputTokens, let outputTokens {
-            totalTokens = inputTokens + outputTokens
-        } else {
-            totalTokens = metadata?.totalTokens
+        let merged = LLMTokenMetadataBuilder.merging(
+            base: metadata,
+            usage: usage,
+            usageIsProviderReported: usage != nil
+        )
+        guard let merged else {
+            let inputTokens = metadata?.promptTokens
+            let outputTokens = metadata?.completionTokens
+            let totalTokens: Int?
+            if let inputTokens, let outputTokens {
+                totalTokens = inputTokens + outputTokens
+            } else {
+                totalTokens = metadata?.totalTokens
+            }
+            return LLMTokenMetadataBuilder.build(
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                remainingContextTokens: metadata?.remainingContextTokens,
+                totalTokens: totalTokens,
+                contextWindowTokens: metadata?.contextWindowTokens,
+                extraModelMetadata: metadata?.modelMetadata,
+                finishReason: stop?.finishReasonRawValue ?? metadata?.finishReason
+            )
         }
         return LLMTokenMetadataBuilder.build(
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            remainingContextTokens: metadata?.remainingContextTokens,
-            totalTokens: totalTokens,
-            contextWindowTokens: metadata?.contextWindowTokens,
-            extraModelMetadata: metadata?.modelMetadata,
-            finishReason: stop?.finishReasonRawValue ?? metadata?.finishReason
+            inputTokens: merged.promptTokens,
+            outputTokens: merged.completionTokens,
+            remainingContextTokens: LLMTokenMetadataBuilder.effectiveRemainingContextTokens(from: merged) ?? metadata?.remainingContextTokens,
+            totalTokens: merged.totalTokens,
+            contextWindowTokens: merged.contextWindowTokens ?? metadata?.contextWindowTokens,
+            extraModelMetadata: merged.modelMetadata,
+            cacheReadTokens: CanonicalUsageExtraction.cacheReadTokens(from: merged),
+            cacheWriteTokens: CanonicalUsageExtraction.cacheWriteTokens(from: merged),
+            usageIsProviderReported: CanonicalUsageExtraction.valuesAreProviderReported(from: merged),
+            finishReason: stop?.finishReasonRawValue ?? merged.finishReason ?? metadata?.finishReason
         )
     }
 }

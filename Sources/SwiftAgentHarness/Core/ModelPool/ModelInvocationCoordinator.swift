@@ -289,6 +289,8 @@ public actor ModelInvocationCoordinator: ModelInvocationLifecycleTracking {
             promptCacheEstimatedCachedInputTokens: observation.promptCacheEstimatedCachedInputTokens,
             promptCacheEstimatedCacheWriteTokens: observation.promptCacheEstimatedCacheWriteTokens,
             promptCacheEstimatedSavingsUSD: observation.promptCacheEstimatedSavingsUSD,
+            promptCacheValuesAreProviderReported: observation.promptCacheValuesAreProviderReported,
+            promptCacheUnexpectedCacheWrite: observation.promptCacheUnexpectedCacheWrite,
             errorClass: observation.errorClass,
             errorCode: observation.errorCode,
             latencyMs: observation.latencyMs

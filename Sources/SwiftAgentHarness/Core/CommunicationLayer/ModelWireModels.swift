@@ -274,6 +274,8 @@ public struct ModelCallRecord: Codable, Sendable, Equatable {
         public var promptCacheEstimatedCachedInputTokens: Int?
         public var promptCacheEstimatedCacheWriteTokens: Int?
         public var promptCacheEstimatedSavingsUSD: Double?
+        public var promptCacheValuesAreProviderReported: Bool?
+        public var promptCacheUnexpectedCacheWrite: Bool?
         public var errorClass: String?
         public var errorCode: String?
         public var latencyMs: Double?
@@ -294,6 +296,8 @@ public struct ModelCallRecord: Codable, Sendable, Equatable {
             promptCacheEstimatedCachedInputTokens: Int? = nil,
             promptCacheEstimatedCacheWriteTokens: Int? = nil,
             promptCacheEstimatedSavingsUSD: Double? = nil,
+            promptCacheValuesAreProviderReported: Bool? = nil,
+            promptCacheUnexpectedCacheWrite: Bool? = nil,
             errorClass: String? = nil,
             errorCode: String? = nil,
             latencyMs: Double? = nil
@@ -313,6 +317,8 @@ public struct ModelCallRecord: Codable, Sendable, Equatable {
             self.promptCacheEstimatedCachedInputTokens = promptCacheEstimatedCachedInputTokens
             self.promptCacheEstimatedCacheWriteTokens = promptCacheEstimatedCacheWriteTokens
             self.promptCacheEstimatedSavingsUSD = promptCacheEstimatedSavingsUSD
+            self.promptCacheValuesAreProviderReported = promptCacheValuesAreProviderReported
+            self.promptCacheUnexpectedCacheWrite = promptCacheUnexpectedCacheWrite
             self.errorClass = errorClass
             self.errorCode = errorCode
             self.latencyMs = latencyMs

@@ -28,6 +28,41 @@ private struct CountingPromptPlanner: PromptCachePlanning {
     }
 }
 
+private actor ReportedUsagePromptPlanningLLMStub: LLMProtocol {
+    private let metadata: LLMMetadata
+
+    init(metadata: LLMMetadata) {
+        self.metadata = metadata
+    }
+
+    nonisolated var currentState: LLMRuntimeState { .idle(.ready) }
+    nonisolated var stateUpdates: AsyncStream<LLMRuntimeState> { AsyncStream { $0.finish() } }
+    nonisolated func getModelName() -> String { "reported-usage-stub" }
+    nonisolated func getCapabilities() -> [LLMCapability] { [.completion] }
+    nonisolated func getRequestFeatures() -> ModelRequestFeatures {
+        ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.jsonObject],
+            parallelToolCalls: .uncapped,
+            reasoningEfforts: [.medium]
+        )
+    }
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        let _ = (messages, config)
+        return LLMResponse(content: "ok", toolCalls: [], metadata: metadata)
+    }
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        let _ = config
+        return ImageGenerationResponse(images: [])
+    }
+    nonisolated func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        let _ = (messages, config)
+        return AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+}
+
 private actor PromptPlanningLLMStub: LLMProtocol {
     private var lastConfig: LLMRequestConfig?
     nonisolated var currentState: LLMRuntimeState { .idle(.ready) }
@@ -232,6 +267,97 @@ struct PromptCachePlanningTests {
                 (row.promptCacheEstimatedCachedInputTokens ?? 0) > 0
         }
         #expect(hasPromptCacheTelemetry)
+    }
+
+    @Test("planning wrapper prefers provider-reported cache usage in telemetry")
+    func planningWrapperPrefersProviderReportedCacheUsage() async throws {
+        let binding = ProviderBinding(
+            providerId: "anthropic",
+            modelProtocol: .anthropic,
+            endpointModelId: "claude-sonnet-4-6",
+            serverURL: URL(string: "https://example.com")!,
+            priority: 0
+        )
+        let metadata = LLMTokenMetadataBuilder.build(
+            inputTokens: 1200,
+            outputTokens: 80,
+            remainingContextTokens: nil,
+            totalTokens: 1280,
+            cacheReadTokens: 900,
+            cacheWriteTokens: 0,
+            usageIsProviderReported: true
+        )
+        let collector = PromptCacheAttemptCollector()
+        let wrapper = PromptCachePlanningLLM(
+            base: ReportedUsagePromptPlanningLLMStub(metadata: metadata),
+            modelID: UUID(),
+            binding: binding,
+            modelCapabilities: [.completion, .promptCachePersistent],
+            modelCost: ModelCostBudget(inputPer1MUSD: 2, outputPer1MUSD: 5, cachedInputPer1MUSD: 0.5),
+            policy: .enabled(strategy: .automatic),
+            planner: CapabilityDrivenPromptCachePlanner(),
+            attemptObserver: { observation in
+                await collector.record(observation)
+            }
+        )
+        _ = try await wrapper.send(
+            [
+                Message(id: UUID(), role: .system, content: "system baseline", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .user, content: "user request", timestamp: Date(), toolCalls: []),
+            ],
+            config: LLMRequestConfig()
+        )
+        let row = try #require(await collector.rows.first { $0.kind == .promptCache })
+        #expect(row.promptCacheValuesAreProviderReported == true)
+        #expect(row.promptCacheEstimatedCachedInputTokens == 900)
+        #expect(row.promptCacheEstimatedCacheWriteTokens == 0)
+        #expect(row.promptCacheProviderSupportsNative == true)
+        #expect(row.promptCacheProviderApplied == true)
+    }
+
+    @Test("planning wrapper flags unexpected cache write when read expected")
+    func planningWrapperFlagsUnexpectedCacheWrite() async throws {
+        let binding = ProviderBinding(
+            providerId: "anthropic",
+            modelProtocol: .anthropic,
+            endpointModelId: "claude-sonnet-4-6",
+            serverURL: URL(string: "https://example.com")!,
+            priority: 0
+        )
+        let metadata = LLMTokenMetadataBuilder.build(
+            inputTokens: 1200,
+            outputTokens: 80,
+            remainingContextTokens: nil,
+            totalTokens: 1280,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 300,
+            usageIsProviderReported: true
+        )
+        let collector = PromptCacheAttemptCollector()
+        let wrapper = PromptCachePlanningLLM(
+            base: ReportedUsagePromptPlanningLLMStub(metadata: metadata),
+            modelID: UUID(),
+            binding: binding,
+            modelCapabilities: [.completion, .promptCacheEphemeral],
+            modelCost: nil,
+            policy: .enabled(strategy: .automatic),
+            planner: CapabilityDrivenPromptCachePlanner(),
+            attemptObserver: { observation in
+                await collector.record(observation)
+            }
+        )
+        try await ModelInvocationTaskContext.$promptCacheExpectsRead.withValue(true) {
+            _ = try await wrapper.send(
+                [
+                    Message(id: UUID(), role: .system, content: "system baseline", timestamp: Date(), toolCalls: []),
+                    Message(id: UUID(), role: .user, content: "user request", timestamp: Date(), toolCalls: []),
+                    Message(id: UUID(), role: .user, content: "stable context", timestamp: Date(), toolCalls: []),
+                ],
+                config: LLMRequestConfig()
+            )
+        }
+        let row = try #require(await collector.rows.first { $0.kind == .promptCache })
+        #expect(row.promptCacheUnexpectedCacheWrite == true)
     }
 }
 

@@ -1878,6 +1878,10 @@ components:
         promptCacheEstimatedSavingsUSD:
           type: number
           format: double
+        promptCacheValuesAreProviderReported:
+          type: boolean
+        promptCacheUnexpectedCacheWrite:
+          type: boolean
         errorClass:
           type: string
         errorCode:

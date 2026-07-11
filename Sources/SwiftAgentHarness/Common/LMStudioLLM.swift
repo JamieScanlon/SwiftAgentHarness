@@ -327,10 +327,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                         let storedFinishReason = canonicalFinishReason == .unknown ? finishReason : canonicalFinishReason.rawValue
                         if let streamUsage {
                             emitter.yield(
-                                .usage(NormalizedUsage(
-                                    inputTokens: streamUsage.promptTokens,
-                                    outputTokens: streamUsage.completionTokens
-                                )),
+                                .usage(streamUsage.normalizedUsage),
                                 availableTools: config.availableTools
                             )
                         }
@@ -379,10 +376,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     }()
                     if let streamUsage {
                         emitter.yield(
-                            .usage(NormalizedUsage(
-                                inputTokens: streamUsage.promptTokens,
-                                outputTokens: streamUsage.completionTokens
-                            )),
+                            .usage(streamUsage.normalizedUsage),
                             availableTools: config.availableTools
                         )
                     }
@@ -753,6 +747,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             remainingContextTokens: remaining,
             totalTokens: usage?.totalTokens,
             contextWindowTokens: config.maxTokens,
+            cacheReadTokens: usage?.cachedTokens,
+            usageIsProviderReported: usage != nil,
             finishReason: finishReason
         )
     }
@@ -768,7 +764,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         return LMStudioUsage(
             promptTokens: int(usage["prompt_tokens"]),
             completionTokens: int(usage["completion_tokens"]),
-            totalTokens: int(usage["total_tokens"])
+            totalTokens: int(usage["total_tokens"]),
+            cachedTokens: CanonicalUsageExtraction.openAICompatCachedTokens(from: usage)
         )
     }
     
@@ -1035,6 +1032,31 @@ private struct LMStudioUsage: Codable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?
+    let cachedTokens: Int?
+
+    init(
+        promptTokens: Int?,
+        completionTokens: Int?,
+        totalTokens: Int?,
+        cachedTokens: Int? = nil
+    ) {
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.totalTokens = totalTokens
+        self.cachedTokens = cachedTokens
+    }
+
+    var normalizedUsage: NormalizedUsage {
+        CanonicalUsageExtraction.openAICompatUsage(
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            totalTokens: totalTokens,
+            cachedTokens: cachedTokens
+        ) ?? NormalizedUsage(
+            inputTokens: promptTokens,
+            outputTokens: completionTokens
+        )
+    }
 }
 
 // MARK: - Extension for ToolDefinition

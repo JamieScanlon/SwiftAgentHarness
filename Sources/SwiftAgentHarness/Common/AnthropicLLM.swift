@@ -128,10 +128,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                             if let u {
                                 usage = u
                                 emitter.yield(
-                                    .usage(NormalizedUsage(
-                                        inputTokens: u.inputTokens,
-                                        outputTokens: u.outputTokens
-                                    )),
+                                    .usage(u.normalizedUsage),
                                     availableTools: config.availableTools
                                 )
                             }
@@ -157,6 +154,9 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         outputTokens: usage?.outputTokens,
                         remainingContextTokens: nil,
                         totalTokens: nil,
+                        cacheReadTokens: usage?.cacheReadInputTokens,
+                        cacheWriteTokens: usage?.cacheCreationInputTokens,
+                        usageIsProviderReported: usage != nil,
                         finishReason: stopReason.finishReasonRawValue
                     )
                     emitter.finishSuccess(
@@ -227,11 +227,15 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             }
         }
         let usageJSON = json["usage"] as? [String: Any]
+        let reportedUsage = CanonicalUsageExtraction.anthropicUsage(from: usageJSON)
         let metadata = LLMTokenMetadataBuilder.build(
-            inputTokens: usageJSON?["input_tokens"] as? Int,
-            outputTokens: usageJSON?["output_tokens"] as? Int,
+            inputTokens: reportedUsage?.inputTokens,
+            outputTokens: reportedUsage?.outputTokens,
             remainingContextTokens: nil,
-            totalTokens: nil
+            totalTokens: nil,
+            cacheReadTokens: reportedUsage?.cacheReadTokens,
+            cacheWriteTokens: reportedUsage?.cacheWriteTokens,
+            usageIsProviderReported: reportedUsage != nil
         )
         return LLMResponse(
             content: contentParts.joined(),
@@ -386,6 +390,37 @@ enum AnthropicStreamEvent: Sendable {
 struct AnthropicUsage: Sendable {
     let inputTokens: Int?
     let outputTokens: Int?
+    let cacheReadInputTokens: Int?
+    let cacheCreationInputTokens: Int?
+
+    init(
+        inputTokens: Int?,
+        outputTokens: Int?,
+        cacheReadInputTokens: Int? = nil,
+        cacheCreationInputTokens: Int? = nil
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadInputTokens = cacheReadInputTokens
+        self.cacheCreationInputTokens = cacheCreationInputTokens
+    }
+
+    init(usageJSON: [String: Any]) {
+        self.inputTokens = usageJSON["input_tokens"] as? Int
+        self.outputTokens = usageJSON["output_tokens"] as? Int
+        self.cacheReadInputTokens = usageJSON["cache_read_input_tokens"] as? Int
+        self.cacheCreationInputTokens = usageJSON["cache_creation_input_tokens"] as? Int
+    }
+
+    var normalizedUsage: NormalizedUsage {
+        NormalizedUsage(
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            cacheReadTokens: cacheReadInputTokens,
+            cacheWriteTokens: cacheCreationInputTokens,
+            reasoningTokens: nil
+        )
+    }
 }
 
 protocol AnthropicStreamSourcing: Sendable {
@@ -506,10 +541,7 @@ enum AnthropicSSEParser {
             }
         case "message_delta":
             if let usage = object["usage"] as? [String: Any] {
-                return [.messageDelta(AnthropicUsage(
-                    inputTokens: usage["input_tokens"] as? Int,
-                    outputTokens: usage["output_tokens"] as? Int
-                ))]
+                return [.messageDelta(AnthropicUsage(usageJSON: usage))]
             }
             return [.messageDelta(nil)]
         case "message_stop":

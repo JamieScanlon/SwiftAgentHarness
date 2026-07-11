@@ -233,10 +233,17 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     
                     if let usage {
                         emitter.yield(
-                            .usage(NormalizedUsage(
-                                inputTokens: usage.promptTokens,
-                                outputTokens: usage.completionTokens
-                            )),
+                            .usage(
+                                CanonicalUsageExtraction.openAICompatUsage(
+                                    promptTokens: usage.promptTokens,
+                                    completionTokens: usage.completionTokens,
+                                    totalTokens: usage.totalTokens,
+                                    cachedTokens: usage.promptTokensDetails?.cachedTokens
+                                ) ?? NormalizedUsage(
+                                    inputTokens: usage.promptTokens,
+                                    outputTokens: usage.completionTokens
+                                )
+                            ),
                             availableTools: config.availableTools
                         )
                     }
@@ -299,6 +306,8 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             remainingContextTokens: remaining,
             totalTokens: usage?.totalTokens,
             contextWindowTokens: config.maxTokens,
+            cacheReadTokens: usage?.promptTokensDetails?.cachedTokens,
+            usageIsProviderReported: usage != nil,
             finishReason: finishReason
         )
     }

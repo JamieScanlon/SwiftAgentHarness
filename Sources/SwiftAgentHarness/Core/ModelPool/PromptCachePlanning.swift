@@ -188,7 +188,12 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
         await PromptCachePlanningMetricsStore.shared.record(mode: plan.mode)
         let configured = apply(plan: plan, to: config)
         let response = try await base.send(messages, config: configured)
-        await emitPromptCacheTelemetry(plan: plan, messages: messages, response: response, providerApplied: providerAppliesPromptCache(plan: plan))
+        await emitPromptCacheTelemetry(
+            plan: plan,
+            messages: messages,
+            response: response,
+            transportKnobApplied: transportKnobApplied(plan: plan)
+        )
         return response
     }
 
@@ -219,7 +224,7 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
                                 plan: plan,
                                 messages: messages,
                                 response: final,
-                                providerApplied: providerAppliesPromptCache(plan: plan)
+                                transportKnobApplied: transportKnobApplied(plan: plan)
                             )
                         }
                         continuation.yield(event)
@@ -259,33 +264,86 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
         )
     }
 
-    private func providerAppliesPromptCache(plan: PromptCachePlan) -> Bool {
+    private func transportKnobApplied(plan: PromptCachePlan) -> Bool {
         guard plan.mode != .none else { return false }
         return binding.modelProtocol == .lmStudio
+    }
+
+    private func providerSupportsNativePromptCache() -> Bool {
+        let capabilities = Set(modelCapabilities)
+        if capabilities.contains(.promptCacheEphemeral) || capabilities.contains(.promptCachePersistent) {
+            return true
+        }
+        return ProviderRuntimeHooks.cacheTtlEligibility(binding: binding) != .none
+    }
+
+    private func providerAppliedPromptCache(
+        plan: PromptCachePlan,
+        reported: NormalizedUsage?,
+        transportKnobApplied: Bool
+    ) -> Bool {
+        let reportedCacheActivity = (reported?.cacheReadTokens ?? 0) + (reported?.cacheWriteTokens ?? 0) > 0
+        return reportedCacheActivity || (transportKnobApplied && plan.mode != .none)
+    }
+
+    private func unexpectedCacheWrite(
+        plan: PromptCachePlan,
+        cacheReadTokens: Int?,
+        cacheWriteTokens: Int?,
+        valuesAreProviderReported: Bool
+    ) -> Bool {
+        guard plan.mode != .none, valuesAreProviderReported else { return false }
+        guard ModelInvocationTaskContext.promptCacheExpectsRead == true else { return false }
+        return (cacheWriteTokens ?? 0) > 0 && (cacheReadTokens ?? 0) == 0
     }
 
     private func emitPromptCacheTelemetry(
         plan: PromptCachePlan,
         messages: [Message],
         response: LLMResponse,
-        providerApplied: Bool
+        transportKnobApplied: Bool
     ) async {
         guard let attemptObserver else { return }
+        let reported = CanonicalUsageExtraction.from(metadata: response.metadata)
+        let valuesAreProviderReported = CanonicalUsageExtraction.valuesAreProviderReported(from: response.metadata)
+            || reported?.cacheReadTokens != nil
+            || reported?.cacheWriteTokens != nil
         let stablePrefixCount = max(0, plan.stablePrefixMessageCount ?? 0)
-        let estimatedInputTokens = response.metadata?.promptTokens ?? estimateTokens(in: messages)
         let estimatedStablePrefixTokens = estimateTokens(in: Array(messages.prefix(stablePrefixCount)))
-        let estimatedCachedInputTokens = providerApplied ? min(estimatedInputTokens, estimatedStablePrefixTokens) : nil
-        let estimatedCacheWriteTokens = (providerApplied && plan.mode == .persistent) ? estimatedStablePrefixTokens : nil
+        let inputTokens = reported?.inputTokens ?? response.metadata?.promptTokens ?? estimateTokens(in: messages)
+        let cachedInputTokens = reported?.cacheReadTokens ?? estimatedCachedInputFallback(
+            providerApplied: providerAppliedPromptCache(
+                plan: plan,
+                reported: reported,
+                transportKnobApplied: transportKnobApplied
+            ),
+            inputTokens: inputTokens,
+            estimatedStablePrefixTokens: estimatedStablePrefixTokens
+        )
+        let cacheWriteTokens = reported?.cacheWriteTokens ?? estimatedCacheWriteFallback(
+            providerApplied: transportKnobApplied,
+            plan: plan,
+            estimatedStablePrefixTokens: estimatedStablePrefixTokens
+        )
         let estimatedSavingsUSD: Double? = {
-            guard providerApplied,
-                  let cachedTokens = estimatedCachedInputTokens,
+            guard let cachedTokens = cachedInputTokens,
                   let inputRate = modelCost?.inputPer1MUSD,
                   let cachedRate = modelCost?.cachedInputPer1MUSD,
-                  inputRate > cachedRate else {
-                return nil
-            }
+                  inputRate > cachedRate
+            else { return nil }
             return max(0, (inputRate - cachedRate) * (Double(cachedTokens) / 1_000_000))
         }()
+        let providerApplied = providerAppliedPromptCache(
+            plan: plan,
+            reported: reported,
+            transportKnobApplied: transportKnobApplied
+        )
+        let unexpectedWrite = unexpectedCacheWrite(
+            plan: plan,
+            cacheReadTokens: cachedInputTokens,
+            cacheWriteTokens: cacheWriteTokens,
+            valuesAreProviderReported: valuesAreProviderReported
+        )
         await attemptObserver(
             ModelCallAttemptObservation(
                 modelID: modelID,
@@ -296,14 +354,34 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
                 endpointModelID: binding.endpointModelId,
                 promptCacheMode: modeRawValue(plan.mode),
                 promptCacheStablePrefixMessageCount: plan.stablePrefixMessageCount,
-                promptCacheProviderSupportsNative: binding.modelProtocol == .lmStudio,
+                promptCacheProviderSupportsNative: providerSupportsNativePromptCache(),
                 promptCacheProviderApplied: providerApplied,
-                promptCacheEstimatedInputTokens: estimatedInputTokens,
-                promptCacheEstimatedCachedInputTokens: estimatedCachedInputTokens,
-                promptCacheEstimatedCacheWriteTokens: estimatedCacheWriteTokens,
-                promptCacheEstimatedSavingsUSD: estimatedSavingsUSD
+                promptCacheEstimatedInputTokens: inputTokens,
+                promptCacheEstimatedCachedInputTokens: cachedInputTokens,
+                promptCacheEstimatedCacheWriteTokens: cacheWriteTokens,
+                promptCacheEstimatedSavingsUSD: estimatedSavingsUSD,
+                promptCacheValuesAreProviderReported: valuesAreProviderReported,
+                promptCacheUnexpectedCacheWrite: unexpectedWrite ? true : nil
             )
         )
+    }
+
+    private func estimatedCachedInputFallback(
+        providerApplied: Bool,
+        inputTokens: Int,
+        estimatedStablePrefixTokens: Int
+    ) -> Int? {
+        guard providerApplied else { return nil }
+        return min(inputTokens, estimatedStablePrefixTokens)
+    }
+
+    private func estimatedCacheWriteFallback(
+        providerApplied: Bool,
+        plan: PromptCachePlan,
+        estimatedStablePrefixTokens: Int
+    ) -> Int? {
+        guard providerApplied, plan.mode == .persistent else { return nil }
+        return estimatedStablePrefixTokens
     }
 
     private func estimateTokens(in messages: [Message]) -> Int {
