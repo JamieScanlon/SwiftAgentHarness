@@ -61,6 +61,8 @@ Writes confined to `{skillsFolderPath}/{normalized-name}/SKILL.md`. Names normal
 | `SkillWorkshopService.swift` | suggest/apply/reject/list/inspect/status orchestration |
 | `../ToolSystem/SkillWorkshopToolProvider.swift` | `skill_workshop` tool surface |
 
+Direct `write_file` / `edit_file` writes under the configured skills directory are scanned with the same rules as memory-directory writes (see **Sensitive write scanning** below). The skill workshop apply path uses a broader scanner on proposals.
+
 ## Related
 
 - [`../ToolSystem/README.md`](../ToolSystem/README.md) — tool registration and policy

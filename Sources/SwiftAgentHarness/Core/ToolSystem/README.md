@@ -83,6 +83,15 @@ At boot, the host app typically:
 - `think` is intentionally non-halting (`haltsLoop == false`) and is used as a continuation/no-op tool for required-tool-choice rounds.
 - `ask_user` returns a structured prompt payload (`question`, `options`, `allowMultiple`, optional `defaultOptionID`) in `ToolResult.metadata.askUser` for UI/API consumers.
 
+## Sensitive write scanning
+
+[`WorkspaceFilesystemToolProvider`](WorkspaceFilesystemToolProvider.swift) and sub-agent ACP `writeTextFile` scan **post-edit content** before persisting when the resolved path is inside either:
+
+- the session **memory directory** (agent-written memory), or
+- the configured **skills directory** (`settings.skillsFolderPath`, resolved via [`SkillsDirectoryResolver`](../Common/SkillsDirectoryResolver.swift) against the workspace root).
+
+Rules come from [`ProjectInstructionContentScanner`](../Memory/ProjectInstructionContentScanner.swift) (instruction injection, exfiltration shapes, invisible unicode) — the same trust profile for both surfaces. Writes elsewhere in the workspace are not scanned. The skill workshop apply path uses a broader scanner on proposals ([`../SkillWorkshop/README.md`](../SkillWorkshop/README.md)).
+
 ## Approval and elevated lifecycle
 
 - Approval-gated tools are **advertised** to the model (`isAdvertisedToModel`); dispatch enforces approval when the model calls them (harness snapshot gate + live pre-dispatch evaluator backed by `ToolSystemGateway` and `ToolApprovalStateStore`).

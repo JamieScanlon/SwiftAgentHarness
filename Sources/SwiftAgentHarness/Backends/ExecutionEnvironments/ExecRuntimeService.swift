@@ -6,6 +6,7 @@ public struct ExecRuntimeContext: Sendable {
     public let agentID: String
     public let isMainSession: Bool
     public let memoryDirectory: String?
+    public let skillsDirectory: String?
     public let memoryWriteOnly: Bool
     public let senderIdentity: ExecSenderIdentity
     public let elevated: ElevatedExecContext
@@ -16,6 +17,7 @@ public struct ExecRuntimeContext: Sendable {
         agentID: String,
         isMainSession: Bool,
         memoryDirectory: String? = nil,
+        skillsDirectory: String? = nil,
         memoryWriteOnly: Bool = false,
         senderIdentity: ExecSenderIdentity = .cliDefault,
         elevated: ElevatedExecContext = ElevatedExecContext(mode: .off, senderAllowed: false),
@@ -25,6 +27,7 @@ public struct ExecRuntimeContext: Sendable {
         self.agentID = agentID
         self.isMainSession = isMainSession
         self.memoryDirectory = memoryDirectory
+        self.skillsDirectory = skillsDirectory
         self.memoryWriteOnly = memoryWriteOnly
         self.senderIdentity = senderIdentity
         self.elevated = elevated

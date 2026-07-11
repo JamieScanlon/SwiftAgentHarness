@@ -327,9 +327,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let content = extractString(from: toolCall.arguments, key: "content") ?? ""
             let path = try resolveToolPath(raw: raw, requireExists: false)
-            try MemoryContentScanner.validateWriteIfMemoryTarget(
+            try MemoryContentScanner.validateWriteIfSensitiveTarget(
                 path: path,
                 memoryDirectory: memoryDirectoryURL(),
+                skillsDirectory: skillsDirectoryURL(),
                 content: content
             ).get()
             try await validatePreCompactionFlushWriteIfNeeded(
@@ -364,9 +365,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 return err(toolCall, "old_string not found")
             }
             content = content.replacingOccurrences(of: oldString, with: newString)
-            try MemoryContentScanner.validateWriteIfMemoryTarget(
+            try MemoryContentScanner.validateWriteIfSensitiveTarget(
                 path: path,
                 memoryDirectory: memoryDirectoryURL(),
+                skillsDirectory: skillsDirectoryURL(),
                 content: content
             ).get()
             try await validatePreCompactionFlushWriteIfNeeded(
@@ -406,6 +408,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func memoryDirectoryURL() -> URL? {
         runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func skillsDirectoryURL() -> URL? {
+        runtimeContext.skillsDirectory.map { URL(fileURLWithPath: $0) }
     }
 
     private func validatePreCompactionFlushWriteIfNeeded(
@@ -501,6 +507,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             agentID: runtimeContext.agentID,
             isMainSession: runtimeContext.isMainSession,
             memoryDirectory: runtimeContext.memoryDirectory,
+            skillsDirectory: runtimeContext.skillsDirectory,
             memoryWriteOnly: runtimeContext.memoryWriteOnly,
             senderIdentity: identity,
             elevated: ElevatedExecContext(mode: mode, senderAllowed: senderAllowed),
@@ -686,6 +693,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             return message
         case let error as PreCompactionFlushWriteToolError:
             return error.message
+        case let error as MemoryWriteScanError:
+            switch error {
+            case .threatsDetected(let threats):
+                return "Write blocked: sensitive content detected (\(threats.joined(separator: ", ")))"
+            }
         case SandboxBackendError.pathEscapes:
             return "Path escapes workspace boundary"
         default:

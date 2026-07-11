@@ -44,11 +44,14 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
             approvalDelivery: approvalDelivery,
             logger: deps.logger
         )
+        let skillsDirectory = (try? SystemPrompt.loadSkillsFolderPathFromConfig())
+            .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
         let runtimeContext = ExecRuntimeContext(
             sessionKey: sessionKey,
             agentID: sessionKey,
             isMainSession: true,
             memoryDirectory: memoryDirectory?.path,
+            skillsDirectory: skillsDirectory?.path,
             memoryWriteOnly: ConversationLineageInference.isMemoryWriteScopedProfile(conversation.modeProfileID)
         )
         let baseConfiguration = HarnessRuntimeSession.Configuration(enableTools: true, enableAgents: true)

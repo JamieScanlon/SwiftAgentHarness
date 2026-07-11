@@ -641,11 +641,14 @@ public actor OrchestratorRuntimeService {
                 approvalDelivery: approvalDelivery,
                 logger: logger
             )
+            let skillsDirectory = (try? SystemPrompt.loadSkillsFolderPathFromConfig())
+                .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
             let runtimeContext = ExecRuntimeContext(
                 sessionKey: sessionKey,
                 agentID: sessionKey,
                 isMainSession: true,
                 memoryDirectory: memoryDirectory?.path,
+                skillsDirectory: skillsDirectory?.path,
                 memoryWriteOnly: memoryWriteOnly
             )
             let perCallElevationModes: [String: ElevatedMode] = Dictionary(
