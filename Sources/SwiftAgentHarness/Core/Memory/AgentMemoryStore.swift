@@ -2,9 +2,15 @@ import Foundation
 
 struct AgentMemoryStore: Sendable {
     let memoryDirectory: URL
+    let indexCapProfile: MemoryIndexCapProfile
 
-    init(memoryDirectory: URL, fileManager: FileManager = .default) {
+    init(
+        memoryDirectory: URL,
+        indexCapProfile: MemoryIndexCapProfile = .project,
+        fileManager: FileManager = .default
+    ) {
         self.memoryDirectory = memoryDirectory
+        self.indexCapProfile = indexCapProfile
         _ = fileManager
     }
 
@@ -18,16 +24,19 @@ struct AgentMemoryStore: Sendable {
         }
     }
 
-    static func validatedTruncatedIndexContent(_ content: String) throws -> (text: String, capFired: String?) {
+    static func validatedTruncatedIndexContent(
+        _ content: String,
+        indexCapProfile: MemoryIndexCapProfile = .project
+    ) throws -> (text: String, capFired: String?) {
         try MemoryContentScanner.validateWrite(content).get()
-        let truncated = MemoryIndexTruncator.truncate(content)
+        let truncated = MemoryIndexTruncator.truncate(content, profile: indexCapProfile)
         return (truncated.text, truncated.capFired)
     }
 
     func readIndexSnapshot() throws -> String {
         try ensureLayout()
         let raw = (try? String(contentsOf: indexURL, encoding: .utf8)) ?? ""
-        return MemoryIndexTruncator.truncate(raw).text
+        return MemoryIndexTruncator.truncate(raw, profile: indexCapProfile).text
     }
 
     func readTopicBody(filename: String) throws -> String? {
@@ -65,7 +74,7 @@ struct AgentMemoryStore: Sendable {
 
     /// Caller must already hold `MemoryFileLock.withLock` for this memory directory.
     func writeIndexAssumingLocked(content: String) throws -> String? {
-        let prepared = try Self.validatedTruncatedIndexContent(content)
+        let prepared = try Self.validatedTruncatedIndexContent(content, indexCapProfile: indexCapProfile)
         try ensureLayout()
         try MemoryFileLock.atomicWrite(text: prepared.text, to: indexURL, fileManager: .default)
         return prepared.capFired

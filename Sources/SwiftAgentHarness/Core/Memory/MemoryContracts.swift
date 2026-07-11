@@ -12,6 +12,7 @@ struct MemorySessionContext: Sendable, Equatable {
     let cwd: String
     let canonicalGitRoot: String?
     let memoryDirectory: URL
+    let userMemoryDirectory: URL
     let chatType: MemoryChatType
     let agentID: String?
 
@@ -20,6 +21,7 @@ struct MemorySessionContext: Sendable, Equatable {
         cwd: String,
         canonicalGitRoot: String?,
         memoryDirectory: URL,
+        userMemoryDirectory: URL? = nil,
         chatType: MemoryChatType = .direct,
         agentID: String? = nil
     ) {
@@ -27,6 +29,13 @@ struct MemorySessionContext: Sendable, Equatable {
         self.cwd = cwd
         self.canonicalGitRoot = canonicalGitRoot
         self.memoryDirectory = memoryDirectory
+        if let userMemoryDirectory {
+            self.userMemoryDirectory = userMemoryDirectory
+        } else if let resolved = try? AgentMemoryPathResolver.resolveUserMemoryDirectory() {
+            self.userMemoryDirectory = resolved
+        } else {
+            self.userMemoryDirectory = memoryDirectory.appendingPathComponent("_user-tier", isDirectory: true)
+        }
         self.chatType = chatType
         self.agentID = agentID
     }

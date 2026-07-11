@@ -31,6 +31,7 @@ When no topic files exist yet, create new typed topic files using write_file wit
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.indexUsagePrompt)
 \(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
+\(MemoryTypeTaxonomy.userTierWriteRoutingPrompt)
 
 URGENT: Context compaction is about to summarize away the conversation below. Promote any durable facts to curated typed topic files NOW before they are lost. Do not write daily staging files.
 """

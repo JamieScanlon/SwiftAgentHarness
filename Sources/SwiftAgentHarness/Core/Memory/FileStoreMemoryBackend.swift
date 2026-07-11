@@ -28,22 +28,32 @@ struct FileStoreMemoryPromptBuilder: MemoryPromptBuilding {
         availableToolNames: [String]
     ) throws -> MemoryBackendPromptSections {
         _ = availableToolNames
-        let index = try store.readIndexSnapshot()
+        let projectIndex = try store.readIndexSnapshot()
+        let userStore = AgentMemoryStore(
+            memoryDirectory: context.userMemoryDirectory,
+            indexCapProfile: .user
+        )
+        let userIndex = try userStore.readIndexSnapshot()
+        let combinedIndex = MemoryIndexPromptComposer.combinedIndexText(
+            userIndex: userIndex,
+            projectIndex: projectIndex
+        )
         let taxonomy = """
 \(MemoryTypeTaxonomy.indexUsagePrompt)
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.persistenceDistinctionPrompt)
 \(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
+\(MemoryTypeTaxonomy.userTierWriteRoutingPrompt)
 """
         var sensitive = MemoryTypeTaxonomy.sensitiveDataPrompt
         if config.teamMemoryEnabled {
             sensitive += "\n" + MemoryTypeTaxonomy.teamSensitiveDataPrompt
         }
         let pathDisclosure = """
-You have a persistent, file-based memory system at \(context.memoryDirectory.path).
+You have a persistent, file-based memory system. Project memory: \(context.memoryDirectory.path). User memory (cross-project): \(context.userMemoryDirectory.path).
 """
         return MemoryBackendPromptSections(
-            memoryIndexText: index.isEmpty ? "" : "# Agent memory index\n\(index)",
+            memoryIndexText: combinedIndex,
             recalledTopicBodiesText: recalled,
             taxonomyPromptText: taxonomy,
             driftGuardText: MemoryTypeTaxonomy.driftGuardPrompt,
@@ -156,6 +166,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     private var extractionRunner: MemoryExtractionRunning?
     private var sessionByConversation: [UUID: MemorySessionContext] = [:]
     private var storeByConversation: [UUID: AgentMemoryStore] = [:]
+    private var userStore: AgentMemoryStore?
 
     init(
         config: MemoryConfiguration,
@@ -178,6 +189,14 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         let store = AgentMemoryStore(memoryDirectory: context.memoryDirectory)
         try store.ensureLayout()
         storeByConversation[context.conversationID] = store
+        if userStore == nil {
+            let sharedUserStore = AgentMemoryStore(
+                memoryDirectory: context.userMemoryDirectory,
+                indexCapProfile: .user
+            )
+            try sharedUserStore.ensureLayout()
+            userStore = sharedUserStore
+        }
         Task { await self.activeMemory.warmStanding(session: context) }
     }
 
@@ -271,6 +290,10 @@ actor FileStoreMemoryBackend: MemoryRuntime {
 
     func store(for conversationID: UUID) async -> AgentMemoryStore? {
         storeByConversation[conversationID]
+    }
+
+    func userTierStore() async -> AgentMemoryStore? {
+        userStore
     }
 
     func sessionContext(for conversationID: UUID) async -> MemorySessionContext? {

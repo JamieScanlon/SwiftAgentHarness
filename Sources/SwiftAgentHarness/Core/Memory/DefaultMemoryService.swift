@@ -117,7 +117,7 @@ public actor DefaultMemoryService: MemoryServicing {
         guard let session = await capability.runtime.sessionContext(for: context.conversationID),
               let store = await capability.runtime.store(for: context.conversationID) else { return .skipped }
 
-        let manifestLines = store.manifest().map(MemoryManifestScanner.formatManifestLine)
+        let manifestLines = await extractionManifestLines(conversationID: context.conversationID)
         let middleTranscript = MemoryExtractionPrompts.recentTranscriptSlice(
             messages: context.middleMessages,
             limit: context.middleMessages.count
@@ -435,6 +435,21 @@ public actor DefaultMemoryService: MemoryServicing {
         return await capability.runtime.manifestEntries(conversationID: conversationID)
     }
 
+    func extractionManifestLines(conversationID: UUID) async -> [String] {
+        var lines: [String] = []
+        if let userDir = try? AgentMemoryPathResolver.resolveUserMemoryDirectory() {
+            let userStore = AgentMemoryStore(memoryDirectory: userDir, indexCapProfile: .user)
+            for entry in userStore.manifest() {
+                lines.append(MemoryManifestScanner.formatManifestLine(entry, scope: .user))
+            }
+        }
+        let projectEntries = await manifestEntries(conversationID: conversationID)
+        for entry in projectEntries {
+            lines.append(MemoryManifestScanner.formatManifestLine(entry, scope: .project))
+        }
+        return lines
+    }
+
     func hybridSearch() async -> HybridMemorySearch {
         let capability = await capabilityRegistry.activeCapability()
         return await capability.runtime.hybridSearch()
@@ -454,11 +469,13 @@ public actor DefaultMemoryService: MemoryServicing {
     nonisolated func makeSessionContext(conversationID: UUID, cwd: String, chatType: MemoryChatType = .direct) throws -> MemorySessionContext {
         let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
         let memoryDir = try AgentMemoryPathResolver.resolveMemoryDirectory(canonicalGitRoot: gitRoot, cwd: cwd)
+        let userMemoryDir = try AgentMemoryPathResolver.resolveUserMemoryDirectory()
         return MemorySessionContext(
             conversationID: conversationID,
             cwd: cwd,
             canonicalGitRoot: gitRoot,
             memoryDirectory: memoryDir,
+            userMemoryDirectory: userMemoryDir,
             chatType: chatType
         )
     }

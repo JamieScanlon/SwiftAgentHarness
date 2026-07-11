@@ -338,7 +338,7 @@ struct DailyStagingTierTests {
             availableToolNames: []
         )
         #expect(sections.taxonomyPromptText.contains("## Memory vs skills (routing)"))
-        #expect(sections.taxonomyPromptText.contains("Do **not** save procedures as memory"))
-        #expect(sections.taxonomyPromptText.contains("skill_workshop"))
+        #expect(sections.taxonomyPromptText.contains("## User vs project tier (write routing)"))
+        #expect(sections.memoryPathDisclosureText.contains("User memory (cross-project)"))
     }
 }

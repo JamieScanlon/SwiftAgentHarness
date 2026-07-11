@@ -714,12 +714,12 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("extraction prompt scopes file tools to memory directory and cold start")
     func extractionPromptGuidesMemoryScopedPaths() {
         let prompt = MemoryExtractionPrompts.systemPrompt(manifestLines: [])
-        #expect(prompt.contains("File tools are scoped to the memory directory"))
-        #expect(prompt.contains("write_file rather than reading first"))
-        #expect(prompt.contains("they are not accessible"))
+        #expect(prompt.contains("File tools are scoped to project and user memory directories"))
         #expect(prompt.contains("## Memory vs skills (routing)"))
         #expect(prompt.contains("Do **not** save procedures as memory"))
         #expect(prompt.contains("skill_workshop"))
+        #expect(prompt.contains("## User vs project tier (write routing)"))
+        #expect(prompt.contains("user/MEMORY.md"))
     }
 }
 

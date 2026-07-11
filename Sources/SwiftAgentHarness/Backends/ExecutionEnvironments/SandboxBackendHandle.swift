@@ -116,11 +116,18 @@ public struct SandboxFsBridgeContext: Sendable {
     public let workspaceRoot: String
     public let agentWorkspaceDir: String
     public let memoryDirectory: String?
+    public let userMemoryDirectory: String?
 
-    public init(workspaceRoot: String, agentWorkspaceDir: String, memoryDirectory: String? = nil) {
+    public init(
+        workspaceRoot: String,
+        agentWorkspaceDir: String,
+        memoryDirectory: String? = nil,
+        userMemoryDirectory: String? = nil
+    ) {
         self.workspaceRoot = workspaceRoot
         self.agentWorkspaceDir = agentWorkspaceDir
         self.memoryDirectory = memoryDirectory
+        self.userMemoryDirectory = userMemoryDirectory
     }
 }
 

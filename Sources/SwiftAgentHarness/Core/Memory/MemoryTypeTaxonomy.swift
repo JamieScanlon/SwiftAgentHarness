@@ -73,18 +73,46 @@ Do **not** save procedures as memory — especially sprawling `feedback` topic f
 
 When `skill_workshop` is available, propose durable procedures there instead of writing them to memory.
 """
+
+    static let userTierWriteRoutingPrompt = """
+## User vs project tier (write routing)
+
+- `type: user` memories → **user tier** (cross-project facts about the person). Prefix paths with `user/` (e.g. `user/MEMORY.md`, `user/preferences.md`). Daily staging stays project-scoped only.
+- `type: feedback`, `project`, `reference` → **project tier** (bare filenames, existing rules).
+- User tier holds user-about facts only — no repo paths, architecture, or procedures.
+"""
+}
+
+enum MemoryIndexCapProfile: Sendable, Equatable {
+    case project
+    case user
 }
 
 enum MemoryIndexTruncator {
     static let maxLines = 200
     static let maxBytes = 25_000
+    static let userTierMaxLines = 50
+    static let userTierMaxBytes = 8_000
 
     struct TruncationResult: Equatable {
         let text: String
         let capFired: String?
     }
 
-    static func truncate(_ content: String) -> TruncationResult {
+    static func truncate(_ content: String, profile: MemoryIndexCapProfile = .project) -> TruncationResult {
+        switch profile {
+        case .project:
+            truncate(content, maxLines: maxLines, maxBytes: maxBytes)
+        case .user:
+            truncate(content, maxLines: userTierMaxLines, maxBytes: userTierMaxBytes)
+        }
+    }
+
+    static func truncateUserTier(_ content: String) -> TruncationResult {
+        truncate(content, profile: .user)
+    }
+
+    private static func truncate(_ content: String, maxLines: Int, maxBytes: Int) -> TruncationResult {
         var text = content
         var capFired: String?
         let lines = text.components(separatedBy: .newlines)
@@ -168,7 +196,30 @@ enum MemoryManifestScanner {
     }
 
     static func formatManifestLine(_ entry: MemoryManifestEntry) -> String {
+        formatManifestLine(entry, scope: nil)
+    }
+
+    static func formatManifestLine(_ entry: MemoryManifestEntry, scope: MemoryTierScope?) -> String {
         let ts = entry.updatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
-        return "[\(entry.memoryType.rawValue)] \(entry.filename) (\(ts)): \(entry.description)"
+        let scopePrefix = scope.map { "[scope:\($0.rawValue)] " } ?? ""
+        return "\(scopePrefix)[\(entry.memoryType.rawValue)] \(entry.filename) (\(ts)): \(entry.description)"
+    }
+}
+
+enum MemoryTierScope: String, Sendable, Equatable {
+    case user
+    case project
+}
+
+enum MemoryIndexPromptComposer {
+    static func combinedIndexText(userIndex: String, projectIndex: String) -> String {
+        var parts: [String] = []
+        if !userIndex.isEmpty {
+            parts.append("# User memory index [scope:user]\n\(userIndex)")
+        }
+        if !projectIndex.isEmpty {
+            parts.append("# Agent memory index [scope:project]\n\(projectIndex)")
+        }
+        return parts.joined(separator: "\n\n")
     }
 }

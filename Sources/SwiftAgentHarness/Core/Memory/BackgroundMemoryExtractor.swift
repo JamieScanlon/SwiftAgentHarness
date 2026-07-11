@@ -105,10 +105,11 @@ Turn 1 — issue all Read calls in parallel for every file you might update; tur
 Existing memory manifest:
 \(manifestLines.joined(separator: "\n"))
 
-File tools are scoped to the memory directory. Use bare filenames only (e.g. today's `YYYY-MM-DD.md`, typed topic files, `MEMORY.md`). Do not attempt to read project or source files referenced in the transcript — they are not accessible.
+File tools are scoped to project and user memory directories. Use bare filenames for project-tier files (e.g. today's `YYYY-MM-DD.md`, typed topic files, `MEMORY.md`). Prefix `user/` for user-tier files (e.g. `user/MEMORY.md`, `user/preferences.md`). Do not attempt to read project or source files referenced in the transcript — they are not accessible.
 When no memory files exist yet (blank manifest above), create them using write_file rather than reading first.
 
 \(MemoryTypeTaxonomy.dailyCapturePrompt)
+\(MemoryTypeTaxonomy.userTierWriteRoutingPrompt)
 \(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.indexUsagePrompt)

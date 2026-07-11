@@ -23,12 +23,14 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
         let workspaceRoot = conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
         let memoryService = (deps.contextEngine as? DefaultContextEngine)?.memoryService
         var memoryDirectory: URL?
+        var userMemoryDirectory: URL?
         if let memoryService,
            let context = try? memoryService.makeSessionContext(
             conversationID: conversation.id,
             cwd: workspaceRoot
            ) {
             memoryDirectory = context.memoryDirectory
+            userMemoryDirectory = context.userMemoryDirectory
         }
         let sessionKey = conversation.id.uuidString
         let approvalDelivery = await ExecApprovalDeliveryFactory.make(
@@ -51,6 +53,7 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
             agentID: sessionKey,
             isMainSession: true,
             memoryDirectory: memoryDirectory?.path,
+            userMemoryDirectory: userMemoryDirectory?.path,
             skillsDirectory: skillsDirectory?.path,
             memoryWriteOnly: ConversationLineageInference.isMemoryWriteScopedProfile(conversation.modeProfileID)
         )

@@ -12,6 +12,42 @@ public enum WorkspaceFilesystemError: Error, Equatable {
 
 public enum PathPolicy {
     private static let defaultMaxSymlinkDepth = 40
+    static let userTierPathPrefix = "user/"
+
+    public static func resolveTieredMemoryRelativePath(
+        raw: String,
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?,
+        requireExists: Bool,
+        fileManager: FileManager = .default
+    ) throws -> String {
+        let (tier, filename) = try parseTieredMemoryPath(raw)
+        let root: URL
+        switch tier {
+        case .user:
+            guard let userMemoryDirectory else { throw WorkspaceFilesystemError.writeDenied }
+            root = userMemoryDirectory
+        case .project:
+            root = projectMemoryDirectory
+        }
+        return try resolveMemoryRelativePath(
+            raw: filename,
+            memoryDirectory: root,
+            requireExists: requireExists,
+            fileManager: fileManager
+        )
+    }
+
+    public static func tieredMemoryAllowedRoots(
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?
+    ) -> [String] {
+        var roots = [FilesystemCanonicalPath.resolve(projectMemoryDirectory.path)]
+        if let userMemoryDirectory {
+            roots.append(FilesystemCanonicalPath.resolve(userMemoryDirectory.path))
+        }
+        return roots
+    }
 
     public static func toRelativeWorkspacePath(root: String, candidate: String) throws -> String {
         let normalizedRoot = FilesystemCanonicalPath.resolve(root)
@@ -138,6 +174,21 @@ public enum PathPolicy {
         guard !raw.isEmpty, !raw.contains("\0") else { throw WorkspaceFilesystemError.invalidPath }
         guard !raw.hasPrefix("/") else { throw WorkspaceFilesystemError.invalidPath }
         if raw.contains("/") || raw.contains("..") { throw WorkspaceFilesystemError.invalidPath }
+    }
+
+    private enum TieredMemoryPathTier: Sendable {
+        case user
+        case project
+    }
+
+    private static func parseTieredMemoryPath(_ raw: String) throws -> (TieredMemoryPathTier, String) {
+        if raw.hasPrefix(userTierPathPrefix) {
+            let filename = String(raw.dropFirst(userTierPathPrefix.count))
+            try validateMemoryFilename(filename)
+            return (.user, filename)
+        }
+        try validateMemoryFilename(raw)
+        return (.project, raw)
     }
 
     private static func pass1NormalizedPath(

@@ -586,9 +586,11 @@ public actor OrchestratorRuntimeService {
         if !workspaceRoot.isEmpty {
             let memoryService = (deps.contextEngine as? DefaultContextEngine)?.memoryService
             var memoryDirectory: URL?
+            var userMemoryDirectory: URL?
             if let memoryService, let conv = activeConversation,
                let context = try? memoryService.makeSessionContext(conversationID: conv.id, cwd: workspaceRoot) {
                 memoryDirectory = context.memoryDirectory
+                userMemoryDirectory = context.userMemoryDirectory
             }
             let memoryWriteOnly = ConversationLineageInference.isMemoryWriteScopedProfile(
                 activeConversation?.modeProfileID
@@ -648,6 +650,7 @@ public actor OrchestratorRuntimeService {
                 agentID: sessionKey,
                 isMainSession: true,
                 memoryDirectory: memoryDirectory?.path,
+                userMemoryDirectory: userMemoryDirectory?.path,
                 skillsDirectory: skillsDirectory?.path,
                 memoryWriteOnly: memoryWriteOnly
             )

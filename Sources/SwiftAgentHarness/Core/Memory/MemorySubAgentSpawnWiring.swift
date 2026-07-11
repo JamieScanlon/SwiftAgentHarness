@@ -55,8 +55,7 @@ enum MemorySubAgentSpawnWiring {
                       let memoryService = defaultEngine.memoryService else {
                     return []
                 }
-                let entries = await memoryService.manifestEntries(conversationID: conversationID)
-                return entries.map(MemoryManifestScanner.formatManifestLine)
+                return await memoryService.extractionManifestLines(conversationID: conversationID)
             },
             parentModel: { conversationID in
                 await persistenceDomain.modelConversation(id: conversationID)?.model

@@ -330,6 +330,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             try MemoryContentScanner.validateWriteIfSensitiveTarget(
                 path: path,
                 memoryDirectory: memoryDirectoryURL(),
+                userMemoryDirectory: userMemoryDirectoryURL(),
                 skillsDirectory: skillsDirectoryURL(),
                 content: content
             ).get()
@@ -368,6 +369,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             try MemoryContentScanner.validateWriteIfSensitiveTarget(
                 path: path,
                 memoryDirectory: memoryDirectoryURL(),
+                userMemoryDirectory: userMemoryDirectoryURL(),
                 skillsDirectory: skillsDirectoryURL(),
                 content: content
             ).get()
@@ -397,8 +399,19 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         content: Data
     ) async throws {
         if let memoryDirectory = memoryDirectoryURL(),
-           AgentMemoryPathResolver.isPathInsideMemoryDirectory(absolutePath, memoryDirectory: memoryDirectory) {
-            try await MemoryFileLock.withLockAsync(memoryDirectory: memoryDirectory) {
+           AgentMemoryPathResolver.isPathInsideAnyMemoryDirectory(
+               absolutePath,
+               projectMemoryDirectory: memoryDirectory,
+               userMemoryDirectory: userMemoryDirectoryURL()
+           ) {
+            let lockDirectory: URL
+            if let userMemoryDirectory = userMemoryDirectoryURL(),
+               AgentMemoryPathResolver.isPathInsideMemoryDirectory(absolutePath, memoryDirectory: userMemoryDirectory) {
+                lockDirectory = userMemoryDirectory
+            } else {
+                lockDirectory = memoryDirectory
+            }
+            try await MemoryFileLock.withLockAsync(memoryDirectory: lockDirectory) {
                 try await bridge.writeFile(path: rawPath, content: content)
             }
             return
@@ -408,6 +421,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func memoryDirectoryURL() -> URL? {
         runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func userMemoryDirectoryURL() -> URL? {
+        runtimeContext.userMemoryDirectory.map { URL(fileURLWithPath: $0) }
     }
 
     private func skillsDirectoryURL() -> URL? {
@@ -425,9 +442,10 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func resolveToolPath(raw: String, requireExists: Bool) throws -> String {
         if runtimeContext.memoryWriteOnly, let memoryDirectory = memoryDirectoryURL() {
-            return try PathPolicy.resolveMemoryRelativePath(
+            return try PathPolicy.resolveTieredMemoryRelativePath(
                 raw: raw,
-                memoryDirectory: memoryDirectory,
+                projectMemoryDirectory: memoryDirectory,
+                userMemoryDirectory: userMemoryDirectoryURL(),
                 requireExists: requireExists
             )
         }
@@ -669,7 +687,11 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func notifyMemoryWrite(_ path: String) async {
         guard let memoryDirectory = runtimeContext.memoryDirectory,
-              AgentMemoryPathResolver.isPathInsideMemoryDirectory(path, memoryDirectory: URL(fileURLWithPath: memoryDirectory)) else {
+              AgentMemoryPathResolver.isPathInsideAnyMemoryDirectory(
+                  path,
+                  projectMemoryDirectory: URL(fileURLWithPath: memoryDirectory),
+                  userMemoryDirectory: userMemoryDirectoryURL()
+              ) else {
             return
         }
         await onMemoryWrite?(path)

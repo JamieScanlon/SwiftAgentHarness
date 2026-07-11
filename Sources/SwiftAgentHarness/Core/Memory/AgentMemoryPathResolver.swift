@@ -62,8 +62,31 @@ enum AgentMemoryPathResolver {
         return URL(fileURLWithPath: normalized, isDirectory: true)
     }
 
+    static func resolveUserMemoryDirectory(fileManager: FileManager = .default) throws -> URL {
+        let dir = MemoryConfigHome.resolve(fileManager: fileManager)
+            .appendingPathComponent("memory", isDirectory: true)
+            .appendingPathComponent("user", isDirectory: true)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     static func isPathInsideMemoryDirectory(_ path: String, memoryDirectory: URL) -> Bool {
         WorkspacePathPolicy.isPathInsideRoot(path, root: memoryDirectory.standardizedFileURL.path)
+    }
+
+    static func isPathInsideAnyMemoryDirectory(
+        _ path: String,
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?
+    ) -> Bool {
+        if isPathInsideMemoryDirectory(path, memoryDirectory: projectMemoryDirectory) {
+            return true
+        }
+        if let userMemoryDirectory,
+           isPathInsideMemoryDirectory(path, memoryDirectory: userMemoryDirectory) {
+            return true
+        }
+        return false
     }
 
     private static func readTrustedAutoMemoryDirectory(fileManager: FileManager) -> String? {

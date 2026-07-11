@@ -63,11 +63,16 @@ enum MemoryContentScanner {
     static func validateWriteIfSensitiveTarget(
         path: String,
         memoryDirectory: URL?,
+        userMemoryDirectory: URL? = nil,
         skillsDirectory: URL?,
         content: String
     ) -> Result<Void, MemoryWriteScanError> {
         if let memoryDirectory,
-           AgentMemoryPathResolver.isPathInsideMemoryDirectory(path, memoryDirectory: memoryDirectory) {
+           AgentMemoryPathResolver.isPathInsideAnyMemoryDirectory(
+               path,
+               projectMemoryDirectory: memoryDirectory,
+               userMemoryDirectory: userMemoryDirectory
+           ) {
             return validateWrite(content)
         }
         if let skillsDirectory,
