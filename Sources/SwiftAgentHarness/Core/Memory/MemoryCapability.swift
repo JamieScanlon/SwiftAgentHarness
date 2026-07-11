@@ -160,7 +160,7 @@ struct LegacyLifecycleMemoryRuntime: MemoryRuntime {
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
         _ = request
-        return MemoryRecallResult(selectedFilenames: [], recalledBodiesText: "")
+        return MemoryRecallResult(selectedFilenames: [], hits: [])
     }
 
     func onTurnEnded(request: MemoryTurnEndedRequest) async {

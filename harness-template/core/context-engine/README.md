@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-The Context Engine owns **what gets sent to the model on each turn**. It reads the conversation's two event arrays (`rawEvents: [Message]` as the source of truth and `derivedEvents: [Checkpoint]` as the Engine's own prior work), the loaded skills, the attached resources, the relevant memory, and the per-conversation overrides; it applies the lifecycle of transformations (system-prompt assembly, history trimming, compaction, memory injection, tool-result trimming, attachment inlining); it returns a message array — the *projected view* the model will see. The projection is **a pure function of `(rawEvents, derivedEvents, config)`**: nothing is stored on the side, nothing is cached separately. The Engine's *only* persisted output is **Checkpoint** entries appended to `derivedEvents` (CompactionCheckpoint, MemoryInjectionSnapshot, ToolResultTrim, optional SystemPromptAssembly); each carries a validity check so stale or invalidated entries can be silently rejected.
+The Context Engine owns **what gets sent to the model on each turn**. It reads the conversation's two event arrays (`rawEvents: [Message]` as the source of truth and `derivedEvents: [Checkpoint]` as the Engine's own prior work), the loaded skills, the attached resources, the relevant memory, and the per-conversation overrides; it applies the lifecycle of transformations (system-prompt assembly, history trimming, compaction, memory injection, tool-result trimming, attachment inlining); it returns a message array — the *projected view* the model will see. The projection is **a pure function of `(rawEvents, derivedEvents, config)`**: nothing is stored on the side, nothing is cached separately. The Engine's *only* persisted output is **Checkpoint** entries appended to `derivedEvents` (CompactionCheckpoint, MemoryInjectionSnapshot, ToolResultTrim, optional SystemPromptAssembly, optional AttachmentDigest); each carries a validity check so stale or invalidated entries can be silently rejected.
 
 The architectural lock-in for this layer: **never mutate `rawEvents`.** Raw history stays append-only and lossless; everything the Engine produces is a Checkpoint in `derivedEvents`, with its own validity check. See [conversation-manager.md → "The event log and the projected view"](../conversation-manager/README.md#the-event-log-and-the-projected-view) for the full type and the projection function.
 
@@ -44,12 +44,13 @@ This pattern is how compaction, memory injection, tool-result trimming, and (opt
 - **The lifecycle** — `bootstrap / ingest / ingestBatch / assemble / compact / afterTurn`. `assemble()` returns `{messages, estimatedTokens, systemPromptAddition?}` — the projected view for the upcoming turn. Optional `prepareSubagentSpawn / onSubagentEnded` for sub-agent coordination.
 - **`project(rawEvents, derivedEvents, config)` is the pure-function entry point the [Agent Runtime](../agent-runtime/) calls every iteration via the Manager's `assembleForTurn(...)` wrapper.** No side state; same inputs always produce the same output.
 - **Compaction appends a `CompactionCheckpoint` to `derivedEvents`** whose payload describes how to substitute a synthetic message list for a covered raw-message prefix. See [compaction.md](./compaction.md) for triggers, scope, prompt design, output framing, and the validity rule. Compaction never mutates `rawEvents`.
-- **Memory injection appends a `MemoryInjectionSnapshot` to `derivedEvents`** when the Engine fetches relevant memory and wants to cache the lookup across turns. The validity check covers both raw-prefix match and the memory store's `memoryStoreVersion` (so an updated memory invalidates cached snapshots automatically). Late-stage transformations apply the snapshot's hits to the projection.
+- **Memory injection appends a `MemoryInjectionSnapshot` to `derivedEvents`** when the Engine fetches relevant memory and wants to cache the lookup across turns. The validity check covers both raw-prefix match and the memory store's `memoryStoreVersion` (so an updated memory invalidates cached snapshots automatically). Late-stage transformations apply the snapshot's hits to the projection. See [memory-injection.md](./memory-injection.md) for the full injection policy: tiers, thresholds, budgeting, placement, and ordering.
 - **Tool-result trimming appends a `ToolResultTrim` to `derivedEvents`** targeting a specific raw `ToolResultMessage` by id. The projection substitutes the trimmed view when assembling. Validity check is just "the target message still exists" (always true given raw messages are immutable; trims never invalidate without explicit replacement).
-- **System-prompt assembly is normally transient** — computed once per turn, not persisted — but can optionally append a `SystemPromptAssembly` Checkpoint for transparency/debugging UIs that want to render "what was the system prompt on turn 17."
+- **Attachment inlining is a per-turn representation decision** — inline / digest / reference, chosen from size, modality × model capability, trust class, and recency; attachment bytes never enter `rawEvents`, and expensive digests are cached as `AttachmentDigest` Checkpoints keyed on content hash. See [attachment-inlining.md](./attachment-inlining.md).
+- **System-prompt assembly is normally transient** — computed once per turn, not persisted — but can optionally append a `SystemPromptAssembly` Checkpoint for transparency/debugging UIs that want to render "what was the system prompt on turn 17." See [system-prompt-composition.md](./system-prompt-composition.md) for the full composition design: named sections, layering, cache-boundary discipline, sub-agent scoping.
 - **`ownsCompaction: true` disables the runtime's auto-compaction**; `delegateCompactionToRuntime(...)` lets engines opt back in. This is the seam that makes the entire compaction strategy pluggable.
 - **Pluggable engines via a single plugin slot** (`plugins.slots.contextEngine`). The cleanest "swap out the entire context strategy" point in the six harnesses.
-- **Cache-aware operations.** Edit the projected prefix surgically so prompt caches survive context manipulation (the `cache_edits` / `apiMicrocompact` technique; a `contextPruning.mode = "cache-ttl"` pass drops old tool-result blocks before the prompt-cache TTL expires). Implementations either append fine-grained `ToolResultTrim` Checkpoints for the specific raw messages being pruned or append a coarse `CompactionCheckpoint` covering a larger range — same projection machinery, different granularity.
+- **Cache-aware operations.** Edit the projected prefix surgically so prompt caches survive context manipulation (the `cache_edits` / `apiMicrocompact` technique; a `contextPruning.mode = "cache-ttl"` pass drops old tool-result blocks before the prompt-cache TTL expires). Implementations either append fine-grained `ToolResultTrim` Checkpoints for the specific raw messages being pruned or append a coarse `CompactionCheckpoint` covering a larger range — same projection machinery, different granularity. See [cache-aware-operations.md](./cache-aware-operations.md) for the full design: stability contract, the three techniques, breakpoint policy, cache observability.
 
 ### Concurrent compaction
 
@@ -93,7 +94,7 @@ Two operational rules the Engine must respect: **never prune the latest valid Ch
 - The active model's capability metadata (from the [Model Pool](../model-pool/)) — needed to decide compaction aggressiveness, prompt-cache breakpoints, attachment inlining policy.
 
 **Writes to:**
-- The [Conversation Manager](../conversation-manager/) — `derivedEvents` only, via `appendCheckpoint(...)`. The Engine is the sole writer of Checkpoint kinds (CompactionCheckpoint, MemoryInjectionSnapshot, ToolResultTrim, optional SystemPromptAssembly). Never writes to `rawEvents`.
+- The [Conversation Manager](../conversation-manager/) — `derivedEvents` only, via `appendCheckpoint(...)`. The Engine is the sole writer of Checkpoint kinds (CompactionCheckpoint, MemoryInjectionSnapshot, ToolResultTrim, optional SystemPromptAssembly, optional AttachmentDigest). Never writes to `rawEvents`.
 
 ---
 
@@ -101,14 +102,9 @@ Two operational rules the Engine must respect: **never prune the latest valid Ch
 
 - [compaction.md](./compaction.md) — Recommended design for compaction: triggers, scope, prompt design, output framing, resumability. Drafted.
 - [summarization-techniques.md](./summarization-techniques.md) — Beyond full compaction: deterministic pre-compaction hygiene, turn-prefix summarization, branch summarization, iterative/delta summarization, focused compaction.
-
----
-
-## Open design questions (not yet drafted)
-
-- **Cache-aware operations as their own page.** The surgical-edit pattern (`cache_edits` / `apiMicrocompact`) plus a `contextPruning` mode is a coherent topic worth its own treatment.
-- **Memory-injection policy.** When to inject, what relevance threshold, how to budget memory hits against conversation history. Currently scattered across the [memory/](../memory/) page and this layer's responsibilities.
-- **System-prompt composition.** Layering of defaults + skills + per-conversation overrides + sub-agent context. Currently treated implicitly; deserves its own page.
-- **Attachment inlining policy.** When to inline, summarize, or search-only. Particularly load-bearing for large files and image-heavy conversations.
+- [memory-injection.md](./memory-injection.md) — Injection policy: the three-tier ladder (frozen index snapshot / per-turn relevance pass / pre-reply recall), bias-toward-nothing thresholds, memory-junior-to-conversation budgeting, placement and fencing, `MemoryInjectionSnapshot` caching, ordering against compaction and trimming.
+- [system-prompt-composition.md](./system-prompt-composition.md) — The prompt as a structured artifact of named sections: single-owner sections, contribution-not-mutation, the six-layer precedence order, four levers (directive / suppression / override / full override), cache-boundary discipline, sub-agent recompose-vs-fork, override-proof Constraints, `SystemPromptAssembly` auditability.
+- [cache-aware-operations.md](./cache-aware-operations.md) — The stability contract (byte-extension between deliberate cache events; transformations classed cache-neutral / cache-editing / cache-breaking), surgical prefix edits, TTL-aware pruning, expiry inference, breakpoint policy as a provider-binding question, cache-regression observability.
+- [attachment-inlining.md](./attachment-inlining.md) — The inline / digest / reference ladder chosen per attachment per turn: smallest-sufficient-rung selection, recency demotion, bytes-never-in-`rawEvents`, `AttachmentDigest` Checkpoint caching, trust wrapping at every rung, compaction touchpoints.
 
 ---

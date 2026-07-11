@@ -72,9 +72,35 @@ struct MemoryRecallRequest: Sendable {
     let manifestEntries: [MemoryManifestEntry]
 }
 
+struct MemoryRecallHit: Sendable, Equatable {
+    let selectionKey: String
+    /// Scope tag + body; not yet fenced (Context Engine applies injection policy).
+    let formattedBody: String
+}
+
 struct MemoryRecallResult: Sendable, Equatable {
     let selectedFilenames: [String]
-    let recalledBodiesText: String
+    let hits: [MemoryRecallHit]
+
+    var recalledBodiesText: String {
+        let bodies = hits.map(\.formattedBody).filter { !$0.isEmpty }
+        guard !bodies.isEmpty else { return "" }
+        return MemoryContextFencer.fence(bodies.joined(separator: "\n\n"))
+    }
+
+    init(selectedFilenames: [String], hits: [MemoryRecallHit]) {
+        self.selectedFilenames = selectedFilenames
+        self.hits = hits
+    }
+
+    init(selectedFilenames: [String], recalledBodiesText: String) {
+        self.selectedFilenames = selectedFilenames
+        if recalledBodiesText.isEmpty {
+            self.hits = []
+        } else {
+            self.hits = [MemoryRecallHit(selectionKey: "", formattedBody: recalledBodiesText)]
+        }
+    }
 }
 
 struct MemoryTurnEndedRequest: Sendable {

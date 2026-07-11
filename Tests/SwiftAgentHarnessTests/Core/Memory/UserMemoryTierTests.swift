@@ -248,11 +248,13 @@ struct UserMemoryTierTests {
         )
         #expect(recall.selectedFilenames.contains("user/prefs.md"))
         #expect(recall.selectedFilenames.contains("prefs.md"))
+        #expect(recall.hits.count >= 2)
+        #expect(recall.hits.map(\.selectionKey).filter { recall.selectedFilenames.contains($0) }.count >= 2)
         #expect(recall.recalledBodiesText.contains("[scope:user]"))
         #expect(recall.recalledBodiesText.contains("[scope:project]"))
-        let userScope = recall.recalledBodiesText.range(of: "[scope:user]")!
-        let projectScope = recall.recalledBodiesText.range(of: "[scope:project]")!
-        #expect(userScope.lowerBound < projectScope.lowerBound)
+        let hitOrder = recall.hits.map(\.selectionKey)
+        let selectedOrder = recall.selectedFilenames.filter { hitOrder.contains($0) }
+        #expect(hitOrder.filter { selectedOrder.contains($0) } == selectedOrder)
     }
 
     @Test("LLM selector parseFilenames accepts user-tier selection keys")

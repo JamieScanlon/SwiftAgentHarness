@@ -86,14 +86,13 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     assemblyKind: request.conversation.interactionMode.harnessAssemblyKind
                 )
         )
-        let messagesWithMemory = await injectingMemoryLayerMessages(
+        let messagesWithTier1 = await injectingTier1MemoryContext(
             into: request.messages,
             conversation: request.conversation,
-            phase: request.phase,
             modeMemoryInjection: modeSwitches.memoryInjectionMode,
             resolvedProfile: request.projectionPolicy?.systemPromptAssemblyPolicy?.resolvedModeProfile
         )
-        let memorySnapshot = memoryStoreVersion > 0 ? ContextMemoryInjectionSnapshotSpec(
+        var memorySnapshot = memoryStoreVersion > 0 ? ContextMemoryInjectionSnapshotSpec(
             conversationID: request.conversation.id,
             phase: request.phase,
             memoryStoreVersion: memoryStoreVersion,
@@ -105,7 +104,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             config: request.compactionConfig
         )
         let preparedTurnRequest = ContextEngineAssembleRequest(
-            messages: messagesWithMemory,
+            messages: messagesWithTier1,
             conversation: request.conversation,
             phase: request.phase,
             gatingOverride: request.gatingOverride,
@@ -128,8 +127,31 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
+        let tier2Result = await applyTier2MemoryRecallIfNeeded(
+            into: result.messages,
+            conversation: request.conversation,
+            phase: request.phase,
+            modeMemoryInjection: modeSwitches.memoryInjectionMode,
+            resolvedProfile: request.projectionPolicy?.systemPromptAssemblyPolicy?.resolvedModeProfile,
+            compactionConfig: request.compactionConfig,
+            lastContextLimitTokens: request.lastContextLimitTokens,
+            lastPromptTokens: request.lastPromptTokens,
+            memoryStoreVersion: memoryStoreVersion
+        )
+        if tier2Result.injected, memoryStoreVersion > 0 {
+            memorySnapshot = ContextMemoryInjectionSnapshotSpec(
+                conversationID: request.conversation.id,
+                phase: request.phase,
+                memoryStoreVersion: memoryStoreVersion,
+                memoryStoreNamespaceKey: request.conversation.id.uuidString,
+                injectedMemoryEntryIDs: [
+                    Self.snapshotEntryID(generation: memoryStoreVersion),
+                    Self.recallEntryID(generation: memoryStoreVersion),
+                ]
+            )
+        }
         return ContextEngineAssembleResult(
-            messages: result.messages,
+            messages: tier2Result.messages,
             transformOutput: result.transformOutput,
             checkpointPersistence: result.checkpointPersistence,
             memoryInjectionSnapshot: memorySnapshot,
@@ -792,10 +814,9 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         }
     }
 
-    private func injectingMemoryLayerMessages(
+    private func injectingTier1MemoryContext(
         into baseMessages: [Message],
         conversation: ModelConversation,
-        phase: ContextTransformInvocationPhase,
         modeMemoryInjection: String,
         resolvedProfile: ResolvedModeProfile?
     ) async -> [Message] {
@@ -812,42 +833,84 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
             return baseMessages
         }
-        var recalledText = ""
-        if case .initial = phase,
-           let query = latestUserQuery(from: baseMessages),
-           let session = await memoryService.sessionContext(for: conversation.id),
-           let recall = try? await memoryService.recallForTurn(
-               request: MemoryRecallRequest(
-                   session: session,
-                   userQuery: query,
-                   manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id)
-               )
-           ),
-           !recall.recalledBodiesText.isEmpty {
-            recalledText = recall.recalledBodiesText
-        }
         let stable = blocks.stableSystemPromptSection
-        guard !stable.isEmpty || !recalledText.isEmpty else { return baseMessages }
-        var injected: [Message] = []
-        if !stable.isEmpty {
-            injected.append(HarnessInjectedMessageMetadata.systemMessage(
-                id: Self.snapshotEntryID(generation: blocks.snapshotGeneration),
-                content: """
+        guard !stable.isEmpty else { return baseMessages }
+        let injected = HarnessInjectedMessageMetadata.systemMessage(
+            id: Self.snapshotEntryID(generation: blocks.snapshotGeneration),
+            content: """
 \(HarnessInjectedMessagePrefixes.memoryContext)
 \(stable)
 """
-            ))
+        )
+        return [injected] + baseMessages
+    }
+
+    private struct Tier2RecallApplicationResult: Sendable {
+        let messages: [Message]
+        let injected: Bool
+    }
+
+    @discardableResult
+    private func applyTier2MemoryRecallIfNeeded(
+        into baseMessages: [Message],
+        conversation: ModelConversation,
+        phase: ContextTransformInvocationPhase,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?,
+        compactionConfig: ContextCompactionConfiguration,
+        lastContextLimitTokens: Int?,
+        lastPromptTokens: Int?,
+        memoryStoreVersion: Int
+    ) async -> Tier2RecallApplicationResult {
+        guard case .initial = phase else {
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
         }
-        if !recalledText.isEmpty {
-            injected.append(HarnessInjectedMessageMetadata.systemMessage(
-                id: Self.recallEntryID(generation: blocks.snapshotGeneration),
-                content: """
-\(HarnessInjectedMessagePrefixes.memoryRecall)
-\(recalledText)
-"""
-            ))
+        switch modeMemoryInjection {
+        case "off":
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+        case "skills-only":
+            let includeSkills = resolvedProfile?.context.includeSkills ?? true
+            guard includeSkills else {
+                return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            }
+        default:
+            break
         }
-        return injected + baseMessages
+        guard let memoryService else {
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+        }
+        guard let query = latestUserQuery(from: baseMessages),
+              let session = await memoryService.sessionContext(for: conversation.id),
+              let recall = try? await memoryService.recallForTurn(
+                  request: MemoryRecallRequest(
+                      session: session,
+                      userQuery: query,
+                      manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id)
+                  )
+              ),
+              !recall.hits.isEmpty else {
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+        }
+        let modelLimit = lastContextLimitTokens
+            ?? conversation.model.maxContextLength
+            ?? compactionConfig.fallbackContextLimitTokens
+        let recallEntryID = Self.recallEntryID(generation: max(memoryStoreVersion, 1))
+        let budgetedHits = MemoryRecallInjectionPolicy.hitsFittingCompactionGuard(
+            hits: recall.hits,
+            baseMessages: baseMessages,
+            recallEntryID: recallEntryID,
+            modelLimit: modelLimit,
+            lastPromptTokens: lastPromptTokens,
+            config: compactionConfig
+        )
+        guard let recallMessage = MemoryRecallInjectionPolicy.makeRecallMessage(
+            hits: budgetedHits,
+            entryID: recallEntryID
+        ) else {
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+        }
+        let withRecall = MemoryRecallInjectionPolicy.insertLateRecall(recallMessage, into: baseMessages)
+        return Tier2RecallApplicationResult(messages: withRecall, injected: true)
     }
 
     private func latestUserQuery(from messages: [Message]) -> String? {

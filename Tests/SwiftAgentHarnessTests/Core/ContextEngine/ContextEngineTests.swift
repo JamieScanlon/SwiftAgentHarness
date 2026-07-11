@@ -288,6 +288,100 @@ struct ContextEngineTests {
         try? FileManager.default.removeItem(at: root)
     }
 
+    @Test("DefaultContextEngine applies Tier 2 recall late with byte budgets")
+    func engineTier2RecallLateInjectionWithBudgets() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-tier2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let service = DefaultMemoryService(
+            config: .default,
+            userConfigDir: root.appendingPathComponent("user", isDirectory: true)
+        )
+        let engine = DefaultContextEngine(compactionCoordinator: nil, memoryService: service, logger: nil)
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 200_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let context = try service.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await service.bootstrapSession(context: context)
+        let largeBody = String(repeating: "x", count: 10_000)
+        try """
+        ---
+        name: Big Topic
+        description: oversized recall body
+        type: project
+        ---
+        \(largeBody)
+        """.write(
+            to: context.memoryDirectory.appendingPathComponent("big-topic.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let userID = UUID()
+        let baseMessages: [Message] = [
+            Message(id: UUID(), role: .system, content: "system", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "prior turn", timestamp: Date(), toolCalls: []),
+            Message(id: userID, role: .user, content: "big topic oversized recall", timestamp: Date(), toolCalls: []),
+        ]
+        let request = ContextEngineAssembleRequest(
+            messages: baseMessages,
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: nil,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 200_000,
+            lastPromptTokens: 100,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: false,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let recallMessages = result.messages.filter {
+            $0.content.contains(HarnessInjectedMessagePrefixes.memoryRecall)
+        }
+        #expect(recallMessages.count == 1)
+        let recallIndex = try #require(result.messages.firstIndex(where: { $0.id == recallMessages[0].id }))
+        let lastUserIndex = try #require(result.messages.lastIndex(where: { $0.role == .user }))
+        #expect(recallIndex + 1 == lastUserIndex)
+        #expect(result.messages[lastUserIndex].content == "big topic oversized recall")
+        #expect(result.messages.first?.content.contains(HarnessInjectedMessagePrefixes.memoryContext) == true)
+        let recallBody = recallMessages[0].content
+        #expect(recallBody.contains(MemoryRecallInjectionPolicy.truncationMarker))
+        #expect(result.passthroughReason != "context_compacted")
+        #expect(result.memoryInjectionSnapshot?.injectedMemoryEntryIDs.count == 2)
+    }
+
     @Test("ContextEngineSlotResolver resolves noop slot and unknown falls back")
     func contextEngineSlotResolverSemantics() async {
         let coordinator = CompactionConcurrencyCoordinator()
@@ -1937,7 +2031,7 @@ private struct StubPreCompressMemoryRuntime: MemoryRuntime {
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
         _ = request
-        return MemoryRecallResult(selectedFilenames: [], recalledBodiesText: "")
+        return MemoryRecallResult(selectedFilenames: [], hits: [])
     }
 
     func onTurnEnded(request: MemoryTurnEndedRequest) async { _ = request }
