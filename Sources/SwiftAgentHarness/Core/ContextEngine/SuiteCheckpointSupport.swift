@@ -119,7 +119,7 @@ enum SuiteCheckpointSupport {
             decode: { ConversationEventCodec.decode(AttachmentProjectionCheckpointWire.self, from: $0) },
             basedOnEventID: { $0.basedOnEventID },
             isValid: { wire, _ in
-                wire.schemaVersion == AttachmentProjectionCheckpointWire.currentSchemaVersion
+                (wire.schemaVersion == 1 || wire.schemaVersion == AttachmentProjectionCheckpointWire.currentSchemaVersion)
                     && !wire.projectionFingerprint.isEmpty
                     && !wire.decisions.isEmpty
                     && (expectedProjectionFingerprint == nil || wire.projectionFingerprint == expectedProjectionFingerprint)

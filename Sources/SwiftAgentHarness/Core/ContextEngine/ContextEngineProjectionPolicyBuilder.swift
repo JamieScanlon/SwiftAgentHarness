@@ -93,6 +93,8 @@ enum ContextEngineProjectionPolicyBuilder {
            !entries.isEmpty {
             transcriptEntries = entries
         }
+        let harness = await deps.persistenceDomain.harnessSessionPersistence
+        let blobReader = AttachmentBlobReading.harness(harness, conversationID: conversation.id)
         return ContextEngineProjectionPolicyInput(
             requestInputTrustRaw: trustRaw,
             safeDefaultTrustClass: deps.trustPolicyConfiguration.safeDefaultClass,
@@ -102,6 +104,7 @@ enum ContextEngineProjectionPolicyBuilder {
             modelSupportsVision: conversation.model.capabilities.contains(.vision),
             systemPromptAssemblyPolicy: promptPolicy,
             attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(),
+            attachmentBlobReader: blobReader,
             useSessionTreeProjection: compactionCfg.useSessionTreeProjection,
             sessionTranscriptEntries: transcriptEntries,
             contextPruningPolicy: contextPruningPolicy

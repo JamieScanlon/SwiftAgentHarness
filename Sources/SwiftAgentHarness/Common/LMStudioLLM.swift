@@ -475,30 +475,17 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
     }
 
     nonisolated private func extractAttachmentDispositions(from additionalParameters: JSON?) -> [String: String] {
-        guard let additionalParameters,
-              case .object(let root) = additionalParameters,
-              let projection = root["contextEngineAttachmentProjection"],
-              case .object(let projectionObject) = projection,
-              let decisionsJSON = projectionObject["decisions"],
-              case .array(let decisions) = decisionsJSON else {
-            return [:]
-        }
-        var output: [String: String] = [:]
-        for decision in decisions {
-            guard case .object(let object) = decision,
-                  case .string(let name)? = object["attachmentName"],
-                  case .string(let disposition)? = object["disposition"] else {
-                continue
-            }
-            output[name] = disposition
-        }
-        return output
+        AttachmentProjectionDispatchCodec.extractDispositions(from: additionalParameters)
     }
 
     nonisolated private func attachmentDispositionSuffix(
         imageNames: [String],
-        dispositions: [String: String]
+        dispositions: [String: String],
+        additionalParameters: JSON?
     ) -> String {
+        if AttachmentProjectionDispatchCodec.hasMaterializedBlocks(in: additionalParameters) {
+            return ""
+        }
         let projected = imageNames.compactMap { name -> String? in
             guard let disposition = dispositions[name],
                   disposition != ConversationAttachmentProjectionDisposition.inline.rawValue else {
@@ -530,7 +517,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     role: "user",
                     content: message.content + attachmentDispositionSuffix(
                         imageNames: message.images.map(\.name),
-                        dispositions: attachmentDispositions
+                        dispositions: attachmentDispositions,
+                        additionalParameters: config.additionalParameters
                     )
                 ))
             case .assistant:
@@ -544,7 +532,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     role: "assistant",
                     content: message.content + attachmentDispositionSuffix(
                         imageNames: message.images.map(\.name),
-                        dispositions: attachmentDispositions
+                        dispositions: attachmentDispositions,
+                        additionalParameters: config.additionalParameters
                     ),
                     toolCalls: toolCalls
                 ))

@@ -23,6 +23,7 @@ enum SystemPromptAssemblyContributionCollector {
         memorySnapshotGeneration: Int?,
         modeMemoryInjection: String,
         engineDynamicAddition: String? = nil,
+        attachmentSectionContent: String? = nil,
         referenceDate: Date = Date()
     ) -> SystemPromptAssemblyContributionBundle {
         let modeSwitches = ContextSystemPromptModeSwitches.build(
@@ -117,6 +118,16 @@ enum SystemPromptAssemblyContributionCollector {
                 SystemPromptContribution(
                     source: .engine,
                     sectionDirectives: [.dynamicAdditions: addition]
+                )
+            )
+        }
+
+        if let attachmentSection = attachmentSectionContent?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !attachmentSection.isEmpty {
+            contributions.append(
+                SystemPromptContribution(
+                    source: .engine,
+                    sectionOverrides: [.attachments: attachmentSection]
                 )
             )
         }

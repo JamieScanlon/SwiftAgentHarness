@@ -149,12 +149,13 @@ public struct SystemPromptAssemblyCheckpointWire: Codable, Sendable, Equatable {
 }
 
 public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var basedOnEventID: Int
     public var projectionFingerprint: String
     public var decisions: [ConversationAttachmentProjectionDecision]
+    public var materializedBlocks: [AttachmentMaterializedBlock]
     public var createdAt: Date
 
     public init(
@@ -162,13 +163,34 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
         basedOnEventID: Int,
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
+        materializedBlocks: [AttachmentMaterializedBlock] = [],
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
         self.basedOnEventID = basedOnEventID
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
+        self.materializedBlocks = materializedBlocks
         self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case basedOnEventID
+        case projectionFingerprint
+        case decisions
+        case materializedBlocks
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        basedOnEventID = try container.decode(Int.self, forKey: .basedOnEventID)
+        projectionFingerprint = try container.decode(String.self, forKey: .projectionFingerprint)
+        decisions = try container.decode([ConversationAttachmentProjectionDecision].self, forKey: .decisions)
+        materializedBlocks = try container.decodeIfPresent([AttachmentMaterializedBlock].self, forKey: .materializedBlocks) ?? []
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
     }
 }
 

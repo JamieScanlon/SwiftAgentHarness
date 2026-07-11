@@ -1,0 +1,294 @@
+import CryptoKit
+import Foundation
+import SwiftAgentKit
+
+public struct AttachmentMaterializedBlock: Codable, Sendable, Equatable {
+    public var attachmentID: UUID
+    public var attachmentName: String
+    public var disposition: ConversationAttachmentProjectionDisposition
+    public var body: String
+
+    public init(
+        attachmentID: UUID,
+        attachmentName: String,
+        disposition: ConversationAttachmentProjectionDisposition,
+        body: String
+    ) {
+        self.attachmentID = attachmentID
+        self.attachmentName = attachmentName
+        self.disposition = disposition
+        self.body = body
+    }
+}
+
+public struct AttachmentRepresentationMaterializerConfiguration: Sendable, Equatable {
+    public var digestHeadMaxBytes: Int
+    public var digestTailMaxBytes: Int
+
+    public init(digestHeadMaxBytes: Int = 1_536, digestTailMaxBytes: Int = 512) {
+        self.digestHeadMaxBytes = max(0, digestHeadMaxBytes)
+        self.digestTailMaxBytes = max(0, digestTailMaxBytes)
+    }
+
+    public static let `default` = AttachmentRepresentationMaterializerConfiguration()
+}
+
+enum AttachmentRepresentationMaterializer {
+    static func materialize(
+        decisions: [ConversationAttachmentProjectionDecision],
+        catalog: [ConversationAttachmentDescriptor],
+        modelSupportsVision: Bool,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID,
+        configuration: AttachmentRepresentationMaterializerConfiguration = .default
+    ) -> [AttachmentMaterializedBlock] {
+        let catalogByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        return decisions.compactMap { decision in
+            guard decision.disposition != .inline else { return nil }
+            guard let descriptor = catalogByID[decision.attachmentID] else { return nil }
+            let body = materializedBody(
+                descriptor: descriptor,
+                decision: decision,
+                modelSupportsVision: modelSupportsVision,
+                blobReader: blobReader,
+                conversationID: conversationID,
+                configuration: configuration
+            )
+            return AttachmentMaterializedBlock(
+                attachmentID: decision.attachmentID,
+                attachmentName: decision.attachmentName,
+                disposition: decision.disposition,
+                body: body
+            )
+        }
+    }
+
+    static func attachmentsSectionBody(blocks: [AttachmentMaterializedBlock]) -> String? {
+        let bodies = blocks.map(\.body).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !bodies.isEmpty else { return nil }
+        return bodies.joined(separator: "\n\n")
+    }
+
+    private static func materializedBody(
+        descriptor: ConversationAttachmentDescriptor,
+        decision: ConversationAttachmentProjectionDecision,
+        modelSupportsVision: Bool,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID,
+        configuration: AttachmentRepresentationMaterializerConfiguration
+    ) -> String {
+        switch decision.disposition {
+        case .inline:
+            return ""
+        case .searchOnly:
+            return wrapIfNeeded(
+                descriptor: descriptor,
+                core: referenceCore(descriptor: descriptor, decision: decision),
+                blobReader: blobReader,
+                conversationID: conversationID
+            )
+        case .summarize:
+            return wrapIfNeeded(
+                descriptor: descriptor,
+                core: digestCore(
+                    descriptor: descriptor,
+                    decision: decision,
+                    modelSupportsVision: modelSupportsVision,
+                    blobReader: blobReader,
+                    conversationID: conversationID,
+                    configuration: configuration
+                ),
+                blobReader: blobReader,
+                conversationID: conversationID
+            )
+        }
+    }
+
+    private static func referenceCore(
+        descriptor: ConversationAttachmentDescriptor,
+        decision: ConversationAttachmentProjectionDecision
+    ) -> String {
+        var lines = ["[attachment reference]"]
+        lines.append("name: \(descriptor.name)")
+        lines.append("kind: \(descriptor.kind)")
+        if let mimeType = descriptor.mimeType, !mimeType.isEmpty {
+            lines.append("mime_type: \(mimeType)")
+        }
+        if let byteSize = descriptor.byteSize {
+            lines.append("byte_size: \(byteSize)")
+        }
+        lines.append("reason: \(decision.reason)")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func digestCore(
+        descriptor: ConversationAttachmentDescriptor,
+        decision: ConversationAttachmentProjectionDecision,
+        modelSupportsVision: Bool,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID,
+        configuration: AttachmentRepresentationMaterializerConfiguration
+    ) -> String {
+        var lines = ["[attachment digest]"]
+        lines.append("name: \(descriptor.name)")
+        lines.append("kind: \(descriptor.kind)")
+        if let mimeType = descriptor.mimeType, !mimeType.isEmpty {
+            lines.append("mime_type: \(mimeType)")
+        }
+        if !decision.reason.isEmpty {
+            lines.append("reason: \(decision.reason)")
+        }
+        let isImage = isImageDescriptor(descriptor)
+        if isImage, !modelSupportsVision {
+            lines.append("image attached; active model cannot view images")
+            if let byteSize = descriptor.byteSize {
+                lines.append("byte_size: \(byteSize)")
+            }
+            return lines.joined(separator: "\n")
+        }
+        guard let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !blobId.isEmpty,
+              let blobReader else {
+            lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
+            return lines.joined(separator: "\n")
+        }
+        let bytes: Data
+        do {
+            guard let loaded = try blobReader.loadBytes(blobId, conversationID) else {
+                lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
+                return lines.joined(separator: "\n")
+            }
+            bytes = loaded
+        } catch {
+            lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
+            return lines.joined(separator: "\n")
+        }
+        let originalByteCount = bytes.count
+        lines.append("original_byte_count: \(originalByteCount)")
+        if isImage {
+            lines.append("image attachment (\(originalByteCount) bytes)")
+        } else if let text = utf8Text(from: bytes, mimeType: descriptor.mimeType, name: descriptor.name) {
+            lines.append("preview:")
+            lines.append(textDigestPreview(
+                text: text,
+                originalByteCount: originalByteCount,
+                configuration: configuration
+            ))
+        } else {
+            lines.append("binary attachment (\(originalByteCount) bytes)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func wrapIfNeeded(
+        descriptor: ConversationAttachmentDescriptor,
+        core: String,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> String {
+        let recovery = recoveryFooter(descriptor: descriptor, blobReader: blobReader, conversationID: conversationID)
+        let trust = AttachmentInputTrustCodec.safePolicyClass(raw: descriptor.trustRaw)
+        let combined = core + "\n" + recovery
+        guard trust == .lowTrust else { return combined }
+        return ExternalContentEnvelope.wrap(
+            combined,
+            options: ExternalContentEnvelopeOptions(
+                source: .unknown,
+                from: sanitizedAttachmentName(descriptor.name),
+                subject: nil,
+                includeSecurityPreamble: true
+            )
+        )
+    }
+
+    private static func recoveryFooter(
+        descriptor: ConversationAttachmentDescriptor,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> String {
+        var lines = [
+            "attachment_id: \(descriptor.id.uuidString)",
+        ]
+        if let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !blobId.isEmpty {
+            lines.append("blob_id: \(blobId)")
+            if let blobReader,
+               let path = try? blobReader.blobPath(blobId),
+               !path.path.isEmpty {
+                lines.append("read_path: \(path.path)")
+            }
+        }
+        _ = conversationID
+        lines.append("Use read_file with offset/limit to read more.")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func textDigestPreview(
+        text: String,
+        originalByteCount: Int,
+        configuration: AttachmentRepresentationMaterializerConfiguration
+    ) -> String {
+        let headMax = configuration.digestHeadMaxBytes
+        let tailMax = configuration.digestTailMaxBytes
+        let utf8Count = text.utf8.count
+        if utf8Count <= headMax + tailMax || headMax + tailMax == 0 {
+            return text
+        }
+        let head = ToolResultSpillEnvelope.previewPrefix(for: text, maxBytes: headMax)
+        let tail = utf8SuffixPreview(text, maxBytes: tailMax)
+        let elided = max(0, originalByteCount - head.utf8.count - tail.utf8.count)
+        return "\(head)\n… [\(elided) bytes elided] …\n\(tail)"
+    }
+
+    private static func utf8SuffixPreview(_ text: String, maxBytes: Int) -> String {
+        guard maxBytes > 0 else { return "" }
+        let data = Data(text.utf8)
+        guard data.count > maxBytes else { return text }
+        var cutoff = maxBytes
+        while cutoff > 0 {
+            let suffix = data.suffix(cutoff)
+            if let decoded = String(data: suffix, encoding: .utf8) {
+                return decoded
+            }
+            cutoff -= 1
+        }
+        return ""
+    }
+
+    private static func utf8Text(from bytes: Data, mimeType: String?, name: String) -> String? {
+        if isTextLike(mimeType: mimeType, name: name),
+           let decoded = String(data: bytes, encoding: .utf8) {
+            return decoded
+        }
+        if String(data: bytes, encoding: .utf8) != nil,
+           bytes.count <= 64_000,
+           !bytes.contains(0) {
+            return String(data: bytes, encoding: .utf8)
+        }
+        return nil
+    }
+
+    private static func isTextLike(mimeType: String?, name: String) -> Bool {
+        if let mimeType {
+            let lowered = mimeType.lowercased()
+            if lowered.hasPrefix("text/") || lowered == "application/json" || lowered == "application/xml" {
+                return true
+            }
+        }
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ["txt", "md", "json", "csv", "swift", "py", "js", "ts", "yaml", "yml", "xml", "html", "htm", "log"]
+            .contains(ext)
+    }
+
+    private static func isImageDescriptor(_ descriptor: ConversationAttachmentDescriptor) -> Bool {
+        let normalizedKind = descriptor.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedKind == "image" { return true }
+        return descriptor.mimeType?.lowercased().hasPrefix("image/") == true
+    }
+
+    private static func sanitizedAttachmentName(_ name: String) -> String {
+        name
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+    }
+}

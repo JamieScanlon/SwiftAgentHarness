@@ -61,8 +61,53 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             .joined()
         return ContextEngineAttachmentProjectionArtifact(
             projectionFingerprint: projectionFingerprint,
-            decisions: decisions
+            decisions: decisions,
+            materializedBlocks: []
         )
+    }
+
+    static func resolveAttachmentProjectionArtifact(
+        catalog: [ConversationAttachmentDescriptor],
+        modelSupportsVision: Bool?,
+        policy: ContextEngineAttachmentProjectionPolicyInput?,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> ContextEngineAttachmentProjectionArtifact? {
+        guard let policy, policy.enabled, !catalog.isEmpty else { return nil }
+        let decisions = catalog.map { descriptor in
+            decision(
+                for: descriptor,
+                modelSupportsVision: modelSupportsVision ?? false,
+                policy: policy
+            )
+        }
+        guard !decisions.isEmpty else { return nil }
+        let materializedBlocks = AttachmentRepresentationMaterializer.materialize(
+            decisions: decisions,
+            catalog: catalog,
+            modelSupportsVision: modelSupportsVision ?? false,
+            blobReader: blobReader,
+            conversationID: conversationID
+        )
+        let canonical = decisions.map {
+            "\($0.attachmentID.uuidString)|\($0.disposition.rawValue)|\($0.reason)"
+        }.sorted().joined(separator: ";")
+        let materializedCanonical = materializedBlocks.map {
+            "\($0.attachmentID.uuidString)|\(sha256Hex($0.body))"
+        }.sorted().joined(separator: ";")
+        let fingerprintSource = "\(policy.inlineByteLimit)|\(policy.summarizeByteLimit)|\(modelSupportsVision == true ? 1 : 0)|\(canonical)|\(materializedCanonical)"
+        let projectionFingerprint = sha256Hex(fingerprintSource)
+        return ContextEngineAttachmentProjectionArtifact(
+            projectionFingerprint: projectionFingerprint,
+            decisions: decisions,
+            materializedBlocks: materializedBlocks
+        )
+    }
+
+    private static func sha256Hex(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private static func decision(

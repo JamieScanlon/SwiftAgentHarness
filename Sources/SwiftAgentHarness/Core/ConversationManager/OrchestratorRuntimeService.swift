@@ -364,9 +364,18 @@ public actor OrchestratorRuntimeService {
                     "reason": .string(decision.reason),
                 ])
             }
+            let materializedBlocks: [JSON] = attachmentProjection.materializedBlocks.map { block in
+                .object([
+                    "attachmentID": .string(block.attachmentID.uuidString),
+                    "attachmentName": .string(block.attachmentName),
+                    "disposition": .string(block.disposition.rawValue),
+                    "body": .string(block.body),
+                ])
+            }
             payload["contextEngineAttachmentProjection"] = .object([
                 "projectionFingerprint": .string(attachmentProjection.projectionFingerprint),
                 "decisions": .array(decisions),
+                "materializedBlocks": .array(materializedBlocks),
             ])
         }
         if let thinkingConfig {

@@ -72,6 +72,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
     let modelSupportsVision: Bool?
     let systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput?
     let attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput?
+    let attachmentBlobReader: AttachmentBlobReading?
     let useSessionTreeProjection: Bool
     let sessionTranscriptEntries: [SessionTranscriptEntry]?
     let contextPruningPolicy: ContextPruningPolicy?
@@ -85,6 +86,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         modelSupportsVision: Bool? = nil,
         systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput? = nil,
         attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput? = nil,
+        attachmentBlobReader: AttachmentBlobReading? = nil,
         useSessionTreeProjection: Bool = false,
         sessionTranscriptEntries: [SessionTranscriptEntry]? = nil,
         contextPruningPolicy: ContextPruningPolicy? = nil
@@ -97,6 +99,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         self.modelSupportsVision = modelSupportsVision
         self.systemPromptAssemblyPolicy = systemPromptAssemblyPolicy
         self.attachmentProjectionPolicy = attachmentProjectionPolicy
+        self.attachmentBlobReader = attachmentBlobReader
         self.useSessionTreeProjection = useSessionTreeProjection
         self.sessionTranscriptEntries = sessionTranscriptEntries
         self.contextPruningPolicy = contextPruningPolicy
@@ -197,6 +200,17 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
 public struct ContextEngineAttachmentProjectionArtifact: Sendable {
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
+    let materializedBlocks: [AttachmentMaterializedBlock]
+
+    init(
+        projectionFingerprint: String,
+        decisions: [ConversationAttachmentProjectionDecision],
+        materializedBlocks: [AttachmentMaterializedBlock] = []
+    ) {
+        self.projectionFingerprint = projectionFingerprint
+        self.decisions = decisions
+        self.materializedBlocks = materializedBlocks
+    }
 }
 
 /// Persistable checkpoint trigger emitted by CE projection lifecycle.
@@ -230,6 +244,19 @@ public struct ContextAttachmentProjectionCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
+    let materializedBlocks: [AttachmentMaterializedBlock]
+
+    init(
+        conversationID: UUID,
+        projectionFingerprint: String,
+        decisions: [ConversationAttachmentProjectionDecision],
+        materializedBlocks: [AttachmentMaterializedBlock] = []
+    ) {
+        self.conversationID = conversationID
+        self.projectionFingerprint = projectionFingerprint
+        self.decisions = decisions
+        self.materializedBlocks = materializedBlocks
+    }
 }
 
 /// Deterministic CE projection artifact consumed by manager/provider layers.

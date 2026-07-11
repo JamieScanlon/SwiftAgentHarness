@@ -899,8 +899,13 @@ struct ContextEngineTests {
     }
 
     @Test("DefaultContextEngine emits attachment projection decisions and checkpoint")
-    func engineProjectionEmitsAttachmentProjectionCheckpoint() async {
-        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+    func engineProjectionEmitsAttachmentProjectionCheckpoint() async throws {
+        let renderer = DefaultSystemPromptAssemblyRenderer(skillLoaderProvider: { _ in nil }, logger: nil)
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            systemPromptAssemblyRenderer: renderer,
+            logger: nil
+        )
         let conv = ModelConversation(
             model: Model(
                 protocol: .openAIAPI,
@@ -912,8 +917,20 @@ struct ContextEngineTests {
             messages: [],
             systemPrompt: "s"
         )
+        let harness = InMemoryHarnessSessionPersistence()
+        let textBody = "line one\nline two\nline three"
+        let blobRef = try harness.putBlob(
+            data: Data(textBody.utf8),
+            durability: .durable,
+            originalName: "notes.txt",
+            mimeType: "text/plain",
+            trust: AttachmentInputTrust.directUserEntry.rawValue,
+            ttlSeconds: nil,
+            lane: .inbound
+        )
         let trusted = ConversationAttachmentDescriptor(
             id: UUID(),
+            blobId: blobRef.id,
             kind: "image",
             name: "diagram.png",
             mimeType: "image/png",
@@ -928,14 +945,33 @@ struct ContextEngineTests {
             byteSize: 4_000_000,
             trustRaw: AttachmentInputTrust.automation.rawValue
         )
+        let blobReader = AttachmentBlobReading.harness(harness, conversationID: conv.id)
         let policy = ContextEngineProjectionPolicyInput(
             attachmentCatalog: [trusted, lowTrust],
             modelSupportsVision: false,
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: ResolvedModeProfile(
+                    id: InteractionMode.chat.rawValue,
+                    interactionMode: .chat,
+                    assemblyKind: .chat,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: false,
+                    builtInSeedVersion: ResolvedModeProfile.builtInSeedVersion,
+                    semanticLayerTags: []
+                ),
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: false,
+                includeDateTime: false,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            ),
             attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(
                 enabled: true,
                 inlineByteLimit: 20_000,
                 summarizeByteLimit: 1_000_000
-            )
+            ),
+            attachmentBlobReader: blobReader
         )
         let assembleReq = makeAssembleRequest(
             messages: [Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: [])],
@@ -945,13 +981,23 @@ struct ContextEngineTests {
         let result = await engine.assemble(request: assembleReq) { _ in
             fatalError("transform must not run")
         }
-        let checkpoint = try? #require(result.attachmentProjectionCheckpoint)
-        #expect(checkpoint?.conversationID == conv.id)
-        #expect(checkpoint?.decisions.count == 2)
-        let trustedDecision = checkpoint?.decisions.first(where: { $0.attachmentName == "diagram.png" })
-        let lowTrustDecision = checkpoint?.decisions.first(where: { $0.attachmentName == "generated.pdf" })
+        let checkpoint = try #require(result.attachmentProjectionCheckpoint)
+        #expect(checkpoint.conversationID == conv.id)
+        #expect(checkpoint.decisions.count == 2)
+        #expect(checkpoint.materializedBlocks.count == 2)
+        let trustedDecision = checkpoint.decisions.first(where: { $0.attachmentName == "diagram.png" })
+        let lowTrustDecision = checkpoint.decisions.first(where: { $0.attachmentName == "generated.pdf" })
         #expect(trustedDecision?.disposition == .summarize)
         #expect(lowTrustDecision?.disposition == .searchOnly)
+        let digestBlock = checkpoint.materializedBlocks.first(where: { $0.attachmentName == "diagram.png" })
+        let referenceBlock = checkpoint.materializedBlocks.first(where: { $0.attachmentName == "generated.pdf" })
+        #expect(digestBlock?.body.contains("image attached; active model cannot view images") == true)
+        #expect(referenceBlock?.body.contains("[attachment reference]") == true)
+        let assembledPrompt = try #require(result.projectionArtifact?.systemPromptAssembly?.assembledSystemPromptText)
+        #expect(assembledPrompt.contains("# Attachments"))
+        #expect(assembledPrompt.contains("image attached; active model cannot view images"))
+        #expect(assembledPrompt.contains("[attachment reference]"))
+        #expect(!assembledPrompt.contains("name:summarize"))
     }
 
     @Test("DefaultContextEngine emits pre-compaction memory flush spec after successful flush")

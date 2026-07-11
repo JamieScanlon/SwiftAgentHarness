@@ -390,7 +390,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             ContextAttachmentProjectionCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
                 projectionFingerprint: $0.projectionFingerprint,
-                decisions: $0.decisions
+                decisions: $0.decisions,
+                materializedBlocks: $0.materializedBlocks
             )
         }
 
@@ -1130,6 +1131,16 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             messages: projected,
             policy: policy.deterministicAttachmentHygiene
         )
+        let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjectionArtifact(
+            catalog: policy.attachmentCatalog,
+            modelSupportsVision: policy.modelSupportsVision,
+            policy: policy.attachmentProjectionPolicy,
+            blobReader: policy.attachmentBlobReader,
+            conversationID: conversation.id
+        )
+        let attachmentSectionContent = attachmentArtifact.flatMap {
+            AttachmentRepresentationMaterializer.attachmentsSectionBody(blocks: $0.materializedBlocks)
+        }
         let promptArtifact = if let assemblyPolicy = policy.systemPromptAssemblyPolicy {
             await buildSystemPromptAssemblyArtifact(
                 conversation: conversation,
@@ -1140,7 +1151,8 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                     strictAgentHarnessPrompts: assemblyPolicy.strictAgentHarnessPrompts,
                     resolvedProfile: assemblyPolicy.resolvedModeProfile
                 ).memoryInjectionMode,
-                resolvedProfile: assemblyPolicy.resolvedModeProfile
+                resolvedProfile: assemblyPolicy.resolvedModeProfile,
+                attachmentSectionContent: attachmentSectionContent
             )
         } else {
             nil as ContextEngineSystemPromptAssemblyArtifact?
@@ -1148,11 +1160,6 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         if let assembledText = promptArtifact?.assembledSystemPromptText {
             projected = SystemPromptAssemblyApplicator.apply(assembledText: assembledText, to: projected)
         }
-        let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjection(
-            catalog: policy.attachmentCatalog,
-            modelSupportsVision: policy.modelSupportsVision,
-            policy: policy.attachmentProjectionPolicy
-        )
         return (
             projected,
             ContextEngineProjectionArtifact(
@@ -1168,7 +1175,8 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         policy: ContextEngineSystemPromptAssemblyPolicyInput,
         projectedMessages: [Message],
         modeMemoryInjection: String,
-        resolvedProfile: ResolvedModeProfile?
+        resolvedProfile: ResolvedModeProfile?,
+        attachmentSectionContent: String? = nil
     ) async -> ContextEngineSystemPromptAssemblyArtifact {
         if ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata) == .fork,
            let inheritedText = ConversationMetadataSubagentPromptComposition.inheritedAssembledPromptText(
@@ -1225,6 +1233,7 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             memorySnapshotGeneration: memoryBlocks?.generation,
             modeMemoryInjection: modeMemoryInjection,
             engineDynamicAddition: nil,
+            attachmentSectionContent: attachmentSectionContent,
             referenceDate: referenceDate
         )
 
