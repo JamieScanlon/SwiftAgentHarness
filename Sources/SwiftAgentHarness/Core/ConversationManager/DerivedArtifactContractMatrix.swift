@@ -94,6 +94,13 @@ enum DerivedArtifactContractMatrix: Sendable {
                 snapshotSupersessionEligible: false
             ),
             DerivedArtifactContract(
+                persistedKind: ConversationEventKind.attachmentDigestCheckpoint.rawValue,
+                invalidationKindKeys: [HarnessCheckpointInvalidationKind.attachmentDigest],
+                branchInheritanceRule: .copyVerbatim,
+                retentionEligible: true,
+                snapshotSupersessionEligible: false
+            ),
+            DerivedArtifactContract(
                 persistedKind: ConversationEventKind.runLifecycleEvent.rawValue,
                 invalidationKindKeys: [],
                 branchInheritanceRule: .copyVerbatim,

@@ -369,6 +369,20 @@ extension ConversationManager {
                 createdAt: wire.createdAt
             )
             return ConversationEventCodec.encode(wire)
+        case ConversationEventKind.attachmentDigestCheckpoint.rawValue:
+            guard var wire = ConversationEventCodec.decode(AttachmentDigestCheckpointWire.self, from: payloadJSON) else {
+                return payloadJSON
+            }
+            wire = AttachmentDigestCheckpointWire(
+                schemaVersion: wire.schemaVersion,
+                basedOnEventID: remapEventID(wire.basedOnEventID),
+                attachmentID: wire.attachmentID,
+                contentHash: wire.contentHash,
+                configFingerprint: wire.configFingerprint,
+                digestBody: wire.digestBody,
+                createdAt: wire.createdAt
+            )
+            return ConversationEventCodec.encode(wire)
         case ConversationEventKind.systemPromptAssemblyCheckpoint.rawValue:
             guard var wire = ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: payloadJSON) else {
                 return payloadJSON

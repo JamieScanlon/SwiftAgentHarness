@@ -38,6 +38,7 @@ enum ConversationEventsReplayClassifier {
         ConversationEventKind.toolResultTrimCheckpoint.rawValue,
         ConversationEventKind.systemPromptAssemblyCheckpoint.rawValue,
         ConversationEventKind.attachmentProjectionCheckpoint.rawValue,
+        ConversationEventKind.attachmentDigestCheckpoint.rawValue,
         ConversationEventKind.compactionApplied.rawValue,
         ConversationEventKind.checkpointInvalidated.rawValue,
     ]

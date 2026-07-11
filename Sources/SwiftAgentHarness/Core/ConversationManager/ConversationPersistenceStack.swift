@@ -287,6 +287,20 @@ final class ConversationPersistenceStack {
         )
     }
 
+    /// Persist a CE attachment digest cache checkpoint (derived stream).
+    func persistAttachmentDigestCheckpoint(
+        conversationID: UUID,
+        wire: AttachmentDigestCheckpointWire,
+        expectedDerivedSequence: Int? = nil
+    ) throws {
+        let expected = expectedDerivedSequence ?? derivedEventStore.latestDerivedStreamSequence(conversationID: conversationID)
+        try derivedEventStore.appendAttachmentDigestCheckpoint(
+            conversationID: conversationID,
+            wire: wire,
+            expectedDerivedSequence: expected
+        )
+    }
+
     /// Append a runs.md lifecycle marker on the v2 transcript (`run_cancelled`, `run_orphaned`, …).
     func persistRunLifecycleTranscriptMarker(conversationID: UUID, payload: RunLifecycleTranscriptMarkerPayload) throws {
         let harness = conversationManager.harnessSessionPersistence

@@ -73,6 +73,13 @@ enum ContextAssemblyPersistenceApplicator {
                 persistence: persistence,
                 logger: logger
             )
+            ContextCheckpointWriter.persistAttachmentDigestCheckpointsIfNeeded(
+                spec: result.attachmentDigestCheckpoints,
+                events: assembleRequest.events,
+                frontierEventID: assembleRequest.eventLogFrontier,
+                persistence: persistence,
+                logger: logger
+            )
             let attachmentCache = result.projectionArtifact?.attachmentProjection
             let systemPromptCache = result.projectionArtifact?.systemPromptAssembly
             let persistedCompaction = ContextCheckpointWriter.persistCompactionCheckpointIfNeeded(

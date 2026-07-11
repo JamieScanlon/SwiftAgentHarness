@@ -299,6 +299,33 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
         )
     }
 
+    func appendAttachmentDigestCheckpoint(
+        conversationID: UUID,
+        wire: AttachmentDigestCheckpointWire,
+        expectedDerivedSequence: Int?
+    ) throws {
+        let basedOnGlobal = latestGlobalEventID(conversationID: conversationID)
+        let persist = AttachmentDigestCheckpointWire(
+            schemaVersion: wire.schemaVersion,
+            basedOnEventID: basedOnGlobal,
+            attachmentID: wire.attachmentID,
+            contentHash: wire.contentHash,
+            configFingerprint: wire.configFingerprint,
+            digestBody: wire.digestBody,
+            createdAt: wire.createdAt
+        )
+        try appendDerived(
+            conversationID: conversationID,
+            kind: .attachmentDigestCheckpoint,
+            payloadJSON: ConversationEventCodec.encode(persist),
+            basedOnEventID: basedOnGlobal,
+            coversStartEventID: nil,
+            coversEndEventID: nil,
+            createdAt: persist.createdAt,
+            expectedDerivedSequence: expectedDerivedSequence
+        )
+    }
+
     func appendRunLifecycleEvent(
         conversationID: UUID,
         runID: UUID,

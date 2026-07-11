@@ -243,19 +243,22 @@ public struct ContextEngineAttachmentProjectionArtifact: Sendable {
     let targetDecisions: [ConversationAttachmentProjectionDecision]?
     let materializedBlocks: [AttachmentMaterializedBlock]
     let accessWatermarkTurnIndex: Int?
+    let newDigestCheckpoints: [AttachmentDigestCheckpointWire]
 
     init(
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
         targetDecisions: [ConversationAttachmentProjectionDecision]? = nil,
         materializedBlocks: [AttachmentMaterializedBlock] = [],
-        accessWatermarkTurnIndex: Int? = nil
+        accessWatermarkTurnIndex: Int? = nil,
+        newDigestCheckpoints: [AttachmentDigestCheckpointWire] = []
     ) {
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
         self.targetDecisions = targetDecisions
         self.materializedBlocks = materializedBlocks
         self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
+        self.newDigestCheckpoints = newDigestCheckpoints
     }
 }
 
@@ -308,6 +311,17 @@ public struct ContextAttachmentProjectionCheckpointPersistenceSpec: Sendable {
         self.targetDecisions = targetDecisions
         self.materializedBlocks = materializedBlocks
         self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
+    }
+}
+
+/// Persistable checkpoint trigger for CE attachment digest cache entries.
+public struct ContextAttachmentDigestCheckpointPersistenceSpec: Sendable {
+    let conversationID: UUID
+    let checkpoints: [AttachmentDigestCheckpointWire]
+
+    init(conversationID: UUID, checkpoints: [AttachmentDigestCheckpointWire]) {
+        self.conversationID = conversationID
+        self.checkpoints = checkpoints
     }
 }
 
@@ -431,6 +445,7 @@ public struct ContextEngineAssembleResult: Sendable {
     let projectionArtifact: ContextEngineProjectionArtifact?
     let systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec?
     let attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec?
+    let attachmentDigestCheckpoints: ContextAttachmentDigestCheckpointPersistenceSpec?
     let preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
     let compactionLowSavings: Bool
     let projectedMemorySelectionKeys: [String]
@@ -446,6 +461,7 @@ public struct ContextEngineAssembleResult: Sendable {
         projectionArtifact: ContextEngineProjectionArtifact? = nil,
         systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec? = nil,
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec? = nil,
+        attachmentDigestCheckpoints: ContextAttachmentDigestCheckpointPersistenceSpec? = nil,
         preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec? = nil,
         compactionLowSavings: Bool = false,
         projectedMemorySelectionKeys: [String] = [],
@@ -460,6 +476,7 @@ public struct ContextEngineAssembleResult: Sendable {
         self.projectionArtifact = projectionArtifact
         self.systemPromptCheckpoint = systemPromptCheckpoint
         self.attachmentProjectionCheckpoint = attachmentProjectionCheckpoint
+        self.attachmentDigestCheckpoints = attachmentDigestCheckpoints
         self.preCompactionMemoryFlush = preCompactionMemoryFlush
         self.compactionLowSavings = compactionLowSavings
         self.projectedMemorySelectionKeys = projectedMemorySelectionKeys

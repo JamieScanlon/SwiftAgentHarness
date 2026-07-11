@@ -396,5 +396,43 @@ enum ContextCheckpointWriter {
             logger?.warning("[ContextCheckpointWriter] persistAttachmentProjectionCheckpoint failed: \(error)")
         }
     }
+
+    static func persistAttachmentDigestCheckpointsIfNeeded(
+        spec: ContextAttachmentDigestCheckpointPersistenceSpec?,
+        events: [CachedConversationEvent],
+        frontierEventID: Int,
+        persistence: ConversationPersistenceStack,
+        logger: Logger?
+    ) {
+        guard let spec, !spec.checkpoints.isEmpty else { return }
+        for checkpoint in spec.checkpoints {
+            if SuiteCheckpointSupport.latestValidAttachmentDigest(
+                events: events,
+                frontierEventID: frontierEventID,
+                attachmentID: checkpoint.attachmentID,
+                contentHash: checkpoint.contentHash,
+                configFingerprint: checkpoint.configFingerprint
+            )?.wire.digestBody == checkpoint.digestBody {
+                continue
+            }
+            let wire = AttachmentDigestCheckpointWire(
+                schemaVersion: AttachmentDigestCheckpointWire.currentSchemaVersion,
+                basedOnEventID: frontierEventID,
+                attachmentID: checkpoint.attachmentID,
+                contentHash: checkpoint.contentHash,
+                configFingerprint: checkpoint.configFingerprint,
+                digestBody: checkpoint.digestBody,
+                createdAt: Date()
+            )
+            do {
+                try persistence.persistAttachmentDigestCheckpoint(
+                    conversationID: spec.conversationID,
+                    wire: wire
+                )
+            } catch {
+                logger?.warning("[ContextCheckpointWriter] persistAttachmentDigestCheckpoint failed: \(error)")
+            }
+        }
+    }
 }
 

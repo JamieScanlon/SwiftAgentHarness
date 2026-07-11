@@ -57,7 +57,9 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             conversationID: UUID(),
             messages: [],
             priorAttachmentProjection: nil,
-            pendingCacheBreakEvents: []
+            pendingCacheBreakEvents: [],
+            events: [],
+            frontierEventID: nil
         )
     }
 
@@ -69,7 +71,9 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         conversationID: UUID,
         messages: [Message] = [],
         priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact? = nil,
-        pendingCacheBreakEvents: Set<CacheBreakEventReason> = []
+        pendingCacheBreakEvents: Set<CacheBreakEventReason> = [],
+        events: [CachedConversationEvent] = [],
+        frontierEventID: Int? = nil
     ) -> ContextEngineAttachmentProjectionArtifact? {
         guard let policy, policy.enabled, !catalog.isEmpty else { return nil }
         let supportsVision = modelSupportsVision ?? false
@@ -104,15 +108,27 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         )
         let effectiveDecisions = coordinated.effective
         guard !effectiveDecisions.isEmpty else { return nil }
+        let materializerConfiguration = AttachmentRepresentationMaterializerConfiguration(
+            inlineByteLimit: policy.inlineByteLimit
+        )
+        let digestCache = AttachmentDigestCacheResolver.resolve(
+            catalog: catalog,
+            decisions: effectiveDecisions,
+            configuration: materializerConfiguration,
+            modelSupportsVision: supportsVision,
+            blobReader: blobReader,
+            conversationID: conversationID,
+            events: events,
+            frontierEventID: frontierEventID
+        )
         let materializedBlocks = AttachmentRepresentationMaterializer.materialize(
             decisions: effectiveDecisions,
             catalog: catalog,
             modelSupportsVision: supportsVision,
             blobReader: blobReader,
             conversationID: conversationID,
-            configuration: AttachmentRepresentationMaterializerConfiguration(
-                inlineByteLimit: policy.inlineByteLimit
-            )
+            configuration: materializerConfiguration,
+            digestPreviewByAttachmentID: digestCache.digestPreviewByAttachmentID
         )
         let projectionFingerprint = fingerprint(
             policy: policy,
@@ -127,7 +143,8 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             decisions: effectiveDecisions,
             targetDecisions: coordinated.target,
             materializedBlocks: materializedBlocks,
-            accessWatermarkTurnIndex: accessIndex.currentTurnIndex
+            accessWatermarkTurnIndex: accessIndex.currentTurnIndex,
+            newDigestCheckpoints: digestCache.newDigestCheckpoints
         )
     }
 

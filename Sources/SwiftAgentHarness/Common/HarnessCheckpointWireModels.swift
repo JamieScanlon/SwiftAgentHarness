@@ -11,6 +11,7 @@ public enum HarnessCheckpointWireKind: String, Codable, Sendable, CaseIterable {
     case toolResultTrim = "tool_result_trim"
     case systemPromptAssembly = "system_prompt_assembly"
     case attachmentProjection = "attachment_projection"
+    case attachmentDigest = "attachment_digest"
 }
 
 public struct MemoryStoreSnapshotJSON: Codable, Sendable, Equatable {
@@ -216,6 +217,36 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
     }
 }
 
+public struct AttachmentDigestCheckpointWire: Codable, Sendable, Equatable {
+    public static let currentSchemaVersion = 1
+
+    public var schemaVersion: Int
+    public var basedOnEventID: Int
+    public var attachmentID: UUID
+    public var contentHash: String
+    public var configFingerprint: String
+    public var digestBody: String
+    public var createdAt: Date
+
+    public init(
+        schemaVersion: Int,
+        basedOnEventID: Int,
+        attachmentID: UUID,
+        contentHash: String,
+        configFingerprint: String,
+        digestBody: String,
+        createdAt: Date
+    ) {
+        self.schemaVersion = schemaVersion
+        self.basedOnEventID = basedOnEventID
+        self.attachmentID = attachmentID
+        self.contentHash = contentHash
+        self.configFingerprint = configFingerprint
+        self.digestBody = digestBody
+        self.createdAt = createdAt
+    }
+}
+
 /// Discriminated checkpoint body (`checkpoint` JSON varies by top-level `kind`).
 public enum LatestCheckpointPayload: Sendable, Equatable {
     case contextCompaction(ContextCompactionCheckpointWire)
@@ -223,6 +254,7 @@ public enum LatestCheckpointPayload: Sendable, Equatable {
     case toolResultTrim(ToolResultTrimCheckpointWire)
     case systemPromptAssembly(SystemPromptAssemblyCheckpointWire)
     case attachmentProjection(AttachmentProjectionCheckpointWire)
+    case attachmentDigest(AttachmentDigestCheckpointWire)
 }
 
 /// Latest valid checkpoint for `GET /api/conversations/{id}/checkpoints/latest`.
@@ -272,6 +304,8 @@ public struct LatestCheckpointResponse: Codable, Sendable, Equatable {
             return .systemPromptAssembly(try c.decode(SystemPromptAssemblyCheckpointWire.self, forKey: .checkpoint))
         case HarnessCheckpointWireKind.attachmentProjection.rawValue:
             return .attachmentProjection(try c.decode(AttachmentProjectionCheckpointWire.self, forKey: .checkpoint))
+        case HarnessCheckpointWireKind.attachmentDigest.rawValue:
+            return .attachmentDigest(try c.decode(AttachmentDigestCheckpointWire.self, forKey: .checkpoint))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -292,6 +326,8 @@ public struct LatestCheckpointResponse: Codable, Sendable, Equatable {
         case .systemPromptAssembly(let wire):
             try c.encode(wire, forKey: .checkpoint)
         case .attachmentProjection(let wire):
+            try c.encode(wire, forKey: .checkpoint)
+        case .attachmentDigest(let wire):
             try c.encode(wire, forKey: .checkpoint)
         }
     }

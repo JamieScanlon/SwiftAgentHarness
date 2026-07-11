@@ -46,7 +46,8 @@ enum AttachmentRepresentationMaterializer {
         modelSupportsVision: Bool,
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
-        configuration: AttachmentRepresentationMaterializerConfiguration = .default
+        configuration: AttachmentRepresentationMaterializerConfiguration = .default,
+        digestPreviewByAttachmentID: [UUID: String] = [:]
     ) -> [AttachmentMaterializedBlock] {
         let catalogByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         return decisions.compactMap { decision in
@@ -60,7 +61,8 @@ enum AttachmentRepresentationMaterializer {
                 modelSupportsVision: modelSupportsVision,
                 blobReader: blobReader,
                 conversationID: conversationID,
-                configuration: configuration
+                configuration: configuration,
+                cachedDigestPreview: digestPreviewByAttachmentID[decision.attachmentID]
             )
             guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return AttachmentMaterializedBlock(
@@ -84,7 +86,8 @@ enum AttachmentRepresentationMaterializer {
         modelSupportsVision: Bool,
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
-        configuration: AttachmentRepresentationMaterializerConfiguration
+        configuration: AttachmentRepresentationMaterializerConfiguration,
+        cachedDigestPreview: String? = nil
     ) -> String {
         switch decision.disposition {
         case .inline:
@@ -116,7 +119,8 @@ enum AttachmentRepresentationMaterializer {
                     modelSupportsVision: modelSupportsVision,
                     blobReader: blobReader,
                     conversationID: conversationID,
-                    configuration: configuration
+                    configuration: configuration,
+                    cachedDigestPreview: cachedDigestPreview
                 ),
                 blobReader: blobReader,
                 conversationID: conversationID
@@ -178,7 +182,8 @@ enum AttachmentRepresentationMaterializer {
         modelSupportsVision: Bool,
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
-        configuration: AttachmentRepresentationMaterializerConfiguration
+        configuration: AttachmentRepresentationMaterializerConfiguration,
+        cachedDigestPreview: String? = nil
     ) -> String {
         var lines = ["[attachment digest]"]
         lines.append("name: \(displayName(descriptor))")
@@ -201,12 +206,17 @@ enum AttachmentRepresentationMaterializer {
             lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
             return lines.joined(separator: "\n")
         }
-        let preview = AttachmentDigestProducer.produce(
-            descriptor: descriptor,
-            bytes: bytes,
-            modelSupportsVision: modelSupportsVision,
-            configuration: configuration
-        )
+        let preview: String
+        if let cachedDigestPreview, !cachedDigestPreview.isEmpty {
+            preview = cachedDigestPreview
+        } else {
+            preview = AttachmentDigestProducer.produce(
+                descriptor: descriptor,
+                bytes: bytes,
+                modelSupportsVision: modelSupportsVision,
+                configuration: configuration
+            )
+        }
         lines.append(preview)
         return lines.joined(separator: "\n")
     }

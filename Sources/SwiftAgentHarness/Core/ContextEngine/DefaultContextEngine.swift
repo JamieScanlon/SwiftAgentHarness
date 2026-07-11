@@ -170,6 +170,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             projectionArtifact: result.projectionArtifact,
             systemPromptCheckpoint: result.systemPromptCheckpoint,
             attachmentProjectionCheckpoint: result.attachmentProjectionCheckpoint,
+            attachmentDigestCheckpoints: result.attachmentDigestCheckpoints,
             preCompactionMemoryFlush: result.preCompactionMemoryFlush,
             compactionLowSavings: result.compactionLowSavings,
             projectedMemorySelectionKeys: tier2Result.projectedMemorySelectionKeys,
@@ -354,7 +355,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
-            policy: request.projectionPolicy
+            policy: request.projectionPolicy,
+            events: request.events,
+            frontierEventID: request.eventLogFrontier
         )
         let policyAdjustedMessages = projected.messages
         let (compactionInjectedPrefix, compactionTranscript) =
@@ -396,6 +399,13 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 accessWatermarkTurnIndex: $0.accessWatermarkTurnIndex
             )
         }
+        let attachmentDigestCheckpoints = projectionArtifact.attachmentProjection.flatMap { artifact -> ContextAttachmentDigestCheckpointPersistenceSpec? in
+            guard !artifact.newDigestCheckpoints.isEmpty else { return nil }
+            return ContextAttachmentDigestCheckpointPersistenceSpec(
+                conversationID: request.conversation.id,
+                checkpoints: artifact.newDigestCheckpoints
+            )
+        }
 
         guard request.enableContextTransform else {
             return ContextTurnAssemblyResult(
@@ -408,6 +418,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 preCompactionMemoryFlush: nil,
                 cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
@@ -465,6 +476,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                     preCompactionMemoryFlush: softFlush,
                     cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
@@ -503,6 +515,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                     preCompactionMemoryFlush: nil,
                     cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
@@ -567,6 +580,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 performTransform: performTransform,
                 preCompactionMemoryFlush: preCompactionMemoryFlush,
                 cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
@@ -585,6 +599,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             projectionArtifact: projectionArtifact,
             systemPromptCheckpoint: promptCheckpoint,
             attachmentProjectionCheckpoint: attachmentCheckpoint,
+            attachmentDigestCheckpoints: attachmentDigestCheckpoints,
             performTransform: performTransform,
             preCompactionMemoryFlush: preCompactionMemoryFlush,
             cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
@@ -727,6 +742,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         projectionArtifact: ContextEngineProjectionArtifact,
         systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec?,
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec?,
+        attachmentDigestCheckpoints: ContextAttachmentDigestCheckpointPersistenceSpec?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput,
         preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?,
         cacheExpiredHygieneWindow: Bool
@@ -841,6 +857,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 preCompactionMemoryFlush: preCompactionMemoryFlush,
                 compactionLowSavings: compactionLowSavings,
                 cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
@@ -856,6 +873,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 preCompactionMemoryFlush: preCompactionMemoryFlush,
                 cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
@@ -1094,7 +1112,9 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
     private func applyProjectionPolicy(
         messages: [Message],
         conversation: ModelConversation,
-        policy: ContextEngineProjectionPolicyInput?
+        policy: ContextEngineProjectionPolicyInput?,
+        events: [CachedConversationEvent] = [],
+        frontierEventID: Int? = nil
     ) async -> (messages: [Message], artifact: ContextEngineProjectionArtifact) {
         guard let policy else {
             return (
@@ -1141,7 +1161,9 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             conversationID: conversation.id,
             messages: projected,
             priorAttachmentProjection: policy.priorAttachmentProjection,
-            pendingCacheBreakEvents: policy.pendingCacheBreakEvents
+            pendingCacheBreakEvents: policy.pendingCacheBreakEvents,
+            events: events,
+            frontierEventID: frontierEventID
         )
         if let attachmentArtifact {
             projected = CatalogVisionImageProjector.apply(

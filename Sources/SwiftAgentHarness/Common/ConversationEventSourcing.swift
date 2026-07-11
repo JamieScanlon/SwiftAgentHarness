@@ -17,6 +17,7 @@ enum ConversationEventKind: String {
     case toolResultTrimCheckpoint = "tool_result_trim_checkpoint"
     case systemPromptAssemblyCheckpoint = "system_prompt_assembly_checkpoint"
     case attachmentProjectionCheckpoint = "attachment_projection_checkpoint"
+    case attachmentDigestCheckpoint = "attachment_digest_checkpoint"
     /// Derived run lifecycle marker (`running` -> terminal) used for durable run history projection.
     case runLifecycleEvent = "run_lifecycle_event"
     /// Derived tool approval/elevated lifecycle audit, projected from runtime lifecycle topic events.
@@ -39,6 +40,7 @@ enum HarnessCheckpointInvalidationKind {
     static let toolResultTrim = HarnessCheckpointWireKind.toolResultTrim.rawValue
     static let systemPromptAssembly = HarnessCheckpointWireKind.systemPromptAssembly.rawValue
     static let attachmentProjection = HarnessCheckpointWireKind.attachmentProjection.rawValue
+    static let attachmentDigest = HarnessCheckpointWireKind.attachmentDigest.rawValue
     /// Internal marker for cache-aware pruning strategy drifts / TTL expiry invalidation.
     static let cacheAwarePruning = "cache_aware_pruning"
 }

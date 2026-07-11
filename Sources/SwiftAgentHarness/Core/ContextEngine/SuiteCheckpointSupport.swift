@@ -127,6 +127,29 @@ enum SuiteCheckpointSupport {
         )
     }
 
+    static func latestValidAttachmentDigest(
+        events: [CachedConversationEvent],
+        frontierEventID: Int? = nil,
+        attachmentID: UUID,
+        contentHash: String,
+        configFingerprint: String
+    ) -> (wire: AttachmentDigestCheckpointWire, eventID: Int)? {
+        latestValidWireCheckpoint(
+            events: events,
+            persistedKind: ConversationEventKind.attachmentDigestCheckpoint.rawValue,
+            frontierEventID: frontierEventID,
+            decode: { ConversationEventCodec.decode(AttachmentDigestCheckpointWire.self, from: $0) },
+            basedOnEventID: { $0.basedOnEventID },
+            isValid: { wire, _ in
+                wire.schemaVersion == AttachmentDigestCheckpointWire.currentSchemaVersion
+                    && wire.attachmentID == attachmentID
+                    && wire.contentHash == contentHash
+                    && wire.configFingerprint == configFingerprint
+                    && !wire.digestBody.isEmpty
+            }
+        )
+    }
+
     private static func latestValidWireCheckpoint<Wire>(
         events: [CachedConversationEvent],
         persistedKind: String,
