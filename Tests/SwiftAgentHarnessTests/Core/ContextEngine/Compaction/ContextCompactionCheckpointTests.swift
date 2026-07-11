@@ -756,7 +756,7 @@ struct ContextCompactionCheckpointTests {
             rawMiddle: tiny,
             config: config,
             conversationID: UUID(),
-            lastLLMDateByConversationID: [:]
+            lastCompactionLLMDateByConversationID: [:]
         )
         #expect(allow == false)
     }
@@ -773,7 +773,7 @@ struct ContextCompactionCheckpointTests {
             rawMiddle: mid,
             config: config,
             conversationID: UUID(),
-            lastLLMDateByConversationID: [:]
+            lastCompactionLLMDateByConversationID: [:]
         )
         #expect(allow == true)
     }
@@ -792,7 +792,7 @@ struct ContextCompactionCheckpointTests {
                 rawMiddle: mid,
                 config: config,
                 conversationID: cid,
-                lastLLMDateByConversationID: recent
+                lastCompactionLLMDateByConversationID: recent
             ) == false
         )
         let old: [UUID: Date] = [cid: Date(timeIntervalSince1970: 0)]
@@ -801,7 +801,7 @@ struct ContextCompactionCheckpointTests {
                 rawMiddle: mid,
                 config: config,
                 conversationID: cid,
-                lastLLMDateByConversationID: old
+                lastCompactionLLMDateByConversationID: old
             ) == true
         )
     }

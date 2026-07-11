@@ -71,6 +71,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var contextPruningKeepRecentToolResults: Int
     /// Optional tool-name filter for TTL pruning; `nil` means all eligible tools.
     public var contextPruningTargetTools: [String]?
+    /// Idle gap (seconds) after the last foreground model request before inferring the prompt cache
+    /// is dead and batching deferred hygiene. `nil` uses the default (9000s / 2.5h).
+    public var cacheExpiryInferenceThresholdSeconds: Double?
     /// Deterministic stage toggle for tool-result pruning before summarizer invocation.
     public var deterministicToolResultPruningEnabled: Bool
     /// Enables deterministic attachment/image/document hygiene before summarizer invocation.
@@ -204,6 +207,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         contextPruningMode: nil,
         contextPruningKeepRecentToolResults: 5,
         contextPruningTargetTools: nil,
+        cacheExpiryInferenceThresholdSeconds: nil,
         deterministicToolResultPruningEnabled: true,
         deterministicAttachmentDocumentHygieneEnabled: false,
         deterministicMaxImagesPerMessage: 3,
@@ -273,6 +277,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         contextPruningMode: String? = nil,
         contextPruningKeepRecentToolResults: Int = 5,
         contextPruningTargetTools: [String]? = nil,
+        cacheExpiryInferenceThresholdSeconds: Double? = nil,
         deterministicToolResultPruningEnabled: Bool = true,
         deterministicAttachmentDocumentHygieneEnabled: Bool = false,
         deterministicMaxImagesPerMessage: Int = 3,
@@ -340,6 +345,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.contextPruningMode = contextPruningMode
         self.contextPruningKeepRecentToolResults = contextPruningKeepRecentToolResults
         self.contextPruningTargetTools = contextPruningTargetTools
+        self.cacheExpiryInferenceThresholdSeconds = cacheExpiryInferenceThresholdSeconds
         self.deterministicToolResultPruningEnabled = deterministicToolResultPruningEnabled
         self.deterministicAttachmentDocumentHygieneEnabled = deterministicAttachmentDocumentHygieneEnabled
         self.deterministicMaxImagesPerMessage = deterministicMaxImagesPerMessage
@@ -895,6 +901,16 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.contextPruningTargetTools
             }()
+            let cacheExpiryInferenceThresholdSeconds: Double? = {
+                if payload["cacheExpiryInferenceThresholdSeconds"] is NSNull { return nil }
+                if let value = payload["cacheExpiryInferenceThresholdSeconds"] as? Double {
+                    return value > 0 ? Swift.min(2_592_000, value) : nil
+                }
+                if let value = payload["cacheExpiryInferenceThresholdSeconds"] as? Int {
+                    return value > 0 ? Swift.min(2_592_000, Double(value)) : nil
+                }
+                return def.cacheExpiryInferenceThresholdSeconds
+            }()
             let deterministicToolResultPruningEnabled =
                 (payload["deterministicToolResultPruningEnabled"] as? Bool)
                 ?? def.deterministicToolResultPruningEnabled
@@ -996,6 +1012,7 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 contextPruningMode: contextPruningMode,
                 contextPruningKeepRecentToolResults: contextPruningKeepRecentToolResults,
                 contextPruningTargetTools: contextPruningTargetTools,
+                cacheExpiryInferenceThresholdSeconds: cacheExpiryInferenceThresholdSeconds,
                 deterministicToolResultPruningEnabled: deterministicToolResultPruningEnabled,
                 deterministicAttachmentDocumentHygieneEnabled: deterministicAttachmentDocumentHygieneEnabled,
                 deterministicMaxImagesPerMessage: deterministicMaxImagesPerMessage,

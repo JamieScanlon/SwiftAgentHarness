@@ -195,6 +195,10 @@ extension AgentRuntimeOrchestrationCore: AgentRuntimeTokenSnapshotting {
     ) {
         await tokenSnapshotsForOrchestration(conversationID: conversationID)
     }
+
+    func lastModelRequestAt(for conversationID: UUID) async -> Date? {
+        await pool.lastModelRequestAt(for: conversationID)
+    }
 }
 
 extension AgentRuntimeOrchestrationCore: AgentRuntimeResidualStateReading {

@@ -51,7 +51,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .production
         )
         guard case .passthrough(let reason) = r else {
@@ -119,7 +119,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: 9_999, // above threshold
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .production
         )
         guard case .transform = r else {
@@ -175,7 +175,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: 500, // real count well under threshold = 1_000
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .production
         )
         guard case .passthrough(let reason) = r else {
@@ -231,7 +231,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .production
         )
         guard case .transform = r else {
@@ -291,7 +291,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: recent,
+            lastCompactionLLMDateByConversationID: recent,
             gating: g
         )
         guard case .transform = r else {
@@ -346,7 +346,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: g
         )
         guard case .transform = r else {
@@ -375,7 +375,7 @@ struct ContextCompactionInputBuilderTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: ContextCompactionGatingOptions(ignoreTokenThreshold: true, forceRunCompactionLLM: true)
         )
         guard case .transform(let input) = r else {

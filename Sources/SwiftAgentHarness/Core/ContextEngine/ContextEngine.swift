@@ -281,7 +281,8 @@ public struct ContextEngineAssembleRequest: Sendable {
     let lastPromptTokens: Int?
     let events: [CachedConversationEvent]
     let eventLogFrontier: Int
-    let lastLLMDateByConversationID: [UUID: Date]
+    let lastModelRequestAtByConversationID: [UUID: Date]
+    let lastCompactionLLMDateByConversationID: [UUID: Date]
     let persistCompactionCheckpoint: Bool
     let allowProactiveCompactionTriggers: Bool
     let compactionLockAlreadyHeldByCaller: Bool
@@ -304,7 +305,8 @@ public struct ContextEngineAssembleRequest: Sendable {
         lastPromptTokens: Int?,
         events: [CachedConversationEvent],
         eventLogFrontier: Int,
-        lastLLMDateByConversationID: [UUID: Date],
+        lastModelRequestAtByConversationID: [UUID: Date],
+        lastCompactionLLMDateByConversationID: [UUID: Date],
         persistCompactionCheckpoint: Bool,
         allowProactiveCompactionTriggers: Bool,
         compactionLockAlreadyHeldByCaller: Bool,
@@ -326,7 +328,8 @@ public struct ContextEngineAssembleRequest: Sendable {
         self.lastPromptTokens = lastPromptTokens
         self.events = events
         self.eventLogFrontier = eventLogFrontier
-        self.lastLLMDateByConversationID = lastLLMDateByConversationID
+        self.lastModelRequestAtByConversationID = lastModelRequestAtByConversationID
+        self.lastCompactionLLMDateByConversationID = lastCompactionLLMDateByConversationID
         self.persistCompactionCheckpoint = persistCompactionCheckpoint
         self.allowProactiveCompactionTriggers = allowProactiveCompactionTriggers
         self.compactionLockAlreadyHeldByCaller = compactionLockAlreadyHeldByCaller
@@ -352,6 +355,7 @@ public struct ContextEngineAssembleResult: Sendable {
     let preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
     let compactionLowSavings: Bool
     let projectedMemorySelectionKeys: [String]
+    let cacheExpiredHygieneWindow: Bool
 
     init(
         messages: [Message],
@@ -365,7 +369,8 @@ public struct ContextEngineAssembleResult: Sendable {
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec? = nil,
         preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec? = nil,
         compactionLowSavings: Bool = false,
-        projectedMemorySelectionKeys: [String] = []
+        projectedMemorySelectionKeys: [String] = [],
+        cacheExpiredHygieneWindow: Bool = false
     ) {
         self.messages = messages
         self.transformOutput = transformOutput
@@ -379,6 +384,7 @@ public struct ContextEngineAssembleResult: Sendable {
         self.preCompactionMemoryFlush = preCompactionMemoryFlush
         self.compactionLowSavings = compactionLowSavings
         self.projectedMemorySelectionKeys = projectedMemorySelectionKeys
+        self.cacheExpiredHygieneWindow = cacheExpiredHygieneWindow
     }
 }
 

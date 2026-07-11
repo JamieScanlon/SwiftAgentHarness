@@ -531,14 +531,16 @@ enum ContextCompactionCheckpointSupport {
         rawMiddle: [Message],
         config: ContextCompactionConfiguration,
         conversationID: UUID,
-        lastLLMDateByConversationID: [UUID: Date]
+        lastCompactionLLMDateByConversationID: [UUID: Date],
+        cacheExpiredHygieneWindow: Bool = false
     ) -> Bool {
         let chars = estimatedMiddleCharacters(rawMiddle)
         if config.middleMinCharactersForCompactionLLM > 0, chars < config.middleMinCharactersForCompactionLLM {
             return false
         }
         if config.compactionLLMCooldownSeconds > 0,
-           let last = lastLLMDateByConversationID[conversationID] {
+           !cacheExpiredHygieneWindow,
+           let last = lastCompactionLLMDateByConversationID[conversationID] {
             let elapsed = Date().timeIntervalSince(last)
             if elapsed < config.compactionLLMCooldownSeconds {
                 return false

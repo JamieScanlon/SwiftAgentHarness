@@ -88,8 +88,13 @@ actor ContextProjectionService {
         lastSystemPromptAssemblyByConversationID[conversationID]
     }
 
-    func lastLLMDate(for conversationID: UUID) -> Date? {
-        lastContextCompactionLLMDateByConversationID[conversationID]
+    func lastLLMDate(for conversationID: UUID) async -> Date? {
+        await agentRuntime.lastModelRequestAt(for: conversationID)
+    }
+
+    private func lastModelRequestAtMap(for conversationID: UUID) async -> [UUID: Date] {
+        guard let at = await agentRuntime.lastModelRequestAt(for: conversationID) else { return [:] }
+        return [conversationID: at]
     }
 
     func seedSystemPromptAssembly(
@@ -258,6 +263,7 @@ actor ContextProjectionService {
             persistCompactionCheckpoint: true,
             onLockHeld: messages
         ) { lockHeldByCaller in
+            let lastModelRequestAtByConversationID = await self.lastModelRequestAtMap(for: conversation.id)
             let pipelineOutput = await ContextAssemblyPipeline.ingestAndOrchestratorAssemble(
                 contextEngine: deps.contextEngine,
                 persistenceDomain: deps.persistenceDomain,
@@ -272,6 +278,7 @@ actor ContextProjectionService {
                 projectionPolicy: projectionContext.projectionPolicy,
                 lastContextLimitTokens: projectionContext.lastContextLimitTokens,
                 lastPromptTokens: projectionContext.lastPromptTokens,
+                lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
                 logger: deps.logger,
                 performTransform: { input in
@@ -316,6 +323,12 @@ actor ContextProjectionService {
                 }
             }
             let persistenceEffects = pipelineOutput.persistenceEffects
+            if result.cacheExpiredHygieneWindow {
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .cacheExpiry
+                )
+            }
             if persistenceEffects.persistedCompactionCheckpoint, let spec = result.checkpointPersistence {
                 consecutiveLowSavingsCompactionsByConversationID[conversation.id] = 0
                 lastContextCompactionLLMDateByConversationID[conversation.id] = Date()
@@ -371,6 +384,7 @@ actor ContextProjectionService {
                 transformFailed: false
             )
         }
+        let lastModelRequestAtByConversationID = await lastModelRequestAtMap(for: conversation.id)
         let pipelineOutput = await ContextAssemblyPipeline.ingestAndOrchestratorAssemblePreview(
             contextEngine: deps.contextEngine,
             persistenceDomain: deps.persistenceDomain,
@@ -384,6 +398,7 @@ actor ContextProjectionService {
             projectionPolicy: projectionContext.projectionPolicy,
             lastContextLimitTokens: projectionContext.lastContextLimitTokens,
             lastPromptTokens: projectionContext.lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             performTransform: { input in
                 try await ContextAssemblyService.runTransformWithTimeout(
@@ -437,7 +452,7 @@ actor ContextProjectionService {
             lastPromptTokens: projectionContext.lastPromptTokens,
             events: events,
             eventLogFrontier: eventLogFrontier,
-            lastLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            lastCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             gating: gating,
             compactionSummarizerDebugOutputPath: summarizerDebugOutputPath,
             allowProactiveCompactionTriggers: true,
@@ -566,6 +581,7 @@ actor ContextProjectionService {
                 thresholdTokens: thresholdTokens
             )
         ) { lockHeldByCaller in
+            let lastModelRequestAtByConversationID = await self.lastModelRequestAtMap(for: conversation.id)
             let pipelineOutput = await ContextAssemblyPipeline.ingestAndManualCompact(
                 contextEngine: deps.contextEngine,
                 persistenceDomain: deps.persistenceDomain,
@@ -578,6 +594,7 @@ actor ContextProjectionService {
                 projectionPolicy: projectionContext.projectionPolicy,
                 lastContextLimitTokens: projectionContext.lastContextLimitTokens,
                 lastPromptTokens: projectionContext.lastPromptTokens,
+                lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
                 logger: deps.logger,
                 performTransform: { input in

@@ -185,6 +185,7 @@ protocol AgentRuntimeTokenSnapshotting: Sendable {
         lastPromptTokens: Int?,
         lastContextLimitTokens: Int?
     )
+    func lastModelRequestAt(for conversationID: UUID) async -> Date?
 }
 
 protocol AgentRuntimeLaneErrorMapping: Sendable {

@@ -121,7 +121,7 @@ recalled
             lastPromptTokens: 200_000,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .forcedReactiveRetry,
             compactionInjectedPrefix: injected
         )
@@ -177,7 +177,7 @@ recalled
             lastPromptTokens: 200_000,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .forcedReactiveRetry,
             compactionInjectedPrefix: injected
         )

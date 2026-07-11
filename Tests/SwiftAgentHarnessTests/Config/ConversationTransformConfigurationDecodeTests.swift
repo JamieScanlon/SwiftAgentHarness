@@ -393,6 +393,17 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(resolved.ttlSeconds == 90)
     }
 
+    @Test("cacheExpiryInferenceThresholdSeconds decodes from contextCompaction JSON")
+    func parserPreservesCacheExpiryInferenceThreshold() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "cacheExpiryInferenceThresholdSeconds": 12_000,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        #expect(config.cacheExpiryInferenceThresholdSeconds == 12_000)
+    }
+
     @Test("Explicit contextCompaction JSON values are preserved")
     func parserPreservesContextCompaction() {
         let block: [String: Any] = [

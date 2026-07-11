@@ -109,7 +109,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             lastPromptTokens: request.lastPromptTokens,
             events: request.events,
             eventLogFrontier: request.eventLogFrontier,
-            lastLLMDateByConversationID: request.lastLLMDateByConversationID,
+            lastModelRequestAtByConversationID: request.lastModelRequestAtByConversationID,
+            lastCompactionLLMDateByConversationID: request.lastCompactionLLMDateByConversationID,
             persistCompactionCheckpoint: request.persistCompactionCheckpoint,
             allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
             compactionLockAlreadyHeldByCaller: request.compactionLockAlreadyHeldByCaller,
@@ -120,7 +121,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
-        let ttlPruned = applyCacheTTLPruningIfNeeded(messages: result.messages, request: request)
+        let ttlPruned = applyCacheTTLPruningIfNeeded(messages: result.messages, request: preparedTurnRequest)
         if ttlPruned.transformationKind == .cacheEditing {
             logger?.debug(
                 "[ContextEngine] cache TTL pruning substituted stale tool results conversation=\(request.conversation.id)"
@@ -171,7 +172,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             attachmentProjectionCheckpoint: result.attachmentProjectionCheckpoint,
             preCompactionMemoryFlush: result.preCompactionMemoryFlush,
             compactionLowSavings: result.compactionLowSavings,
-            projectedMemorySelectionKeys: tier2Result.projectedMemorySelectionKeys
+            projectedMemorySelectionKeys: tier2Result.projectedMemorySelectionKeys,
+            cacheExpiredHygieneWindow: result.cacheExpiredHygieneWindow
         )
     }
 
@@ -348,6 +350,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextTurnAssemblyRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextTurnAssemblyResult {
+        let cacheExpiredHygieneWindow = resolveCacheExpiredHygieneWindow(request: request)
         let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
@@ -402,7 +405,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
-                preCompactionMemoryFlush: nil
+                preCompactionMemoryFlush: nil,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
 
@@ -431,13 +435,14 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 lastPromptTokens: request.lastPromptTokens,
                 events: request.events,
                 eventLogFrontier: request.eventLogFrontier,
-                lastLLMDateByConversationID: request.lastLLMDateByConversationID,
+                lastCompactionLLMDateByConversationID: request.lastCompactionLLMDateByConversationID,
                 gating: request.gatingOverride ?? .production,
                 allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
                 sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction,
                 compactionInjectedPrefix: compactionInjectedPrefix,
                 reinjectableSkills: reinjectableSkills,
-                postCompactionInstructionContext: postCompactionInstructionContext
+                postCompactionInstructionContext: postCompactionInstructionContext,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
             switch initial {
             case .passthrough(let reason):
@@ -457,7 +462,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
-                    preCompactionMemoryFlush: softFlush
+                    preCompactionMemoryFlush: softFlush,
+                    cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
             case .transform(let built):
                 input = built
@@ -494,7 +500,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
-                    preCompactionMemoryFlush: nil
+                    preCompactionMemoryFlush: nil,
+                    cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
             }
         }
@@ -558,7 +565,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
                 performTransform: performTransform,
-                preCompactionMemoryFlush: preCompactionMemoryFlush
+                preCompactionMemoryFlush: preCompactionMemoryFlush,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
             if result.checkpointPersistence != nil {
                 await memoryService?.clearPreCompactionFlushCycle(conversationID: conversationID)
@@ -575,7 +583,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             systemPromptCheckpoint: promptCheckpoint,
             attachmentProjectionCheckpoint: attachmentCheckpoint,
             performTransform: performTransform,
-            preCompactionMemoryFlush: preCompactionMemoryFlush
+            preCompactionMemoryFlush: preCompactionMemoryFlush,
+            cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
         )
         if result.checkpointPersistence != nil {
             await memoryService?.clearPreCompactionFlushCycle(conversationID: request.conversation.id)
@@ -716,7 +725,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec?,
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput,
-        preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
+        preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?,
+        cacheExpiredHygieneWindow: Bool
     ) async -> ContextTurnAssemblyResult {
         do {
             let output = try await performTransform(input)
@@ -829,7 +839,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
                 preCompactionMemoryFlush: preCompactionMemoryFlush,
-                compactionLowSavings: compactionLowSavings
+                compactionLowSavings: compactionLowSavings,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         } catch {
             return ContextTurnAssemblyResult(
@@ -842,7 +853,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
-                preCompactionMemoryFlush: preCompactionMemoryFlush
+                preCompactionMemoryFlush: preCompactionMemoryFlush,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
     }
@@ -1033,10 +1045,37 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         return ContextCacheTTLPruning.applyIfNeeded(
             messages: messages,
             policy: policy,
-            lastLLMDate: request.lastLLMDateByConversationID[request.conversation.id],
+            lastLLMDate: request.lastModelRequestAtByConversationID[request.conversation.id],
             referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages),
             toolCallResolutionContext: request.messages
         )
+    }
+
+    private func resolveCacheExpiredHygieneWindow(request: ContextEngineAssembleRequest) -> Bool {
+        guard request.persistCompactionCheckpoint else { return false }
+        guard let policy = request.projectionPolicy?.contextPruningPolicy,
+              policy.mode == .cacheTTL
+        else { return false }
+        let eligibility: ProviderCacheTTLEligibility = .short
+        guard let threshold = CacheExpiryInference.resolvedThresholdSeconds(
+            config: request.compactionConfig,
+            providerEligibility: eligibility
+        ) else { return false }
+        let referenceInstant = ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages)
+        let lastModelRequestAt = request.lastModelRequestAtByConversationID[request.conversation.id]
+        let expired = CacheExpiryInference.isCacheExpired(
+            lastModelRequestAt: lastModelRequestAt,
+            referenceInstant: referenceInstant,
+            providerEligibility: eligibility,
+            thresholdSeconds: threshold
+        )
+        if expired, let lastModelRequestAt {
+            let gap = referenceInstant.timeIntervalSince(lastModelRequestAt)
+            logger?.info(
+                "[ContextEngine] cache expired; hygiene window conversation=\(request.conversation.id) gap=\(Int(gap))s threshold=\(Int(threshold))s"
+            )
+        }
+        return expired
     }
 
     private func contextPruningPolicyFingerprint(for policy: ContextPruningPolicy) -> String? {

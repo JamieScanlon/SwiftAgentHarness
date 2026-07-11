@@ -14,6 +14,10 @@ extension AgentRuntimeSessionService {
         await orchestrationCore.tokenSnapshotsForOrchestration(for: conversationID)
     }
 
+    func lastModelRequestAt(for conversationID: UUID) async -> Date? {
+        await orchestrationCore.lastModelRequestAt(for: conversationID)
+    }
+
     func contextTokenMetricsForOrchestration(conversationID: UUID? = nil) async -> (
         lastPromptTokens: Int?,
         lastContextLimitTokens: Int?,

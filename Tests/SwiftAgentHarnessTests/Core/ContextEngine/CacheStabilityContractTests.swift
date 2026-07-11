@@ -55,7 +55,7 @@ struct CacheStabilityContractTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastModelRequestAtByConversationID: [:], lastCompactionLLMDateByConversationID: [:],
             persistCompactionCheckpoint: false,
             allowProactiveCompactionTriggers: true,
             compactionLockAlreadyHeldByCaller: false,

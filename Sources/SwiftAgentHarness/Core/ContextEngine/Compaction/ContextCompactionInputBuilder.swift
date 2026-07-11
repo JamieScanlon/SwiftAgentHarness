@@ -101,14 +101,15 @@ enum ContextCompactionInputBuilder: Sendable {
         lastPromptTokens: Int?,
         events: [CachedConversationEvent],
         eventLogFrontier: Int,
-        lastLLMDateByConversationID: [UUID: Date],
+        lastCompactionLLMDateByConversationID: [UUID: Date],
         gating: ContextCompactionGatingOptions,
         compactionSummarizerDebugOutputPath: String? = nil,
         allowProactiveCompactionTriggers: Bool = true,
         sessionMemoryNoteForCompaction: String? = nil,
         compactionInjectedPrefix: [Message] = [],
         reinjectableSkills: [ReinjectableSkill] = [],
-        postCompactionInstructionContext: String? = nil
+        postCompactionInstructionContext: String? = nil,
+        cacheExpiredHygieneWindow: Bool = false
     ) -> ContextCompactionInitialPhaseBuildResult {
         guard enableContextTransform else {
             return .passthrough(reason: "context_transform_disabled")
@@ -184,7 +185,8 @@ enum ContextCompactionInputBuilder: Sendable {
                 rawMiddle: rawMiddle,
                 config: compactionConfig,
                 conversationID: conversation.id,
-                lastLLMDateByConversationID: lastLLMDateByConversationID
+                lastCompactionLLMDateByConversationID: lastCompactionLLMDateByConversationID,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
 

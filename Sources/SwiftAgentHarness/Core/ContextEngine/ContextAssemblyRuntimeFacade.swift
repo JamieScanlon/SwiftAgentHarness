@@ -19,6 +19,7 @@ struct ContextAssemblyRuntimeFacade {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date]
     ) async -> ContextEngineAssembleRequest {
         await persistenceDomain.makeContextEngineAssembleRequest(
@@ -34,6 +35,7 @@ struct ContextAssemblyRuntimeFacade {
             projectionPolicy: projectionPolicy,
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             conversationTransformConfiguration: conversationTransformConfiguration
         )

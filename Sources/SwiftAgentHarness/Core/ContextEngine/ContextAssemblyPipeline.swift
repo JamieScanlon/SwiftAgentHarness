@@ -28,6 +28,7 @@ enum ContextAssemblyPipeline {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
         logger: Logger?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
@@ -50,6 +51,7 @@ enum ContextAssemblyPipeline {
             projectionPolicy: projectionPolicy,
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
         )
         let result = await contextEngine.assemble(request: assembleRequest, performTransform: performTransform)
@@ -83,6 +85,7 @@ enum ContextAssemblyPipeline {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextAssemblyPipelineRunOutput {
@@ -104,6 +107,7 @@ enum ContextAssemblyPipeline {
             projectionPolicy: projectionPolicy,
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
         )
         let result = await contextEngine.assemble(request: assembleRequest, performTransform: performTransform)
@@ -132,6 +136,7 @@ enum ContextAssemblyPipeline {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
         logger: Logger?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
@@ -154,6 +159,7 @@ enum ContextAssemblyPipeline {
             projectionPolicy: projectionPolicy,
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
         )
         let compactRequest = ContextEngineCompactRequest(assemble: assembleRequest)

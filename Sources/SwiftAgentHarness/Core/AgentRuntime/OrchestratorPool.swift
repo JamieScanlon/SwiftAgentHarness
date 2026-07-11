@@ -16,6 +16,7 @@ struct OrchestratorPoolEntryTokenSnapshot: Sendable {
     var lastPromptTokens: Int?
     var lastContextLimitTokens: Int?
     var lastRemainingContextTokens: Int?
+    var lastModelRequestAt: Date?
 }
 
 struct OrchestratorAcquisition: Sendable {
@@ -217,6 +218,10 @@ actor OrchestratorPool {
         return entry.tokenSnapshot
     }
 
+    func lastModelRequestAt(for conversationID: UUID) -> Date? {
+        tokenSnapshot(for: conversationID)?.lastModelRequestAt
+    }
+
     func resetTokenSnapshot(for conversationID: UUID) {
         _ = mutateEntry(forConversationID: conversationID) { entry in
             entry.tokenSnapshot = OrchestratorPoolEntryTokenSnapshot()
@@ -235,6 +240,7 @@ actor OrchestratorPool {
         requestConfig: LLMRequestConfig
     ) {
         guard mutateEntry(forConversationID: conversationID, mutate: { entry in
+            entry.tokenSnapshot.lastModelRequestAt = Date()
             if let meta = response.metadata {
                 entry.tokenSnapshot.lastContextLimitTokens = meta.contextWindowTokens ?? requestConfig.maxTokens
                 entry.tokenSnapshot.lastPromptTokens = meta.promptTokens

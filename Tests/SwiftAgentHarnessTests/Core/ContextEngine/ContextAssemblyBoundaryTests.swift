@@ -63,7 +63,7 @@ struct ContextAssemblyBoundaryTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastModelRequestAtByConversationID: [:], lastCompactionLLMDateByConversationID: [:],
             persistCompactionCheckpoint: true,
             allowProactiveCompactionTriggers: true,
             compactionLockAlreadyHeldByCaller: false,
@@ -231,6 +231,7 @@ struct ContextAssemblyBoundaryTests {
             projectionPolicy: nil,
             lastContextLimitTokens: nil,
             lastPromptTokens: nil,
+            lastModelRequestAtByConversationID: [:],
             lastContextCompactionLLMDateByConversationID: [:]
         )
         #expect(request.eventLogFrontier == 1)
@@ -264,6 +265,7 @@ struct ContextAssemblyBoundaryTests {
             projectionPolicy: nil,
             lastContextLimitTokens: nil,
             lastPromptTokens: nil,
+            lastModelRequestAtByConversationID: [:],
             lastContextCompactionLLMDateByConversationID: [:],
             logger: nil,
             performTransform: { input in

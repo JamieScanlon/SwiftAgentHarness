@@ -16,6 +16,7 @@ public enum CacheBreakEventReason: String, Sendable, Equatable, Codable {
   case providerChange
   case memorySnapshotRefresh
   case manualCompaction
+  case cacheExpiry
 }
 
 public enum ProjectionStabilityContract {

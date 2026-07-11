@@ -107,6 +107,7 @@ public actor ConversationPersistenceDomain {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
         conversationTransformConfiguration: ConversationTransformConfiguration
     ) -> ContextEngineAssembleRequest {
@@ -131,7 +132,8 @@ public actor ConversationPersistenceDomain {
             lastPromptTokens: lastPromptTokens,
             events: events,
             eventLogFrontier: frontier,
-            lastLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
+            lastCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             persistCompactionCheckpoint: persistCompactionCheckpoint,
             allowProactiveCompactionTriggers: allowProactiveCompactionTriggers,
             compactionLockAlreadyHeldByCaller: compactionLockAlreadyHeldByCaller,
