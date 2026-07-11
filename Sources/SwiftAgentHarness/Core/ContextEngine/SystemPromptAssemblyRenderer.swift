@@ -13,7 +13,8 @@ protocol SystemPromptAssemblyRendering: Sendable {
         userSystemPrompt: String?,
         assemblyContext: SystemPromptAssemblyContext,
         contributions: [SystemPromptContribution],
-        referenceDate: Date
+        referenceDate: Date,
+        fullOverrideText: String?
     ) async throws -> String
 }
 
@@ -45,8 +46,13 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
         userSystemPrompt: String?,
         assemblyContext: SystemPromptAssemblyContext,
         contributions: [SystemPromptContribution],
-        referenceDate: Date
+        referenceDate: Date,
+        fullOverrideText: String? = nil
     ) async throws -> String {
+        if conversation.systemPromptFullOverride {
+            logger?.warning("[DefaultSystemPromptAssemblyRenderer] systemPromptFullOverride active for conversation \(conversation.id)")
+            return fullOverrideText ?? userSystemPrompt ?? conversation.systemPrompt
+        }
         let skillLoader = await skillLoaderProvider(conversation.id)
         let modeCtx = ModePolicyContext(
             interactionMode: conversation.interactionMode,
@@ -54,7 +60,12 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
         )
         var context = assemblyContext
         context.referenceDate = referenceDate
-        if let userSystemPrompt {
+        let conversationHandlesExtraInstructions = contributions.contains {
+            $0.source == .conversation && $0.sectionDirectives[.extraInstructions] != nil
+        }
+        if conversationHandlesExtraInstructions {
+            context.userSystemPrompt = ""
+        } else if let userSystemPrompt {
             context.userSystemPrompt = userSystemPrompt
         }
         let resolution = try SystemPromptContributionResolver.resolve(contributions: contributions)

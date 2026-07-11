@@ -51,18 +51,31 @@ struct MemorySystemPromptBlocks: Sendable, Equatable {
     let memoryPathDisclosureText: String
     let snapshotGeneration: Int
 
-    var combinedSystemPromptSection: String {
-        [projectInstructionsText, memoryPathDisclosureText, memoryIndexText, recalledTopicBodiesText,
-         taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
+    var workspaceInstructionSection: String {
+        projectInstructionsText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var memoryStableSection: String {
+        [memoryPathDisclosureText, memoryIndexText, taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
     }
 
-    var stableSystemPromptSection: String {
-        [projectInstructionsText, memoryPathDisclosureText, memoryIndexText,
-         taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
+    var memoryTier1Content: String {
+        [memoryStableSection, recalledTopicBodiesText]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+    }
+
+    var combinedSystemPromptSection: String {
+        [workspaceInstructionSection, memoryTier1Content]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    /// Memory-only stable slice (excludes workspace instruction files).
+    var stableSystemPromptSection: String {
+        memoryStableSection
     }
 }
 

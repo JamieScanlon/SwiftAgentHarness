@@ -105,6 +105,8 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
     public var includeSkills: Bool?
     /// Reserved for future sectioned tool-guidance toggles (included in fingerprints today).
     public var includeToolGuidance: Bool?
+    /// When true, workspace instruction files are omitted from system prompt assembly (sub-agent scoping).
+    public var omitWorkspaceConventions: Bool?
 
     public init(
         compactionLevel: String? = nil,
@@ -113,7 +115,8 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
         suppressSections: [String] = [],
         memoryInjection: String? = nil,
         includeSkills: Bool? = nil,
-        includeToolGuidance: Bool? = nil
+        includeToolGuidance: Bool? = nil,
+        omitWorkspaceConventions: Bool? = nil
     ) {
         self.compactionLevel = compactionLevel
         self.modeDirective = modeDirective
@@ -122,6 +125,7 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
         self.memoryInjection = memoryInjection
         self.includeSkills = includeSkills
         self.includeToolGuidance = includeToolGuidance
+        self.omitWorkspaceConventions = omitWorkspaceConventions
     }
 
     public static let neutral = ModeProfileContextSlice()

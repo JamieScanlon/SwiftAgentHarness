@@ -4,6 +4,7 @@ public enum SystemPromptContributionSource: String, Sendable, Equatable, Codable
     case harness
     case provider
     case mode
+    case workspace
     case memory
     case conversation
     case engine

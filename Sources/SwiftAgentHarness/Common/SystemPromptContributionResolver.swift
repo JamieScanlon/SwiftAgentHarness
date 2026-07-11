@@ -13,7 +13,7 @@ public struct SystemPromptContributionResolution: Sendable, Equatable {
 /// Merges layered contributions with conflict detection and cache-boundary rules.
 public enum SystemPromptContributionResolver: Sendable {
     private static let layerOrder: [SystemPromptContributionSource] = [
-        .harness, .provider, .mode, .memory, .conversation, .engine,
+        .harness, .provider, .mode, .workspace, .memory, .conversation, .engine,
     ]
 
     private static let stablePrefixAllowedSources: Set<SystemPromptContributionSource> = [

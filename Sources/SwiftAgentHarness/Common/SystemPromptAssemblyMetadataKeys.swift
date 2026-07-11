@@ -8,4 +8,5 @@ enum SystemPromptAssemblyMetadataKeys {
     static let assembledPromptDigest = "assembledPromptDigest"
     /// ISO-8601 instant frozen at CE assemble time; used for the `datetime` token instead of live `Date()`.
     static let assembleReferenceDateISO = "assembleReferenceDateISO"
+    static let systemPromptFullOverrideActive = "systemPromptFullOverrideActive"
 }

@@ -154,6 +154,7 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let metadata: [String: String]
     let fingerprint: String
     let tier1MemorySectionContent: String?
+    let workspaceSectionContent: String?
     let memorySnapshotGeneration: Int?
     let assembledSystemPromptText: String?
     let assembledPromptDigest: String?

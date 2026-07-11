@@ -79,6 +79,8 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
     public var ownerAccountID: UUID?
     /// User- or harness-appended instructions (system override remains ``systemPrompt``).
     public var extraInstructions: String?
+    /// When true, the canonical system message replaces the entire assembled prompt (escape hatch).
+    public var systemPromptFullOverride: Bool
     /// Optional persisted routing preferences (model hint + explicit tool policy).
     public var routingPrefs: ConversationRoutingPrefs?
     /// Last durable budget snapshot for this conversation.
@@ -238,6 +240,7 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
                 parentConversationID: UUID? = nil,
                 ownerAccountID: UUID? = nil,
                 extraInstructions: String? = nil,
+                systemPromptFullOverride: Bool = false,
                 routingPrefs: ConversationRoutingPrefs? = nil,
                 budgetSnapshot: ConversationBudgetSnapshot? = nil,
                 branchChildren: [ConversationBranchRef] = [],
@@ -278,6 +281,7 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
         self.parentConversationID = parentConversationID
         self.ownerAccountID = ownerAccountID
         self.extraInstructions = extraInstructions
+        self.systemPromptFullOverride = systemPromptFullOverride
         self.routingPrefs = routingPrefs
         self.budgetSnapshot = budgetSnapshot
         self.branchChildren = branchChildren
@@ -401,6 +405,7 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
         parentConversationID = try container.decodeIfPresent(UUID.self, forKey: .parentConversationID)
         ownerAccountID = try container.decodeIfPresent(UUID.self, forKey: .ownerAccountID)
         extraInstructions = try container.decodeIfPresent(String.self, forKey: .extraInstructions)
+        systemPromptFullOverride = try container.decodeIfPresent(Bool.self, forKey: .systemPromptFullOverride) ?? false
         routingPrefs = try container.decodeIfPresent(ConversationRoutingPrefs.self, forKey: .routingPrefs)
         budgetSnapshot = try container.decodeIfPresent(ConversationBudgetSnapshot.self, forKey: .budgetSnapshot)
         branchChildren = try container.decodeIfPresent([ConversationBranchRef].self, forKey: .branchChildren) ?? []
@@ -445,6 +450,9 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
         try container.encodeIfPresent(parentConversationID, forKey: .parentConversationID)
         try container.encodeIfPresent(ownerAccountID, forKey: .ownerAccountID)
         try container.encodeIfPresent(extraInstructions, forKey: .extraInstructions)
+        if systemPromptFullOverride {
+            try container.encode(systemPromptFullOverride, forKey: .systemPromptFullOverride)
+        }
         try container.encodeIfPresent(routingPrefs, forKey: .routingPrefs)
         try container.encodeIfPresent(budgetSnapshot, forKey: .budgetSnapshot)
         if !branchChildren.isEmpty {
@@ -469,7 +477,7 @@ public struct ModelConversation: Identifiable, Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, model, messages, turns, state, showError, errorMessage, createdAt, updatedAt, systemPrompt, topic, description, isModelAvailable, agenticPhase, llmRequestPhase, interactionMode, modeProfileID, metadata, splitFromConversationID, splitThreadAfterMessageID
-        case lifecycle, resourceRunStatus, currentRunID, parentConversationID, ownerAccountID, extraInstructions, routingPrefs, budgetSnapshot, branchChildren, attachmentsCatalog, tags, lastActiveAt, controlPlaneRevision
+        case lifecycle, resourceRunStatus, currentRunID, parentConversationID, ownerAccountID, extraInstructions, systemPromptFullOverride, routingPrefs, budgetSnapshot, branchChildren, attachmentsCatalog, tags, lastActiveAt, controlPlaneRevision
         case harnessPersistenceSource, harnessPersistenceTrustClass, harnessPersistenceAgentId, harnessPersistenceCwd, transcriptIntegrity, lineageKind, origin
     }
 }

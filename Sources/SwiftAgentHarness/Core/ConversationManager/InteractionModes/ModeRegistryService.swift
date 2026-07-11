@@ -387,6 +387,9 @@ public actor ModeRegistryService {
         if o.keys.contains("includeToolGuidance"), let b = o.optionalBool(for: "includeToolGuidance") {
             copy.includeToolGuidance = b
         }
+        if o.keys.contains("omitWorkspaceConventions"), let b = o.optionalBool(for: "omitWorkspaceConventions") {
+            copy.omitWorkspaceConventions = b
+        }
         return copy
     }
 

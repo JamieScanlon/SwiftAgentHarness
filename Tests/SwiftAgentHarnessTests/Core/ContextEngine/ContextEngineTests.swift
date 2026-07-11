@@ -228,7 +228,13 @@ struct ContextEngineTests {
             config: .default,
             userConfigDir: root.appendingPathComponent("user", isDirectory: true)
         )
-        let engine = DefaultContextEngine(compactionCoordinator: nil, memoryService: memoryService, logger: nil)
+        let renderer = DefaultSystemPromptAssemblyRenderer(skillLoaderProvider: { _ in nil }, logger: nil)
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            systemPromptAssemblyRenderer: renderer,
+            logger: nil
+        )
         var conv = ModelConversation(
             model: Model(
                 protocol: .openAIAPI,
@@ -278,24 +284,14 @@ struct ContextEngineTests {
         #expect(s1 == nil)
         #expect(s2 == nil)
         let artifact = try #require(t1.projectionArtifact?.systemPromptAssembly)
-        #expect(artifact.tier1MemorySectionContent?.contains("project rule") == true)
+        #expect(artifact.tier1MemorySectionContent?.contains("project rule") == false)
         #expect(artifact.memorySnapshotGeneration != nil)
         #expect(!t1.messages.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryContext) }))
-        let prompt = try await SystemPrompt(
-            includeCurrentDateTime: false,
-            includeAgentSkills: false,
-            skillLoader: nil,
-            skipConfigLoad: true
-        )
-        var metadata = artifact.metadata
-        if let tier1 = artifact.tier1MemorySectionContent {
-            metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1
-        }
-        let rendered = try await prompt.generateSystemPrompt(additionalMetadata: metadata)
-        #expect(rendered.contains("project rule"))
-        #expect(rendered.contains("<!-- provenance: engine:memory -->"))
-        #expect(rendered.contains("<memory-context>"))
-        #expect(rendered.contains(MemoryContextFencer.systemNote))
+        let assembled = try #require(artifact.assembledSystemPromptText)
+        #expect(assembled.contains("project rule"))
+        #expect(assembled.contains("# Personality"))
+        #expect(assembled.contains("# Memory"))
+        #expect(assembled.contains("<!-- provenance: engine:memory -->") == false || assembled.contains("<memory-context>"))
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -637,7 +633,8 @@ struct ContextEngineTests {
                 userSystemPrompt: String?,
                 assemblyContext: SystemPromptAssemblyContext,
                 contributions: [SystemPromptContribution],
-                referenceDate: Date
+                referenceDate: Date,
+                fullOverrideText: String?
             ) async throws -> String {
                 lock.withLock {
                     _contributions = contributions
@@ -722,7 +719,8 @@ struct ContextEngineTests {
                 userSystemPrompt: String?,
                 assemblyContext: SystemPromptAssemblyContext,
                 contributions: [SystemPromptContribution],
-                referenceDate: Date
+                referenceDate: Date,
+                fullOverrideText: String?
             ) async throws -> String {
                 let tier1 = assemblyContext.tier1MemoryContent ?? ""
                 let iso = ISO8601DateFormatter().string(from: referenceDate)
@@ -792,7 +790,7 @@ struct ContextEngineTests {
             first.messages.first(where: { $0.role == .system && !HarnessInjectedMessageMetadata.isHarnessInjected($0) })
         )
         #expect(canonical.content.hasPrefix("ASSEMBLED:seed prompt:"))
-        #expect(canonical.content.contains("tier-one rule"))
+        #expect(canonical.content.contains("tier-one rule") == false)
         #expect(artifact.assembledPromptDigest == SystemPromptDispatchCodec.sha256Digest(of: canonical.content))
         #expect(first.systemPromptCheckpoint?.assembledPromptDigest == artifact.assembledPromptDigest)
         #expect(

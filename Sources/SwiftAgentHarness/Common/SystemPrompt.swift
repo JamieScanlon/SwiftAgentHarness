@@ -382,7 +382,11 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
             }
         }
 
-        applyMemorySection(context: assemblyContext, sections: &sections)
+        applyMemorySection(
+            context: assemblyContext,
+            sections: &sections,
+            skipWhenMemoryContributionApplied: resolved.provenance[.memory] == .memory
+        )
         if !assemblyContext.includeToolGuidance {
             sections[.toolGuidance] = ""
         }
@@ -413,8 +417,18 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
 
     private static func applyMemorySection(
         context: SystemPromptAssemblyContext,
-        sections: inout [SystemPromptSectionName: String]
+        sections: inout [SystemPromptSectionName: String],
+        skipWhenMemoryContributionApplied: Bool
     ) {
+        if skipWhenMemoryContributionApplied {
+            let memoryMode = context.memoryInjectionMode.lowercased()
+            if memoryMode == "off" {
+                sections[.memory] = ""
+            } else if memoryMode == "skills-only", !context.includeAgentSkills {
+                sections[.memory] = ""
+            }
+            return
+        }
         let memoryMode = context.memoryInjectionMode.lowercased()
         let tier1 = context.tier1MemoryContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         switch memoryMode {
@@ -435,6 +449,38 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
                 tier1Content: tier1
             )
         }
+    }
+
+    static func memoryLayerSectionOverride(
+        memoryInjectionMode: String,
+        includeAgentSkills: Bool,
+        tier1Content: String
+    ) -> String? {
+        let tier1 = tier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch memoryInjectionMode.lowercased() {
+        case "off":
+            return nil
+        case "skills-only":
+            guard includeAgentSkills else { return nil }
+            return memorySectionBody(
+                guidance: "Use retrieved memory context only when directly relevant to active skills and tool execution.",
+                tier1Content: tier1
+            )
+        default:
+            return memorySectionBody(
+                guidance: "Use retrieved memory context when it helps maintain correctness and continuity.",
+                tier1Content: tier1
+            )
+        }
+    }
+
+    private static func memorySectionBody(guidance: String, tier1Content: String) -> String {
+        var body = guidance
+        if !tier1Content.isEmpty {
+            body += "\n\n<!-- provenance: engine:memory -->\n"
+            body += MemoryContextFencer.fence(tier1Content)
+        }
+        return body
     }
 
     private static func defaultSections(

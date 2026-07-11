@@ -73,15 +73,16 @@ public enum ProviderRuntimeHooks {
     ) -> ProviderSystemPromptContribution? {
         guard let binding else { return nil }
         ProviderRegistry.ensureBootstrapped()
-        guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
-            return nil
+        if let provider = ProviderRegistry.textInferenceProvider(forBinding: binding),
+           let pluginContribution = provider.resolveSystemPromptContribution(
+               ProviderSystemPromptContext(
+                   providerID: provider.manifest.id,
+                   endpointModelId: binding.endpointModelId
+               )
+           ) {
+            return pluginContribution
         }
-        return provider.resolveSystemPromptContribution(
-            ProviderSystemPromptContext(
-                providerID: provider.manifest.id,
-                endpointModelId: binding.endpointModelId
-            )
-        )
+        return ProviderCatalogLoader.systemPromptContribution(for: binding)
     }
 
     public static func failoverClassification(

@@ -1,4 +1,17 @@
 {
   "providerId": "openai",
-  "models": {}
+  "models": {
+    "gpt-4.1": {
+      "modelFamily": "gpt-4.1"
+    }
+  },
+  "modelFamilies": {
+    "gpt-4.1": {
+      "systemPromptContribution": {
+        "sectionOverrides": {
+          "tool_call_style": "OpenAI models: prefer strict JSON tool arguments."
+        }
+      }
+    }
+  }
 }

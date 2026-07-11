@@ -1,4 +1,14 @@
 {
   "providerId": "anthropic",
-  "models": {}
+  "models": {},
+  "modelFamilies": {
+    "claude-sonnet": {
+      "systemPromptContribution": {
+        "stablePrefix": "Anthropic Claude Sonnet: favor precise, concise tool use.",
+        "sectionOverrides": {
+          "tool_call_style": "Batch independent reads; avoid redundant tool rounds."
+        }
+      }
+    }
+  }
 }

@@ -258,27 +258,33 @@ public actor OrchestratorSessionRuntimeService {
             providerContribution: providerContribution
         )
         let referenceDate = Date()
-        let modeSwitches = ContextSystemPromptModeSwitches.build(
+        let memoryBlocks: MemorySystemPromptBlocks?
+        let memoryGeneration: Int?
+        if let defaultEngine = deps.contextEngine as? DefaultContextEngine,
+           let memoryService = defaultEngine.memoryService,
+           let blocks = await memoryService.systemPromptBlocks(conversationID: conv.id) {
+            memoryBlocks = blocks
+            memoryGeneration = await memoryService.currentSnapshotGeneration(conversationID: conv.id)
+        } else {
+            memoryBlocks = nil
+            memoryGeneration = nil
+        }
+        let modeMemoryInjection = ContextSystemPromptModeSwitches.build(
             conversation: conv,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
             resolvedProfile: policy.resolvedModeProfile,
             referenceDate: referenceDate
+        ).memoryInjectionMode
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: userSystemPrompt,
+            memoryBlocks: memoryBlocks,
+            memorySnapshotGeneration: memoryGeneration,
+            modeMemoryInjection: modeMemoryInjection,
+            engineDynamicAddition: nil,
+            referenceDate: referenceDate
         )
-        var assemblyContext = modeSwitches.assemblyContext
-        if let defaultEngine = deps.contextEngine as? DefaultContextEngine,
-           let memoryService = defaultEngine.memoryService,
-           let blocks = await memoryService.systemPromptBlocks(conversationID: conv.id) {
-            let stable = blocks.stableSystemPromptSection.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !stable.isEmpty {
-                assemblyContext.tier1MemoryContent = stable
-            }
-            assemblyContext.memorySnapshotGeneration = await memoryService.currentSnapshotGeneration(conversationID: conv.id)
-        }
-        var contributions: [SystemPromptContribution] = []
-        if let providerContribution {
-            contributions.append(providerContribution)
-        }
-        contributions.append(modeSwitches.modeContribution)
 
         let renderer = DefaultSystemPromptAssemblyRenderer(
             skillLoaderProvider: { [skillActivation] conversationID in
@@ -290,9 +296,10 @@ public actor OrchestratorSessionRuntimeService {
             conversation: conv,
             policy: policy,
             userSystemPrompt: userSystemPrompt,
-            assemblyContext: assemblyContext,
-            contributions: contributions,
-            referenceDate: referenceDate
+            assemblyContext: bundle.assemblyContext,
+            contributions: bundle.contributions,
+            referenceDate: referenceDate,
+            fullOverrideText: bundle.fullOverrideText
         )
         do {
             let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
@@ -303,8 +310,11 @@ public actor OrchestratorSessionRuntimeService {
                 toolPolicySignature: policy.toolPolicySignature,
                 routingPolicyTools: policy.routingPolicyTools,
                 routingPolicySkills: policy.routingPolicySkills,
-                memorySnapshotGeneration: assemblyContext.memorySnapshotGeneration,
-                tier1MemorySectionContent: assemblyContext.tier1MemoryContent
+                memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
+                workspaceSectionContent: bundle.memorySlice.workspaceContent,
+                memoryTier1SectionContent: bundle.memorySlice.tier1Content,
+                providerContributionSignature: bundle.providerContributionSignature,
+                systemPromptFullOverride: conv.systemPromptFullOverride
             )
             try await persistenceDomain.persistSystemPromptAssemblyCheckpointIfNeededAsync(
                 conversationID: conv.id,

@@ -131,7 +131,10 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             lastContextLimitTokens: request.lastContextLimitTokens,
             lastPromptTokens: request.lastPromptTokens,
             memoryStoreVersion: memoryStoreVersion,
-            tier1MemorySectionContent: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent,
+            tier1MemorySectionContent: Self.tier1ContentForCrossTierDedup(
+                memoryTier1: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent,
+                workspace: result.projectionArtifact?.systemPromptAssembly?.workspaceSectionContent
+            ),
             rawMessages: request.messages,
             events: request.events,
             eventLogFrontier: request.eventLogFrontier,
@@ -1052,30 +1055,22 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         resolvedProfile: ResolvedModeProfile?
     ) async -> ContextEngineSystemPromptAssemblyArtifact {
         let referenceDate = Date()
-        let modeSwitches = ContextSystemPromptModeSwitches.build(
-            conversation: conversation,
-            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
-            resolvedProfile: policy.resolvedModeProfile,
-            referenceDate: referenceDate
-        )
-        let tier1 = await tier1MemorySectionContent(
+        let memoryBlocks = await loadMemoryBlocks(
             conversation: conversation,
             modeMemoryInjection: modeMemoryInjection,
             resolvedProfile: resolvedProfile
         )
-        var assemblyContext = modeSwitches.assemblyContext
-        if let tier1Content = tier1.content?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !tier1Content.isEmpty {
-            assemblyContext.tier1MemoryContent = tier1Content
-        }
-        assemblyContext.memorySnapshotGeneration = tier1.generation
-
-        var contributions: [SystemPromptContribution] = []
-        if let provider = policy.providerContribution {
-            contributions.append(provider)
-        }
-        contributions.append(modeSwitches.modeContribution)
+        let userSystemPrompt = SystemPromptAssemblyApplicator.userSystemPrompt(from: projectedMessages)
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conversation,
+            policy: policy,
+            userSystemPrompt: userSystemPrompt,
+            memoryBlocks: memoryBlocks?.blocks,
+            memorySnapshotGeneration: memoryBlocks?.generation,
+            modeMemoryInjection: modeMemoryInjection,
+            engineDynamicAddition: nil,
+            referenceDate: referenceDate
+        )
 
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,
@@ -1085,20 +1080,23 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             toolPolicySignature: policy.toolPolicySignature,
             routingPolicyTools: policy.routingPolicyTools,
             routingPolicySkills: policy.routingPolicySkills,
-            memorySnapshotGeneration: tier1.generation,
-            tier1MemorySectionContent: tier1.content
+            memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
+            workspaceSectionContent: bundle.memorySlice.workspaceContent,
+            memoryTier1SectionContent: bundle.memorySlice.tier1Content,
+            providerContributionSignature: bundle.providerContributionSignature,
+            systemPromptFullOverride: conversation.systemPromptFullOverride
         )
         var assembledSystemPromptText: String?
         if let renderer = systemPromptAssemblyRenderer {
-            let userSystemPrompt = SystemPromptAssemblyApplicator.userSystemPrompt(from: projectedMessages)
             do {
                 assembledSystemPromptText = try await renderer.render(
                     conversation: conversation,
                     policy: policy,
                     userSystemPrompt: userSystemPrompt,
-                    assemblyContext: assemblyContext,
-                    contributions: contributions,
-                    referenceDate: referenceDate
+                    assemblyContext: bundle.assemblyContext,
+                    contributions: bundle.contributions,
+                    referenceDate: referenceDate,
+                    fullOverrideText: bundle.fullOverrideText
                 )
             } catch {
                 logger?.warning("[DefaultContextEngine] system prompt assembly render failed: \(error)")
@@ -1109,17 +1107,58 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         if let assembledPromptDigest {
             dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
         }
-        if let generation = tier1.generation {
+        if let generation = bundle.memorySlice.snapshotGeneration {
             dispatchMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+        }
+        if conversation.systemPromptFullOverride {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.systemPromptFullOverrideActive] = "true"
         }
         return ContextEngineSystemPromptAssemblyArtifact(
             metadata: dispatchMetadata,
             fingerprint: fingerprint,
-            tier1MemorySectionContent: tier1.content,
-            memorySnapshotGeneration: tier1.generation,
+            tier1MemorySectionContent: bundle.memorySlice.tier1Content,
+            workspaceSectionContent: bundle.memorySlice.workspaceContent,
+            memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
             assembledSystemPromptText: assembledSystemPromptText,
             assembledPromptDigest: assembledPromptDigest
         )
+    }
+
+    private static func tier1ContentForCrossTierDedup(memoryTier1: String?, workspace: String?) -> String? {
+        let parts = [workspace, memoryTier1]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private struct LoadedMemoryBlocks: Sendable {
+        let blocks: MemorySystemPromptBlocks
+        let generation: Int?
+    }
+
+    private func loadMemoryBlocks(
+        conversation: ModelConversation,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?
+    ) async -> LoadedMemoryBlocks? {
+        switch modeMemoryInjection {
+        case "off":
+            return nil
+        case "skills-only":
+            let includeSkills = resolvedProfile?.context.includeSkills ?? true
+            guard includeSkills else { return nil }
+        default:
+            break
+        }
+        guard let memoryService else { return nil }
+        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
+            return nil
+        }
+        let hasContent = !blocks.workspaceInstructionSection.isEmpty || !blocks.memoryTier1Content.isEmpty
+        guard hasContent else { return nil }
+        let generation = await memoryService.currentSnapshotGeneration(conversationID: conversation.id)
+        return LoadedMemoryBlocks(blocks: blocks, generation: generation)
     }
 
     private struct Tier1MemorySectionContent: Sendable {
@@ -1149,11 +1188,11 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
             return Tier1MemorySectionContent(content: nil, generation: nil)
         }
-        let stable = blocks.stableSystemPromptSection.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stable.isEmpty else {
+        let memoryOnly = blocks.memoryTier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !memoryOnly.isEmpty else {
             return Tier1MemorySectionContent(content: nil, generation: nil)
         }
-        return Tier1MemorySectionContent(content: stable, generation: blocks.snapshotGeneration)
+        return Tier1MemorySectionContent(content: memoryOnly, generation: blocks.snapshotGeneration)
     }
 
 
