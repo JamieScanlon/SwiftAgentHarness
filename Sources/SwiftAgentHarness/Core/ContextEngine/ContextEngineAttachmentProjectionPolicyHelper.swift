@@ -87,7 +87,10 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             catalog: catalog,
             modelSupportsVision: modelSupportsVision ?? false,
             blobReader: blobReader,
-            conversationID: conversationID
+            conversationID: conversationID,
+            configuration: AttachmentRepresentationMaterializerConfiguration(
+                inlineByteLimit: policy.inlineByteLimit
+            )
         )
         let canonical = decisions.map {
             "\($0.attachmentID.uuidString)|\($0.disposition.rawValue)|\($0.reason)"
@@ -115,16 +118,12 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         modelSupportsVision: Bool,
         policy: ContextEngineAttachmentProjectionPolicyInput
     ) -> ConversationAttachmentProjectionDecision {
-        let trust = AttachmentInputTrustCodec.safePolicyClass(raw: descriptor.trustRaw)
         let normalizedKind = descriptor.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let byteSize = descriptor.byteSize ?? 0
         let isImage = normalizedKind == "image" || (descriptor.mimeType?.lowercased().hasPrefix("image/") == true)
         let disposition: ConversationAttachmentProjectionDisposition
         let reason: String
-        if trust == .lowTrust {
-            disposition = .searchOnly
-            reason = "low_trust"
-        } else if isImage && !modelSupportsVision {
+        if isImage && !modelSupportsVision {
             disposition = .summarize
             reason = "vision_unsupported"
         } else if byteSize > 0, byteSize <= policy.inlineByteLimit {

@@ -90,7 +90,7 @@ public struct ConversationAttachmentToolProvider: ToolProvider, ToolDescriptorHi
                 offsetLine: offsetLine,
                 limitLines: limitLines
             )
-            let wrapped = wrapIfLowTrust(descriptor: descriptor, body: body)
+            let wrapped = AttachmentProvenancePolicy.wrapIfRequired(descriptor: descriptor, content: body)
             return ToolResult(success: true, content: wrapped, toolCallId: toolCall.id)
         } catch let window as AttachmentReadWindowRequired {
             return failure(toolCall, window.guidance)
@@ -121,24 +121,6 @@ public struct ConversationAttachmentToolProvider: ToolProvider, ToolDescriptorHi
         lines.append("original_byte_count: \(bytes.count)")
         lines.append("Content is binary; text decoding is not available for this attachment.")
         return lines.joined(separator: "\n")
-    }
-
-    private func wrapIfLowTrust(descriptor: ConversationAttachmentDescriptor, body: String) -> String {
-        guard AttachmentInputTrustCodec.safePolicyClass(raw: descriptor.trustRaw) == .lowTrust else {
-            return body
-        }
-        let name = descriptor.name
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
-        return ExternalContentEnvelope.wrap(
-            body,
-            options: ExternalContentEnvelopeOptions(
-                source: .unknown,
-                from: name,
-                subject: nil,
-                includeSecurityPreamble: true
-            )
-        )
     }
 
     private func isTextLike(descriptor: ConversationAttachmentDescriptor, bytes: Data) -> Bool {

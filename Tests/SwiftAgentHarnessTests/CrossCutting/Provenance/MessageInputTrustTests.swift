@@ -58,6 +58,9 @@ struct MessageInputTrustTests {
         #expect(AttachmentInputTrustCodec.typedTrust(from: "unknown_value") == nil)
         #expect(AttachmentInputTrustCodec.safePolicyClass(raw: nil) == .lowTrust)
         #expect(AttachmentInputTrustCodec.safePolicyClass(raw: AttachmentInputTrust.scripted.rawValue) == .lowTrust)
+        #expect(AttachmentInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.userDirect.rawValue) == .trusted)
+        #expect(AttachmentInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.unknownParty.rawValue) == .lowTrust)
+        #expect(AttachmentInputTrustCodec.safePolicyClass(raw: CommEnvelopeOriginTrust.knownParty.rawValue) == .trusted)
     }
 
     @Test("attachment descriptor normalizes trustRaw and preserves known typed trust")

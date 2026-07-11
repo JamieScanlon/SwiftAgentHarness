@@ -87,6 +87,9 @@ public enum AttachmentInputTrustCodec {
         guard let sanitized else {
             return unknownFallback
         }
+        if let originTrustClass = CommEnvelopeTrustTag.executionPolicyClass(forOriginTrustRaw: sanitized) {
+            return originTrustClass
+        }
         guard let typed = AttachmentInputTrust(rawValue: sanitized) else {
             return unknownFallback
         }

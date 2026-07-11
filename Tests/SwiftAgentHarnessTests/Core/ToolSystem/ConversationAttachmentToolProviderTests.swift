@@ -180,6 +180,61 @@ struct ConversationAttachmentToolProviderTests {
         #expect(ExternalContentEnvelope.isAlreadyWrapped(result.content))
     }
 
+    @Test("read_attachment leaves user-direct content plain")
+    func userDirectAttachmentStaysPlain() async throws {
+        let harness = InMemoryHarnessSessionPersistence()
+        let attachmentID = UUID()
+        let blobId = try storeBlob(harness: harness, data: Data("trusted".utf8))
+        let descriptor = ConversationAttachmentDescriptor(
+            id: attachmentID,
+            blobId: blobId,
+            kind: "document",
+            name: "notes.txt",
+            mimeType: "text/plain",
+            byteSize: 7,
+            trustRaw: CommEnvelopeOriginTrust.userDirect.rawValue
+        )
+        let conversation = makeConversation(attachments: [descriptor])
+        let provider = makeProvider(conversation: conversation, harness: harness)
+        let call = ToolCall(
+            name: ConversationAttachmentToolProvider.readAttachmentToolName,
+            arguments: .object(["attachment_id": .string(attachmentID.uuidString)]),
+            id: "tc-user-direct"
+        )
+        let result = try await provider.executeTool(call)
+        #expect(result.success)
+        #expect(result.content == "trusted")
+        #expect(!ExternalContentEnvelope.isAlreadyWrapped(result.content))
+    }
+
+    @Test("read_attachment agent-fetched unknown-party includes web_fetch source label")
+    func agentFetchedUnknownPartyUsesWebFetchSource() async throws {
+        let harness = InMemoryHarnessSessionPersistence()
+        let attachmentID = UUID()
+        let blobId = try storeBlob(harness: harness, data: Data("fetched".utf8))
+        let descriptor = ConversationAttachmentDescriptor(
+            id: attachmentID,
+            blobId: blobId,
+            kind: "document",
+            name: "page.html",
+            mimeType: "text/html",
+            byteSize: 7,
+            addedBy: .agent,
+            trustRaw: CommEnvelopeOriginTrust.unknownParty.rawValue
+        )
+        let conversation = makeConversation(attachments: [descriptor])
+        let provider = makeProvider(conversation: conversation, harness: harness)
+        let call = ToolCall(
+            name: ConversationAttachmentToolProvider.readAttachmentToolName,
+            arguments: .object(["attachment_id": .string(attachmentID.uuidString)]),
+            id: "tc-agent-fetch"
+        )
+        let result = try await provider.executeTool(call)
+        #expect(result.success)
+        #expect(ExternalContentEnvelope.isAlreadyWrapped(result.content))
+        #expect(result.content.contains("Web fetch"))
+    }
+
     @Test("read_attachment returns honest binary marker for non-text bytes")
     func binaryAttachmentReturnsHonestMarker() async throws {
         let harness = InMemoryHarnessSessionPersistence()

@@ -24,10 +24,16 @@ public struct AttachmentMaterializedBlock: Codable, Sendable, Equatable {
 public struct AttachmentRepresentationMaterializerConfiguration: Sendable, Equatable {
     public var digestHeadMaxBytes: Int
     public var digestTailMaxBytes: Int
+    public var inlineByteLimit: Int64
 
-    public init(digestHeadMaxBytes: Int = 1_536, digestTailMaxBytes: Int = 512) {
+    public init(
+        digestHeadMaxBytes: Int = 1_536,
+        digestTailMaxBytes: Int = 512,
+        inlineByteLimit: Int64 = 256_000
+    ) {
         self.digestHeadMaxBytes = max(0, digestHeadMaxBytes)
         self.digestTailMaxBytes = max(0, digestTailMaxBytes)
+        self.inlineByteLimit = max(0, inlineByteLimit)
     }
 
     public static let `default` = AttachmentRepresentationMaterializerConfiguration()
@@ -44,8 +50,10 @@ enum AttachmentRepresentationMaterializer {
     ) -> [AttachmentMaterializedBlock] {
         let catalogByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         return decisions.compactMap { decision in
-            guard decision.disposition != .inline else { return nil }
             guard let descriptor = catalogByID[decision.attachmentID] else { return nil }
+            if decision.disposition == .inline, isImageDescriptor(descriptor) {
+                return nil
+            }
             let body = materializedBody(
                 descriptor: descriptor,
                 decision: decision,
@@ -54,6 +62,7 @@ enum AttachmentRepresentationMaterializer {
                 conversationID: conversationID,
                 configuration: configuration
             )
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return AttachmentMaterializedBlock(
                 attachmentID: decision.attachmentID,
                 attachmentName: decision.attachmentName,
@@ -79,16 +88,27 @@ enum AttachmentRepresentationMaterializer {
     ) -> String {
         switch decision.disposition {
         case .inline:
-            return ""
+            return wrapWithRecovery(
+                descriptor: descriptor,
+                core: inlineCore(
+                    descriptor: descriptor,
+                    blobReader: blobReader,
+                    conversationID: conversationID,
+                    configuration: configuration
+                ),
+                blobReader: blobReader,
+                conversationID: conversationID,
+                includeRecovery: false
+            )
         case .searchOnly:
-            return wrapIfNeeded(
+            return wrapWithRecovery(
                 descriptor: descriptor,
                 core: referenceCore(descriptor: descriptor, decision: decision),
                 blobReader: blobReader,
                 conversationID: conversationID
             )
         case .summarize:
-            return wrapIfNeeded(
+            return wrapWithRecovery(
                 descriptor: descriptor,
                 core: digestCore(
                     descriptor: descriptor,
@@ -104,12 +124,40 @@ enum AttachmentRepresentationMaterializer {
         }
     }
 
+    private static func inlineCore(
+        descriptor: ConversationAttachmentDescriptor,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID,
+        configuration: AttachmentRepresentationMaterializerConfiguration
+    ) -> String {
+        var lines = ["[attachment inline]"]
+        lines.append("name: \(displayName(descriptor))")
+        lines.append("kind: \(descriptor.kind)")
+        if let mimeType = descriptor.mimeType, !mimeType.isEmpty {
+            lines.append("mime_type: \(mimeType)")
+        }
+        lines.append("attachment_id: \(descriptor.id.uuidString)")
+        guard let bytes = loadBytes(descriptor: descriptor, blobReader: blobReader, conversationID: conversationID) else {
+            lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
+            return lines.joined(separator: "\n")
+        }
+        let originalByteCount = bytes.count
+        lines.append("original_byte_count: \(originalByteCount)")
+        if let text = utf8Text(from: bytes, mimeType: descriptor.mimeType, name: descriptor.name) {
+            lines.append("content:")
+            lines.append(inlineTextContent(text: text, inlineByteLimit: configuration.inlineByteLimit))
+        } else {
+            lines.append("binary attachment (\(originalByteCount) bytes)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private static func referenceCore(
         descriptor: ConversationAttachmentDescriptor,
         decision: ConversationAttachmentProjectionDecision
     ) -> String {
         var lines = ["[attachment reference]"]
-        lines.append("name: \(descriptor.name)")
+        lines.append("name: \(displayName(descriptor))")
         lines.append("kind: \(descriptor.kind)")
         if let mimeType = descriptor.mimeType, !mimeType.isEmpty {
             lines.append("mime_type: \(mimeType)")
@@ -133,7 +181,7 @@ enum AttachmentRepresentationMaterializer {
         configuration: AttachmentRepresentationMaterializerConfiguration
     ) -> String {
         var lines = ["[attachment digest]"]
-        lines.append("name: \(descriptor.name)")
+        lines.append("name: \(displayName(descriptor))")
         lines.append("kind: \(descriptor.kind)")
         if let mimeType = descriptor.mimeType, !mimeType.isEmpty {
             lines.append("mime_type: \(mimeType)")
@@ -149,59 +197,35 @@ enum AttachmentRepresentationMaterializer {
             }
             return lines.joined(separator: "\n")
         }
-        guard let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              !blobId.isEmpty,
-              let blobReader else {
+        guard let bytes = loadBytes(descriptor: descriptor, blobReader: blobReader, conversationID: conversationID) else {
             lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
             return lines.joined(separator: "\n")
         }
-        let bytes: Data
-        do {
-            guard let loaded = try blobReader.loadBytes(blobId, conversationID) else {
-                lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
-                return lines.joined(separator: "\n")
-            }
-            bytes = loaded
-        } catch {
-            lines.append(SessionBlobMessageHydration.unavailableMarker(name: descriptor.name))
-            return lines.joined(separator: "\n")
-        }
-        let originalByteCount = bytes.count
-        lines.append("original_byte_count: \(originalByteCount)")
-        if isImage {
-            lines.append("image attachment (\(originalByteCount) bytes)")
-        } else if let text = utf8Text(from: bytes, mimeType: descriptor.mimeType, name: descriptor.name) {
-            lines.append("preview:")
-            lines.append(textDigestPreview(
-                text: text,
-                originalByteCount: originalByteCount,
-                configuration: configuration
-            ))
-        } else {
-            lines.append("binary attachment (\(originalByteCount) bytes)")
-        }
+        let preview = AttachmentDigestProducer.produce(
+            descriptor: descriptor,
+            bytes: bytes,
+            modelSupportsVision: modelSupportsVision,
+            configuration: configuration
+        )
+        lines.append(preview)
         return lines.joined(separator: "\n")
     }
 
-    private static func wrapIfNeeded(
+    private static func wrapWithRecovery(
         descriptor: ConversationAttachmentDescriptor,
         core: String,
         blobReader: AttachmentBlobReading?,
-        conversationID: UUID
+        conversationID: UUID,
+        includeRecovery: Bool = true
     ) -> String {
-        let recovery = recoveryFooter(descriptor: descriptor, blobReader: blobReader, conversationID: conversationID)
-        let trust = AttachmentInputTrustCodec.safePolicyClass(raw: descriptor.trustRaw)
-        let combined = core + "\n" + recovery
-        guard trust == .lowTrust else { return combined }
-        return ExternalContentEnvelope.wrap(
-            combined,
-            options: ExternalContentEnvelopeOptions(
-                source: .unknown,
-                from: sanitizedAttachmentName(descriptor.name),
-                subject: nil,
-                includeSecurityPreamble: true
-            )
-        )
+        let combined: String
+        if includeRecovery {
+            let recovery = recoveryFooter(descriptor: descriptor, blobReader: blobReader, conversationID: conversationID)
+            combined = core + "\n" + recovery
+        } else {
+            combined = core
+        }
+        return AttachmentProvenancePolicy.wrapIfRequired(descriptor: descriptor, content: combined)
     }
 
     private static func recoveryFooter(
@@ -224,7 +248,35 @@ enum AttachmentRepresentationMaterializer {
         return lines.joined(separator: "\n")
     }
 
-    private static func textDigestPreview(
+    private static func loadBytes(
+        descriptor: ConversationAttachmentDescriptor,
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> Data? {
+        guard let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !blobId.isEmpty,
+              let blobReader else {
+            return nil
+        }
+        do {
+            return try blobReader.loadBytes(blobId, conversationID)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func inlineTextContent(text: String, inlineByteLimit: Int64) -> String {
+        let limit = Int(inlineByteLimit)
+        guard limit > 0, text.utf8.count > limit else { return text }
+        return ToolResultSpillEnvelope.previewPrefix(for: text, maxBytes: limit)
+            + "\n… [\(text.utf8.count - limit) bytes truncated for inline budget] …"
+    }
+
+    private static func displayName(_ descriptor: ConversationAttachmentDescriptor) -> String {
+        AttachmentProvenancePolicy.sanitizedAttachmentName(descriptor.name)
+    }
+
+    static func textDigestPreview(
         text: String,
         originalByteCount: Int,
         configuration: AttachmentRepresentationMaterializerConfiguration
@@ -256,7 +308,7 @@ enum AttachmentRepresentationMaterializer {
         return ""
     }
 
-    private static func utf8Text(from bytes: Data, mimeType: String?, name: String) -> String? {
+    static func utf8Text(from bytes: Data, mimeType: String?, name: String) -> String? {
         if isTextLike(mimeType: mimeType, name: name),
            let decoded = String(data: bytes, encoding: .utf8) {
             return decoded
@@ -281,15 +333,9 @@ enum AttachmentRepresentationMaterializer {
             .contains(ext)
     }
 
-    private static func isImageDescriptor(_ descriptor: ConversationAttachmentDescriptor) -> Bool {
+    static func isImageDescriptor(_ descriptor: ConversationAttachmentDescriptor) -> Bool {
         let normalizedKind = descriptor.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalizedKind == "image" { return true }
         return descriptor.mimeType?.lowercased().hasPrefix("image/") == true
-    }
-
-    private static func sanitizedAttachmentName(_ name: String) -> String {
-        name
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
     }
 }

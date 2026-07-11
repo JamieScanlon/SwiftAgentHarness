@@ -93,6 +93,8 @@ extension ConversationManager {
             let blobId = SessionBlobImageRef.parsePath(resource.filePath)
                 ?? SessionBlobImageRef.parsePath(resource.thumbnailPath)
             let stat = blobId.flatMap { try? sessionHarness.statBlob(blobId: $0) }
+            let addedBy: ConversationAttachmentAddedBy = .user
+            let trustRaw = normalizedTrust ?? AttachmentProvenancePolicy.defaultTrustRaw(for: addedBy)
             catalog.append(
                 ConversationAttachmentDescriptor(
                     id: resource.id,
@@ -102,8 +104,8 @@ extension ConversationManager {
                     mimeType: stat?.mimeType,
                     byteSize: stat.map { Int64($0.size) },
                     addedAt: now,
-                    addedBy: .user,
-                    trustRaw: normalizedTrust
+                    addedBy: addedBy,
+                    trustRaw: trustRaw
                 )
             )
             seen.insert(resource.id)

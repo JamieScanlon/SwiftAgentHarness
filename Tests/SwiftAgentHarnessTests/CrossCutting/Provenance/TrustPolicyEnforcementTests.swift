@@ -200,7 +200,7 @@ struct TrustPolicyEnforcementTests {
         #expect(ignored.safeDefaultClass == .lowTrust)
     }
 
-    @Test("attachment projection helper is trust and capability aware")
+    @Test("attachment projection helper is size and capability aware")
     func attachmentProjectionDecisionMatrix() {
         let trustedImage = ConversationAttachmentDescriptor(
             id: UUID(),
@@ -218,8 +218,16 @@ struct TrustPolicyEnforcementTests {
             byteSize: 99_999_999,
             trustRaw: AttachmentInputTrust.scripted.rawValue
         )
+        let unknownPartySmall = ConversationAttachmentDescriptor(
+            id: UUID(),
+            kind: "document",
+            name: "fetched.txt",
+            mimeType: "text/plain",
+            byteSize: 1_024,
+            trustRaw: CommEnvelopeOriginTrust.unknownParty.rawValue
+        )
         let artifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjection(
-            catalog: [trustedImage, lowTrustDoc],
+            catalog: [trustedImage, lowTrustDoc, unknownPartySmall],
             modelSupportsVision: false,
             policy: ContextEngineAttachmentProjectionPolicyInput(
                 enabled: true,
@@ -230,9 +238,36 @@ struct TrustPolicyEnforcementTests {
         #expect(artifact != nil)
         let trustedDecision = artifact?.decisions.first(where: { $0.attachmentName == "snapshot.png" })
         let lowTrustDecision = artifact?.decisions.first(where: { $0.attachmentName == "scripted.txt" })
+        let unknownDecision = artifact?.decisions.first(where: { $0.attachmentName == "fetched.txt" })
         #expect(trustedDecision?.disposition == .summarize)
         #expect(trustedDecision?.reason == "vision_unsupported")
         #expect(lowTrustDecision?.disposition == .searchOnly)
-        #expect(lowTrustDecision?.reason == "low_trust")
+        #expect(lowTrustDecision?.reason == "over_budget")
+        #expect(unknownDecision?.disposition == .inline)
+        #expect(unknownDecision?.reason == "within_inline_budget")
+    }
+
+    @Test("attachment catalog merge defaults user attachments to user-direct trust")
+    func attachmentCatalogMergeDefaultsUserDirectTrust() async throws {
+        let (stack, _, root) = try HarnessConversationTestFixtures.makeLocalPersistenceStack(label: "trust-default")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let conversation = try stack.conversationManager.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        let resource = CachedResource(id: UUID(), name: "notes.txt", fileType: "document")
+        try stack.conversationManager.mergeAttachmentsCatalog(
+            conversationID: conversation.id,
+            resources: [resource],
+            attachmentTrustRaw: nil
+        )
+        let reloaded = try #require(stack.conversationManager.modelConversation(id: conversation.id))
+        #expect(reloaded.attachmentsCatalog.count == 1)
+        #expect(reloaded.attachmentsCatalog[0].trustRaw == CommEnvelopeOriginTrust.userDirect.rawValue)
     }
 }
