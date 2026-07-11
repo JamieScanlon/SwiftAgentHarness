@@ -78,6 +78,8 @@ recalled chunk
         #expect(text.contains("# Memory"))
         #expect(text.contains("frozen project rule"))
         #expect(text.contains("<!-- provenance: engine:memory -->"))
+        #expect(text.contains("<memory-context>"))
+        #expect(text.contains(MemoryContextFencer.systemNote))
         #expect(!text.contains("[Memory Context]"))
     }
 }

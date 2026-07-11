@@ -235,6 +235,8 @@ struct SystemPromptModeContextSwitchTests {
         #expect(result.contains("# Memory"))
         #expect(result.contains("frozen index body"))
         #expect(result.contains("<!-- provenance: engine:memory -->"))
+        #expect(result.contains("<memory-context>"))
+        #expect(result.contains(MemoryContextFencer.systemNote))
     }
 
     @Test("skills-only with includeSkills false suppresses memory section")

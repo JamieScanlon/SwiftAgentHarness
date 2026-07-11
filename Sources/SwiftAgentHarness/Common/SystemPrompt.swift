@@ -450,7 +450,7 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         if !tier1Content.isEmpty {
             body += """
 <!-- provenance: engine:memory -->
-\(tier1Content)
+\(MemoryContextFencer.fence(tier1Content))
 
 """
         }

@@ -294,6 +294,8 @@ struct ContextEngineTests {
         let rendered = try await prompt.generateSystemPrompt(additionalMetadata: metadata)
         #expect(rendered.contains("project rule"))
         #expect(rendered.contains("<!-- provenance: engine:memory -->"))
+        #expect(rendered.contains("<memory-context>"))
+        #expect(rendered.contains(MemoryContextFencer.systemNote))
         try? FileManager.default.removeItem(at: root)
     }
 
