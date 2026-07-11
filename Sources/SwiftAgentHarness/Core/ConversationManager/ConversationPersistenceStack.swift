@@ -544,12 +544,21 @@ final class ConversationPersistenceStack {
             role: message.role,
             activeMessages: lineageMessages
         )
+        let addedBy: ConversationAttachmentAddedBy = message.role == .user ? .user : .agent
+        let ingestResult = try AttachmentIngestService.ingestImages(
+            conversationID: conversationID,
+            images: message.images,
+            harness: harness,
+            conversationManager: conversationManager,
+            attachmentTrustRaw: message.inputTrustRaw,
+            addedBy: addedBy
+        )
         let persistedMessage = Message(
             id: message.id,
             role: message.role,
             content: message.content,
             timestamp: persistedTimestamp,
-            images: message.images,
+            images: ingestResult.refOnlyImages,
             toolCalls: message.toolCalls,
             toolCallId: message.toolCallId,
             responseFormat: message.responseFormat,
@@ -588,7 +597,8 @@ final class ConversationPersistenceStack {
             from: persistedMessage,
             sequence: v2Sequence,
             parentEntryId: parentEntryId,
-            transcriptRunID: resolvedTranscriptRunID
+            transcriptRunID: resolvedTranscriptRunID,
+            attachmentIngestRefs: ingestResult.ingestRefs.isEmpty ? nil : ingestResult.ingestRefs
         )
         try harness.appendMirroredTranscriptEntry(conversationID: conversationID, entry: entry)
         conversationManager.appendPersistedMessageToRegistry(persistedMessage, conversationID: conversationID)

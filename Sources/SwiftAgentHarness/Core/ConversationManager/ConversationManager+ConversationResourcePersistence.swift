@@ -115,6 +115,12 @@ extension ConversationManager {
         _ = try applyConversationResourceCatalogPatch(conversation)
     }
 
+    func catalogAttachmentID(forBlobId blobId: String, conversationID: UUID) -> UUID? {
+        let normalized = blobId.lowercased()
+        guard let conversation = modelConversation(id: conversationID) else { return nil }
+        return conversation.attachmentsCatalog.first(where: { $0.blobId?.lowercased() == normalized })?.id
+    }
+
     /// Durable hydration source for runtime budget ledger startup.
     func budgetLedgerHydrationSeeds() -> [BudgetLedgerHydrationSeed] {
         let records = (try? sessionBackend.listCatalogConversations()) ?? []

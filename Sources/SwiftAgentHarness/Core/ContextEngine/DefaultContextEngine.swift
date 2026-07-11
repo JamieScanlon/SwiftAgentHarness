@@ -1143,6 +1143,16 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             priorAttachmentProjection: policy.priorAttachmentProjection,
             pendingCacheBreakEvents: policy.pendingCacheBreakEvents
         )
+        if let attachmentArtifact {
+            projected = CatalogVisionImageProjector.apply(
+                messages: projected,
+                catalog: policy.attachmentCatalog,
+                effectiveDecisions: attachmentArtifact.decisions,
+                blobReader: policy.attachmentBlobReader,
+                conversationID: conversation.id,
+                modelSupportsVision: policy.modelSupportsVision ?? false
+            )
+        }
         let attachmentSectionContent = attachmentArtifact.flatMap {
             AttachmentRepresentationMaterializer.attachmentsSectionBody(blocks: $0.materializedBlocks)
         }

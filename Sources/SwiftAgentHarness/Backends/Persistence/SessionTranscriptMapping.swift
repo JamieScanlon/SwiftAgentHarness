@@ -11,7 +11,8 @@ enum SessionTranscriptMapping {
         sequence: Int,
         parentEntryId: SessionEntryID?,
         transcriptRunID: UUID? = nil,
-        finishReason: String? = nil
+        finishReason: String? = nil,
+        attachmentIngestRefs: [AttachmentIngestRef]? = nil
     ) throws -> SessionTranscriptEntry {
         let roleType: SessionTranscriptEntryType = message.role == .system ? .system : .message
         let contentBlocks = HarnessMessageEnvelopeStore.envelope(for: message.id)?.contentBlocks
@@ -19,7 +20,8 @@ enum SessionTranscriptMapping {
             from: message,
             transcriptRunID: transcriptRunID,
             finishReason: finishReason,
-            contentBlocks: contentBlocks
+            contentBlocks: contentBlocks,
+            attachmentIngestRefs: attachmentIngestRefs
         )
         return SessionTranscriptEntry(
             sequence: sequence,

@@ -12,21 +12,40 @@ struct MessageTranscriptAttachmentWire: Codable, Sendable, Equatable {
     var name: String
     var mimeType: String?
     var trust: String?
+    var attachmentId: UUID?
 
-    init(blobId: String, kind: String, name: String, mimeType: String? = nil, trust: String? = nil) {
+    init(
+        blobId: String,
+        kind: String,
+        name: String,
+        mimeType: String? = nil,
+        trust: String? = nil,
+        attachmentId: UUID? = nil
+    ) {
         self.blobId = blobId.lowercased()
         self.kind = kind
         self.name = name
         self.mimeType = mimeType
         self.trust = trust
+        self.attachmentId = attachmentId
     }
 
-    init(from image: Message.Image, trust: String?) {
+    init(from image: Message.Image, trust: String?, attachmentId: UUID? = nil) {
         blobId = SessionBlobImageRef.parsePath(image.path) ?? ""
         kind = "image"
         name = image.name
         mimeType = nil
         self.trust = trust
+        self.attachmentId = attachmentId
+    }
+
+    init(from ingestRef: AttachmentIngestRef) {
+        blobId = ingestRef.blobId
+        kind = ingestRef.kind
+        name = ingestRef.name
+        mimeType = ingestRef.mimeType
+        trust = ingestRef.trust
+        attachmentId = ingestRef.attachmentId
     }
 
     func asMessageImage() -> Message.Image? {
@@ -147,7 +166,8 @@ struct MessageTranscriptPayload: Codable, Sendable, Equatable {
         from message: Message,
         transcriptRunID: UUID? = nil,
         finishReason: String? = nil,
-        contentBlocks: [HarnessContentBlock]? = nil
+        contentBlocks: [HarnessContentBlock]? = nil,
+        attachmentIngestRefs: [AttachmentIngestRef]? = nil
     ) {
         v = Self.currentVersion
         id = message.id
@@ -158,9 +178,14 @@ struct MessageTranscriptPayload: Codable, Sendable, Equatable {
         toolCallNames = nil
         toolCalls = message.toolCalls.isEmpty ? nil : message.toolCalls.map(MessageTranscriptToolCallWire.init(from:))
         let trust = message.role == .user ? MessageInputTrustCodec.sanitizedInputTrustRaw(message.inputTrustRaw) : nil
-        let refs = message.images.compactMap { image -> MessageTranscriptAttachmentWire? in
-            guard SessionBlobImageRef.parsePath(image.path) != nil else { return nil }
-            return MessageTranscriptAttachmentWire(from: image, trust: trust)
+        let refs: [MessageTranscriptAttachmentWire]
+        if let attachmentIngestRefs, !attachmentIngestRefs.isEmpty {
+            refs = attachmentIngestRefs.map(MessageTranscriptAttachmentWire.init(from:))
+        } else {
+            refs = message.images.compactMap { image -> MessageTranscriptAttachmentWire? in
+                guard SessionBlobImageRef.parsePath(image.path) != nil else { return nil }
+                return MessageTranscriptAttachmentWire(from: image, trust: trust)
+            }
         }
         attachmentRefs = refs.isEmpty ? nil : refs
         self.transcriptRunID = transcriptRunID
@@ -263,7 +288,8 @@ enum MessageTranscriptPayloadCodec {
         from message: Message,
         transcriptRunID: UUID? = nil,
         finishReason: String? = nil,
-        contentBlocks: [HarnessContentBlock]? = nil
+        contentBlocks: [HarnessContentBlock]? = nil,
+        attachmentIngestRefs: [AttachmentIngestRef]? = nil
     ) throws -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
@@ -271,7 +297,8 @@ enum MessageTranscriptPayloadCodec {
             from: message,
             transcriptRunID: transcriptRunID,
             finishReason: finishReason,
-            contentBlocks: contentBlocks
+            contentBlocks: contentBlocks,
+            attachmentIngestRefs: attachmentIngestRefs
         )
         let data = try enc.encode(payload)
         guard let json = String(data: data, encoding: .utf8) else {
