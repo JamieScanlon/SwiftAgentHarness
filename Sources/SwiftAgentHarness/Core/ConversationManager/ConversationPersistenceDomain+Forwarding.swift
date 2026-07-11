@@ -33,6 +33,25 @@ extension ConversationPersistenceDomain {
         stack.harnessSessionPersistence
     }
 
+    func readAttachmentBytes(
+        attachmentID: UUID,
+        conversationID: UUID
+    ) throws -> (ConversationAttachmentDescriptor, Data) {
+        guard let conversation = modelConversation(id: conversationID) else {
+            throw ConversationAttachmentBlobAccessError.attachmentNotFoundInConversation(attachmentID: attachmentID)
+        }
+        let descriptor = try ConversationAttachmentBlobAccess.resolve(
+            attachmentID: attachmentID,
+            catalog: conversation.attachmentsCatalog
+        )
+        let data = try ConversationAttachmentBlobAccess.loadBytes(
+            descriptor: descriptor,
+            conversationID: conversationID,
+            harness: harnessSessionPersistence
+        )
+        return (descriptor, data)
+    }
+
     func firstConversation(excluding conversationID: UUID) -> ModelConversation? {
         stack.conversationManager.firstConversation(excluding: conversationID)
     }

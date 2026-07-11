@@ -9,7 +9,7 @@ struct LeastPrivilegeModeProfileTests {
     private static let defaultMachineSpawnProfileID = "subagent-minimal"
 
     private static let memoryExtractionAllowedTools = [
-        "edit_file", "read_file", "write_file",
+        "edit_file", "read_attachment", "read_file", "write_file",
     ]
 
     private static let memoryActiveRecallAllowedTools = [
@@ -18,7 +18,7 @@ struct LeastPrivilegeModeProfileTests {
     ]
 
     private static let privilegedCandidateTools = [
-        "read_file", "write_file", "edit_file", "glob", "grep", "bash",
+        "read_file", "read_attachment", "write_file", "edit_file", "glob", "grep", "bash",
         AgentPlanToolProvider.getPlanToolName,
         "spawn_sub_agent",
         ConversationsToolProvider.listConversationsToolName,

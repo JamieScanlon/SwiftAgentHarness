@@ -16,6 +16,11 @@ enum ToolPolicyArgumentExtractor {
                 return [canonicalizePath(path)]
             }
             return []
+        case "read_attachment":
+            if let attachmentID = stringValue(arguments, keys: ["attachment_id"]) {
+                return [attachmentID]
+            }
+            return []
         case "web_fetch":
             if let url = stringValue(arguments, keys: ["url"]) {
                 return [normalizeURL(url)]

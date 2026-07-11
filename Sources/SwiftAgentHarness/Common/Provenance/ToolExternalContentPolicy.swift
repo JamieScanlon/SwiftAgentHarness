@@ -35,6 +35,7 @@ enum ToolExternalContentPolicy {
         ContextCompactionToolProvider.compactConversationToolName,
         "activate_skill",
         "list_skills",
+        ConversationAttachmentToolProvider.readAttachmentToolName,
     ]
 
     private static let webFetchTools: Set<String> = ["web_fetch"]

@@ -702,7 +702,10 @@ enum ModeProfileBuiltInCatalog {
     static func machineProfiles(seedVersion v: Int) -> [ResolvedModeProfile] {
         let disabledModel = ModeProfileModelSlice(thinkingConfig: .disabled)
         let denyAllSubAgents = ModeProfileSubAgentsSlice(allow: [])
-        let memoryFileTools = ModeProfileToolsSlice(allow: ["read_file", "write_file", "edit_file"], deny: [])
+        let memoryFileTools = ModeProfileToolsSlice(
+            allow: ["read_file", "read_attachment", "write_file", "edit_file"],
+            deny: []
+        )
         // Suppress (not just empty) the skills + tool-guidance prompt sections so the chat preamble carries no dead tokens.
         let leanMachineContext = ModeProfileContextSlice(includeSkills: false, includeToolGuidance: false)
 

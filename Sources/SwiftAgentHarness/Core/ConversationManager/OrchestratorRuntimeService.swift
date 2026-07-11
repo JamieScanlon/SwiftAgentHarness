@@ -561,6 +561,20 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        let attachmentPersistence = deps.persistenceDomain
+        let attachmentConversation = activeConversation
+        providers.append(
+            ConversationAttachmentToolProvider(
+                resolveConversation: { attachmentConversation },
+                readAttachmentBytes: { attachmentID, conversationID in
+                    try await attachmentPersistence.readAttachmentBytes(
+                        attachmentID: attachmentID,
+                        conversationID: conversationID
+                    )
+                },
+                logger: logger
+            )
+        )
         providers.append(
             AgentPlanToolProvider(
                 dataProvider: toolData,

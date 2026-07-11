@@ -998,6 +998,55 @@ struct ContextEngineTests {
         #expect(assembledPrompt.contains("image attached; active model cannot view images"))
         #expect(assembledPrompt.contains("[attachment reference]"))
         #expect(!assembledPrompt.contains("name:summarize"))
+        #expect(referenceBlock?.body.contains("Use read_attachment with attachment_id") == true)
+    }
+
+    @Test("search_only materialized attachment_id resolves through catalog ACL for read_attachment")
+    func searchOnlyAttachmentReadableFromCatalog() async throws {
+        let harness = InMemoryHarnessSessionPersistence()
+        let conversationID = UUID()
+        let attachmentID = UUID()
+        let body = "promoted attachment text"
+        let blobRef = try harness.putBlob(
+            data: Data(body.utf8),
+            durability: .durable,
+            originalName: "notes.txt",
+            mimeType: "text/plain",
+            trust: AttachmentInputTrust.directUserEntry.rawValue,
+            ttlSeconds: nil,
+            lane: .inbound
+        )
+        let descriptor = ConversationAttachmentDescriptor(
+            id: attachmentID,
+            blobId: blobRef.id,
+            kind: "document",
+            name: "notes.txt",
+            mimeType: "text/plain",
+            byteSize: Int64(body.utf8.count),
+            trustRaw: AttachmentInputTrust.directUserEntry.rawValue
+        )
+        let decision = ConversationAttachmentProjectionDecision(
+            attachmentID: attachmentID,
+            attachmentName: descriptor.name,
+            attachmentKind: descriptor.kind,
+            disposition: .searchOnly,
+            reason: "over_budget"
+        )
+        let blocks = AttachmentRepresentationMaterializer.materialize(
+            decisions: [decision],
+            catalog: [descriptor],
+            modelSupportsVision: true,
+            blobReader: AttachmentBlobReading.harness(harness, conversationID: conversationID),
+            conversationID: conversationID
+        )
+        let referenceBlock = try #require(blocks.first)
+        #expect(referenceBlock.body.contains("read_attachment"))
+        let loaded = try ConversationAttachmentBlobAccess.loadBytes(
+            descriptor: descriptor,
+            conversationID: conversationID,
+            harness: harness
+        )
+        #expect(String(data: loaded, encoding: .utf8) == body)
     }
 
     @Test("DefaultContextEngine emits pre-compaction memory flush spec after successful flush")

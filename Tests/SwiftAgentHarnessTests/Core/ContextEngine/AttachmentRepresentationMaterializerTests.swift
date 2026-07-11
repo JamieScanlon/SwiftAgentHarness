@@ -63,8 +63,9 @@ struct AttachmentRepresentationMaterializerTests {
         #expect(block.body.contains("bytes elided"))
         #expect(block.body.contains("attachment_id: \(descriptor.id.uuidString)"))
         #expect(block.body.contains("blob_id: \(blobId)"))
-        #expect(block.body.contains("Use read_file with offset/limit to read more."))
-        #expect(!block.body.contains("name:summarize"))
+        #expect(block.body.contains("Use read_attachment with attachment_id \(descriptor.id.uuidString)"))
+        #expect(!block.body.contains("read_file"))
+        #expect(!block.body.contains("read_path:"))
     }
 
     @Test("Reference disposition emits metadata line and recovery instruction")
@@ -97,7 +98,9 @@ struct AttachmentRepresentationMaterializerTests {
         #expect(block.body.contains("kind: document"))
         #expect(block.body.contains("mime_type: application/pdf"))
         #expect(block.body.contains("byte_size: 4000000"))
-        #expect(block.body.contains("Use read_file with offset/limit to read more."))
+        #expect(block.body.contains("attachment_id: \(descriptor.id.uuidString)"))
+        #expect(block.body.contains("Use read_attachment with attachment_id \(descriptor.id.uuidString)"))
+        #expect(!block.body.contains("read_file"))
     }
 
     @Test("Vision-unsupported image digest is an honest capability marker")

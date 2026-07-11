@@ -117,7 +117,10 @@ enum AttachmentRepresentationMaterializer {
         if let byteSize = descriptor.byteSize {
             lines.append("byte_size: \(byteSize)")
         }
-        lines.append("reason: \(decision.reason)")
+        lines.append("attachment_id: \(descriptor.id.uuidString)")
+        if !decision.reason.isEmpty {
+            lines.append("reason: \(decision.reason)")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -212,14 +215,12 @@ enum AttachmentRepresentationMaterializer {
         if let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !blobId.isEmpty {
             lines.append("blob_id: \(blobId)")
-            if let blobReader,
-               let path = try? blobReader.blobPath(blobId),
-               !path.path.isEmpty {
-                lines.append("read_path: \(path.path)")
-            }
         }
         _ = conversationID
-        lines.append("Use read_file with offset/limit to read more.")
+        _ = blobReader
+        lines.append(
+            "Use read_attachment with attachment_id \(descriptor.id.uuidString) and optional offset/limit to read more."
+        )
         return lines.joined(separator: "\n")
     }
 

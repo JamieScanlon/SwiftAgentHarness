@@ -108,7 +108,7 @@ struct ModeRegistryTests {
         let minimal = try await registry.resolve(modeId: "subagent-minimal")
         #expect(minimal.tools.allow == [])
         let extraction = try await registry.resolve(modeId: "memory-extraction")
-        #expect(extraction.tools.allow?.sorted() == ["edit_file", "read_file", "write_file"].sorted())
+        #expect(extraction.tools.allow?.sorted() == ["edit_file", "read_attachment", "read_file", "write_file"].sorted())
         #expect(!(extraction.tools.allow ?? []).contains("spawn_sub_agent"))
     }
 
