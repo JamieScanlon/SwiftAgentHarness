@@ -546,8 +546,8 @@ struct MemorySubAgentSpawnAdapterTests {
         #expect(fenced.contains("[user] remember grafana"))
     }
 
-    @Test("Background extraction uses isolated spawn and fenced transcript")
-    func backgroundExtractionUsesIsolatedSpawn() async throws {
+    @Test("Background extraction uses fork spawn with directive in user message")
+    func backgroundExtractionUsesForkSpawn() async throws {
         let capture = ExtractionSpawnCapture()
         let session = MemorySessionContext(
             conversationID: UUID(),
@@ -595,11 +595,14 @@ struct MemorySubAgentSpawnAdapterTests {
         let spawnRequest = await capture.spawnRequest
         let runPayload = await capture.waitForRun()
         let spawn = try #require(spawnRequest)
-        #expect(spawn.context == .isolated)
-        #expect(spawn.userMessageID == nil)
+        #expect(spawn.context == .fork)
+        #expect(spawn.userMessageID == request.recentMessages.last(where: { $0.role == .user })?.id)
         #expect(spawn.interactionMode == "memory-extraction")
         #expect(spawn.toolsAllow == nil)
+        #expect(spawn.userSystemPrompt == nil)
+        #expect(spawn.prompt?.contains("<fork-boilerplate>") == true)
         #expect(spawn.prompt?.contains("<extraction-input>") == true)
+        #expect(runPayload?.contains("<fork-boilerplate>") == true)
         #expect(runPayload?.contains("<extraction-input>") == true)
     }
 

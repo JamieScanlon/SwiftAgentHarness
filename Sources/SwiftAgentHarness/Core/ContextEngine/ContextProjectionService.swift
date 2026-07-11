@@ -88,6 +88,13 @@ actor ContextProjectionService {
         lastSystemPromptAssemblyByConversationID[conversationID]
     }
 
+    func seedSystemPromptAssembly(
+        conversationID: UUID,
+        artifact: ContextEngineSystemPromptAssemblyArtifact
+    ) {
+        lastSystemPromptAssemblyByConversationID[conversationID] = artifact
+    }
+
     func projectedMemorySelectionKeysSnapshot(conversationID: UUID) -> Set<String> {
         Set(lastProjectedMemorySelectionKeysByConversationID[conversationID] ?? [])
     }

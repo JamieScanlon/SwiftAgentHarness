@@ -279,7 +279,8 @@ public enum HarnessRuntimeSessionFactory {
             messaging: messaging,
             orchestrator: orchestrator,
             startup: conversationStartupService,
-            lifecycle: lifecycle
+            lifecycle: lifecycle,
+            contextProjection: contextProjectionService
         )
         subAgentCompletionRuntimeService.installSpawn(subAgentSpawnService)
         orchestratorRuntimeService.installSpawn(subAgentSpawnService)

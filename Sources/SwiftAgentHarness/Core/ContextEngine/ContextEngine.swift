@@ -433,6 +433,46 @@ public struct ContextEnginePrepareSubagentSpawnRequest: Sendable {
     let permissionPolicyByToolName: [String: SubAgentPermissionPolicy]
     let trustLevelByToolName: [String: SubAgentTrustLevel]
     let preApprovedToolNames: Set<String>
+    let compositionMode: SubagentPromptCompositionMode?
+    let parentConversationID: UUID?
+    let taskDescription: String?
+    let spawnPrompt: String?
+    let spawnUserSystemPrompt: String?
+
+    init(
+        conversationID: UUID,
+        runID: UUID?,
+        candidateToolNames: [String],
+        permissionPolicyByToolName: [String: SubAgentPermissionPolicy],
+        trustLevelByToolName: [String: SubAgentTrustLevel],
+        preApprovedToolNames: Set<String>,
+        compositionMode: SubagentPromptCompositionMode? = nil,
+        parentConversationID: UUID? = nil,
+        taskDescription: String? = nil,
+        spawnPrompt: String? = nil,
+        spawnUserSystemPrompt: String? = nil
+    ) {
+        self.conversationID = conversationID
+        self.runID = runID
+        self.candidateToolNames = candidateToolNames
+        self.permissionPolicyByToolName = permissionPolicyByToolName
+        self.trustLevelByToolName = trustLevelByToolName
+        self.preApprovedToolNames = preApprovedToolNames
+        self.compositionMode = compositionMode
+        self.parentConversationID = parentConversationID
+        self.taskDescription = taskDescription
+        self.spawnPrompt = spawnPrompt
+        self.spawnUserSystemPrompt = spawnUserSystemPrompt
+    }
+}
+
+public struct ContextEngineSubagentPromptCompositionArtifact: Sendable, Equatable {
+    let mode: SubagentPromptCompositionMode
+    let inheritedAssembledPromptText: String?
+    let inheritedAssembledPromptDigest: String?
+    let inheritedReplaySpecDigest: String?
+    let spawnSectionSuppressions: Set<SystemPromptSectionName>?
+    let spawnTaskDirective: String?
 }
 
 /// Deterministic CE artifact produced during sub-agent spawn preparation.
@@ -455,15 +495,18 @@ public struct ContextEnginePrepareSubagentSpawnResult: Sendable {
     let approvedToolNames: [String]
     let handoffArtifact: ContextEngineSubagentHandoffArtifact?
     let checkpointInvalidation: ContextEngineSubagentCheckpointInvalidationSpec?
+    let promptCompositionArtifact: ContextEngineSubagentPromptCompositionArtifact?
 
     init(
         approvedToolNames: [String],
         handoffArtifact: ContextEngineSubagentHandoffArtifact? = nil,
-        checkpointInvalidation: ContextEngineSubagentCheckpointInvalidationSpec? = nil
+        checkpointInvalidation: ContextEngineSubagentCheckpointInvalidationSpec? = nil,
+        promptCompositionArtifact: ContextEngineSubagentPromptCompositionArtifact? = nil
     ) {
         self.approvedToolNames = approvedToolNames
         self.handoffArtifact = handoffArtifact
         self.checkpointInvalidation = checkpointInvalidation
+        self.promptCompositionArtifact = promptCompositionArtifact
     }
 }
 

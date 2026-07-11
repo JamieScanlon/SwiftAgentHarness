@@ -234,11 +234,44 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             conversationID: request.conversationID,
             invalidatedKinds: invalidationKinds
         )
+        let compositionArtifact = promptCompositionArtifact(for: request)
         return ContextEnginePrepareSubagentSpawnResult(
             approvedToolNames: approved,
             handoffArtifact: handoff,
-            checkpointInvalidation: invalidation
+            checkpointInvalidation: invalidation,
+            promptCompositionArtifact: compositionArtifact
         )
+    }
+
+    private func promptCompositionArtifact(
+        for request: ContextEnginePrepareSubagentSpawnRequest
+    ) -> ContextEngineSubagentPromptCompositionArtifact? {
+        guard let mode = request.compositionMode else { return nil }
+        switch mode {
+        case .fork:
+            return ContextEngineSubagentPromptCompositionArtifact(
+                mode: .fork,
+                inheritedAssembledPromptText: nil,
+                inheritedAssembledPromptDigest: nil,
+                inheritedReplaySpecDigest: nil,
+                spawnSectionSuppressions: nil,
+                spawnTaskDirective: nil
+            )
+        case .spawn:
+            let directive = SystemPromptSubagentComposition.spawnTaskDirective(
+                taskDescription: request.taskDescription,
+                prompt: request.spawnPrompt,
+                userSystemPrompt: request.spawnUserSystemPrompt
+            )
+            return ContextEngineSubagentPromptCompositionArtifact(
+                mode: .spawn,
+                inheritedAssembledPromptText: nil,
+                inheritedAssembledPromptDigest: nil,
+                inheritedReplaySpecDigest: nil,
+                spawnSectionSuppressions: SystemPromptSubagentComposition.spawnSectionSuppressions,
+                spawnTaskDirective: directive
+            )
+        }
     }
 
     public func onSubagentEnded(
@@ -1073,6 +1106,46 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         modeMemoryInjection: String,
         resolvedProfile: ResolvedModeProfile?
     ) async -> ContextEngineSystemPromptAssemblyArtifact {
+        if ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata) == .fork,
+           let inheritedText = ConversationMetadataSubagentPromptComposition.inheritedAssembledPromptText(
+               from: conversation.metadata
+           ) {
+            let expectedDigest = ConversationMetadataSubagentPromptComposition.inheritedParentPromptDigest(
+                from: conversation.metadata
+            )
+            let actualDigest = SystemPromptDispatchCodec.sha256Digest(of: inheritedText)
+            if let expectedDigest, expectedDigest != actualDigest {
+                logger?.warning(
+                    "[DefaultContextEngine] fork inherited prompt digest mismatch for conversation \(conversation.id)"
+                )
+            }
+            var dispatchMetadata: [String: String] = [:]
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = actualDigest
+            if let replayDigest = ConversationMetadataSubagentPromptComposition.inheritedReplaySpecDigest(
+                from: conversation.metadata
+            ) {
+                dispatchMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = replayDigest
+            }
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] =
+                SystemPrompt.assembleReferenceDateISOString(from: Date())
+            return ContextEngineSystemPromptAssemblyArtifact(
+                metadata: dispatchMetadata,
+                fingerprint: "fork-inherited",
+                tier1MemorySectionContent: nil,
+                workspaceSectionContent: nil,
+                memorySnapshotGeneration: nil,
+                assembledSystemPromptText: inheritedText,
+                assembledPromptDigest: actualDigest,
+                replaySpec: nil,
+                replaySpecDigest: ConversationMetadataSubagentPromptComposition.inheritedReplaySpecDigest(
+                    from: conversation.metadata
+                ),
+                sectionProvenance: nil,
+                frozenSkillsIndexXML: ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(
+                    from: conversation.metadata
+                )
+            )
+        }
         let referenceDate = Date()
         let memoryBlocks = await loadMemoryBlocks(
             conversation: conversation,

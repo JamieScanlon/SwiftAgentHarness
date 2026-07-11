@@ -60,7 +60,16 @@ enum SystemPromptAssemblyContributionCollector {
         }
         contributions.append(modeSwitches.modeContribution)
 
+        let compositionMode = ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata)
+            ?? (conversation.lineageKind == .subAgent ? .spawn : nil)
+        if compositionMode == .spawn {
+            var spawnContribution = SystemPromptContribution(source: .engine)
+            spawnContribution.suppress = SystemPromptSubagentComposition.spawnSectionSuppressions
+            contributions.append(spawnContribution)
+        }
+
         if !omitWorkspace,
+           compositionMode != .spawn,
            let workspace = resolvedMemorySlice.workspaceContent?.trimmingCharacters(in: .whitespacesAndNewlines),
            !workspace.isEmpty {
             contributions.append(
@@ -75,7 +84,7 @@ enum SystemPromptAssemblyContributionCollector {
             memoryInjectionMode: modeMemoryInjection,
             includeAgentSkills: assemblyContext.includeAgentSkills,
             tier1Content: memorySlice.tier1Content ?? ""
-        ) {
+        ), compositionMode != .spawn {
             contributions.append(
                 SystemPromptContribution(
                     source: .memory,

@@ -34,17 +34,19 @@ enum ContextSystemPromptModeSwitches {
         let sectionOverrides = normalizedSectionOverrides(context.sectionOverrides)
 
         var workflowBlock = ""
-        if conversation.interactionMode == .plan || conversation.interactionMode == .agent {
+        let compositionMode = ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata)
+            ?? (conversation.lineageKind == .subAgent ? .spawn : nil)
+        if compositionMode == .spawn {
+            workflowBlock = ConversationMetadataSubagentPromptComposition.spawnTaskDirective(from: conversation.metadata) ?? ""
+        } else if compositionMode != .fork,
+                  conversation.interactionMode == .plan || conversation.interactionMode == .agent {
             workflowBlock = agentWorkflowPromptBlock(
                 for: conversation,
                 strictAgentHarnessPrompts: strictAgentHarnessPrompts
             )
         }
 
-        var subAgentPrompt: String?
-        if conversation.lineageKind == .subAgent {
-            subAgentPrompt = subAgentContextPrompt(scope: conversation.conversationScope())
-        }
+        let subAgentPrompt: String? = nil
 
         let assemblyContext = SystemPromptAssemblyContext(
             conversationID: conversation.id.uuidString,

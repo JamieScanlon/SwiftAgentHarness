@@ -448,7 +448,8 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         applyMemorySection(
             context: assemblyContext,
             sections: &sections,
-            skipWhenMemoryContributionApplied: resolved.provenance[.memory] == .memory
+            skipWhenMemoryContributionApplied: resolved.provenance[.memory] == .memory,
+            suppressions: resolved.suppressions
         )
         if !assemblyContext.includeToolGuidance {
             sections[.toolGuidance] = ""
@@ -481,8 +482,13 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
     private static func applyMemorySection(
         context: SystemPromptAssemblyContext,
         sections: inout [SystemPromptSectionName: String],
-        skipWhenMemoryContributionApplied: Bool
+        skipWhenMemoryContributionApplied: Bool,
+        suppressions: Set<SystemPromptSectionName> = []
     ) {
+        if suppressions.contains(.memory) {
+            sections[.memory] = ""
+            return
+        }
         if skipWhenMemoryContributionApplied {
             let memoryMode = context.memoryInjectionMode.lowercased()
             if memoryMode == "off" {

@@ -80,22 +80,32 @@ enum MemorySubAgentSpawnAdapter {
             },
             spawnBackgroundExtraction: { request in
                 let manifest = await manifestLines(request.session.conversationID)
-                let systemPrompt = MemoryExtractionPrompts.systemPrompt(
-                    manifestLines: manifest,
-                    teamMemoryEnabled: config.teamMemoryEnabled
-                )
                 let transcript = MemoryExtractionPrompts.recentTranscriptSlice(
                     messages: request.recentMessages,
                     limit: config.extractionRecentMessageCount
                 )
                 guard !transcript.isEmpty else { return }
+                let anchorMessageID = request.recentMessages.last(where: { $0.role == .user })?.id
+                    ?? request.recentMessages.last?.id
+                guard let anchorMessageID else { return }
+                let extractionDirective = MemoryExtractionPrompts.systemPrompt(
+                    manifestLines: manifest,
+                    teamMemoryEnabled: config.teamMemoryEnabled
+                )
                 let fencedTranscript = MemoryExtractionInputFencer.fence(transcript)
+                let forkUserPrompt = """
+                <fork-boilerplate>
+                \(extractionDirective)
+                </fork-boilerplate>
+
+                \(fencedTranscript)
+                """
                 let spawnRequest = SubAgentSpawnRequest(
-                    context: .isolated,
+                    context: .fork,
+                    userMessageID: anchorMessageID,
                     taskDescription: "memory-extraction",
-                    prompt: fencedTranscript,
+                    prompt: forkUserPrompt,
                     runInBackground: true,
-                    userSystemPrompt: systemPrompt,
                     topic: "memory-extraction",
                     interactionMode: "memory-extraction"
                 )
@@ -108,7 +118,7 @@ enum MemorySubAgentSpawnAdapter {
                 }
                 Task {
                     do {
-                        try await sendMessageAndRun(childID, fencedTranscript)
+                        try await sendMessageAndRun(childID, forkUserPrompt)
                     } catch {
                         logger?.debug("[MemoryExtractor] background run failed: \(error)")
                     }
@@ -123,12 +133,22 @@ enum MemorySubAgentSpawnAdapter {
                 )
                 guard !transcript.isEmpty else { return false }
                 guard let plan = await resolveFlushPlan(parentConversationID, manifest, transcript) else { return false }
+                let anchorMessageID = middleMessages.last(where: { $0.role == .user })?.id
+                    ?? middleMessages.last?.id
+                guard let anchorMessageID else { return false }
+                let forkUserPrompt = """
+                <fork-boilerplate>
+                \(plan.systemPrompt)
+                </fork-boilerplate>
+
+                \(plan.userPrompt)
+                """
                 let spawnRequest = SubAgentSpawnRequest(
-                    context: .isolated,
+                    context: .fork,
+                    userMessageID: anchorMessageID,
                     taskDescription: "memory-pre-compaction-flush",
-                    prompt: plan.userPrompt,
+                    prompt: forkUserPrompt,
                     runInBackground: false,
-                    userSystemPrompt: plan.systemPrompt,
                     topic: "memory-pre-compaction-flush",
                     metadata: .object([
                         "preCompactionFlushMaxIterations": .double(Double(config.preCompactionFlushMaxIterations)),
@@ -143,7 +163,7 @@ enum MemorySubAgentSpawnAdapter {
                     return false
                 }
                 let completed = await runWithTimeout(timeoutMs: timeoutMs) {
-                    try await sendMessageAndRun(childID, plan.userPrompt)
+                    try await sendMessageAndRun(childID, forkUserPrompt)
                 }
                 if completed == false {
                     logger?.debug("[PreCompactionMemoryFlush] timed out; cancelling child run")

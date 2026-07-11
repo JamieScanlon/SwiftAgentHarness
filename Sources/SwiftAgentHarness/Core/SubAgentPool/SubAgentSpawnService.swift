@@ -14,6 +14,7 @@ public actor SubAgentSpawnService {
     private let startup: ConversationStartupService
     private let lifecycle: any ConversationLifecycleServicing
     private let completionService: SubAgentCompletionRuntimeService
+    private let contextProjection: ContextProjectionService
 
     nonisolated let subAgentPool: any SubAgentPooling
     private var subAgentLifecycleState = SubAgentLifecycleState()
@@ -35,7 +36,8 @@ public actor SubAgentSpawnService {
         messaging: ConversationMessagingPort,
         orchestrator: OrchestratorSessionPort,
         startup: ConversationStartupService,
-        lifecycle: any ConversationLifecycleServicing
+        lifecycle: any ConversationLifecycleServicing,
+        contextProjection: ContextProjectionService
     ) {
         self.deps = deps
         self.subAgentPool = subAgentPool
@@ -47,6 +49,7 @@ public actor SubAgentSpawnService {
         self.orchestrator = orchestrator
         self.startup = startup
         self.lifecycle = lifecycle
+        self.contextProjection = contextProjection
     }
 
     func conversationTopicPublisherConfigured() async -> Bool {
@@ -274,12 +277,40 @@ public actor SubAgentSpawnService {
                 completionHandleID: launchPlan.asyncHandleID,
                 routingContext: launchPlan.request.routingContext
             )
+            let compositionMeta = try await forkCompositionMetadata(
+                parentConversationID: parentConversationID,
+                parentConversation: parentConversation,
+                baseMetadata: meta
+            )
             try await applyChildRoleCapabilities(
                 childID: childID,
                 launchPlan: launchPlan,
                 parentProfile: parentProfile,
-                metadata: meta
+                metadata: compositionMeta,
+                compositionMode: .fork
             )
+            if let inherited = await resolvedParentAssembly(
+                parentConversationID: parentConversationID,
+                parentConversation: parentConversation
+            ) {
+                let artifact = ContextEngineSystemPromptAssemblyArtifact(
+                    metadata: [
+                        SystemPromptAssemblyMetadataKeys.assembledPromptDigest: inherited.assembledPromptDigest,
+                        SystemPromptAssemblyMetadataKeys.replaySpecDigest: inherited.replaySpecDigest ?? "",
+                    ].compactMapValues { $0.isEmpty ? nil : $0 },
+                    fingerprint: inherited.fingerprint ?? "fork-inherited",
+                    tier1MemorySectionContent: nil,
+                    workspaceSectionContent: nil,
+                    memorySnapshotGeneration: nil,
+                    assembledSystemPromptText: inherited.assembledSystemPromptText,
+                    assembledPromptDigest: inherited.assembledPromptDigest,
+                    replaySpec: nil,
+                    replaySpecDigest: inherited.replaySpecDigest,
+                    sectionProvenance: nil,
+                    frozenSkillsIndexXML: inherited.frozenSkillsIndexXML
+                )
+                await contextProjection.seedSystemPromptAssembly(conversationID: childID, artifact: artifact)
+            }
             await linkDelegateCost(childConversationID: childID, parentConversationID: parentConversationID)
             var running = admitted
             running.phase = SubAgentLifecyclePhase.running
@@ -296,8 +327,17 @@ public actor SubAgentSpawnService {
             let model = modelOverride ?? parent.model
             let prompt = launchPlan.request.userSystemPrompt ?? launchPlan.request.prompt ?? parent.systemPrompt
             let rawMeta = launchPlan.request.metadata ?? parent.metadata
+            let spawnDirective = SystemPromptSubagentComposition.spawnTaskDirective(
+                taskDescription: launchPlan.request.taskDescription,
+                prompt: launchPlan.request.prompt,
+                userSystemPrompt: launchPlan.request.userSystemPrompt
+            )
+            let rawMetaWithComposition = ConversationMetadataSubagentPromptComposition.mergingSpawnComposition(
+                taskDirective: spawnDirective,
+                into: rawMeta
+            ) ?? rawMeta
             let meta = metadataBySettingSubAgentDepth(
-                rawMeta,
+                rawMetaWithComposition,
                 depth: parentDepth + 1,
                 lifecycleID: lifecycleID,
                 delegateToolName: launchPlan.delegationContext.delegateToolName,
@@ -855,7 +895,8 @@ public actor SubAgentSpawnService {
         childID: UUID,
         launchPlan: SubAgentLaunchPlan,
         parentProfile: ResolvedModeProfile,
-        metadata: JSON
+        metadata: JSON,
+        compositionMode: SubagentPromptCompositionMode
     ) async throws {
         let (interactionMode, modeProfileID) = await childInteractionModeAndProfileID(
             launchPlan: launchPlan,
@@ -871,7 +912,8 @@ public actor SubAgentSpawnService {
             skipControlPlaneRevisionBump: false,
             allowHarnessMetadataKeys: true
         )
-        if let userSystemPrompt = launchPlan.request.userSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if compositionMode == .spawn,
+           let userSystemPrompt = launchPlan.request.userSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
            !userSystemPrompt.isEmpty {
             _ = try await deps.persistenceDomain.updateConversationModelAndUserPrompt(
                 conversationID: childID,
@@ -879,11 +921,64 @@ public actor SubAgentSpawnService {
                 userSystemPrompt: userSystemPrompt,
                 skipControlPlaneRevisionBump: true
             )
+        } else if compositionMode == .fork,
+                  let userSystemPrompt = launchPlan.request.userSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !userSystemPrompt.isEmpty {
+            deps.logger?.warning(
+                "[SubAgentSpawnService] ignoring userSystemPrompt on fork spawn; use task message directive instead"
+            )
         }
         guard let child = await deps.persistenceDomain.modelConversation(id: childID) else {
             throw ConversationServiceError.conversationNotFound
         }
         await messaging.update(conversation: child)
+    }
+
+    private func resolvedParentAssembly(
+        parentConversationID: UUID,
+        parentConversation: ModelConversation
+    ) async -> ResolvedParentSystemPromptAssembly? {
+        let cached = await contextProjection.cachedSystemPromptAssembly(conversationID: parentConversationID)
+        let (events, frontier) = await deps.persistenceDomain.loadConversationEventsWithFrontier(
+            conversationID: parentConversationID
+        )
+        return SystemPromptAssemblyInheritanceResolver.resolve(
+            parentConversationID: parentConversationID,
+            cachedArtifact: cached,
+            parentEvents: events,
+            frontierEventID: frontier
+        )
+    }
+
+    private func forkCompositionMetadata(
+        parentConversationID: UUID,
+        parentConversation: ModelConversation,
+        baseMetadata: JSON
+    ) async throws -> JSON {
+        guard let inherited = await resolvedParentAssembly(
+            parentConversationID: parentConversationID,
+            parentConversation: parentConversation
+        ) else {
+            deps.logger?.warning(
+                "[SubAgentSpawnService] fork spawn missing parent assembly; child will fall back to live render"
+            )
+            return baseMetadata
+        }
+        var merged = ConversationMetadataSubagentPromptComposition.mergingForkInheritance(
+            parentConversationID: parentConversationID,
+            assembledPromptText: inherited.assembledSystemPromptText,
+            assembledPromptDigest: inherited.assembledPromptDigest,
+            replaySpecDigest: inherited.replaySpecDigest,
+            into: baseMetadata
+        ) ?? baseMetadata
+        if let frozenSkillsIndexXML = inherited.frozenSkillsIndexXML
+            ?? ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(from: parentConversation.metadata) {
+            merged = ConversationMetadataFrozenSkillsIndex.mergingFrozenSkillsIndex(
+                xml: frozenSkillsIndexXML,
+                into: merged
+            ) ?? merged
+        }
+        return merged
     }
 
     private func childInteractionModeAndProfileID(
