@@ -122,6 +122,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 0,
                     assemblyFingerprint: "sys-fp",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -416,6 +417,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: expected,
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -430,6 +432,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: "other-fp",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -457,7 +460,7 @@ struct LatestCheckpointDispatchTests {
     func systemPromptAssemblyV2DigestRoundTrip() {
         let digest = "abc123digest"
         let wire = SystemPromptAssemblyCheckpointWire(
-            schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
+            schemaVersion: 2,
             basedOnEventID: 1,
             assemblyFingerprint: "fp",
             assembledPromptDigest: digest,

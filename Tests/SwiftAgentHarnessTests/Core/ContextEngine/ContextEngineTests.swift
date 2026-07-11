@@ -642,6 +642,42 @@ struct ContextEngineTests {
                 }
                 return "MODE_SWITCH_PROBE"
             }
+
+            func renderWithAudit(
+                conversation: ModelConversation,
+                policy: ContextEngineSystemPromptAssemblyPolicyInput,
+                userSystemPrompt: String?,
+                assemblyContext: SystemPromptAssemblyContext,
+                contributions: [SystemPromptContribution],
+                referenceDate: Date,
+                fullOverrideText: String?,
+                frozenSkills: SystemPromptFrozenSkillRenderInput?
+            ) async throws -> SystemPromptAssemblyRenderAudit {
+                let text = try await render(
+                    conversation: conversation,
+                    policy: policy,
+                    userSystemPrompt: userSystemPrompt,
+                    assemblyContext: assemblyContext,
+                    contributions: contributions,
+                    referenceDate: referenceDate,
+                    fullOverrideText: fullOverrideText
+                )
+                return SystemPromptAssemblyRenderAudit(
+                    text: text,
+                    product: SystemPromptAssemblyRenderProduct(
+                        text: text,
+                        sectionProvenance: [:],
+                        skillSnapshot: SystemPromptSkillRenderSnapshot(
+                            activatedSkillNames: [],
+                            activatedSkillBodyDigests: [:],
+                            skillsIndexDigest: nil
+                        )
+                    ),
+                    effectiveUserSystemPrompt: userSystemPrompt ?? "",
+                    providerStablePrefix: nil,
+                    activatedSkillBodies: [:]
+                )
+            }
         }
         let renderer = CapturingRenderer()
         let engine = DefaultContextEngine(
@@ -799,6 +835,8 @@ struct ContextEngineTests {
         )
         let metadata = artifact.metadata
         #expect(metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] == artifact.assembledPromptDigest)
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] != nil)
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] == artifact.replaySpecDigest)
         #expect(metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] == nil)
     }
 

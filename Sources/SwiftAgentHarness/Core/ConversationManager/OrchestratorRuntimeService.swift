@@ -339,11 +339,9 @@ public actor OrchestratorRuntimeService {
         var enrichedMetadata = metadata
         if let conversationID = conversation?.id,
            let assembly = await contextProjection.cachedSystemPromptAssembly(conversationID: conversationID) {
-            if let digest = assembly.assembledPromptDigest {
-                enrichedMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = digest
-            }
-            if let generation = assembly.memorySnapshotGeneration {
-                enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+            enrichedMetadata.merge(assembly.metadata) { _, new in new }
+            if assembly.replaySpecDigest != nil {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = assembly.replaySpecDigest
             }
         }
         if enrichedMetadata.isEmpty, thinkingConfig == nil {

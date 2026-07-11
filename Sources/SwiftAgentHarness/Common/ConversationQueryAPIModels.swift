@@ -499,10 +499,22 @@ public struct ConversationProjectionMetadata: Codable, Sendable {
 public struct ConversationProjectResponse: Codable, Sendable {
     public var projectedMessages: [Message]
     public var metadata: ConversationProjectionMetadata
+    public var assembledSystemPrompt: String?
+    public var systemPromptReplaySpecDigest: String?
+    public var sectionProvenance: [String: String]?
 
-    public init(projectedMessages: [Message], metadata: ConversationProjectionMetadata) {
+    public init(
+        projectedMessages: [Message],
+        metadata: ConversationProjectionMetadata,
+        assembledSystemPrompt: String? = nil,
+        systemPromptReplaySpecDigest: String? = nil,
+        sectionProvenance: [String: String]? = nil
+    ) {
         self.projectedMessages = projectedMessages
         self.metadata = metadata
+        self.assembledSystemPrompt = assembledSystemPrompt
+        self.systemPromptReplaySpecDigest = systemPromptReplaySpecDigest
+        self.sectionProvenance = sectionProvenance
     }
 }
 

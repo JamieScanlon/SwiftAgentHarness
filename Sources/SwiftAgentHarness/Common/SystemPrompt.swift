@@ -44,6 +44,7 @@ public struct SystemPrompt: Sendable {
         includeAgentSkills: Bool?,
         skillLoader: SkillLoader?,
         skipConfigLoad: Bool = false,
+        allowSkillLoaderAbsence: Bool = false,
         logger: Logger? = nil,
         interactionMode: InteractionMode = .chat,
         assemblyKind: SystemPromptAssemblyKind? = nil,
@@ -77,7 +78,7 @@ public struct SystemPrompt: Sendable {
         }
 
         var effectiveIncludeAgentSkills = resolvedIncludeAgentSkills
-        if effectiveIncludeAgentSkills, skillLoader == nil {
+        if effectiveIncludeAgentSkills, skillLoader == nil, !allowSkillLoaderAbsence {
             if skipConfigLoad {
                 throw PromptsConfigError.skillLoaderNotFound
             }
@@ -85,10 +86,7 @@ public struct SystemPrompt: Sendable {
         }
 
         let resolvedSkillMetadata: [SkillMetadata]?
-        if effectiveIncludeAgentSkills {
-            guard let skillLoader else {
-                throw PromptsConfigError.skillLoaderNotFound
-            }
+        if effectiveIncludeAgentSkills, let skillLoader {
             var loaded = try await skillLoader.loadMetadata()
             loaded = loaded.filter { meta in
                 let allowed: Bool = if let modePolicyContext {
@@ -123,37 +121,100 @@ public struct SystemPrompt: Sendable {
         resolved: ResolvedSystemPromptSections,
         stablePrefix: String?
     ) async throws -> String {
+        try await renderAssemblyProduct(
+            context: assemblyContext,
+            resolved: resolved,
+            stablePrefix: stablePrefix,
+            frozenSkills: nil,
+            providerID: nil,
+            modeProfileID: assemblyContext.registryProfileID
+        ).text
+    }
+
+    func renderAssemblyProduct(
+        context assemblyContext: SystemPromptAssemblyContext,
+        resolved: ResolvedSystemPromptSections,
+        stablePrefix: String?,
+        frozenSkills: SystemPromptFrozenSkillRenderInput?,
+        providerID: String?,
+        modeProfileID: String?
+    ) async throws -> SystemPromptAssemblyRenderProduct {
         let dateString = Self.dateString(from: assemblyContext.referenceDate)
         var skillsFolderPathValue = ""
         var availableSkillsValue = ""
         var activatedSkillsValue = ""
-        if includeAgentSkills {
-            guard let skillLoader else {
-                throw PromptsConfigError.skillLoaderNotFound
-            }
-            skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
-            availableSkillsValue = SkillPromptFormatter.formatAsXML(skillMetadata ?? [])
-            let activeSkillNames = await skillLoader.activatedSkills
-            var loadedActiveSkills: [String: Skill] = [:]
-            for name in activeSkillNames {
-                if let skill = try await skillLoader.loadSkill(named: name) {
-                    loadedActiveSkills[name] = skill
+        var skillSnapshot = SystemPromptSkillRenderSnapshot(
+            activatedSkillNames: [],
+            activatedSkillBodyDigests: [:],
+            skillsIndexDigest: nil
+        )
+        var capturedSkillBodies: [String: String] = [:]
+        let skillsEnabled = includeAgentSkills || frozenSkills != nil
+        if skillsEnabled {
+            if let frozenSkills {
+                availableSkillsValue = frozenSkills.skillsIndexXML ?? ""
+                let sortedNames = frozenSkills.activatedSkillBodies.keys.sorted()
+                capturedSkillBodies = frozenSkills.activatedSkillBodies
+                let bodies = sortedNames.map { name in
+                    let body = frozenSkills.activatedSkillBodies[name] ?? ""
+                    return "\(name):\n\(body)"
                 }
+                activatedSkillsValue = bodies.isEmpty
+                    ? "No active skills.\n\n"
+                    : bodies.joined(separator: "\n\n")
+                skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
+                    activatedSkillNames: sortedNames,
+                    activatedSkillBodies: frozenSkills.activatedSkillBodies,
+                    skillsIndexXML: frozenSkills.skillsIndexXML
+                )
+            } else {
+                guard let skillLoader else {
+                    throw PromptsConfigError.skillLoaderNotFound
+                }
+                skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
+                availableSkillsValue = SkillPromptFormatter.formatAsXML(skillMetadata ?? [])
+                let activeSkillNames = Array(await skillLoader.activatedSkills).sorted()
+                var loadedActiveSkills: [String: String] = [:]
+                for name in activeSkillNames {
+                    if let skill = try await skillLoader.loadSkill(named: name) {
+                        loadedActiveSkills[name] = skill.fullInstructions
+                    }
+                }
+                capturedSkillBodies = loadedActiveSkills
+                activatedSkillsValue = loadedActiveSkills.isEmpty
+                    ? "No active skills.\n\n"
+                    : loadedActiveSkills.map { "\($0.key):\n\($0.value)" }.joined(separator: "\n\n")
+                skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
+                    activatedSkillNames: activeSkillNames,
+                    activatedSkillBodies: loadedActiveSkills,
+                    skillsIndexXML: availableSkillsValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? nil
+                        : availableSkillsValue
+                )
             }
-            activatedSkillsValue = loadedActiveSkills.isEmpty
-                ? "No active skills.\n\n"
-                : loadedActiveSkills.map { "\($0.value.name):\n\($0.value.fullInstructions)" }.joined(separator: "\n\n")
         }
 
-        let sections = Self.finalSections(
+        var sections = Self.finalSections(
             assemblyContext: assemblyContext,
             resolved: resolved,
             skillsFolderPath: skillsFolderPathValue,
             availableSkills: availableSkillsValue,
             activatedSkills: activatedSkillsValue,
-            includeAgentSkills: includeAgentSkills,
+            includeAgentSkills: skillsEnabled,
             assemblyKind: assemblyKind,
             strictAgentHarnessPrompts: strictAgentHarnessPrompts
+        )
+        Self.applySectionProvenanceTags(
+            sections: &sections,
+            resolved: resolved,
+            providerID: providerID,
+            modeProfileID: modeProfileID
+        )
+        let provenanceMap = SystemPromptSectionProvenanceFormatter.provenanceMap(
+            resolved: resolved,
+            sections: sections,
+            providerID: providerID,
+            modeProfileID: modeProfileID
         )
 
         var dynamicPrompt = DynamicPrompt(template: promptTemplate)
@@ -166,7 +227,7 @@ public struct SystemPrompt: Sendable {
             dynamicPrompt["agentWorkflowBlock"] = assemblyContext.workflowBlock
         }
         dynamicPrompt["userSystemPrompt"] = assemblyContext.userSystemPrompt
-        if includeAgentSkills {
+        if skillsEnabled {
             dynamicPrompt["skillsFolderPath"] = skillsFolderPathValue
             dynamicPrompt["agentSkillsMetadata"] = availableSkillsValue
             dynamicPrompt["activatedAgentSkills"] = activatedSkillsValue
@@ -175,11 +236,39 @@ public struct SystemPrompt: Sendable {
             dynamicPrompt[section.dynamicPromptToken] = sections[section] ?? ""
         }
 
-        return Self.assemblePromptWithCacheBoundary(
+        let text = Self.assemblePromptWithCacheBoundary(
             sections: sections,
             includeDateTimePrefix: includeCurrentDateTime ? "Today is \(dateString).\n" : "",
             providerStablePrefix: stablePrefix
         )
+        return SystemPromptAssemblyRenderProduct(
+            text: text,
+            sectionProvenance: provenanceMap,
+            skillSnapshot: skillSnapshot,
+            activatedSkillBodies: capturedSkillBodies
+        )
+    }
+
+    private static func applySectionProvenanceTags(
+        sections: inout [SystemPromptSectionName: String],
+        resolved: ResolvedSystemPromptSections,
+        providerID: String?,
+        modeProfileID: String?
+    ) {
+        for section in SystemPromptSectionName.allCases {
+            guard SystemPromptSectionName.overrideProof.contains(section) == false else { continue }
+            guard let body = sections[section]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !body.isEmpty else { continue }
+            let label = SystemPromptSectionProvenanceFormatter.label(
+                for: section,
+                resolved: resolved,
+                providerID: providerID,
+                modeProfileID: modeProfileID
+            )
+            let tag = SystemPromptSectionProvenanceFormatter.provenanceComment(for: label)
+            guard !body.contains(tag) else { continue }
+            sections[section] = tag + "\n" + body
+        }
     }
 
     public func generateSystemPrompt(withUserSystemPrompt userSystemPrompt: String? = nil, additionalMetadata: [String: String] = [:]) async throws -> String {
@@ -675,14 +764,20 @@ You are executing the plan in build mode: update task status with **update_plan_
               !iso.isEmpty else {
             return Date()
         }
+        return referenceDate(fromAssembleReferenceDateISO: iso) ?? Date()
+    }
+
+    static func referenceDate(fromAssembleReferenceDateISO iso: String) -> Date? {
+        let trimmed = iso.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let parsed = fractional.date(from: iso) {
+        if let parsed = fractional.date(from: trimmed) {
             return parsed
         }
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: iso) ?? Date()
+        return plain.date(from: trimmed)
     }
 
     static func assembleReferenceDateISOString(from date: Date) -> String {

@@ -291,8 +291,14 @@ enum ContextCheckpointWriter {
         conversationID: UUID,
         fingerprint: String,
         assembledPromptDigest: String? = nil,
-        persistence: ConversationPersistenceStack
+        replaySpecDigest: String? = nil,
+        assembledPrompt: String? = nil,
+        sectionProvenanceJSON: String? = nil,
+        persistence: ConversationPersistenceStack,
+        logger: Logger? = nil
     ) throws {
+        let checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+        if checkpointConfig.mode == .off { return }
         let (events, frontier) = persistence.conversationManager.loadConversationEventsWithFrontier(
             conversationID: conversationID
         )
@@ -301,12 +307,25 @@ enum ContextCheckpointWriter {
             frontierEventID: frontier
         )
         if prior == fingerprint { return }
+        var resolvedAssembledPrompt: String?
+        if checkpointConfig.mode == .fullText, let assembledPrompt {
+            if assembledPrompt.utf8.count > checkpointConfig.maxFullTextBytes {
+                logger?.warning(
+                    "[ContextCheckpointWriter] assembled prompt exceeds maxFullTextBytes (\(assembledPrompt.utf8.count)); persisting digest + replay spec only"
+                )
+            } else {
+                resolvedAssembledPrompt = assembledPrompt
+            }
+        }
         let derivedTail = persistence.derivedEventStore.latestDerivedStreamSequence(conversationID: conversationID)
         let wire = SystemPromptAssemblyCheckpointWire(
             schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
             basedOnEventID: frontier,
             assemblyFingerprint: fingerprint,
             assembledPromptDigest: assembledPromptDigest,
+            replaySpecDigest: replaySpecDigest,
+            assembledPrompt: resolvedAssembledPrompt,
+            sectionProvenanceJSON: sectionProvenanceJSON,
             createdAt: Date()
         )
         try persistence.persistSystemPromptAssemblyCheckpoint(
@@ -327,7 +346,11 @@ enum ContextCheckpointWriter {
                 conversationID: spec.conversationID,
                 fingerprint: spec.fingerprint,
                 assembledPromptDigest: spec.assembledPromptDigest,
-                persistence: persistence
+                replaySpecDigest: spec.replaySpecDigest,
+                assembledPrompt: spec.assembledPrompt,
+                sectionProvenanceJSON: spec.sectionProvenanceJSON,
+                persistence: persistence,
+                logger: logger
             )
         } catch {
             logger?.warning("[ContextCheckpointWriter] persistSystemPromptAssemblyCheckpoint failed: \(error)")

@@ -81,9 +81,28 @@ enum SuiteCheckpointSupport {
             decode: { ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: $0) },
             basedOnEventID: { $0.basedOnEventID },
             isValid: { wire, _ in
-                (wire.schemaVersion == 1 || wire.schemaVersion == SystemPromptAssemblyCheckpointWire.currentSchemaVersion)
-                    && !wire.assemblyFingerprint.isEmpty
-                    && (expectedAssemblyFingerprint == nil || wire.assemblyFingerprint == expectedAssemblyFingerprint)
+                guard !wire.assemblyFingerprint.isEmpty else { return false }
+                if expectedAssemblyFingerprint != nil, wire.assemblyFingerprint != expectedAssemblyFingerprint {
+                    return false
+                }
+                switch wire.schemaVersion {
+                case 1, 2:
+                    return true
+                case SystemPromptAssemblyCheckpointWire.currentSchemaVersion:
+                    guard let replayDigest = wire.replaySpecDigest?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !replayDigest.isEmpty else {
+                        return false
+                    }
+                    if let assembled = wire.assembledPrompt {
+                        guard let digest = wire.assembledPromptDigest,
+                              digest == SystemPromptDispatchCodec.sha256Digest(of: assembled) else {
+                            return false
+                        }
+                    }
+                    return true
+                default:
+                    return false
+                }
             }
         )
     }

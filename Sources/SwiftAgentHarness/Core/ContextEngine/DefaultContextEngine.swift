@@ -319,10 +319,29 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             ContextCompactionCheckpointSupport.partitionForCompaction(policyAdjustedMessages)
         let projectionArtifact = projected.artifact
         let promptCheckpoint = projectionArtifact.systemPromptAssembly.map {
-            ContextSystemPromptAssemblyCheckpointPersistenceSpec(
+            let checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+            let sectionJSON = $0.sectionProvenance.flatMap { map -> String? in
+                let sectionMap = Dictionary(
+                    uniqueKeysWithValues: map.compactMap { key, value -> (SystemPromptSectionName, String)? in
+                        guard let section = SystemPromptSectionName(rawValue: key) else { return nil }
+                        return (section, value)
+                    }
+                )
+                return SystemPromptSectionProvenanceFormatter.encodeSectionProvenanceJSON(sectionMap)
+            }
+            var assembledPrompt: String?
+            if checkpointConfig.mode == .fullText,
+               let text = $0.assembledSystemPromptText,
+               text.utf8.count <= checkpointConfig.maxFullTextBytes {
+                assembledPrompt = text
+            }
+            return ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
                 fingerprint: $0.fingerprint,
-                assembledPromptDigest: $0.assembledPromptDigest
+                assembledPromptDigest: $0.assembledPromptDigest,
+                replaySpecDigest: $0.replaySpecDigest,
+                assembledPrompt: assembledPrompt,
+                sectionProvenanceJSON: sectionJSON
             )
         }
         let attachmentCheckpoint = projectionArtifact.attachmentProjection.map {
@@ -1086,32 +1105,61 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             providerContributionSignature: bundle.providerContributionSignature,
             systemPromptFullOverride: conversation.systemPromptFullOverride
         )
+        let assembleReferenceDateISO = SystemPrompt.assembleReferenceDateISOString(from: referenceDate)
         var assembledSystemPromptText: String?
+        var renderAudit: SystemPromptAssemblyRenderAudit?
         if let renderer = systemPromptAssemblyRenderer {
             do {
-                assembledSystemPromptText = try await renderer.render(
+                renderAudit = try await renderer.renderWithAudit(
                     conversation: conversation,
                     policy: policy,
                     userSystemPrompt: userSystemPrompt,
                     assemblyContext: bundle.assemblyContext,
                     contributions: bundle.contributions,
                     referenceDate: referenceDate,
-                    fullOverrideText: bundle.fullOverrideText
+                    fullOverrideText: bundle.fullOverrideText,
+                    frozenSkills: nil
                 )
+                assembledSystemPromptText = renderAudit?.text
             } catch {
                 logger?.warning("[DefaultContextEngine] system prompt assembly render failed: \(error)")
             }
         }
         let assembledPromptDigest = assembledSystemPromptText.map { SystemPromptDispatchCodec.sha256Digest(of: $0) }
+        let replaySpec = renderAudit.map {
+            SystemPromptAssemblyReplayer.buildReplaySpec(
+                assemblyFingerprint: fingerprint,
+                assembleReferenceDateISO: assembleReferenceDateISO,
+                audit: $0,
+                contributions: bundle.contributions
+            )
+        }
+        let replaySpecDigest = replaySpec?.replaySpecDigest
+        let sectionProvenance = renderAudit.map {
+            SystemPromptSectionProvenanceFormatter.stringSectionProvenanceMap(from: $0.product)
+        }
         var dispatchMetadata: [String: String] = [:]
+        dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] = assembleReferenceDateISO
         if let assembledPromptDigest {
             dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
+        }
+        if let replaySpecDigest {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = replaySpecDigest
+        }
+        if let json = SystemPromptSectionProvenanceFormatter.encodeSectionProvenanceJSON(
+            renderAudit?.product.sectionProvenance ?? [:]
+        ) {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.sectionProvenanceJSON] = json
         }
         if let generation = bundle.memorySlice.snapshotGeneration {
             dispatchMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
         }
         if conversation.systemPromptFullOverride {
             dispatchMetadata[SystemPromptAssemblyMetadataKeys.systemPromptFullOverrideActive] = "true"
+        }
+        if let stablePrefix = renderAudit?.providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stablePrefix.isEmpty {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = stablePrefix
         }
         return ContextEngineSystemPromptAssemblyArtifact(
             metadata: dispatchMetadata,
@@ -1120,7 +1168,11 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             workspaceSectionContent: bundle.memorySlice.workspaceContent,
             memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
             assembledSystemPromptText: assembledSystemPromptText,
-            assembledPromptDigest: assembledPromptDigest
+            assembledPromptDigest: assembledPromptDigest,
+            replaySpec: replaySpec,
+            replaySpecDigest: replaySpecDigest,
+            sectionProvenance: sectionProvenance,
+            frozenActivatedSkillBodies: renderAudit?.activatedSkillBodies
         )
     }
 

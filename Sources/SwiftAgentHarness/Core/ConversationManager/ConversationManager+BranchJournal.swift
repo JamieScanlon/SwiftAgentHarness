@@ -375,6 +375,9 @@ extension ConversationManager {
                 basedOnEventID: remapEventID(wire.basedOnEventID),
                 assemblyFingerprint: wire.assemblyFingerprint,
                 assembledPromptDigest: wire.assembledPromptDigest,
+                replaySpecDigest: wire.replaySpecDigest,
+                assembledPrompt: wire.assembledPrompt,
+                sectionProvenanceJSON: wire.sectionProvenanceJSON,
                 createdAt: wire.createdAt
             )
             return ConversationEventCodec.encode(wire)

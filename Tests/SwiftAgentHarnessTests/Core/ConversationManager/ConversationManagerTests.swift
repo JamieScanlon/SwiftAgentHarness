@@ -486,6 +486,7 @@ struct ConversationManagerTests {
                         schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                         basedOnEventID: basedOn,
                         assemblyFingerprint: "assembly-fp",
+                        replaySpecDigest: "replay-digest",
                         createdAt: Date()
                     )
                 )
@@ -904,6 +905,7 @@ struct ConversationManagerTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: "mode+tools+prompt",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             )
@@ -1007,6 +1009,7 @@ struct ConversationManagerTests {
                 schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                 basedOnEventID: 1,
                 assemblyFingerprint: "base-fingerprint",
+                replaySpecDigest: "replay-digest",
                 createdAt: Date()
             )
         )

@@ -158,6 +158,36 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let memorySnapshotGeneration: Int?
     let assembledSystemPromptText: String?
     let assembledPromptDigest: String?
+    let replaySpec: SystemPromptAssemblyReplaySpec?
+    let replaySpecDigest: String?
+    let sectionProvenance: [String: String]?
+    let frozenActivatedSkillBodies: [String: String]?
+
+    init(
+        metadata: [String: String],
+        fingerprint: String,
+        tier1MemorySectionContent: String?,
+        workspaceSectionContent: String?,
+        memorySnapshotGeneration: Int?,
+        assembledSystemPromptText: String?,
+        assembledPromptDigest: String?,
+        replaySpec: SystemPromptAssemblyReplaySpec? = nil,
+        replaySpecDigest: String? = nil,
+        sectionProvenance: [String: String]? = nil,
+        frozenActivatedSkillBodies: [String: String]? = nil
+    ) {
+        self.metadata = metadata
+        self.fingerprint = fingerprint
+        self.tier1MemorySectionContent = tier1MemorySectionContent
+        self.workspaceSectionContent = workspaceSectionContent
+        self.memorySnapshotGeneration = memorySnapshotGeneration
+        self.assembledSystemPromptText = assembledSystemPromptText
+        self.assembledPromptDigest = assembledPromptDigest
+        self.replaySpec = replaySpec
+        self.replaySpecDigest = replaySpecDigest
+        self.sectionProvenance = sectionProvenance
+        self.frozenActivatedSkillBodies = frozenActivatedSkillBodies
+    }
 }
 
 /// Attachment projection artifact emitted by CE for provider/transformer consumption.
@@ -171,6 +201,25 @@ public struct ContextSystemPromptAssemblyCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let fingerprint: String
     let assembledPromptDigest: String?
+    let replaySpecDigest: String?
+    let assembledPrompt: String?
+    let sectionProvenanceJSON: String?
+
+    init(
+        conversationID: UUID,
+        fingerprint: String,
+        assembledPromptDigest: String? = nil,
+        replaySpecDigest: String? = nil,
+        assembledPrompt: String? = nil,
+        sectionProvenanceJSON: String? = nil
+    ) {
+        self.conversationID = conversationID
+        self.fingerprint = fingerprint
+        self.assembledPromptDigest = assembledPromptDigest
+        self.replaySpecDigest = replaySpecDigest
+        self.assembledPrompt = assembledPrompt
+        self.sectionProvenanceJSON = sectionProvenanceJSON
+    }
 }
 
 /// Persistable checkpoint trigger for CE attachment projection decisions.

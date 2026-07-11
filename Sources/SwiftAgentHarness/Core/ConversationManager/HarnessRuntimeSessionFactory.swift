@@ -192,6 +192,7 @@ public enum HarnessRuntimeSessionFactory {
             topics: topics,
             messaging: messaging,
             sessionProjection: sessionProjection,
+            skillActivation: skillActivationService,
             registryOwnerAccountScope: { nil }
         )
         let conversationDomainServices = domainServices.bundle
