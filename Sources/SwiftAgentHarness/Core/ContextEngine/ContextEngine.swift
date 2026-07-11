@@ -76,6 +76,8 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
     let useSessionTreeProjection: Bool
     let sessionTranscriptEntries: [SessionTranscriptEntry]?
     let contextPruningPolicy: ContextPruningPolicy?
+    let priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact?
+    let pendingCacheBreakEvents: Set<CacheBreakEventReason>
 
     init(
         requestInputTrustRaw: String? = nil,
@@ -89,7 +91,9 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         attachmentBlobReader: AttachmentBlobReading? = nil,
         useSessionTreeProjection: Bool = false,
         sessionTranscriptEntries: [SessionTranscriptEntry]? = nil,
-        contextPruningPolicy: ContextPruningPolicy? = nil
+        contextPruningPolicy: ContextPruningPolicy? = nil,
+        priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact? = nil,
+        pendingCacheBreakEvents: Set<CacheBreakEventReason> = []
     ) {
         self.requestInputTrustRaw = requestInputTrustRaw
         self.safeDefaultTrustClass = safeDefaultTrustClass
@@ -103,6 +107,8 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         self.useSessionTreeProjection = useSessionTreeProjection
         self.sessionTranscriptEntries = sessionTranscriptEntries
         self.contextPruningPolicy = contextPruningPolicy
+        self.priorAttachmentProjection = priorAttachmentProjection
+        self.pendingCacheBreakEvents = pendingCacheBreakEvents
     }
 }
 
@@ -138,20 +144,54 @@ public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
     }
 }
 
+/// Recency and working-set policy for attachment projection rungs.
+public struct ContextEngineAttachmentRecencyPolicyInput: Sendable, Equatable {
+    let enabled: Bool
+    let hotAccessTurns: Int
+    let demoteInlineAfterTurns: Int
+    let demoteDigestAfterTurns: Int
+    let hysteresisTurnMargin: Int
+    let maxInlineImages: Int
+    let promoteHotSetOnCompaction: Int
+
+    public init(
+        enabled: Bool = true,
+        hotAccessTurns: Int = 3,
+        demoteInlineAfterTurns: Int = 8,
+        demoteDigestAfterTurns: Int = 20,
+        hysteresisTurnMargin: Int = 2,
+        maxInlineImages: Int = 2,
+        promoteHotSetOnCompaction: Int = 5
+    ) {
+        self.enabled = enabled
+        self.hotAccessTurns = max(0, hotAccessTurns)
+        self.demoteInlineAfterTurns = max(0, demoteInlineAfterTurns)
+        self.demoteDigestAfterTurns = max(0, demoteDigestAfterTurns)
+        self.hysteresisTurnMargin = max(0, hysteresisTurnMargin)
+        self.maxInlineImages = max(0, maxInlineImages)
+        self.promoteHotSetOnCompaction = max(0, promoteHotSetOnCompaction)
+    }
+
+    public static let `default` = ContextEngineAttachmentRecencyPolicyInput()
+}
+
 /// Inputs for deterministic attachment inlining/summarization projection decisions.
 public struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
     let enabled: Bool
     let inlineByteLimit: Int64
     let summarizeByteLimit: Int64
+    let recencyPolicy: ContextEngineAttachmentRecencyPolicyInput
 
     init(
         enabled: Bool = true,
         inlineByteLimit: Int64 = 256_000,
-        summarizeByteLimit: Int64 = 2_000_000
+        summarizeByteLimit: Int64 = 2_000_000,
+        recencyPolicy: ContextEngineAttachmentRecencyPolicyInput = .default
     ) {
         self.enabled = enabled
         self.inlineByteLimit = inlineByteLimit
         self.summarizeByteLimit = summarizeByteLimit
+        self.recencyPolicy = recencyPolicy
     }
 }
 
@@ -200,16 +240,22 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
 public struct ContextEngineAttachmentProjectionArtifact: Sendable {
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
+    let targetDecisions: [ConversationAttachmentProjectionDecision]?
     let materializedBlocks: [AttachmentMaterializedBlock]
+    let accessWatermarkTurnIndex: Int?
 
     init(
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
-        materializedBlocks: [AttachmentMaterializedBlock] = []
+        targetDecisions: [ConversationAttachmentProjectionDecision]? = nil,
+        materializedBlocks: [AttachmentMaterializedBlock] = [],
+        accessWatermarkTurnIndex: Int? = nil
     ) {
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
+        self.targetDecisions = targetDecisions
         self.materializedBlocks = materializedBlocks
+        self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
     }
 }
 
@@ -244,18 +290,24 @@ public struct ContextAttachmentProjectionCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let projectionFingerprint: String
     let decisions: [ConversationAttachmentProjectionDecision]
+    let targetDecisions: [ConversationAttachmentProjectionDecision]?
     let materializedBlocks: [AttachmentMaterializedBlock]
+    let accessWatermarkTurnIndex: Int?
 
     init(
         conversationID: UUID,
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
-        materializedBlocks: [AttachmentMaterializedBlock] = []
+        targetDecisions: [ConversationAttachmentProjectionDecision]? = nil,
+        materializedBlocks: [AttachmentMaterializedBlock] = [],
+        accessWatermarkTurnIndex: Int? = nil
     ) {
         self.conversationID = conversationID
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
+        self.targetDecisions = targetDecisions
         self.materializedBlocks = materializedBlocks
+        self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
     }
 }
 

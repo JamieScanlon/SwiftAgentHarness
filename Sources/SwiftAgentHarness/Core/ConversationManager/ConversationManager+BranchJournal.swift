@@ -363,7 +363,9 @@ extension ConversationManager {
                 basedOnEventID: remapEventID(wire.basedOnEventID),
                 projectionFingerprint: wire.projectionFingerprint,
                 decisions: wire.decisions,
+                targetDecisions: wire.targetDecisions,
                 materializedBlocks: wire.materializedBlocks,
+                accessWatermarkTurnIndex: wire.accessWatermarkTurnIndex,
                 createdAt: wire.createdAt
             )
             return ConversationEventCodec.encode(wire)

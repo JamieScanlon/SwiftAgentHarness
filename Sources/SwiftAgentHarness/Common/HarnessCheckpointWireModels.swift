@@ -149,13 +149,15 @@ public struct SystemPromptAssemblyCheckpointWire: Codable, Sendable, Equatable {
 }
 
 public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var basedOnEventID: Int
     public var projectionFingerprint: String
     public var decisions: [ConversationAttachmentProjectionDecision]
+    public var targetDecisions: [ConversationAttachmentProjectionDecision]?
     public var materializedBlocks: [AttachmentMaterializedBlock]
+    public var accessWatermarkTurnIndex: Int?
     public var createdAt: Date
 
     public init(
@@ -163,14 +165,18 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
         basedOnEventID: Int,
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
+        targetDecisions: [ConversationAttachmentProjectionDecision]? = nil,
         materializedBlocks: [AttachmentMaterializedBlock] = [],
+        accessWatermarkTurnIndex: Int? = nil,
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
         self.basedOnEventID = basedOnEventID
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
+        self.targetDecisions = targetDecisions
         self.materializedBlocks = materializedBlocks
+        self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
         self.createdAt = createdAt
     }
 
@@ -179,7 +185,9 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
         case basedOnEventID
         case projectionFingerprint
         case decisions
+        case targetDecisions
         case materializedBlocks
+        case accessWatermarkTurnIndex
         case createdAt
     }
 
@@ -189,8 +197,22 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
         basedOnEventID = try container.decode(Int.self, forKey: .basedOnEventID)
         projectionFingerprint = try container.decode(String.self, forKey: .projectionFingerprint)
         decisions = try container.decode([ConversationAttachmentProjectionDecision].self, forKey: .decisions)
+        targetDecisions = try container.decodeIfPresent([ConversationAttachmentProjectionDecision].self, forKey: .targetDecisions)
         materializedBlocks = try container.decodeIfPresent([AttachmentMaterializedBlock].self, forKey: .materializedBlocks) ?? []
+        accessWatermarkTurnIndex = try container.decodeIfPresent(Int.self, forKey: .accessWatermarkTurnIndex)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(basedOnEventID, forKey: .basedOnEventID)
+        try container.encode(projectionFingerprint, forKey: .projectionFingerprint)
+        try container.encode(decisions, forKey: .decisions)
+        try container.encodeIfPresent(targetDecisions, forKey: .targetDecisions)
+        try container.encode(materializedBlocks, forKey: .materializedBlocks)
+        try container.encodeIfPresent(accessWatermarkTurnIndex, forKey: .accessWatermarkTurnIndex)
+        try container.encode(createdAt, forKey: .createdAt)
     }
 }
 

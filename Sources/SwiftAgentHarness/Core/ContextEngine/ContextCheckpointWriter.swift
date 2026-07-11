@@ -372,7 +372,9 @@ enum ContextCheckpointWriter {
         ),
            latest.wire.projectionFingerprint == spec.projectionFingerprint,
            latest.wire.decisions == spec.decisions,
-           latest.wire.materializedBlocks == spec.materializedBlocks {
+           latest.wire.targetDecisions == spec.targetDecisions,
+           latest.wire.materializedBlocks == spec.materializedBlocks,
+           latest.wire.accessWatermarkTurnIndex == spec.accessWatermarkTurnIndex {
             return
         }
         let wire = AttachmentProjectionCheckpointWire(
@@ -380,7 +382,9 @@ enum ContextCheckpointWriter {
             basedOnEventID: frontierEventID,
             projectionFingerprint: spec.projectionFingerprint,
             decisions: spec.decisions,
+            targetDecisions: spec.targetDecisions,
             materializedBlocks: spec.materializedBlocks,
+            accessWatermarkTurnIndex: spec.accessWatermarkTurnIndex,
             createdAt: Date()
         )
         do {

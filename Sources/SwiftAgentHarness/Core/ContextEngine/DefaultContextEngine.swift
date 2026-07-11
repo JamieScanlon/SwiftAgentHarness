@@ -391,7 +391,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 conversationID: request.conversation.id,
                 projectionFingerprint: $0.projectionFingerprint,
                 decisions: $0.decisions,
-                materializedBlocks: $0.materializedBlocks
+                targetDecisions: $0.targetDecisions,
+                materializedBlocks: $0.materializedBlocks,
+                accessWatermarkTurnIndex: $0.accessWatermarkTurnIndex
             )
         }
 
@@ -1136,7 +1138,10 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             modelSupportsVision: policy.modelSupportsVision,
             policy: policy.attachmentProjectionPolicy,
             blobReader: policy.attachmentBlobReader,
-            conversationID: conversation.id
+            conversationID: conversation.id,
+            messages: projected,
+            priorAttachmentProjection: policy.priorAttachmentProjection,
+            pendingCacheBreakEvents: policy.pendingCacheBreakEvents
         )
         let attachmentSectionContent = attachmentArtifact.flatMap {
             AttachmentRepresentationMaterializer.attachmentsSectionBody(blocks: $0.materializedBlocks)

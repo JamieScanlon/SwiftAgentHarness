@@ -43,26 +43,15 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         modelSupportsVision: Bool?,
         policy: ContextEngineAttachmentProjectionPolicyInput?
     ) -> ContextEngineAttachmentProjectionArtifact? {
-        guard let policy, policy.enabled, !catalog.isEmpty else { return nil }
-        let decisions = catalog.map { descriptor in
-            decision(
-                for: descriptor,
-                modelSupportsVision: modelSupportsVision ?? false,
-                policy: policy
-            )
-        }
-        guard !decisions.isEmpty else { return nil }
-        let canonical = decisions.map {
-            "\($0.attachmentID.uuidString)|\($0.disposition.rawValue)|\($0.reason)"
-        }.sorted().joined(separator: ";")
-        let fingerprintSource = "\(policy.inlineByteLimit)|\(policy.summarizeByteLimit)|\(modelSupportsVision == true ? 1 : 0)|\(canonical)"
-        let projectionFingerprint = SHA256.hash(data: Data(fingerprintSource.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return ContextEngineAttachmentProjectionArtifact(
-            projectionFingerprint: projectionFingerprint,
-            decisions: decisions,
-            materializedBlocks: []
+        resolveAttachmentProjectionArtifact(
+            catalog: catalog,
+            modelSupportsVision: modelSupportsVision,
+            policy: policy,
+            blobReader: nil,
+            conversationID: UUID(),
+            messages: [],
+            priorAttachmentProjection: nil,
+            pendingCacheBreakEvents: []
         )
     }
 
@@ -71,77 +60,114 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         modelSupportsVision: Bool?,
         policy: ContextEngineAttachmentProjectionPolicyInput?,
         blobReader: AttachmentBlobReading?,
-        conversationID: UUID
+        conversationID: UUID,
+        messages: [Message] = [],
+        priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact? = nil,
+        pendingCacheBreakEvents: Set<CacheBreakEventReason> = []
     ) -> ContextEngineAttachmentProjectionArtifact? {
         guard let policy, policy.enabled, !catalog.isEmpty else { return nil }
-        let decisions = catalog.map { descriptor in
-            decision(
-                for: descriptor,
-                modelSupportsVision: modelSupportsVision ?? false,
+        let supportsVision = modelSupportsVision ?? false
+        let accessIndex = AttachmentAccessIndexBuilder.build(messages: messages, catalog: catalog)
+        let naturalDecisions = catalog.map {
+            AttachmentRecencyProjectionPolicy.naturalDecision(
+                for: $0,
+                modelSupportsVision: supportsVision,
                 policy: policy
             )
         }
-        guard !decisions.isEmpty else { return nil }
-        let materializedBlocks = AttachmentRepresentationMaterializer.materialize(
-            decisions: decisions,
+        var targetDecisions = AttachmentRecencyProjectionPolicy.applyRecencyDemotion(
+            decisions: naturalDecisions,
             catalog: catalog,
-            modelSupportsVision: modelSupportsVision ?? false,
+            accessIndex: accessIndex,
+            recencyPolicy: policy.recencyPolicy
+        )
+        targetDecisions = AttachmentRecencyProjectionPolicy.applyPerKindInlineCaps(
+            decisions: targetDecisions,
+            catalog: catalog,
+            accessIndex: accessIndex,
+            recencyPolicy: policy.recencyPolicy
+        )
+        let coordinated = AttachmentRungCoordinator.coordinate(
+            catalog: catalog,
+            targetDecisions: targetDecisions,
+            priorDecisions: priorAttachmentProjection?.decisions,
+            naturalDecisions: naturalDecisions,
+            accessIndex: accessIndex,
+            pendingBreakEvents: pendingCacheBreakEvents,
+            recencyPolicy: policy.recencyPolicy
+        )
+        let effectiveDecisions = coordinated.effective
+        guard !effectiveDecisions.isEmpty else { return nil }
+        let materializedBlocks = AttachmentRepresentationMaterializer.materialize(
+            decisions: effectiveDecisions,
+            catalog: catalog,
+            modelSupportsVision: supportsVision,
             blobReader: blobReader,
             conversationID: conversationID,
             configuration: AttachmentRepresentationMaterializerConfiguration(
                 inlineByteLimit: policy.inlineByteLimit
             )
         )
-        let canonical = decisions.map {
+        let projectionFingerprint = fingerprint(
+            policy: policy,
+            modelSupportsVision: supportsVision,
+            effectiveDecisions: effectiveDecisions,
+            targetDecisions: coordinated.target,
+            materializedBlocks: materializedBlocks,
+            accessWatermarkTurnIndex: accessIndex.currentTurnIndex
+        )
+        return ContextEngineAttachmentProjectionArtifact(
+            projectionFingerprint: projectionFingerprint,
+            decisions: effectiveDecisions,
+            targetDecisions: coordinated.target,
+            materializedBlocks: materializedBlocks,
+            accessWatermarkTurnIndex: accessIndex.currentTurnIndex
+        )
+    }
+
+    private static func fingerprint(
+        policy: ContextEngineAttachmentProjectionPolicyInput,
+        modelSupportsVision: Bool,
+        effectiveDecisions: [ConversationAttachmentProjectionDecision],
+        targetDecisions: [ConversationAttachmentProjectionDecision],
+        materializedBlocks: [AttachmentMaterializedBlock],
+        accessWatermarkTurnIndex: Int
+    ) -> String {
+        let effectiveCanonical = effectiveDecisions.map {
+            "\($0.attachmentID.uuidString)|\($0.disposition.rawValue)|\($0.reason)"
+        }.sorted().joined(separator: ";")
+        let targetCanonical = targetDecisions.map {
             "\($0.attachmentID.uuidString)|\($0.disposition.rawValue)|\($0.reason)"
         }.sorted().joined(separator: ";")
         let materializedCanonical = materializedBlocks.map {
             "\($0.attachmentID.uuidString)|\(sha256Hex($0.body))"
         }.sorted().joined(separator: ";")
-        let fingerprintSource = "\(policy.inlineByteLimit)|\(policy.summarizeByteLimit)|\(modelSupportsVision == true ? 1 : 0)|\(canonical)|\(materializedCanonical)"
-        let projectionFingerprint = sha256Hex(fingerprintSource)
-        return ContextEngineAttachmentProjectionArtifact(
-            projectionFingerprint: projectionFingerprint,
-            decisions: decisions,
-            materializedBlocks: materializedBlocks
-        )
+        let recency = policy.recencyPolicy
+        let recencyCanonical = [
+            recency.enabled ? "1" : "0",
+            String(recency.hotAccessTurns),
+            String(recency.demoteInlineAfterTurns),
+            String(recency.demoteDigestAfterTurns),
+            String(recency.hysteresisTurnMargin),
+            String(recency.maxInlineImages),
+            String(recency.promoteHotSetOnCompaction),
+        ].joined(separator: "|")
+        let fingerprintSource = [
+            String(policy.inlineByteLimit),
+            String(policy.summarizeByteLimit),
+            modelSupportsVision ? "1" : "0",
+            recencyCanonical,
+            String(accessWatermarkTurnIndex),
+            effectiveCanonical,
+            targetCanonical,
+            materializedCanonical,
+        ].joined(separator: "||")
+        return sha256Hex(fingerprintSource)
     }
 
     private static func sha256Hex(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
-    }
-
-    private static func decision(
-        for descriptor: ConversationAttachmentDescriptor,
-        modelSupportsVision: Bool,
-        policy: ContextEngineAttachmentProjectionPolicyInput
-    ) -> ConversationAttachmentProjectionDecision {
-        let normalizedKind = descriptor.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let byteSize = descriptor.byteSize ?? 0
-        let isImage = normalizedKind == "image" || (descriptor.mimeType?.lowercased().hasPrefix("image/") == true)
-        let disposition: ConversationAttachmentProjectionDisposition
-        let reason: String
-        if isImage && !modelSupportsVision {
-            disposition = .summarize
-            reason = "vision_unsupported"
-        } else if byteSize > 0, byteSize <= policy.inlineByteLimit {
-            disposition = .inline
-            reason = "within_inline_budget"
-        } else if byteSize == 0 || byteSize <= policy.summarizeByteLimit {
-            disposition = .summarize
-            reason = byteSize == 0 ? "unknown_size" : "within_summary_budget"
-        } else {
-            disposition = .searchOnly
-            reason = "over_budget"
-        }
-        return ConversationAttachmentProjectionDecision(
-            attachmentID: descriptor.id,
-            attachmentName: descriptor.name,
-            attachmentKind: descriptor.kind,
-            disposition: disposition,
-            reason: reason
-        )
     }
 }

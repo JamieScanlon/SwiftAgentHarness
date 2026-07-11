@@ -282,7 +282,9 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
             basedOnEventID: basedOnGlobal,
             projectionFingerprint: wire.projectionFingerprint,
             decisions: wire.decisions,
+            targetDecisions: wire.targetDecisions,
             materializedBlocks: wire.materializedBlocks,
+            accessWatermarkTurnIndex: wire.accessWatermarkTurnIndex,
             createdAt: wire.createdAt
         )
         try appendDerived(
