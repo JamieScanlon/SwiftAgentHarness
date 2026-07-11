@@ -611,12 +611,47 @@ struct ContextEngineTests {
         }
         #expect(result.systemPromptCheckpoint?.conversationID == conv.id)
         #expect(result.systemPromptCheckpoint?.fingerprint.isEmpty == false)
-        #expect(result.projectionArtifact?.systemPromptAssembly?.metadata["conversationID"] == conv.id.uuidString)
+        let metadata = result.projectionArtifact?.systemPromptAssembly?.metadata ?? [:]
+        #expect(metadata["conversationID"] == nil)
+        #expect(metadata["modeDirective"] == nil)
     }
 
-    @Test("DefaultContextEngine applies mode context metadata switches in projection artifact")
+    @Test("DefaultContextEngine applies mode context switches through typed assembly")
     func engineProjectionAppliesModeContextSwitches() async {
-        let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)
+        final class CapturingRenderer: SystemPromptAssemblyRendering, @unchecked Sendable {
+            private let lock = NSLock()
+            private var _contributions: [SystemPromptContribution] = []
+            private var _context: SystemPromptAssemblyContext?
+
+            var contributions: [SystemPromptContribution] {
+                lock.withLock { _contributions }
+            }
+
+            var context: SystemPromptAssemblyContext? {
+                lock.withLock { _context }
+            }
+
+            func render(
+                conversation: ModelConversation,
+                policy: ContextEngineSystemPromptAssemblyPolicyInput,
+                userSystemPrompt: String?,
+                assemblyContext: SystemPromptAssemblyContext,
+                contributions: [SystemPromptContribution],
+                referenceDate: Date
+            ) async throws -> String {
+                lock.withLock {
+                    _contributions = contributions
+                    _context = assemblyContext
+                }
+                return "MODE_SWITCH_PROBE"
+            }
+        }
+        let renderer = CapturingRenderer()
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            systemPromptAssemblyRenderer: renderer,
+            logger: nil
+        )
         let conv = ModelConversation(
             model: Model(
                 protocol: .openAIAPI,
@@ -667,14 +702,15 @@ struct ContextEngineTests {
         let result = await engine.assemble(request: assembleReq) { _ in
             fatalError("transform must not run")
         }
-        let metadata = result.projectionArtifact?.systemPromptAssembly?.metadata ?? [:]
-        #expect(metadata["modeDirective"] == "Focus on code review only.")
-        #expect(metadata["modeCompactionLevel"] == "full")
-        #expect(metadata["modeMemoryInjection"] == "off")
-        #expect(metadata["modeIncludeSkills"] == "false")
-        #expect(metadata["modeIncludeToolGuidance"] == "false")
-        #expect(metadata["modeSuppressSections"]?.contains("skills") == true)
-        #expect(metadata["modeSectionOverride.tools"] == "Only cite tools when explicitly requested.")
+        let modeContribution = renderer.contributions.first(where: { $0.source == .mode })
+        #expect(modeContribution?.sectionDirectives[.modeDirective] == "Focus on code review only.")
+        #expect(modeContribution?.suppress.contains(.skills) == true)
+        #expect(modeContribution?.sectionOverrides[.toolGuidance] == "Only cite tools when explicitly requested.")
+        #expect(renderer.context?.memoryInjectionMode == "off")
+        #expect(renderer.context?.includeAgentSkills == false)
+        #expect(renderer.context?.includeToolGuidance == false)
+        #expect(renderer.context?.modeCompactionLevel == "full")
+        #expect(result.projectionArtifact?.systemPromptAssembly?.metadata["modeDirective"] == nil)
     }
 
     @Test("DefaultContextEngine embeds assembled system prompt when renderer is wired")
@@ -684,11 +720,12 @@ struct ContextEngineTests {
                 conversation: ModelConversation,
                 policy: ContextEngineSystemPromptAssemblyPolicyInput,
                 userSystemPrompt: String?,
-                enrichedMetadata: [String: String],
+                assemblyContext: SystemPromptAssemblyContext,
+                contributions: [SystemPromptContribution],
                 referenceDate: Date
             ) async throws -> String {
-                let tier1 = enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] ?? ""
-                let iso = enrichedMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] ?? ""
+                let tier1 = assemblyContext.tier1MemoryContent ?? ""
+                let iso = ISO8601DateFormatter().string(from: referenceDate)
                 return "ASSEMBLED:\(userSystemPrompt ?? ""):\(tier1):\(iso)"
             }
         }
@@ -764,7 +801,7 @@ struct ContextEngineTests {
         )
         let metadata = artifact.metadata
         #expect(metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] == artifact.assembledPromptDigest)
-        #expect(metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent]?.contains("tier-one rule") == true)
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] == nil)
     }
 
     @Test("System prompt checkpoint fingerprint changes with context override value changes")

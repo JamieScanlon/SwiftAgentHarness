@@ -70,10 +70,9 @@ struct ModeRegistryTests {
             strictAgentHarnessPrompts: true,
             resolvedProfile: extraction
         )
-        #expect(switches.metadata["agentWorkflowBlock"] == nil)
-        #expect(switches.metadata["planPath"] == nil)
-        #expect(switches.metadata["modeIncludeSkills"] == "false")
-        #expect(switches.metadata["modeIncludeToolGuidance"] == "false")
+        #expect(switches.assemblyContext.includeAgentSkills == false)
+        #expect(switches.assemblyContext.includeToolGuidance == false)
+        #expect(switches.assemblyContext.workflowBlock.isEmpty)
     }
 
     @Test("All machine sub-agent mode profiles resolve from built-ins without external config")

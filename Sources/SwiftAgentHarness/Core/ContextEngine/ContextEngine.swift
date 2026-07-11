@@ -109,8 +109,7 @@ public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
     let toolPolicySignature: String
     let routingPolicyTools: [String]
     let routingPolicySkills: [String]
-    let providerStablePrefix: String?
-    let providerSectionOverrides: [String: String]
+    let providerContribution: SystemPromptContribution?
 
     init(
         resolvedModeProfile: ResolvedModeProfile,
@@ -120,8 +119,7 @@ public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
         toolPolicySignature: String,
         routingPolicyTools: [String],
         routingPolicySkills: [String],
-        providerStablePrefix: String? = nil,
-        providerSectionOverrides: [String: String] = [:]
+        providerContribution: SystemPromptContribution? = nil
     ) {
         self.resolvedModeProfile = resolvedModeProfile
         self.strictAgentHarnessPrompts = strictAgentHarnessPrompts
@@ -130,8 +128,7 @@ public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
         self.toolPolicySignature = toolPolicySignature
         self.routingPolicyTools = routingPolicyTools
         self.routingPolicySkills = routingPolicySkills
-        self.providerStablePrefix = providerStablePrefix
-        self.providerSectionOverrides = providerSectionOverrides
+        self.providerContribution = providerContribution
     }
 }
 

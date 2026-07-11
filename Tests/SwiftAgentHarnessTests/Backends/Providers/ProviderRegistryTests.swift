@@ -100,6 +100,21 @@ struct ProviderCapabilitySlotScaffoldTests {
 
 @Suite("ProviderRuntimeHooks")
 struct ProviderRuntimeHooksTests {
+    @Test("System prompt contribution maps provider sections to canonical names")
+    func typedContributionMapping() {
+        let wire = ProviderSystemPromptContribution(
+            stablePrefix: "prefix",
+            sectionOverrides: [
+                .interactionStyle: "be concise",
+                .toolCallStyle: "call tools directly",
+            ]
+        )
+        let typed = ProviderPromptContribution.systemPromptContribution(from: wire)
+        #expect(typed?.stablePrefix == "prefix")
+        #expect(typed?.sectionOverrides[.dynamicAdditions] == "be concise")
+        #expect(typed?.sectionOverrides[.toolGuidance] == "call tools directly")
+    }
+
     @Test("System prompt contribution merges cache boundary")
     func cacheBoundaryMerge() {
         let merged = ProviderPromptContribution.merge(

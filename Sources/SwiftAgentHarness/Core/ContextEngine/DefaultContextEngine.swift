@@ -1051,32 +1051,32 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         modeMemoryInjection: String,
         resolvedProfile: ResolvedModeProfile?
     ) async -> ContextEngineSystemPromptAssemblyArtifact {
-        var metadata = ContextSystemPromptModeSwitches.build(
+        let referenceDate = Date()
+        let modeSwitches = ContextSystemPromptModeSwitches.build(
             conversation: conversation,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
-            resolvedProfile: policy.resolvedModeProfile
-        ).metadata
+            resolvedProfile: policy.resolvedModeProfile,
+            referenceDate: referenceDate
+        )
         let tier1 = await tier1MemorySectionContent(
             conversation: conversation,
             modeMemoryInjection: modeMemoryInjection,
             resolvedProfile: resolvedProfile
         )
+        var assemblyContext = modeSwitches.assemblyContext
         if let tier1Content = tier1.content?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !tier1Content.isEmpty {
-            metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1Content
+            assemblyContext.tier1MemoryContent = tier1Content
         }
-        if let generation = tier1.generation {
-            metadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+        assemblyContext.memorySnapshotGeneration = tier1.generation
+
+        var contributions: [SystemPromptContribution] = []
+        if let provider = policy.providerContribution {
+            contributions.append(provider)
         }
-        if let providerStablePrefix = policy.providerStablePrefix?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !providerStablePrefix.isEmpty {
-            metadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = providerStablePrefix
-        }
-        for (key, value) in policy.providerSectionOverrides {
-            metadata[key] = value
-        }
+        contributions.append(modeSwitches.modeContribution)
+
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
@@ -1088,7 +1088,6 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             memorySnapshotGeneration: tier1.generation,
             tier1MemorySectionContent: tier1.content
         )
-        let referenceDate = Date()
         var assembledSystemPromptText: String?
         if let renderer = systemPromptAssemblyRenderer {
             let userSystemPrompt = SystemPromptAssemblyApplicator.userSystemPrompt(from: projectedMessages)
@@ -1097,7 +1096,8 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                     conversation: conversation,
                     policy: policy,
                     userSystemPrompt: userSystemPrompt,
-                    enrichedMetadata: metadata,
+                    assemblyContext: assemblyContext,
+                    contributions: contributions,
                     referenceDate: referenceDate
                 )
             } catch {
@@ -1105,11 +1105,15 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             }
         }
         let assembledPromptDigest = assembledSystemPromptText.map { SystemPromptDispatchCodec.sha256Digest(of: $0) }
+        var dispatchMetadata: [String: String] = [:]
         if let assembledPromptDigest {
-            metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
+        }
+        if let generation = tier1.generation {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
         }
         return ContextEngineSystemPromptAssemblyArtifact(
-            metadata: metadata,
+            metadata: dispatchMetadata,
             fingerprint: fingerprint,
             tier1MemorySectionContent: tier1.content,
             memorySnapshotGeneration: tier1.generation,

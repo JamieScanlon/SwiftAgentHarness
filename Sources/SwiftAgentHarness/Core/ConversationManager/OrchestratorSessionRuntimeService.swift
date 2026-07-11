@@ -92,12 +92,9 @@ public actor OrchestratorSessionRuntimeService {
         for conversation: ModelConversation?,
         resolvedProfile: ResolvedModeProfile
     ) -> [String: String] {
-        guard let conversation else { return [:] }
-        return ContextSystemPromptModeSwitches.build(
-            conversation: conversation,
-            strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            resolvedProfile: resolvedProfile
-        ).metadata
+        _ = conversation
+        _ = resolvedProfile
+        return [:]
     }
 
     func makeResolvedThinkingConfig(
@@ -218,8 +215,16 @@ public actor OrchestratorSessionRuntimeService {
         }
         guard let conv else {
             let modeCtx = ModePolicyContext(interactionMode: interactionMode, resolvedProfile: resolved)
-            let metadata = makeSystemPromptMetadata(for: nil, resolvedProfile: resolved)
             let skillLoader = await skillActivation.skillLoader(for: conversationID)
+            let referenceDate = Date()
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            let context = SystemPromptAssemblyContext(
+                conversationID: "preview",
+                conversationStartDate: isoFormatter.string(from: referenceDate),
+                referenceDate: referenceDate,
+                userSystemPrompt: userSystemPrompt ?? ""
+            )
             let systemPrompt = try await SystemPrompt(
                 skillLoader: skillLoader,
                 logger: logger,
@@ -229,21 +234,17 @@ public actor OrchestratorSessionRuntimeService {
                 modePolicyContext: modeCtx
             )
             return try await systemPrompt.generateSystemPrompt(
-                withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: metadata
+                context: context,
+                resolved: ResolvedSystemPromptSections(),
+                stablePrefix: nil
             )
         }
 
-        var providerStablePrefix: String?
-        var providerSectionOverrides: [String: String] = [:]
+        var providerContribution: SystemPromptContribution?
         if let entry = await deps.registryEntryProvider?(conv.model.id),
            let binding = entry.primaryBinding,
-           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
-            providerStablePrefix = contribution.stablePrefix
-            ProviderPromptContribution.applySectionOverrides(
-                metadata: &providerSectionOverrides,
-                contribution: contribution
-            )
+           let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+            providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
         }
         let routingNames = ConversationRoutingPolicyNames.names(for: conv)
         let policy = ContextEngineSystemPromptAssemblyPolicyInput(
@@ -254,28 +255,30 @@ public actor OrchestratorSessionRuntimeService {
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
             routingPolicySkills: routingNames.skills,
-            providerStablePrefix: providerStablePrefix,
-            providerSectionOverrides: providerSectionOverrides
+            providerContribution: providerContribution
         )
-        var enrichedMetadata = makeSystemPromptMetadata(for: conv, resolvedProfile: resolved)
+        let referenceDate = Date()
+        let modeSwitches = ContextSystemPromptModeSwitches.build(
+            conversation: conv,
+            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
+            resolvedProfile: policy.resolvedModeProfile,
+            referenceDate: referenceDate
+        )
+        var assemblyContext = modeSwitches.assemblyContext
         if let defaultEngine = deps.contextEngine as? DefaultContextEngine,
            let memoryService = defaultEngine.memoryService,
            let blocks = await memoryService.systemPromptBlocks(conversationID: conv.id) {
             let stable = blocks.stableSystemPromptSection.trimmingCharacters(in: .whitespacesAndNewlines)
             if !stable.isEmpty {
-                enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = stable
+                assemblyContext.tier1MemoryContent = stable
             }
-            let generation = await memoryService.currentSnapshotGeneration(conversationID: conv.id)
-            enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+            assemblyContext.memorySnapshotGeneration = await memoryService.currentSnapshotGeneration(conversationID: conv.id)
         }
-        if let providerStablePrefix = policy.providerStablePrefix?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !providerStablePrefix.isEmpty {
-            enrichedMetadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = providerStablePrefix
+        var contributions: [SystemPromptContribution] = []
+        if let providerContribution {
+            contributions.append(providerContribution)
         }
-        for (key, value) in policy.providerSectionOverrides {
-            enrichedMetadata[key] = value
-        }
+        contributions.append(modeSwitches.modeContribution)
 
         let renderer = DefaultSystemPromptAssemblyRenderer(
             skillLoaderProvider: { [skillActivation] conversationID in
@@ -283,17 +286,15 @@ public actor OrchestratorSessionRuntimeService {
             },
             logger: logger
         )
-        let referenceDate = Date()
         let text = try await renderer.render(
             conversation: conv,
             policy: policy,
             userSystemPrompt: userSystemPrompt,
-            enrichedMetadata: enrichedMetadata,
+            assemblyContext: assemblyContext,
+            contributions: contributions,
             referenceDate: referenceDate
         )
         do {
-            let tier1 = enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent]
-            let generation = enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration].flatMap(Int.init)
             let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
                 resolved: resolved,
                 strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
@@ -302,8 +303,8 @@ public actor OrchestratorSessionRuntimeService {
                 toolPolicySignature: policy.toolPolicySignature,
                 routingPolicyTools: policy.routingPolicyTools,
                 routingPolicySkills: policy.routingPolicySkills,
-                memorySnapshotGeneration: generation,
-                tier1MemorySectionContent: tier1
+                memorySnapshotGeneration: assemblyContext.memorySnapshotGeneration,
+                tier1MemorySectionContent: assemblyContext.tier1MemoryContent
             )
             try await persistenceDomain.persistSystemPromptAssemblyCheckpointIfNeededAsync(
                 conversationID: conv.id,

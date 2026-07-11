@@ -11,7 +11,8 @@ protocol SystemPromptAssemblyRendering: Sendable {
         conversation: ModelConversation,
         policy: ContextEngineSystemPromptAssemblyPolicyInput,
         userSystemPrompt: String?,
-        enrichedMetadata: [String: String],
+        assemblyContext: SystemPromptAssemblyContext,
+        contributions: [SystemPromptContribution],
         referenceDate: Date
     ) async throws -> String
 }
@@ -42,7 +43,8 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
         conversation: ModelConversation,
         policy: ContextEngineSystemPromptAssemblyPolicyInput,
         userSystemPrompt: String?,
-        enrichedMetadata: [String: String],
+        assemblyContext: SystemPromptAssemblyContext,
+        contributions: [SystemPromptContribution],
         referenceDate: Date
     ) async throws -> String {
         let skillLoader = await skillLoaderProvider(conversation.id)
@@ -50,9 +52,12 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
             interactionMode: conversation.interactionMode,
             resolvedProfile: policy.resolvedModeProfile
         )
-        var metadata = enrichedMetadata
-        metadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] =
-            SystemPrompt.assembleReferenceDateISOString(from: referenceDate)
+        var context = assemblyContext
+        context.referenceDate = referenceDate
+        if let userSystemPrompt {
+            context.userSystemPrompt = userSystemPrompt
+        }
+        let resolution = try SystemPromptContributionResolver.resolve(contributions: contributions)
         do {
             let systemPrompt = try await SystemPrompt(
                 skillLoader: skillLoader,
@@ -63,8 +68,9 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 modePolicyContext: modeCtx
             )
             return try await systemPrompt.generateSystemPrompt(
-                withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: metadata
+                context: context,
+                resolved: resolution.resolved,
+                stablePrefix: resolution.stablePrefix
             )
         } catch {
             logger?.warning(
@@ -81,8 +87,9 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 modePolicyContext: modeCtx
             )
             return try await fallbackPrompt.generateSystemPrompt(
-                withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: metadata
+                context: context,
+                resolved: resolution.resolved,
+                stablePrefix: resolution.stablePrefix
             )
         }
     }
