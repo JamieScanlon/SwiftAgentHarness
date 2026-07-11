@@ -48,10 +48,8 @@ public actor DefaultMemoryService: MemoryServicing {
         let capability = await capabilityRegistry.activeCapability()
         try await capability.runtime.initialize(sessionID: context.conversationID, context: context)
         let blocks = try await buildBlocks(context: context, capability: capability, recalled: "")
-        if let store = await capability.runtime.store(for: context.conversationID) {
-            let manifest = store.manifest()
-            await capability.runtime.updateSnapshot(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
-        }
+        let manifest = await capability.runtime.manifestEntries(conversationID: context.conversationID)
+        await capability.runtime.updateSnapshot(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
         return blocks
     }
 
@@ -436,18 +434,8 @@ public actor DefaultMemoryService: MemoryServicing {
     }
 
     func extractionManifestLines(conversationID: UUID) async -> [String] {
-        var lines: [String] = []
-        if let userDir = try? AgentMemoryPathResolver.resolveUserMemoryDirectory() {
-            let userStore = AgentMemoryStore(memoryDirectory: userDir, indexCapProfile: .user)
-            for entry in userStore.manifest() {
-                lines.append(MemoryManifestScanner.formatManifestLine(entry, scope: .user))
-            }
-        }
-        let projectEntries = await manifestEntries(conversationID: conversationID)
-        for entry in projectEntries {
-            lines.append(MemoryManifestScanner.formatManifestLine(entry, scope: .project))
-        }
-        return lines
+        let entries = await manifestEntries(conversationID: conversationID)
+        return entries.map(MemoryManifestScanner.formatManifestLine)
     }
 
     func hybridSearch() async -> HybridMemorySearch {

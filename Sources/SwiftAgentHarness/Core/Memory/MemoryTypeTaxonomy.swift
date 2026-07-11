@@ -169,7 +169,11 @@ enum MemoryTopicFrontmatterParser {
 }
 
 enum MemoryManifestScanner {
-    static func scanDirectory(_ memoryDirectory: URL, fileManager: FileManager = .default) -> [MemoryManifestEntry] {
+    static func scanDirectory(
+        _ memoryDirectory: URL,
+        tierScope: MemoryTierScope = .project,
+        fileManager: FileManager = .default
+    ) -> [MemoryManifestEntry] {
         guard let files = try? fileManager.contentsOfDirectory(at: memoryDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else {
             return []
         }
@@ -189,26 +193,58 @@ enum MemoryManifestScanner {
                     memoryType: fm.type,
                     name: fm.name,
                     description: fm.description,
-                    updatedAt: updated
+                    updatedAt: updated,
+                    tierScope: tierScope
                 )
             }
             .sorted { $0.filename < $1.filename }
     }
 
     static func formatManifestLine(_ entry: MemoryManifestEntry) -> String {
-        formatManifestLine(entry, scope: nil)
+        formatManifestLine(entry, scope: entry.tierScope)
     }
 
     static func formatManifestLine(_ entry: MemoryManifestEntry, scope: MemoryTierScope?) -> String {
+        let effectiveScope = scope ?? entry.tierScope
         let ts = entry.updatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
-        let scopePrefix = scope.map { "[scope:\($0.rawValue)] " } ?? ""
-        return "\(scopePrefix)[\(entry.memoryType.rawValue)] \(entry.filename) (\(ts)): \(entry.description)"
+        return "[scope:\(effectiveScope.rawValue)] [\(entry.memoryType.rawValue)] \(entry.filename) (\(ts)): \(entry.description)"
     }
 }
 
-enum MemoryTierScope: String, Sendable, Equatable {
-    case user
-    case project
+enum MemoryManifestAggregator {
+    static func combinedEntries(userStore: AgentMemoryStore?, projectStore: AgentMemoryStore?) -> [MemoryManifestEntry] {
+        var entries: [MemoryManifestEntry] = []
+        if let userStore {
+            entries.append(contentsOf: userStore.manifest())
+        }
+        if let projectStore {
+            entries.append(contentsOf: projectStore.manifest())
+        }
+        return entries
+    }
+}
+
+enum MemoryRecallSelectionResolver {
+    static let userTierPathPrefix = "user/"
+
+    static func resolve(
+        selectionKey: String,
+        projectStore: AgentMemoryStore,
+        userStore: AgentMemoryStore?
+    ) -> (tierScope: MemoryTierScope, store: AgentMemoryStore, filename: String)? {
+        if selectionKey.hasPrefix(userTierPathPrefix) {
+            let filename = String(selectionKey.dropFirst(userTierPathPrefix.count))
+            guard let userStore else { return nil }
+            return (.user, userStore, filename)
+        }
+        return (.project, projectStore, selectionKey)
+    }
+}
+
+enum MemoryRecallBodyFormatter {
+    static func format(scope: MemoryTierScope, filename: String, body: String) -> String {
+        "[scope:\(scope.rawValue)] <!-- \(filename) -->\n\(body)"
+    }
 }
 
 enum MemoryIndexPromptComposer {

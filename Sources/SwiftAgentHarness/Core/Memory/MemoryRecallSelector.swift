@@ -10,10 +10,12 @@ struct HeuristicMemoryRecallSelector: MemoryRecallSelecting {
         guard !queryTokens.isEmpty else { return [] }
         var scored: [(String, Int)] = []
         for entry in request.manifestEntries {
-            let headerTokens = tokenSet("\(entry.name) \(entry.description) \(entry.memoryType.rawValue)")
+            let headerTokens = tokenSet(
+                "\(entry.name) \(entry.description) \(entry.memoryType.rawValue) \(entry.tierScope.rawValue)"
+            )
             let overlap = queryTokens.intersection(headerTokens).count
             let score = overlap * 2
-            if score > 0 { scored.append((entry.filename, score)) }
+            if score > 0 { scored.append((entry.selectionKey, score)) }
         }
         return scored.sorted { $0.1 > $1.1 }.prefix(5).map(\.0)
     }

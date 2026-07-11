@@ -153,4 +153,115 @@ struct UserMemoryTierTests {
         #expect(lines.contains { $0.contains("[scope:user]") && $0.contains("global-prefs.md") })
         #expect(lines.contains { $0.contains("[scope:project]") && $0.contains("repo-note.md") })
     }
+
+    @Test("manifestEntries merges user tier before project tier with tierScope")
+    func manifestEntriesMergedOrdering() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("manifest-merge-\(UUID().uuidString)", isDirectory: true)
+        let userDir = root.appendingPathComponent("user-tier", isDirectory: true)
+        let projectDir = root.appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: userDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let service = DefaultMemoryService(userConfigDir: root.appendingPathComponent("cfg", isDirectory: true))
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: root.path,
+            canonicalGitRoot: root.path,
+            memoryDirectory: projectDir,
+            userMemoryDirectory: userDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+
+        try """
+        ---
+        name: Global
+        description: concise
+        type: user
+        ---
+        Body
+        """.write(to: userDir.appendingPathComponent("aaa-user.md"), atomically: true, encoding: .utf8)
+        try """
+        ---
+        name: Repo
+        description: postgres
+        type: project
+        ---
+        Body
+        """.write(to: projectDir.appendingPathComponent("zzz-project.md"), atomically: true, encoding: .utf8)
+
+        let entries = await service.manifestEntries(conversationID: conversationID)
+        #expect(entries.count == 2)
+        #expect(entries[0].tierScope == .user)
+        #expect(entries[0].filename == "aaa-user.md")
+        #expect(entries[1].tierScope == .project)
+        #expect(entries[1].filename == "zzz-project.md")
+    }
+
+    @Test("recallForTurn surfaces user-tier topics with scope tags and nearest-wins ordering")
+    func recallLayeringScopeTagsAndOrdering() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("recall-layer-\(UUID().uuidString)", isDirectory: true)
+        let userDir = root.appendingPathComponent("user-tier", isDirectory: true)
+        let projectDir = root.appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: userDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let service = DefaultMemoryService(userConfigDir: root.appendingPathComponent("cfg", isDirectory: true))
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: root.path,
+            canonicalGitRoot: root.path,
+            memoryDirectory: projectDir,
+            userMemoryDirectory: userDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+
+        try """
+        ---
+        name: Global Prefs
+        description: concise answers preferred
+        type: user
+        ---
+        User prefers concise answers.
+        """.write(to: userDir.appendingPathComponent("prefs.md"), atomically: true, encoding: .utf8)
+        try """
+        ---
+        name: Repo Style
+        description: verbose logging preferred
+        type: project
+        ---
+        This repo prefers verbose logging.
+        """.write(to: projectDir.appendingPathComponent("prefs.md"), atomically: true, encoding: .utf8)
+
+        let manifest = await service.manifestEntries(conversationID: conversationID)
+        let recall = try await service.recallForTurn(
+            request: MemoryRecallRequest(
+                session: context,
+                userQuery: "concise verbose logging preferred",
+                manifestEntries: manifest
+            )
+        )
+        #expect(recall.selectedFilenames.contains("user/prefs.md"))
+        #expect(recall.selectedFilenames.contains("prefs.md"))
+        #expect(recall.recalledBodiesText.contains("[scope:user]"))
+        #expect(recall.recalledBodiesText.contains("[scope:project]"))
+        let userScope = recall.recalledBodiesText.range(of: "[scope:user]")!
+        let projectScope = recall.recalledBodiesText.range(of: "[scope:project]")!
+        #expect(userScope.lowerBound < projectScope.lowerBound)
+    }
+
+    @Test("LLM selector parseFilenames accepts user-tier selection keys")
+    func llmSelectorParsesUserPrefixedKeys() {
+        let allowed: Set<String> = ["prefs.md", "user/global.md"]
+        let parsed = ModelPoolMemoryLLMRecallSelector.parseFilenames(
+            from: #"{"filenames":["user/global.md","prefs.md","unknown.md"]}"#,
+            allowed: allowed
+        )
+        #expect(parsed == ["user/global.md", "prefs.md"])
+    }
 }

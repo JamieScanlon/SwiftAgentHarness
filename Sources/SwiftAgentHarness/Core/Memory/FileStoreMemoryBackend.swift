@@ -212,15 +212,33 @@ actor FileStoreMemoryBackend: MemoryRuntime {
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
         let selected = await recallSelector.selectRelevantFiles(request: request)
-        guard let store = storeByConversation[request.session.conversationID] else {
+        guard let projectStore = storeByConversation[request.session.conversationID] else {
             return MemoryRecallResult(selectedFilenames: selected, recalledBodiesText: "")
         }
-        var bodies: [String] = []
-        for filename in selected {
-            if let body = try store.readTopicBody(filename: filename) {
-                bodies.append("<!-- \(filename) -->\n\(body)")
+        var userBodies: [String] = []
+        var projectBodies: [String] = []
+        for selectionKey in selected {
+            guard let resolved = MemoryRecallSelectionResolver.resolve(
+                selectionKey: selectionKey,
+                projectStore: projectStore,
+                userStore: userStore
+            ),
+                  let body = try resolved.store.readTopicBody(filename: resolved.filename) else {
+                continue
+            }
+            let formatted = MemoryRecallBodyFormatter.format(
+                scope: resolved.tierScope,
+                filename: resolved.filename,
+                body: body
+            )
+            switch resolved.tierScope {
+            case .user:
+                userBodies.append(formatted)
+            case .project:
+                projectBodies.append(formatted)
             }
         }
+        let bodies = userBodies + projectBodies
         let recalled = MemoryContextFencer.fence(bodies.joined(separator: "\n\n"))
         return MemoryRecallResult(selectedFilenames: selected, recalledBodiesText: recalled)
     }
@@ -253,7 +271,10 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     }
 
     func manifestEntries(conversationID: UUID) async -> [MemoryManifestEntry] {
-        storeByConversation[conversationID]?.manifest() ?? []
+        MemoryManifestAggregator.combinedEntries(
+            userStore: userStore,
+            projectStore: storeByConversation[conversationID]
+        )
     }
 
     func hybridSearch() async -> HybridMemorySearch { search }

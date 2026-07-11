@@ -81,7 +81,8 @@ struct AgentMemoryStore: Sendable {
     }
 
     func manifest() -> [MemoryManifestEntry] {
-        MemoryManifestScanner.scanDirectory(memoryDirectory, fileManager: .default)
+        let tierScope: MemoryTierScope = indexCapProfile == .user ? .user : .project
+        return MemoryManifestScanner.scanDirectory(memoryDirectory, tierScope: tierScope, fileManager: .default)
     }
 
     func listTopicFilenames() -> [String] {

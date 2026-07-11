@@ -31,7 +31,8 @@ public struct ModelPoolMemoryLLMRecallSelector: MemoryLLMRecallSelecting {
 You select memory topic files relevant to the user's query.
 Return JSON only: {"filenames":["file1.md"]}
 Be selective; if unsure, omit a file. At most 5 filenames.
-Only use filenames from the manifest below.
+Use the exact selection key from the manifest: bare filenames for project-tier entries, `user/<filename>` for user-tier entries.
+Only use keys from the manifest below.
 """
         )
         let user = Message(
@@ -67,7 +68,7 @@ Memory manifest (headers only):
             priority: .background
         )
         let response = try await llm.send([system, user], config: .harnessTagged(.memoryRecallSelector))
-        return Self.parseFilenames(from: response.content, allowed: Set(request.manifestEntries.map(\.filename)))
+        return Self.parseFilenames(from: response.content, allowed: Set(request.manifestEntries.map(\.selectionKey)))
     }
 
     public static func modelID(model: String, serverURL: URL) -> UUID {

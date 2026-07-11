@@ -175,6 +175,32 @@ struct MemoryManifestEntry: Sendable, Equatable {
     let name: String
     let description: String
     let updatedAt: Date?
+    let tierScope: MemoryTierScope
+
+    init(
+        filename: String,
+        memoryType: MemoryTopicType,
+        name: String,
+        description: String,
+        updatedAt: Date?,
+        tierScope: MemoryTierScope = .project
+    ) {
+        self.filename = filename
+        self.memoryType = memoryType
+        self.name = name
+        self.description = description
+        self.updatedAt = updatedAt
+        self.tierScope = tierScope
+    }
+
+    var selectionKey: String {
+        tierScope == .user ? "user/\(filename)" : filename
+    }
+}
+
+enum MemoryTierScope: String, Sendable, Equatable {
+    case user
+    case project
 }
 
 enum MemoryTopicType: String, Sendable, Codable, Equatable, CaseIterable {
