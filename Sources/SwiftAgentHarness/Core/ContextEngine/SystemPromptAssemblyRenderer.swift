@@ -24,8 +24,7 @@ protocol SystemPromptAssemblyRendering: Sendable {
         assemblyContext: SystemPromptAssemblyContext,
         contributions: [SystemPromptContribution],
         referenceDate: Date,
-        fullOverrideText: String?,
-        frozenSkills: SystemPromptFrozenSkillRenderInput?
+        fullOverrideText: String?
     ) async throws -> SystemPromptAssemblyRenderAudit
 }
 
@@ -46,8 +45,7 @@ extension SystemPromptAssemblyRendering {
             assemblyContext: assemblyContext,
             contributions: contributions,
             referenceDate: referenceDate,
-            fullOverrideText: fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: fullOverrideText
         ).text
     }
 
@@ -58,8 +56,7 @@ extension SystemPromptAssemblyRendering {
         assemblyContext: SystemPromptAssemblyContext,
         contributions: [SystemPromptContribution],
         referenceDate: Date,
-        fullOverrideText: String? = nil,
-        frozenSkills: SystemPromptFrozenSkillRenderInput? = nil
+        fullOverrideText: String? = nil
     ) async throws -> SystemPromptAssemblyRenderAudit {
         let text = try await render(
             conversation: conversation,
@@ -77,13 +74,12 @@ extension SystemPromptAssemblyRendering {
                 sectionProvenance: [:],
                 skillSnapshot: SystemPromptSkillRenderSnapshot(
                     activatedSkillNames: [],
-                    activatedSkillBodyDigests: [:],
                     skillsIndexDigest: nil
-                )
+                ),
+                frozenSkillsIndexXML: nil
             ),
             effectiveUserSystemPrompt: userSystemPrompt ?? assemblyContext.userSystemPrompt,
-            providerStablePrefix: nil,
-            activatedSkillBodies: [:]
+            providerStablePrefix: nil
         )
     }
 }
@@ -117,8 +113,7 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
         assemblyContext: SystemPromptAssemblyContext,
         contributions: [SystemPromptContribution],
         referenceDate: Date,
-        fullOverrideText: String? = nil,
-        frozenSkills: SystemPromptFrozenSkillRenderInput? = nil
+        fullOverrideText: String? = nil
     ) async throws -> SystemPromptAssemblyRenderAudit {
         if conversation.systemPromptFullOverride {
             logger?.warning("[DefaultSystemPromptAssemblyRenderer] systemPromptFullOverride active for conversation \(conversation.id)")
@@ -130,22 +125,26 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                     sectionProvenance: [:],
                     skillSnapshot: SystemPromptSkillRenderSnapshot(
                         activatedSkillNames: [],
-                        activatedSkillBodyDigests: [:],
                         skillsIndexDigest: nil
-                    )
+                    ),
+                    frozenSkillsIndexXML: nil
                 ),
                 effectiveUserSystemPrompt: userSystemPrompt ?? conversation.systemPrompt,
-                providerStablePrefix: nil,
-                activatedSkillBodies: [:]
+                providerStablePrefix: nil
             )
         }
-        let skillLoader = frozenSkills == nil ? await skillLoaderProvider(conversation.id) : nil
+        let skillLoader = await skillLoaderProvider(conversation.id)
         let modeCtx = ModePolicyContext(
             interactionMode: conversation.interactionMode,
             resolvedProfile: policy.resolvedModeProfile
         )
         var context = assemblyContext
         context.referenceDate = referenceDate
+        if context.frozenSkillsIndexXML == nil {
+            context.frozenSkillsIndexXML = ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(
+                from: conversation.metadata
+            )
+        }
         let conversationHandlesExtraInstructions = contributions.contains {
             $0.source == .conversation && $0.sectionDirectives[.extraInstructions] != nil
         }
@@ -165,10 +164,10 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
         do {
             let systemPrompt = try await SystemPrompt(
                 includeCurrentDateTime: policy.includeDateTime ? nil : false,
-                includeAgentSkills: frozenSkills != nil ? true : policy.includeAgentSkills,
+                includeAgentSkills: policy.includeAgentSkills,
                 skillLoader: skillLoader,
-                skipConfigLoad: frozenSkills != nil,
-                allowSkillLoaderAbsence: frozenSkills != nil,
+                skipConfigLoad: false,
+                allowSkillLoaderAbsence: context.frozenSkillsIndexXML != nil,
                 logger: logger,
                 interactionMode: conversation.interactionMode,
                 assemblyKind: policy.resolvedModeProfile.assemblyKind,
@@ -179,7 +178,6 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 context: context,
                 resolved: resolution.resolved,
                 stablePrefix: resolution.stablePrefix,
-                frozenSkills: frozenSkills,
                 providerID: providerID,
                 modeProfileID: modeProfileID
             )
@@ -187,8 +185,7 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 text: product.text,
                 product: product,
                 effectiveUserSystemPrompt: effectiveUserSystemPrompt,
-                providerStablePrefix: resolution.stablePrefix,
-                activatedSkillBodies: product.activatedSkillBodies
+                providerStablePrefix: resolution.stablePrefix
             )
         } catch {
             logger?.warning(
@@ -208,7 +205,6 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 context: context,
                 resolved: resolution.resolved,
                 stablePrefix: resolution.stablePrefix,
-                frozenSkills: nil,
                 providerID: providerID,
                 modeProfileID: modeProfileID
             )
@@ -216,8 +212,7 @@ struct DefaultSystemPromptAssemblyRenderer: SystemPromptAssemblyRendering {
                 text: product.text,
                 product: product,
                 effectiveUserSystemPrompt: effectiveUserSystemPrompt,
-                providerStablePrefix: resolution.stablePrefix,
-                activatedSkillBodies: [:]
+                providerStablePrefix: resolution.stablePrefix
             )
         }
     }

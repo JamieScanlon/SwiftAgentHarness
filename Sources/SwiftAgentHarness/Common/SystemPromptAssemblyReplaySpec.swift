@@ -3,25 +3,16 @@ import Foundation
 
 struct SystemPromptSkillRenderSnapshot: Sendable, Equatable, Codable {
     let activatedSkillNames: [String]
-    let activatedSkillBodyDigests: [String: String]
     let skillsIndexDigest: String?
 
     static func capture(
         activatedSkillNames: [String],
-        activatedSkillBodies: [String: String],
         skillsIndexXML: String?
     ) -> SystemPromptSkillRenderSnapshot {
         let sortedNames = activatedSkillNames.sorted()
-        var digests: [String: String] = [:]
-        for name in sortedNames {
-            if let body = activatedSkillBodies[name] {
-                digests[name] = SystemPromptDispatchCodec.sha256Digest(of: body)
-            }
-        }
         let indexDigest = skillsIndexXML.map { SystemPromptDispatchCodec.sha256Digest(of: $0) }
         return SystemPromptSkillRenderSnapshot(
             activatedSkillNames: sortedNames,
-            activatedSkillBodyDigests: digests,
             skillsIndexDigest: indexDigest
         )
     }
@@ -32,7 +23,6 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
     let assembleReferenceDateISO: String
     let userSystemPrompt: String
     let activatedSkillNames: [String]
-    let activatedSkillBodyDigests: [String: String]
     let skillsIndexDigest: String?
     let providerStablePrefix: String?
     let contributionSourcesDigest: String
@@ -89,7 +79,6 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
             assembleReferenceDateISO: assembleReferenceDateISO,
             userSystemPrompt: userSystemPrompt,
             activatedSkillNames: skillSnapshot.activatedSkillNames,
-            activatedSkillBodyDigests: skillSnapshot.activatedSkillBodyDigests,
             skillsIndexDigest: skillSnapshot.skillsIndexDigest,
             providerStablePrefix: providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             contributionSourcesDigest: contributionSourcesDigest(contributions: contributions)
@@ -97,26 +86,27 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
     }
 
     var replaySpecDigest: String {
+        let digestPayload = SystemPromptAssemblyReplaySpecDigestPayload(
+            assemblyFingerprint: assemblyFingerprint,
+            assembleReferenceDateISO: assembleReferenceDateISO,
+            userSystemPrompt: userSystemPrompt,
+            skillsIndexDigest: skillsIndexDigest,
+            providerStablePrefix: providerStablePrefix,
+            contributionSourcesDigest: contributionSourcesDigest
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(self) else {
+        guard let data = try? encoder.encode(digestPayload) else {
             return SystemPromptDispatchCodec.sha256Digest(of: canonicalDigestString)
         }
         return SystemPromptDispatchCodec.sha256Digest(of: String(decoding: data, as: UTF8.self))
     }
 
     private var canonicalDigestString: String {
-        let skillDigests = activatedSkillBodyDigests
-            .keys
-            .sorted()
-            .map { key in "\(key)=\(activatedSkillBodyDigests[key] ?? "")" }
-            .joined(separator: ",")
-        return """
+        """
         assemblyFingerprint=\(assemblyFingerprint)
         assembleReferenceDateISO=\(assembleReferenceDateISO)
         userSystemPrompt=\(userSystemPrompt)
-        activatedSkillNames=\(activatedSkillNames.joined(separator: ","))
-        activatedSkillBodyDigests=\(skillDigests)
         skillsIndexDigest=\(skillsIndexDigest ?? "-")
         providerStablePrefix=\(providerStablePrefix ?? "-")
         contributionSourcesDigest=\(contributionSourcesDigest)
@@ -124,38 +114,20 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
     }
 }
 
+private struct SystemPromptAssemblyReplaySpecDigestPayload: Sendable, Equatable, Codable {
+    let assemblyFingerprint: String
+    let assembleReferenceDateISO: String
+    let userSystemPrompt: String
+    let skillsIndexDigest: String?
+    let providerStablePrefix: String?
+    let contributionSourcesDigest: String
+}
+
 struct SystemPromptAssemblyRenderProduct: Sendable, Equatable {
     let text: String
     let sectionProvenance: [SystemPromptSectionName: String]
     let skillSnapshot: SystemPromptSkillRenderSnapshot
-    let activatedSkillBodies: [String: String]
-
-    init(
-        text: String,
-        sectionProvenance: [SystemPromptSectionName: String],
-        skillSnapshot: SystemPromptSkillRenderSnapshot,
-        activatedSkillBodies: [String: String] = [:]
-    ) {
-        self.text = text
-        self.sectionProvenance = sectionProvenance
-        self.skillSnapshot = skillSnapshot
-        self.activatedSkillBodies = activatedSkillBodies
-    }
-}
-
-struct SystemPromptFrozenSkillRenderInput: Sendable, Equatable {
-    let activatedSkillBodies: [String: String]
-    let skillsIndexXML: String?
-
-    init(activatedSkillBodies: [String: String], skillsIndexXML: String?) {
-        self.activatedSkillBodies = activatedSkillBodies
-        self.skillsIndexXML = skillsIndexXML
-    }
-
-    init(replaySpec: SystemPromptAssemblyReplaySpec, frozenBodies: [String: String]) {
-        self.activatedSkillBodies = frozenBodies
-        self.skillsIndexXML = nil
-    }
+    let frozenSkillsIndexXML: String?
 }
 
 enum SystemPromptAssemblyCheckpointMode: String, Sendable, Codable, Equatable {

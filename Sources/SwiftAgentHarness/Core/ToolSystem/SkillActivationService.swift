@@ -131,7 +131,7 @@ actor SkillActivationService {
         conversationID: UUID,
         skillName: String,
         eligibleSkills: [AvailableSkillInfo]
-    ) async throws -> Set<String> {
+    ) async throws -> SlashSkillActivationResult {
         guard let skillLoader = await ensureSkillLoader(for: conversationID) else {
             throw SkillActivationSlashError.skillsUnavailable
         }
@@ -139,9 +139,20 @@ actor SkillActivationService {
             throw SkillActivationSlashError.unknownSkill(skillName)
         }
         await skillLoader.activateSkill(named: match.name)
+        guard let skill = try await skillLoader.loadSkill(named: match.name) else {
+            throw SkillActivationSlashError.unknownSkill(skillName)
+        }
         let names = await skillLoader.activatedSkills
         try await persistActivatedSkillNamesToConversation(conversationID: conversationID, names: names)
-        return names
+        let body = SkillActivationBodyFormatter.formattedActivateResult(
+            name: match.name,
+            fullInstructions: skill.fullInstructions
+        )
+        return SlashSkillActivationResult(
+            skillName: match.name,
+            activationBody: body,
+            activatedNames: names
+        )
     }
 
     private func ensureCatalogSkillLoader() async -> SkillLoader? {
@@ -214,4 +225,10 @@ actor SkillActivationService {
 enum SkillActivationSlashError: Error, Sendable {
     case skillsUnavailable
     case unknownSkill(String)
+}
+
+struct SlashSkillActivationResult: Sendable, Equatable {
+    let skillName: String
+    let activationBody: String
+    let activatedNames: Set<String>
 }

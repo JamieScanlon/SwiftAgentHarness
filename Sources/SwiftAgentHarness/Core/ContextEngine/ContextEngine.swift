@@ -161,7 +161,7 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let replaySpec: SystemPromptAssemblyReplaySpec?
     let replaySpecDigest: String?
     let sectionProvenance: [String: String]?
-    let frozenActivatedSkillBodies: [String: String]?
+    let frozenSkillsIndexXML: String?
 
     init(
         metadata: [String: String],
@@ -174,7 +174,7 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
         replaySpec: SystemPromptAssemblyReplaySpec? = nil,
         replaySpecDigest: String? = nil,
         sectionProvenance: [String: String]? = nil,
-        frozenActivatedSkillBodies: [String: String]? = nil
+        frozenSkillsIndexXML: String? = nil
     ) {
         self.metadata = metadata
         self.fingerprint = fingerprint
@@ -186,7 +186,7 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
         self.replaySpec = replaySpec
         self.replaySpecDigest = replaySpecDigest
         self.sectionProvenance = sectionProvenance
-        self.frozenActivatedSkillBodies = frozenActivatedSkillBodies
+        self.frozenSkillsIndexXML = frozenSkillsIndexXML
     }
 }
 

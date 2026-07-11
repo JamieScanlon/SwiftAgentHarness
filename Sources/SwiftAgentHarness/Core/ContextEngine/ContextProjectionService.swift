@@ -316,6 +316,11 @@ actor ContextProjectionService {
             }
             if let systemPromptAssembly = persistenceEffects.systemPromptAssemblyArtifactForCache {
                 lastSystemPromptAssemblyByConversationID[conversation.id] = systemPromptAssembly
+                await persistFrozenSkillsIndexIfNeeded(
+                    conversationID: conversation.id,
+                    conversation: conversation,
+                    frozenSkillsIndexXML: systemPromptAssembly.frozenSkillsIndexXML
+                )
             }
             if let projectedKeys = persistenceEffects.projectedMemorySelectionKeysForCache {
                 lastProjectedMemorySelectionKeysByConversationID[conversation.id] = projectedKeys
@@ -794,5 +799,29 @@ actor ContextProjectionService {
         let result = await operation(true)
         await deps.compactionCoordinator.release(for: conversationID)
         return result
+    }
+
+    private func persistFrozenSkillsIndexIfNeeded(
+        conversationID: UUID,
+        conversation: ModelConversation,
+        frozenSkillsIndexXML: String?
+    ) async {
+        guard let frozenSkillsIndexXML,
+              ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(from: conversation.metadata) == nil else {
+            return
+        }
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        updated.metadata = ConversationMetadataFrozenSkillsIndex.mergingFrozenSkillsIndex(
+            xml: frozenSkillsIndexXML,
+            into: updated.metadata
+        )
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
     }
 }

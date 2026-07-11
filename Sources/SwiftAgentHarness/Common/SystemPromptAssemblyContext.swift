@@ -15,6 +15,8 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
     public var subAgentContextPrompt: String?
     public var registryProfileID: String?
     public var modeCompactionLevel: String?
+    /// Session-frozen skills index XML (stable prefix); set once per conversation.
+    public var frozenSkillsIndexXML: String?
     /// Dispatch-only; never interpolated into the prompt template.
     public var assembledPromptDigest: String?
 
@@ -32,6 +34,7 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
         subAgentContextPrompt: String? = nil,
         registryProfileID: String? = nil,
         modeCompactionLevel: String? = nil,
+        frozenSkillsIndexXML: String? = nil,
         assembledPromptDigest: String? = nil
     ) {
         self.conversationID = conversationID
@@ -47,6 +50,7 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
         self.subAgentContextPrompt = subAgentContextPrompt
         self.registryProfileID = registryProfileID
         self.modeCompactionLevel = modeCompactionLevel
+        self.frozenSkillsIndexXML = frozenSkillsIndexXML
         self.assembledPromptDigest = assembledPromptDigest
     }
 }

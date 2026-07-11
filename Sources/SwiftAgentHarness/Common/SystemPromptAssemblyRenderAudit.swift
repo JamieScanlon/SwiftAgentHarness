@@ -5,5 +5,4 @@ struct SystemPromptAssemblyRenderAudit: Sendable, Equatable {
     let product: SystemPromptAssemblyRenderProduct
     let effectiveUserSystemPrompt: String
     let providerStablePrefix: String?
-    let activatedSkillBodies: [String: String]
 }

@@ -11,7 +11,7 @@ enum SystemPromptAssemblyReplayer {
         replaySpec: SystemPromptAssemblyReplaySpec,
         memoryBlocks: MemorySystemPromptBlocks?,
         memorySnapshotGeneration: Int?,
-        frozenSkillBodies: [String: String]?,
+        frozenSkillsIndexXML: String?,
         skillLoader: SkillLoader?,
         logger: Logger?
     ) async throws -> String {
@@ -34,32 +34,27 @@ enum SystemPromptAssemblyReplayer {
             engineDynamicAddition: nil,
             referenceDate: referenceDate
         )
-        let frozenSkills: SystemPromptFrozenSkillRenderInput?
-        if let frozenSkillBodies, !frozenSkillBodies.isEmpty {
-            frozenSkills = SystemPromptFrozenSkillRenderInput(
-                activatedSkillBodies: frozenSkillBodies,
-                skillsIndexXML: nil
-            )
-        } else if !replaySpec.activatedSkillBodyDigests.isEmpty, let skillLoader {
-            var loaded: [String: String] = [:]
-            for name in replaySpec.activatedSkillNames {
-                if let skill = try await skillLoader.loadSkill(named: name) {
-                    let body = skill.fullInstructions
-                    if let expected = replaySpec.activatedSkillBodyDigests[name],
-                       expected != SystemPromptDispatchCodec.sha256Digest(of: body) {
-                        logger?.warning(
-                            "[SystemPromptAssemblyReplayer] skill body digest mismatch for \(name); replay may differ from assemble"
-                        )
-                    }
-                    loaded[name] = body
+        var assemblyContext = bundle.assemblyContext
+        if let frozenSkillsIndexXML {
+            assemblyContext.frozenSkillsIndexXML = frozenSkillsIndexXML
+            if let expectedDigest = replaySpec.skillsIndexDigest {
+                let actual = SystemPromptDispatchCodec.sha256Digest(of: frozenSkillsIndexXML)
+                if actual != expectedDigest {
+                    logger?.warning(
+                        "[SystemPromptAssemblyReplayer] frozen skills index digest mismatch; replay may differ from assemble"
+                    )
                 }
             }
-            frozenSkills = loaded.isEmpty ? nil : SystemPromptFrozenSkillRenderInput(
-                activatedSkillBodies: loaded,
-                skillsIndexXML: nil
-            )
-        } else {
-            frozenSkills = nil
+        } else if let expectedDigest = replaySpec.skillsIndexDigest, let skillLoader {
+            let metadata = try await skillLoader.loadMetadata()
+            let xml = SkillPromptFormatter.formatAsXML(metadata)
+            let actual = SystemPromptDispatchCodec.sha256Digest(of: xml)
+            if actual != expectedDigest {
+                logger?.warning(
+                    "[SystemPromptAssemblyReplayer] skills index digest mismatch for loader snapshot; replay may differ from assemble"
+                )
+            }
+            assemblyContext.frozenSkillsIndexXML = xml
         }
         let renderer = DefaultSystemPromptAssemblyRenderer(
             skillLoaderProvider: { _ in skillLoader },
@@ -69,11 +64,10 @@ enum SystemPromptAssemblyReplayer {
             conversation: conversation,
             policy: policy,
             userSystemPrompt: userSystemPrompt.nilIfEmpty == nil ? nil : userSystemPrompt,
-            assemblyContext: bundle.assemblyContext,
+            assemblyContext: assemblyContext,
             contributions: bundle.contributions,
             referenceDate: referenceDate,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: frozenSkills
+            fullOverrideText: bundle.fullOverrideText
         )
         return audit.text
     }

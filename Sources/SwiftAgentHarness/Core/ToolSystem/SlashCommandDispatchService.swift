@@ -292,8 +292,9 @@ actor SlashCommandDispatchService {
         args: String
     ) async throws -> ChatStreamResponse {
         let eligible = (try? await skillActivation.listAvailableSkillsForSlash(conversationID: conversationID)) ?? []
+        let activationResult: SlashSkillActivationResult
         do {
-            _ = try await skillActivation.activateSkillForSlash(
+            activationResult = try await skillActivation.activateSkillForSlash(
                 conversationID: conversationID,
                 skillName: skillName,
                 eligibleSkills: eligible
@@ -318,21 +319,15 @@ actor SlashCommandDispatchService {
                 preserveGeneratingState: false
             )
         }
-        guard let match = eligible.first(where: { $0.name.lowercased() == skillName.lowercased() }) else {
-            return try await deliverSyntheticSlashAssistantResponse(
-                conversationID: conversationID,
-                content: "Unknown or unavailable skill `\(skillName)` for this conversation.",
-                preserveGeneratingState: false
-            )
-        }
-        var detail = "Activated skill **\(match.name)**."
+        var confirmation = "Activated skill **\(activationResult.skillName)**."
         if !args.isEmpty {
-            detail += " (Additional text after the skill name was not sent to the model; start a normal message to use it.)"
+            confirmation += " (Additional text after the skill name was not sent to the model; start a normal message to use it.)"
         }
-        return try await deliverSyntheticSlashAssistantResponse(
+        return try await deliverSyntheticSlashSkillActivation(
             conversationID: conversationID,
-            content: detail,
-            preserveGeneratingState: false
+            skillName: activationResult.skillName,
+            activationBody: activationResult.activationBody,
+            confirmation: confirmation
         )
     }
 

@@ -934,9 +934,13 @@ final class ConversationManager {
                     incoming: incoming
                 )
             }
-            updatedConversation.metadata = ConversationMetadataActivatedSkills.mergingPreservingActivatedSkillNames(
+            let withActivatedSkills = ConversationMetadataActivatedSkills.mergingPreservingActivatedSkillNames(
                 existing: conversations[index].metadata,
                 incoming: mergedIncoming
+            )
+            updatedConversation.metadata = ConversationMetadataFrozenSkillsIndex.mergingPreservingFrozenSkillsIndex(
+                existing: conversations[index].metadata,
+                incoming: withActivatedSkills
             )
         } else {
             updatedConversation.metadata = nil
@@ -1002,9 +1006,13 @@ final class ConversationManager {
                 trigger: trigger,
                 sessionKey: sessionKey
             )
-            updated.metadata = ConversationMetadataActivatedSkills.mergingPreservingActivatedSkillNames(
+            let withActivatedSkills = ConversationMetadataActivatedSkills.mergingPreservingActivatedSkillNames(
                 existing: updated.metadata,
                 incoming: metadata
+            )
+            updated.metadata = ConversationMetadataFrozenSkillsIndex.mergingPreservingFrozenSkillsIndex(
+                existing: updated.metadata,
+                incoming: withActivatedSkills
             )
             updated.lineageKind = .root
             updated.origin = .system

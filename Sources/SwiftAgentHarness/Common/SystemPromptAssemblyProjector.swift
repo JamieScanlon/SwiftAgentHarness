@@ -75,8 +75,7 @@ enum SystemPromptAssemblyProjector {
             assemblyContext: bundle.assemblyContext,
             contributions: bundle.contributions,
             referenceDate: referenceDate,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundle.fullOverrideText
         )
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,

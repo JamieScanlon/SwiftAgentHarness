@@ -650,8 +650,7 @@ struct ContextEngineTests {
                 assemblyContext: SystemPromptAssemblyContext,
                 contributions: [SystemPromptContribution],
                 referenceDate: Date,
-                fullOverrideText: String?,
-                frozenSkills: SystemPromptFrozenSkillRenderInput?
+                fullOverrideText: String?
             ) async throws -> SystemPromptAssemblyRenderAudit {
                 let text = try await render(
                     conversation: conversation,
@@ -669,13 +668,12 @@ struct ContextEngineTests {
                         sectionProvenance: [:],
                         skillSnapshot: SystemPromptSkillRenderSnapshot(
                             activatedSkillNames: [],
-                            activatedSkillBodyDigests: [:],
                             skillsIndexDigest: nil
-                        )
+                        ),
+                        frozenSkillsIndexXML: nil
                     ),
                     effectiveUserSystemPrompt: userSystemPrompt ?? "",
-                    providerStablePrefix: nil,
-                    activatedSkillBodies: [:]
+                    providerStablePrefix: nil
                 )
             }
         }

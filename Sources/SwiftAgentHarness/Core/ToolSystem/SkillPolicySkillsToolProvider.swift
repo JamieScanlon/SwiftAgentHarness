@@ -37,7 +37,20 @@ struct SkillPolicySkillsToolProvider: ToolProvider {
                 )
             }
         }
-        return try await inner.executeTool(toolCall)
+        let result = try await inner.executeTool(toolCall)
+        if toolCall.name == SkillsToolProvider.activateToolName, result.success,
+           let skillName = extractSkillName(from: toolCall.arguments) {
+            return ToolResult(
+                success: result.success,
+                content: SkillActivationBodyFormatter.formattedActivateResult(
+                    name: skillName,
+                    fullInstructions: result.content
+                ),
+                metadata: result.metadata,
+                toolCallId: result.toolCallId
+            )
+        }
+        return result
     }
 
     func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
@@ -63,7 +76,21 @@ struct SkillPolicySkillsToolProvider: ToolProvider {
                 ))
             }
         }
-        return try await inner.executeToolOutcome(toolCall)
+        let outcome = try await inner.executeToolOutcome(toolCall)
+        if toolCall.name == SkillsToolProvider.activateToolName,
+           case .completed(let result) = outcome, result.success,
+           let skillName = extractSkillName(from: toolCall.arguments) {
+            return .completed(ToolResult(
+                success: result.success,
+                content: SkillActivationBodyFormatter.formattedActivateResult(
+                    name: skillName,
+                    fullInstructions: result.content
+                ),
+                metadata: result.metadata,
+                toolCallId: result.toolCallId
+            ))
+        }
+        return outcome
     }
 
     func cancelPending(handleID: String, toolCallID: String) async -> Bool {

@@ -75,8 +75,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundleA.assemblyContext,
             contributions: bundleA.contributions,
             referenceDate: frozen,
-            fullOverrideText: bundleA.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundleA.fullOverrideText
         )
         let auditB = try await renderer.renderWithAudit(
             conversation: conv,
@@ -85,8 +84,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundleB.assemblyContext,
             contributions: bundleB.contributions,
             referenceDate: frozen,
-            fullOverrideText: bundleB.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundleB.fullOverrideText
         )
         let specA = SystemPromptAssemblyReplayer.buildReplaySpec(
             assemblyFingerprint: "fp-a",
@@ -125,8 +123,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundle.assemblyContext,
             contributions: bundle.contributions,
             referenceDate: dateA,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundle.fullOverrideText
         )
         let auditB = try await renderer.renderWithAudit(
             conversation: conv,
@@ -135,8 +132,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundle.assemblyContext,
             contributions: bundle.contributions,
             referenceDate: dateB,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundle.fullOverrideText
         )
         let specA = SystemPromptAssemblyReplayer.buildReplaySpec(
             assemblyFingerprint: "fp",
@@ -175,8 +171,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundle.assemblyContext,
             contributions: bundle.contributions,
             referenceDate: frozen,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundle.fullOverrideText
         )
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: neutralProfile(),
@@ -205,40 +200,19 @@ struct SystemPromptAssemblyReplayTests {
             replaySpec: replaySpec,
             memoryBlocks: nil,
             memorySnapshotGeneration: nil,
-            frozenSkillBodies: audit.activatedSkillBodies,
+            frozenSkillsIndexXML: audit.product.frozenSkillsIndexXML,
             skillLoader: nil,
             logger: nil
         )
         #expect(SystemPromptDispatchCodec.sha256Digest(of: replayed) == SystemPromptDispatchCodec.sha256Digest(of: audit.text))
     }
 
-    @Test("Frozen skill bodies survive disk drift")
-    func frozenSkillBodiesIgnoreDiskDrift() async throws {
+    @Test("Frozen skills index survives index drift during replay")
+    func frozenSkillsIndexSurvivesDiskDrift() async throws {
         let conv = sampleConversation()
         let frozen = Date(timeIntervalSince1970: 1_700_000_000)
-        let originalBody = "Original skill instructions v1"
-        let mutatedBody = "Mutated skill instructions v2"
-        let frozenSkills = SystemPromptFrozenSkillRenderInput(
-            activatedSkillBodies: ["audit-skill": originalBody],
-            skillsIndexXML: "<skills/>"
-        )
-        let bundle = SystemPromptAssemblyContributionCollector.collect(
-            conversation: conv,
-            policy: ContextEngineSystemPromptAssemblyPolicyInput(
-                resolvedModeProfile: neutralProfile(),
-                strictAgentHarnessPrompts: false,
-                includeAgentSkills: true,
-                includeDateTime: false,
-                toolPolicySignature: "sig",
-                routingPolicyTools: [],
-                routingPolicySkills: []
-            ),
-            userSystemPrompt: nil,
-            memoryBlocks: nil,
-            memorySnapshotGeneration: nil,
-            modeMemoryInjection: "on",
-            referenceDate: frozen
-        )
+        let originalIndex = "<skills><skill name=\"audit-skill\" description=\"v1\"/></skills>"
+        let mutatedIndex = "<skills><skill name=\"audit-skill\" description=\"v2\"/></skills>"
         let policy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: neutralProfile(),
             strictAgentHarnessPrompts: false,
@@ -248,16 +222,26 @@ struct SystemPromptAssemblyReplayTests {
             routingPolicyTools: [],
             routingPolicySkills: []
         )
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: nil,
+            memoryBlocks: nil,
+            memorySnapshotGeneration: nil,
+            modeMemoryInjection: "on",
+            referenceDate: frozen
+        )
+        var context = bundle.assemblyContext
+        context.frozenSkillsIndexXML = originalIndex
         let renderer = DefaultSystemPromptAssemblyRenderer(skillLoaderProvider: { _ in nil }, logger: nil)
         let audit = try await renderer.renderWithAudit(
             conversation: conv,
             policy: policy,
             userSystemPrompt: nil,
-            assemblyContext: bundle.assemblyContext,
+            assemblyContext: context,
             contributions: bundle.contributions,
             referenceDate: frozen,
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: frozenSkills
+            fullOverrideText: bundle.fullOverrideText
         )
         let replaySpec = SystemPromptAssemblyReplayer.buildReplaySpec(
             assemblyFingerprint: "fp",
@@ -265,14 +249,14 @@ struct SystemPromptAssemblyReplayTests {
             audit: audit,
             contributions: bundle.contributions
         )
-        let replayed = try await SystemPromptAssemblyReplayer.reassemble(
+        let replayedOriginal = try await SystemPromptAssemblyReplayer.reassemble(
             conversation: conv,
             messagesAtFrontier: [],
             policy: policy,
             replaySpec: replaySpec,
             memoryBlocks: nil,
             memorySnapshotGeneration: nil,
-            frozenSkillBodies: ["audit-skill": originalBody],
+            frozenSkillsIndexXML: originalIndex,
             skillLoader: nil,
             logger: nil
         )
@@ -283,14 +267,14 @@ struct SystemPromptAssemblyReplayTests {
             replaySpec: replaySpec,
             memoryBlocks: nil,
             memorySnapshotGeneration: nil,
-            frozenSkillBodies: ["audit-skill": mutatedBody],
+            frozenSkillsIndexXML: mutatedIndex,
             skillLoader: nil,
             logger: nil
         )
-        #expect(audit.text.contains(originalBody))
-        #expect(replayed.contains(originalBody))
-        #expect(replayedMutated.contains(mutatedBody))
-        #expect(replayedMutated != replayed)
+        #expect(audit.text.contains("description=\"v1\""))
+        #expect(replayedOriginal.contains("description=\"v1\""))
+        #expect(replayedMutated.contains("description=\"v2\""))
+        #expect(replayedMutated != replayedOriginal)
     }
 
     @Test("Major sections emit provenance tags; Constraints has no contributor tag")
@@ -312,8 +296,7 @@ struct SystemPromptAssemblyReplayTests {
             assemblyContext: bundle.assemblyContext,
             contributions: bundle.contributions,
             referenceDate: Date(),
-            fullOverrideText: bundle.fullOverrideText,
-            frozenSkills: nil
+            fullOverrideText: bundle.fullOverrideText
         )
         #expect(audit.text.contains("<!-- provenance:"))
         #expect(audit.text.contains("# Constraints"))

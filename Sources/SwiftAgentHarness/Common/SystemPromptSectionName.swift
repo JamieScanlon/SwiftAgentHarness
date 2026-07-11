@@ -16,9 +16,9 @@ public enum SystemPromptSectionName: String, Sendable, CaseIterable, Hashable, C
 
     public var isVolatile: Bool {
         switch self {
-        case .identity, .capabilities, .constraints, .personality, .modeDirective, .memory:
+        case .identity, .capabilities, .constraints, .personality, .modeDirective, .memory, .skills:
             return false
-        case .skills, .toolGuidance, .attachments, .extraInstructions, .dynamicAdditions:
+        case .toolGuidance, .attachments, .extraInstructions, .dynamicAdditions:
             return true
         }
     }
@@ -82,11 +82,11 @@ public enum SystemPromptSectionName: String, Sendable, CaseIterable, Hashable, C
     }
 
     public static let stableAssemblyOrder: [SystemPromptSectionName] = [
-        .identity, .capabilities, .constraints, .personality, .modeDirective, .memory,
+        .identity, .capabilities, .constraints, .personality, .modeDirective, .memory, .skills,
     ]
 
     public static let volatileAssemblyOrder: [SystemPromptSectionName] = [
-        .skills, .toolGuidance, .attachments, .extraInstructions, .dynamicAdditions,
+        .toolGuidance, .attachments, .extraInstructions, .dynamicAdditions,
     ]
 
     public var dynamicPromptToken: String {

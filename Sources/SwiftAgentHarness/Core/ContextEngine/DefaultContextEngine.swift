@@ -1106,6 +1106,12 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             systemPromptFullOverride: conversation.systemPromptFullOverride
         )
         let assembleReferenceDateISO = SystemPrompt.assembleReferenceDateISOString(from: referenceDate)
+        var renderContext = bundle.assemblyContext
+        if policy.includeAgentSkills {
+            renderContext.frozenSkillsIndexXML = ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(
+                from: conversation.metadata
+            )
+        }
         var assembledSystemPromptText: String?
         var renderAudit: SystemPromptAssemblyRenderAudit?
         if let renderer = systemPromptAssemblyRenderer {
@@ -1114,11 +1120,10 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                     conversation: conversation,
                     policy: policy,
                     userSystemPrompt: userSystemPrompt,
-                    assemblyContext: bundle.assemblyContext,
+                    assemblyContext: renderContext,
                     contributions: bundle.contributions,
                     referenceDate: referenceDate,
-                    fullOverrideText: bundle.fullOverrideText,
-                    frozenSkills: nil
+                    fullOverrideText: bundle.fullOverrideText
                 )
                 assembledSystemPromptText = renderAudit?.text
             } catch {
@@ -1172,7 +1177,7 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             replaySpec: replaySpec,
             replaySpecDigest: replaySpecDigest,
             sectionProvenance: sectionProvenance,
-            frozenActivatedSkillBodies: renderAudit?.activatedSkillBodies
+            frozenSkillsIndexXML: renderAudit?.product.frozenSkillsIndexXML
         )
     }
 

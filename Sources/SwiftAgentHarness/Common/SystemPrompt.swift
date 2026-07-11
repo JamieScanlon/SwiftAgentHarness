@@ -125,7 +125,6 @@ public struct SystemPrompt: Sendable {
             context: assemblyContext,
             resolved: resolved,
             stablePrefix: stablePrefix,
-            frozenSkills: nil,
             providerID: nil,
             modeProfileID: assemblyContext.registryProfileID
         ).text
@@ -135,63 +134,42 @@ public struct SystemPrompt: Sendable {
         context assemblyContext: SystemPromptAssemblyContext,
         resolved: ResolvedSystemPromptSections,
         stablePrefix: String?,
-        frozenSkills: SystemPromptFrozenSkillRenderInput?,
         providerID: String?,
         modeProfileID: String?
     ) async throws -> SystemPromptAssemblyRenderProduct {
         let dateString = Self.dateString(from: assemblyContext.referenceDate)
         var skillsFolderPathValue = ""
         var availableSkillsValue = ""
-        var activatedSkillsValue = ""
         var skillSnapshot = SystemPromptSkillRenderSnapshot(
             activatedSkillNames: [],
-            activatedSkillBodyDigests: [:],
             skillsIndexDigest: nil
         )
-        var capturedSkillBodies: [String: String] = [:]
-        let skillsEnabled = includeAgentSkills || frozenSkills != nil
-        if skillsEnabled {
-            if let frozenSkills {
-                availableSkillsValue = frozenSkills.skillsIndexXML ?? ""
-                let sortedNames = frozenSkills.activatedSkillBodies.keys.sorted()
-                capturedSkillBodies = frozenSkills.activatedSkillBodies
-                let bodies = sortedNames.map { name in
-                    let body = frozenSkills.activatedSkillBodies[name] ?? ""
-                    return "\(name):\n\(body)"
-                }
-                activatedSkillsValue = bodies.isEmpty
-                    ? "No active skills.\n\n"
-                    : bodies.joined(separator: "\n\n")
-                skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
-                    activatedSkillNames: sortedNames,
-                    activatedSkillBodies: frozenSkills.activatedSkillBodies,
-                    skillsIndexXML: frozenSkills.skillsIndexXML
-                )
+        var capturedFrozenIndexXML: String?
+        if includeAgentSkills {
+            if let frozenIndex = assemblyContext.frozenSkillsIndexXML?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !frozenIndex.isEmpty {
+                availableSkillsValue = frozenIndex
+                capturedFrozenIndexXML = frozenIndex
             } else {
-                guard let skillLoader else {
-                    throw PromptsConfigError.skillLoaderNotFound
-                }
-                skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
                 availableSkillsValue = SkillPromptFormatter.formatAsXML(skillMetadata ?? [])
-                let activeSkillNames = Array(await skillLoader.activatedSkills).sorted()
-                var loadedActiveSkills: [String: String] = [:]
-                for name in activeSkillNames {
-                    if let skill = try await skillLoader.loadSkill(named: name) {
-                        loadedActiveSkills[name] = skill.fullInstructions
-                    }
+                if !availableSkillsValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    capturedFrozenIndexXML = availableSkillsValue
                 }
-                capturedSkillBodies = loadedActiveSkills
-                activatedSkillsValue = loadedActiveSkills.isEmpty
-                    ? "No active skills.\n\n"
-                    : loadedActiveSkills.map { "\($0.key):\n\($0.value)" }.joined(separator: "\n\n")
-                skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
-                    activatedSkillNames: activeSkillNames,
-                    activatedSkillBodies: loadedActiveSkills,
-                    skillsIndexXML: availableSkillsValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? nil
-                        : availableSkillsValue
-                )
             }
+            if let skillLoader {
+                skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
+            }
+            let activatedNames: [String]
+            if let skillLoader {
+                activatedNames = Array(await skillLoader.activatedSkills).sorted()
+            } else {
+                activatedNames = []
+            }
+            skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
+                activatedSkillNames: activatedNames,
+                skillsIndexXML: capturedFrozenIndexXML
+            )
         }
 
         var sections = Self.finalSections(
@@ -199,8 +177,7 @@ public struct SystemPrompt: Sendable {
             resolved: resolved,
             skillsFolderPath: skillsFolderPathValue,
             availableSkills: availableSkillsValue,
-            activatedSkills: activatedSkillsValue,
-            includeAgentSkills: skillsEnabled,
+            includeAgentSkills: includeAgentSkills,
             assemblyKind: assemblyKind,
             strictAgentHarnessPrompts: strictAgentHarnessPrompts
         )
@@ -227,10 +204,9 @@ public struct SystemPrompt: Sendable {
             dynamicPrompt["agentWorkflowBlock"] = assemblyContext.workflowBlock
         }
         dynamicPrompt["userSystemPrompt"] = assemblyContext.userSystemPrompt
-        if skillsEnabled {
+        if includeAgentSkills {
             dynamicPrompt["skillsFolderPath"] = skillsFolderPathValue
             dynamicPrompt["agentSkillsMetadata"] = availableSkillsValue
-            dynamicPrompt["activatedAgentSkills"] = activatedSkillsValue
         }
         for section in SystemPromptSectionName.allCases {
             dynamicPrompt[section.dynamicPromptToken] = sections[section] ?? ""
@@ -245,7 +221,7 @@ public struct SystemPrompt: Sendable {
             text: text,
             sectionProvenance: provenanceMap,
             skillSnapshot: skillSnapshot,
-            activatedSkillBodies: capturedSkillBodies
+            frozenSkillsIndexXML: capturedFrozenIndexXML
         )
     }
 
@@ -439,7 +415,6 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         resolved: ResolvedSystemPromptSections,
         skillsFolderPath: String,
         availableSkills: String,
-        activatedSkills: String,
         includeAgentSkills: Bool,
         assemblyKind: SystemPromptAssemblyKind,
         strictAgentHarnessPrompts: Bool
@@ -448,7 +423,6 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
             assemblyContext: assemblyContext,
             skillsFolderPath: skillsFolderPath,
             availableSkills: availableSkills,
-            activatedSkills: activatedSkills,
             includeAgentSkills: includeAgentSkills,
             assemblyKind: assemblyKind,
             strictAgentHarnessPrompts: strictAgentHarnessPrompts
@@ -576,7 +550,6 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         assemblyContext: SystemPromptAssemblyContext,
         skillsFolderPath: String,
         availableSkills: String,
-        activatedSkills: String,
         includeAgentSkills: Bool,
         assemblyKind: SystemPromptAssemblyKind,
         strictAgentHarnessPrompts: Bool
@@ -611,8 +584,7 @@ This conversation was started on: \(assemblyContext.conversationStartDate)
             .toolGuidance: toolGuidanceSectionTemplate(),
             .skills: skillsSectionTemplate(
                 skillsFolderPath: skillsFolderPath,
-                availableSkills: availableSkills,
-                activatedSkills: activatedSkills
+                availableSkills: availableSkills
             ),
             .attachments: "",
             .extraInstructions: """
@@ -671,8 +643,7 @@ Some tools and commands require human approval before they run. The harness pres
 
     private static func skillsSectionTemplate(
         skillsFolderPath: String,
-        availableSkills: String,
-        activatedSkills: String
+        availableSkills: String
     ) -> String {
         """
 ---
@@ -681,14 +652,12 @@ You have access to Agent Skills. The Agent Skills spec can be found a https://ag
 Agent Skills are a lightweight, open format for extending AI agent capabilities with specialized knowledge and workflows.
 Skills use progressive disclosure to manage context efficiently:
 1. Discovery: At startup, the name and description of each available skill are loaded, just enough to know when it might be relevant. The list of loaded skills is provided below in XML format.
-2. Activation: When a task matches a skill’s description, you will read the full SKILL.md instructions into context. Activating skills can be done through one of your provided functions/tool calls. After activation, the skill will be available to you in the context below. 
+2. Activation: When a task matches a skill’s description, you will read the full SKILL.md instructions into context. Activating skills can be done through one of your provided functions/tool calls. After activation, the skill's instructions are returned in the activation tool result.
 3. Execution: You will follow the instructions, optionally loading referenced files or executing bundled code as needed. Loading files or executing scripts can be done through one of your provided functions/tool calls.
 This approach keeps you fast while giving you access to more context on demand.
 The root skills folder is \(skillsFolderPath).
 ## Available Agent Skills:
 \(availableSkills)
-## Activated Agent Skills:
-\(activatedSkills)
 
 """
     }
