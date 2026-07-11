@@ -116,6 +116,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
+        let selectorConfigFingerprint = await memoryService?.recallSelectorConfigFingerprint() ?? ""
         let tier2Result = await applyTier2MemoryRecallIfNeeded(
             into: result.messages,
             conversation: request.conversation,
@@ -126,7 +127,11 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             lastContextLimitTokens: request.lastContextLimitTokens,
             lastPromptTokens: request.lastPromptTokens,
             memoryStoreVersion: memoryStoreVersion,
-            tier1MemorySectionContent: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent
+            tier1MemorySectionContent: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent,
+            rawMessages: request.messages,
+            events: request.events,
+            eventLogFrontier: request.eventLogFrontier,
+            selectorConfigFingerprint: selectorConfigFingerprint
         )
         if tier2Result.injected, memoryStoreVersion > 0 {
             memorySnapshot = ContextMemoryInjectionSnapshotSpec(
@@ -135,7 +140,10 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 memoryStoreVersion: memoryStoreVersion,
                 memoryStoreNamespaceKey: request.conversation.id.uuidString,
                 injectedMemoryEntryIDs: [Self.recallEntryID(generation: memoryStoreVersion)],
-                projectedSelectionKeys: tier2Result.projectedMemorySelectionKeys
+                selectedSelectionKeys: tier2Result.selectedSelectionKeys,
+                projectedSelectionKeys: tier2Result.projectedMemorySelectionKeys,
+                selectionContextMessageIDs: request.messages.map(\.id),
+                selectorConfigFingerprint: selectorConfigFingerprint
             )
         }
         return ContextEngineAssembleResult(
@@ -803,7 +811,17 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
     private struct Tier2RecallApplicationResult: Sendable {
         let messages: [Message]
         let injected: Bool
+        let selectedSelectionKeys: [String]
         let projectedMemorySelectionKeys: [String]
+
+        static func unchanged(_ messages: [Message]) -> Self {
+            Tier2RecallApplicationResult(
+                messages: messages,
+                injected: false,
+                selectedSelectionKeys: [],
+                projectedMemorySelectionKeys: []
+            )
+        }
     }
 
     @discardableResult
@@ -817,42 +835,62 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
         memoryStoreVersion: Int,
-        tier1MemorySectionContent: String?
+        tier1MemorySectionContent: String?,
+        rawMessages: [Message],
+        events: [CachedConversationEvent],
+        eventLogFrontier: Int,
+        selectorConfigFingerprint: String
     ) async -> Tier2RecallApplicationResult {
         guard case .initial = phase else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+            return .unchanged(baseMessages)
         }
         switch modeMemoryInjection {
         case "off":
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+            return .unchanged(baseMessages)
         case "skills-only":
             let includeSkills = resolvedProfile?.context.includeSkills ?? true
             guard includeSkills else {
-                return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+                return .unchanged(baseMessages)
             }
         default:
             break
         }
         guard let memoryService else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+            return .unchanged(baseMessages)
         }
         guard let query = latestUserQuery(from: baseMessages),
-              let session = await memoryService.sessionContext(for: conversation.id),
-              let recall = try? await memoryService.recallForTurn(
-                  request: MemoryRecallRequest(
-                      session: session,
-                      userQuery: query,
-                      manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id),
-                      activeToolNames: MemoryRecallSelectionPolicy.activeToolNames(from: baseMessages)
-                  )
-              ),
-              !recall.hits.isEmpty else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+              let session = await memoryService.sessionContext(for: conversation.id) else {
+            return .unchanged(baseMessages)
         }
+        let recall: MemoryRecallResult?
+        if let cached = await recallFromInjectionSnapshotIfValid(
+            memoryService: memoryService,
+            session: session,
+            rawMessages: rawMessages,
+            events: events,
+            eventLogFrontier: eventLogFrontier,
+            memoryStoreVersion: memoryStoreVersion,
+            selectorConfigFingerprint: selectorConfigFingerprint
+        ) {
+            recall = cached
+        } else {
+            recall = try? await memoryService.recallForTurn(
+                request: MemoryRecallRequest(
+                    session: session,
+                    userQuery: query,
+                    manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id),
+                    activeToolNames: MemoryRecallSelectionPolicy.activeToolNames(from: baseMessages)
+                )
+            )
+        }
+        guard let recall, !recall.hits.isEmpty else {
+            return .unchanged(baseMessages)
+        }
+        let selectedKeys = recall.selectedFilenames
         let alreadyProjected = MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier1Content: tier1MemorySectionContent)
         let dedupedHits = MemoryCrossTierDedupPolicy.filterTier2Hits(recall.hits, excluding: alreadyProjected)
         guard !dedupedHits.isEmpty else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+            return .unchanged(baseMessages)
         }
         let modelLimit = lastContextLimitTokens
             ?? conversation.model.maxContextLength
@@ -870,15 +908,46 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             hits: budgetedHits,
             entryID: recallEntryID
         ) else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+            return .unchanged(baseMessages)
         }
         let projectedKeys = Array(MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier2Hits: budgetedHits)).sorted()
         let withRecall = MemoryRecallInjectionPolicy.insertLateRecall(recallMessage, into: baseMessages)
         return Tier2RecallApplicationResult(
             messages: withRecall,
             injected: true,
+            selectedSelectionKeys: selectedKeys,
             projectedMemorySelectionKeys: projectedKeys
         )
+    }
+
+    private func recallFromInjectionSnapshotIfValid(
+        memoryService: DefaultMemoryService,
+        session: MemorySessionContext,
+        rawMessages: [Message],
+        events: [CachedConversationEvent],
+        eventLogFrontier: Int,
+        memoryStoreVersion: Int,
+        selectorConfigFingerprint: String
+    ) async -> MemoryRecallResult? {
+        let rawIDs = rawMessages.map(\.id)
+        guard !selectorConfigFingerprint.isEmpty else { return nil }
+        guard let latest = SuiteCheckpointSupport.latestValidMemoryInjectionSnapshot(
+            events: events,
+            frontierEventID: eventLogFrontier,
+            rawMessageIDs: rawIDs,
+            expectedMemoryStoreVersion: memoryStoreVersion,
+            expectedSelectorConfigFingerprint: selectorConfigFingerprint
+        ) else { return nil }
+        guard MemoryInjectionSnapshotProjectionPolicy.isProjectionCacheHit(
+            wire: latest.wire,
+            currentRawMessageIDs: rawIDs,
+            expectedMemoryStoreVersion: memoryStoreVersion,
+            expectedSelectorConfigFingerprint: selectorConfigFingerprint
+        ) else { return nil }
+        guard let keys = MemoryInjectionSnapshotProjectionPolicy.cachedSelectedSelectionKeys(from: latest.wire) else {
+            return nil
+        }
+        return try? await memoryService.recallHits(selectionKeys: keys, session: session)
     }
 
     private func latestUserQuery(from messages: [Message]) -> String? {

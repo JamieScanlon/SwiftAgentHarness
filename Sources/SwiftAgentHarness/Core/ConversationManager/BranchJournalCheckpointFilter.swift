@@ -36,6 +36,10 @@ enum BranchJournalCheckpointFilter {
             guard let w = ConversationEventCodec.decode(MemoryInjectionSnapshotCheckpointWire.self, from: event.payloadJSON) else {
                 return false
             }
+            if let prefix = MemoryInjectionSnapshotProjectionPolicy.resolvedSelectionContextPrefix(from: w) {
+                guard !prefix.isEmpty else { return false }
+                return Set(prefix).isSubset(of: allowedMessageIDs)
+            }
             guard !w.scopeMessageIDs.isEmpty else { return false }
             return Set(w.scopeMessageIDs).isSubset(of: allowedMessageIDs)
         case ConversationEventKind.toolResultTrimCheckpoint.rawValue:

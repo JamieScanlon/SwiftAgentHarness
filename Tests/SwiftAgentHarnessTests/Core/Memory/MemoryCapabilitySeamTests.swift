@@ -98,7 +98,13 @@ struct MemoryCapabilitySeamTests {
             return MemoryRecallResult(selectedFilenames: [], hits: [])
         }
 
-        func onTurnEnded(request: MemoryTurnEndedRequest) async { _ = request }
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult {
+        _ = selectionKeys
+        _ = session
+        return MemoryRecallResult(selectedFilenames: [], hits: [])
+    }
+
+    func onTurnEnded(request: MemoryTurnEndedRequest) async { _ = request }
 
         func onPreCompress(messages: [String]) async -> String {
             _ = messages

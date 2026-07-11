@@ -90,6 +90,7 @@ protocol MemoryRuntime: Sendable {
     func endSession(conversationID: UUID) async
     func shutdown() async
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult
     func onTurnEnded(request: MemoryTurnEndedRequest) async
     func onPreCompress(messages: [String]) async -> String
     func refreshSnapshotAfterFlush(conversationID: UUID) async throws
@@ -161,6 +162,12 @@ struct LegacyLifecycleMemoryRuntime: MemoryRuntime {
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
         _ = request
+        return MemoryRecallResult(selectedFilenames: [], hits: [])
+    }
+
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult {
+        _ = selectionKeys
+        _ = session
         return MemoryRecallResult(selectedFilenames: [], hits: [])
     }
 

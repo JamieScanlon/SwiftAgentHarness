@@ -215,11 +215,15 @@ actor FileStoreMemoryBackend: MemoryRuntime {
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
         let selected = await recallSelector.selectRelevantFiles(request: request)
-        guard let projectStore = storeByConversation[request.session.conversationID] else {
-            return MemoryRecallResult(selectedFilenames: selected, hits: [])
+        return try await recallHits(selectionKeys: selected, session: request.session)
+    }
+
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult {
+        guard let projectStore = storeByConversation[session.conversationID] else {
+            return MemoryRecallResult(selectedFilenames: selectionKeys, hits: [])
         }
         var hits: [MemoryRecallHit] = []
-        for selectionKey in selected {
+        for selectionKey in selectionKeys {
             guard let resolved = MemoryRecallSelectionResolver.resolve(
                 selectionKey: selectionKey,
                 projectStore: projectStore,
@@ -235,7 +239,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
             )
             hits.append(MemoryRecallHit(selectionKey: selectionKey, formattedBody: formatted))
         }
-        return MemoryRecallResult(selectedFilenames: selected, hits: hits)
+        return MemoryRecallResult(selectedFilenames: selectionKeys, hits: hits)
     }
 
     func onTurnEnded(request: MemoryTurnEndedRequest) async {

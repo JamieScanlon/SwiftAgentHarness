@@ -62,6 +62,15 @@ public actor DefaultMemoryService: MemoryServicing {
         return try await capability.runtime.recallForTurn(request: request)
     }
 
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult {
+        let capability = await capabilityRegistry.activeCapability()
+        return try await capability.runtime.recallHits(selectionKeys: selectionKeys, session: session)
+    }
+
+    func recallSelectorConfigFingerprint() -> String {
+        MemoryInjectionSnapshotProjectionPolicy.selectorConfigFingerprint(config: config)
+    }
+
     func bindSpawnPort(_ port: MemorySubAgentSpawnPort) async {
         spawnPortBox.set(port)
         let capability = await capabilityRegistry.activeCapability()

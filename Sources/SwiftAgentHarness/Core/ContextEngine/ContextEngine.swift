@@ -7,7 +7,10 @@ public struct ContextMemoryInjectionSnapshotSpec: Sendable {
     let memoryStoreVersion: Int
     let memoryStoreNamespaceKey: String?
     let injectedMemoryEntryIDs: [UUID]
+    let selectedSelectionKeys: [String]
     let projectedSelectionKeys: [String]
+    let selectionContextMessageIDs: [UUID]
+    let selectorConfigFingerprint: String
 
     init(
         conversationID: UUID,
@@ -15,14 +18,20 @@ public struct ContextMemoryInjectionSnapshotSpec: Sendable {
         memoryStoreVersion: Int,
         memoryStoreNamespaceKey: String?,
         injectedMemoryEntryIDs: [UUID],
-        projectedSelectionKeys: [String] = []
+        selectedSelectionKeys: [String] = [],
+        projectedSelectionKeys: [String] = [],
+        selectionContextMessageIDs: [UUID] = [],
+        selectorConfigFingerprint: String = ""
     ) {
         self.conversationID = conversationID
         self.phase = phase
         self.memoryStoreVersion = memoryStoreVersion
         self.memoryStoreNamespaceKey = memoryStoreNamespaceKey
         self.injectedMemoryEntryIDs = injectedMemoryEntryIDs
+        self.selectedSelectionKeys = selectedSelectionKeys
         self.projectedSelectionKeys = projectedSelectionKeys
+        self.selectionContextMessageIDs = selectionContextMessageIDs
+        self.selectorConfigFingerprint = selectorConfigFingerprint
     }
 }
 

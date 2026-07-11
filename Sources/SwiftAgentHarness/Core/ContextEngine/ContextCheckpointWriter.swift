@@ -77,14 +77,17 @@ enum ContextCheckpointWriter {
         guard let spec else { return }
         let entryIDs = Array(Set(spec.injectedMemoryEntryIDs)).sorted { $0.uuidString < $1.uuidString }
         guard !entryIDs.isEmpty else { return }
-        let selectionKeys = Array(Set(spec.projectedSelectionKeys)).sorted()
+        let selectedKeys = Array(Set(spec.selectedSelectionKeys)).sorted()
+        let projectedKeys = Array(Set(spec.projectedSelectionKeys)).sorted()
+        let contextIDs = spec.selectionContextMessageIDs
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let snapshotData = try? encoder.encode(
             MemoryStoreSnapshotJSON(
                 memoryEntryIDs: entryIDs,
                 memoryStoreVersion: spec.memoryStoreVersion,
-                projectedSelectionKeys: selectionKeys.isEmpty ? nil : selectionKeys
+                selectedSelectionKeys: selectedKeys.isEmpty ? nil : selectedKeys,
+                projectedSelectionKeys: projectedKeys.isEmpty ? nil : projectedKeys
             )
         ),
         let snapshotJSON = String(data: snapshotData, encoding: .utf8) else { return }
@@ -94,15 +97,27 @@ enum ContextCheckpointWriter {
         case .continuation(let round):
             "agent_build_continuation:\(round)"
         }
-        let selectionKeySig = selectionKeys.joined(separator: ",")
-        let fingerprintInput = "v3|\(phaseRaw)|\(spec.conversationID.uuidString)|\(spec.memoryStoreVersion)|\(entryIDs.map(\.uuidString).joined(separator: ","))|\(selectionKeySig)"
+        let fingerprintInput = MemoryInjectionSnapshotProjectionPolicy.injectionFingerprintInput(
+            phaseRaw: phaseRaw,
+            conversationID: spec.conversationID,
+            memoryStoreVersion: spec.memoryStoreVersion,
+            injectedMemoryEntryIDs: entryIDs,
+            selectedSelectionKeys: selectedKeys,
+            projectedSelectionKeys: projectedKeys,
+            selectionContextMessageIDs: contextIDs,
+            selectorConfigFingerprint: spec.selectorConfigFingerprint
+        )
         let fingerprint = SHA256.hash(data: Data(fingerprintInput.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         if let latest = SuiteCheckpointSupport.latestValidMemoryInjectionSnapshot(
             events: events,
             frontierEventID: frontierEventID,
-            expectedMemoryStoreVersion: spec.memoryStoreVersion
+            rawMessageIDs: contextIDs.isEmpty ? nil : contextIDs,
+            expectedMemoryStoreVersion: spec.memoryStoreVersion,
+            expectedSelectorConfigFingerprint: spec.selectorConfigFingerprint.isEmpty
+                ? nil
+                : spec.selectorConfigFingerprint
         ),
            latest.wire.injectionFingerprint == fingerprint,
            latest.wire.memoryStoreNamespaceKey == spec.memoryStoreNamespaceKey,
@@ -118,6 +133,8 @@ enum ContextCheckpointWriter {
             memoryStoreVersion: spec.memoryStoreVersion,
             memoryStoreNamespaceKey: spec.memoryStoreNamespaceKey,
             memoryEntryIDs: entryIDs,
+            selectorConfigFingerprint: spec.selectorConfigFingerprint.isEmpty ? nil : spec.selectorConfigFingerprint,
+            selectionContextMessageIDs: contextIDs.isEmpty ? nil : contextIDs,
             createdAt: Date()
         )
         do {

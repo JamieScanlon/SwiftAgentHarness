@@ -16,15 +16,18 @@ public enum HarnessCheckpointWireKind: String, Codable, Sendable, CaseIterable {
 public struct MemoryStoreSnapshotJSON: Codable, Sendable, Equatable {
     public var memoryEntryIDs: [UUID]
     public var memoryStoreVersion: Int
+    public var selectedSelectionKeys: [String]?
     public var projectedSelectionKeys: [String]?
 
     public init(
         memoryEntryIDs: [UUID],
         memoryStoreVersion: Int,
+        selectedSelectionKeys: [String]? = nil,
         projectedSelectionKeys: [String]? = nil
     ) {
         self.memoryEntryIDs = memoryEntryIDs
         self.memoryStoreVersion = memoryStoreVersion
+        self.selectedSelectionKeys = selectedSelectionKeys
         self.projectedSelectionKeys = projectedSelectionKeys
     }
 }
@@ -54,6 +57,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
     public var memoryStoreVersion: Int?
     public var memoryStoreNamespaceKey: String?
     public var memoryEntryIDs: [UUID]?
+    public var selectorConfigFingerprint: String?
+    public var selectionContextMessageIDs: [UUID]?
     public var createdAt: Date
 
     public init(
@@ -65,6 +70,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
         memoryStoreVersion: Int? = nil,
         memoryStoreNamespaceKey: String? = nil,
         memoryEntryIDs: [UUID]? = nil,
+        selectorConfigFingerprint: String? = nil,
+        selectionContextMessageIDs: [UUID]? = nil,
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
@@ -75,6 +82,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
         self.memoryStoreVersion = memoryStoreVersion
         self.memoryStoreNamespaceKey = memoryStoreNamespaceKey
         self.memoryEntryIDs = memoryEntryIDs
+        self.selectorConfigFingerprint = selectorConfigFingerprint
+        self.selectionContextMessageIDs = selectionContextMessageIDs
         self.createdAt = createdAt
     }
 }
