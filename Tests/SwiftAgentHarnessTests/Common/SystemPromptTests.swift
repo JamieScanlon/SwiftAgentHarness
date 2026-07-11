@@ -221,6 +221,57 @@ struct SystemPromptModeContextSwitchTests {
         )
         #expect(result.contains("# Memory") == false)
     }
+
+    @Test("Tier 1 memory content renders inside Memory section with provenance")
+    func tier1MemoryContentInMemorySection() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: nil,
+            additionalMetadata: [
+                "modeMemoryInjection": "on",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "frozen index body",
+            ]
+        )
+        #expect(result.contains("# Memory"))
+        #expect(result.contains("frozen index body"))
+        #expect(result.contains("<!-- provenance: engine:memory -->"))
+    }
+
+    @Test("skills-only with includeSkills false suppresses memory section")
+    func skillsOnlyWithoutIncludeSkillsSuppressesMemory() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: nil,
+            additionalMetadata: [
+                "modeMemoryInjection": "skills-only",
+                "modeIncludeSkills": "false",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "should not appear",
+            ]
+        )
+        #expect(result.contains("# Memory") == false)
+        #expect(result.contains("should not appear") == false)
+    }
+
+    @Test("cache boundary separates stable prefix from volatile sections")
+    func cacheBoundaryBetweenStableAndVolatile() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: "dynamic requirement",
+            additionalMetadata: [
+                "modeMemoryInjection": "on",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "stable memory",
+                SystemPromptAssemblyMetadataKeys.providerStablePrefix: "provider prefix",
+            ]
+        )
+        let marker = ProviderPromptContribution.cacheBoundaryMarker
+        #expect(result.hasPrefix("provider prefix"))
+        #expect(result.contains(marker))
+        #expect(result.contains("stable memory"))
+        #expect(result.contains("dynamic requirement"))
+        let memoryRange = try #require(result.range(of: "stable memory"))
+        let additionalRange = try #require(result.range(of: "dynamic requirement"))
+        #expect(memoryRange.lowerBound < additionalRange.lowerBound)
+    }
 }
 
 // MARK: - SystemPrompt — DateTime in Generated Prompt

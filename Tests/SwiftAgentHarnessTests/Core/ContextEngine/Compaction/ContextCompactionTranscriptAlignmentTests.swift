@@ -62,16 +62,25 @@ recalled
         )
     }
 
-    @Test("partition separates Tier 1 injected prefix from compaction transcript")
-    func partitionSeparatesInjectedPrefix() {
-        let injected = injectedTier1MemoryContext()
+    @Test("partition has no Tier 1 memory prefix when only conversation messages are present")
+    func partitionHasNoTier1MemoryPrefix() {
         let thread = compressibleThread()
-        let full = injected + thread
-        let (prefix, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(full)
-        #expect(prefix.count == 1)
+        let (prefix, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(thread)
+        #expect(prefix.isEmpty)
         #expect(transcript.map(\.id) == thread.map(\.id))
         #expect(!transcript.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryContext) }))
-        #expect((prefix + transcript).map(\.id) == full.map(\.id))
+    }
+
+    private func injectedSeniorHarnessPrefix() -> [Message] {
+        [
+            HarnessInjectedMessageMetadata.systemMessage(
+                id: UUID(),
+                content: """
+\(HarnessInjectedMessagePrefixes.triggerProvenance)
+trigger snapshot
+"""
+            ),
+        ]
     }
 
     @Test("late-placed Tier 2 recall is excluded from compaction transcript")
@@ -97,7 +106,7 @@ recalled
 
     @Test("builder rawMiddle matches split on filtered transcript only")
     func builderRawMiddleMatchesFilteredSplit() async throws {
-        let injected = injectedTier1MemoryContext()
+        let injected = injectedSeniorHarnessPrefix()
         let thread = compressibleThread()
         let full = injected + thread
         let conversation = makeConversation()
@@ -133,7 +142,7 @@ recalled
 
     @Test("transformer prepends injected prefix to split head")
     func transformerPrependsInjectedPrefixToHead() async throws {
-        let injected = injectedTier1MemoryContext()
+        let injected = injectedSeniorHarnessPrefix()
         let thread = compressibleThread()
         let (_, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(injected + thread)
         let conversation = makeConversation()

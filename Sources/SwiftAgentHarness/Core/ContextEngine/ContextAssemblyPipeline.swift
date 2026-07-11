@@ -112,7 +112,8 @@ enum ContextAssemblyPipeline {
             result: result,
             persistenceEffects: ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: false,
-                attachmentProjectionArtifactForCache: nil
+                attachmentProjectionArtifactForCache: nil,
+                systemPromptAssemblyArtifactForCache: nil
             )
         )
     }

@@ -14,6 +14,8 @@ struct ContextAssemblyPersistenceSideEffects: Sendable {
     let persistedCompactionCheckpoint: Bool
     /// When non-nil, caller should merge into **`lastAttachmentProjectionByConversationID`** (orchestrator path).
     let attachmentProjectionArtifactForCache: ContextEngineAttachmentProjectionArtifact?
+    /// When non-nil, caller should merge into **`lastSystemPromptAssemblyByConversationID`** (orchestrator path).
+    let systemPromptAssemblyArtifactForCache: ContextEngineSystemPromptAssemblyArtifact?
 }
 
 /// Single place to apply ``ContextCheckpointWriter`` after a ``ContextEngineAssembleResult``.
@@ -70,6 +72,7 @@ enum ContextAssemblyPersistenceApplicator {
                 logger: logger
             )
             let attachmentCache = result.projectionArtifact?.attachmentProjection
+            let systemPromptCache = result.projectionArtifact?.systemPromptAssembly
             let persistedCompaction = ContextCheckpointWriter.persistCompactionCheckpointIfNeeded(
                 spec: result.checkpointPersistence,
                 persistence: persistence,
@@ -77,7 +80,8 @@ enum ContextAssemblyPersistenceApplicator {
             )
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
-                attachmentProjectionArtifactForCache: attachmentCache
+                attachmentProjectionArtifactForCache: attachmentCache,
+                systemPromptAssemblyArtifactForCache: systemPromptCache
             )
 
         case .manualCompaction:
@@ -113,7 +117,8 @@ enum ContextAssemblyPersistenceApplicator {
             )
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
-                attachmentProjectionArtifactForCache: nil
+                attachmentProjectionArtifactForCache: nil,
+                systemPromptAssemblyArtifactForCache: nil
             )
         }
     }

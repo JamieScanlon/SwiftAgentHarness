@@ -86,25 +86,14 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     assemblyKind: request.conversation.interactionMode.harnessAssemblyKind
                 )
         )
-        let messagesWithTier1 = await injectingTier1MemoryContext(
-            into: request.messages,
-            conversation: request.conversation,
-            modeMemoryInjection: modeSwitches.memoryInjectionMode,
-            resolvedProfile: request.projectionPolicy?.systemPromptAssemblyPolicy?.resolvedModeProfile
-        )
-        var memorySnapshot = memoryStoreVersion > 0 ? ContextMemoryInjectionSnapshotSpec(
-            conversationID: request.conversation.id,
-            phase: request.phase,
-            memoryStoreVersion: memoryStoreVersion,
-            memoryStoreNamespaceKey: request.conversation.id.uuidString,
-            injectedMemoryEntryIDs: [Self.snapshotEntryID(generation: memoryStoreVersion)]
-        ) : nil
+        let messagesForAssembly = request.messages
+        var memorySnapshot: ContextMemoryInjectionSnapshotSpec?
         let sessionMemoryNote = sessionMemoryNoteForCompaction(
             memoryStoreVersion: memoryStoreVersion,
             config: request.compactionConfig
         )
         let preparedTurnRequest = ContextEngineAssembleRequest(
-            messages: messagesWithTier1,
+            messages: messagesForAssembly,
             conversation: request.conversation,
             phase: request.phase,
             gatingOverride: request.gatingOverride,
@@ -144,10 +133,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 phase: request.phase,
                 memoryStoreVersion: memoryStoreVersion,
                 memoryStoreNamespaceKey: request.conversation.id.uuidString,
-                injectedMemoryEntryIDs: [
-                    Self.snapshotEntryID(generation: memoryStoreVersion),
-                    Self.recallEntryID(generation: memoryStoreVersion),
-                ]
+                injectedMemoryEntryIDs: [Self.recallEntryID(generation: memoryStoreVersion)]
             )
         }
         return ContextEngineAssembleResult(
@@ -269,7 +255,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     public func projectedContextBudget(
         request: ContextEngineProjectedContextBudgetRequest
     ) async -> ConversationContextBudget? {
-        let projected = applyProjectionPolicy(
+        let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
             policy: request.projectionPolicy
@@ -305,7 +291,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextTurnAssemblyRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextTurnAssemblyResult {
-        let projected = applyProjectionPolicy(
+        let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
             policy: request.projectionPolicy
@@ -317,7 +303,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         let promptCheckpoint = projectionArtifact.systemPromptAssembly.map {
             ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
-                fingerprint: $0.fingerprint
+                fingerprint: $0.fingerprint,
+                assembledPromptDigest: nil
             )
         }
         let attachmentCheckpoint = projectionArtifact.attachmentProjection.map {
@@ -793,10 +780,6 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
 """
     }
 
-    private static func snapshotEntryID(generation: Int) -> UUID {
-        UUID(uuidString: String(format: "00000000-0000-4000-8000-%012x", generation)) ?? UUID()
-    }
-
     private static func recallEntryID(generation: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-9000-%012x", generation)) ?? UUID()
     }
@@ -812,37 +795,6 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         } catch {
             logger?.error("[ContextEngine] memory bootstrap failed conversation=\(conversation.id): \(error)")
         }
-    }
-
-    private func injectingTier1MemoryContext(
-        into baseMessages: [Message],
-        conversation: ModelConversation,
-        modeMemoryInjection: String,
-        resolvedProfile: ResolvedModeProfile?
-    ) async -> [Message] {
-        switch modeMemoryInjection {
-        case "off":
-            return baseMessages
-        case "skills-only":
-            let includeSkills = resolvedProfile?.context.includeSkills ?? true
-            guard includeSkills else { return baseMessages }
-        default:
-            break
-        }
-        guard let memoryService else { return baseMessages }
-        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
-            return baseMessages
-        }
-        let stable = blocks.stableSystemPromptSection
-        guard !stable.isEmpty else { return baseMessages }
-        let injected = HarnessInjectedMessageMetadata.systemMessage(
-            id: Self.snapshotEntryID(generation: blocks.snapshotGeneration),
-            content: """
-\(HarnessInjectedMessagePrefixes.memoryContext)
-\(stable)
-"""
-        )
-        return [injected] + baseMessages
     }
 
     private struct Tier2RecallApplicationResult: Sendable {
@@ -932,7 +884,7 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         messages: [Message],
         conversation: ModelConversation,
         policy: ContextEngineProjectionPolicyInput?
-    ) -> (messages: [Message], artifact: ContextEngineProjectionArtifact) {
+    ) async -> (messages: [Message], artifact: ContextEngineProjectionArtifact) {
         guard let policy else {
             return (
                 messages,
@@ -970,11 +922,19 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             messages: projected,
             policy: policy.deterministicAttachmentHygiene
         )
-        let promptArtifact = policy.systemPromptAssemblyPolicy.map {
-            buildSystemPromptAssemblyArtifact(
+        let promptArtifact = if let assemblyPolicy = policy.systemPromptAssemblyPolicy {
+            await buildSystemPromptAssemblyArtifact(
                 conversation: conversation,
-                policy: $0
+                policy: assemblyPolicy,
+                modeMemoryInjection: ContextSystemPromptModeSwitches.build(
+                    conversation: conversation,
+                    strictAgentHarnessPrompts: assemblyPolicy.strictAgentHarnessPrompts,
+                    resolvedProfile: assemblyPolicy.resolvedModeProfile
+                ).memoryInjectionMode,
+                resolvedProfile: assemblyPolicy.resolvedModeProfile
             )
+        } else {
+            nil as ContextEngineSystemPromptAssemblyArtifact?
         }
         let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjection(
             catalog: policy.attachmentCatalog,
@@ -993,13 +953,20 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
 
     private func buildSystemPromptAssemblyArtifact(
         conversation: ModelConversation,
-        policy: ContextEngineSystemPromptAssemblyPolicyInput
-    ) -> ContextEngineSystemPromptAssemblyArtifact {
+        policy: ContextEngineSystemPromptAssemblyPolicyInput,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?
+    ) async -> ContextEngineSystemPromptAssemblyArtifact {
         let metadata = ContextSystemPromptModeSwitches.build(
             conversation: conversation,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
             resolvedProfile: policy.resolvedModeProfile
         ).metadata
+        let tier1 = await tier1MemorySectionContent(
+            conversation: conversation,
+            modeMemoryInjection: modeMemoryInjection,
+            resolvedProfile: resolvedProfile
+        )
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
@@ -1007,9 +974,50 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             includeDateTime: policy.includeDateTime,
             toolPolicySignature: policy.toolPolicySignature,
             routingPolicyTools: policy.routingPolicyTools,
-            routingPolicySkills: policy.routingPolicySkills
+            routingPolicySkills: policy.routingPolicySkills,
+            memorySnapshotGeneration: tier1.generation,
+            tier1MemorySectionContent: tier1.content
         )
-        return ContextEngineSystemPromptAssemblyArtifact(metadata: metadata, fingerprint: fingerprint)
+        return ContextEngineSystemPromptAssemblyArtifact(
+            metadata: metadata,
+            fingerprint: fingerprint,
+            tier1MemorySectionContent: tier1.content,
+            memorySnapshotGeneration: tier1.generation
+        )
+    }
+
+    private struct Tier1MemorySectionContent: Sendable {
+        let content: String?
+        let generation: Int?
+    }
+
+    private func tier1MemorySectionContent(
+        conversation: ModelConversation,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?
+    ) async -> Tier1MemorySectionContent {
+        switch modeMemoryInjection {
+        case "off":
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        case "skills-only":
+            let includeSkills = resolvedProfile?.context.includeSkills ?? true
+            guard includeSkills else {
+                return Tier1MemorySectionContent(content: nil, generation: nil)
+            }
+        default:
+            break
+        }
+        guard let memoryService else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        let stable = blocks.stableSystemPromptSection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stable.isEmpty else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        return Tier1MemorySectionContent(content: stable, generation: blocks.snapshotGeneration)
     }
 
 

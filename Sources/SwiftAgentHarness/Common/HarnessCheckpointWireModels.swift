@@ -101,17 +101,25 @@ public struct ToolResultTrimCheckpointWire: Codable, Sendable, Equatable {
 }
 
 public struct SystemPromptAssemblyCheckpointWire: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var basedOnEventID: Int
     public var assemblyFingerprint: String
+    public var assembledPromptDigest: String?
     public var createdAt: Date
 
-    public init(schemaVersion: Int, basedOnEventID: Int, assemblyFingerprint: String, createdAt: Date) {
+    public init(
+        schemaVersion: Int,
+        basedOnEventID: Int,
+        assemblyFingerprint: String,
+        assembledPromptDigest: String? = nil,
+        createdAt: Date
+    ) {
         self.schemaVersion = schemaVersion
         self.basedOnEventID = basedOnEventID
         self.assemblyFingerprint = assemblyFingerprint
+        self.assembledPromptDigest = assembledPromptDigest
         self.createdAt = createdAt
     }
 }

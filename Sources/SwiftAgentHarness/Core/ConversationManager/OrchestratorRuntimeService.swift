@@ -356,6 +356,17 @@ public actor OrchestratorRuntimeService {
             payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
         }
         if let conversationID = conversation?.id,
+           let assembly = await contextProjection.cachedSystemPromptAssembly(conversationID: conversationID) {
+            if let tier1 = assembly.tier1MemorySectionContent?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !tier1.isEmpty {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1
+            }
+            if let generation = assembly.memorySnapshotGeneration {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+            }
+        }
+        if let conversationID = conversation?.id,
            let attachmentProjection = await contextProjection.cachedAttachmentProjection(conversationID: conversationID) {
             let decisions: [JSON] = attachmentProjection.decisions.map { decision in
                 .object([

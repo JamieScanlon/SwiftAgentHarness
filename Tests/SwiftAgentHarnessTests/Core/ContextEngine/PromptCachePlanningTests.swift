@@ -138,6 +138,34 @@ struct PromptCachePlanningTests {
         #expect((plan.stablePrefixMessageCount ?? 0) >= 2)
     }
 
+    @Test("stable prefix counting does not require Memory Context harness message")
+    func stablePrefixWithoutMemoryContextMessage() async {
+        let planner = CapabilityDrivenPromptCachePlanner()
+        let binding = ProviderBinding(
+            providerId: "lmstudio",
+            modelProtocol: .lmStudio,
+            endpointModelId: "model-x",
+            serverURL: URL(string: "http://localhost:1234")!,
+            priority: 0
+        )
+        let input = PromptCachePlanningInput(
+            modelID: UUID(),
+            binding: binding,
+            modelCapabilities: [.completion, .promptCachePersistent],
+            messages: [
+                Message(id: UUID(), role: .system, content: "canonical system", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .user, content: "user", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .user, content: "second", timestamp: Date(), toolCalls: []),
+            ],
+            config: LLMRequestConfig(),
+            policy: .enabled(strategy: .automatic)
+        )
+        let plan = planner.plan(for: input)
+        #expect(plan.mode == .persistent)
+        #expect((plan.stablePrefixMessageCount ?? 0) >= 2)
+        #expect(!input.messages.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryContext) }))
+    }
+
     @Test("capability-driven planner disables when unsupported")
     func capabilityDrivenPlannerDisablesWithoutCapability() async {
         let planner = CapabilityDrivenPromptCachePlanner()

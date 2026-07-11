@@ -10,11 +10,19 @@ enum SystemPromptAssemblyFingerprint {
         includeDateTime: Bool,
         toolPolicySignature: String,
         routingPolicyTools: [String],
-        routingPolicySkills: [String]
+        routingPolicySkills: [String],
+        memorySnapshotGeneration: Int? = nil,
+        tier1MemorySectionContent: String? = nil
     ) -> String {
         let tools = routingPolicyTools.sorted().joined(separator: ",")
         let skills = routingPolicySkills.sorted().joined(separator: ",")
         let sliceSig = modeProfileSliceSignature(resolved)
+        let memoryGen = memorySnapshotGeneration.map(String.init) ?? "-"
+        let tier1Sig: String = {
+            guard let tier1 = tier1MemorySectionContent?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !tier1.isEmpty else { return "-" }
+            return "len=\(tier1.count):prefix=\(String(tier1.prefix(256)))"
+        }()
         let canonical =
             """
             modeId=\(resolved.id)
@@ -27,6 +35,8 @@ enum SystemPromptAssemblyFingerprint {
             routingTools=\(tools)
             routingSkills=\(skills)
             modeSlices=\(sliceSig)
+            memorySnapshotGeneration=\(memoryGen)
+            tier1Memory=\(tier1Sig)
             """
         let digest = SHA256.hash(data: Data(canonical.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()

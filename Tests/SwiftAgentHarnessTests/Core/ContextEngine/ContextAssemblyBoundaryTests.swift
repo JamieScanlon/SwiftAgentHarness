@@ -112,7 +112,8 @@ struct ContextAssemblyBoundaryTests {
             projectionArtifact: nil,
             systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: conversationID,
-                fingerprint: "ctx-assembly-test-fingerprint"
+                fingerprint: "ctx-assembly-test-fingerprint",
+                assembledPromptDigest: nil
             ),
             attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec(
                 conversationID: conversationID,

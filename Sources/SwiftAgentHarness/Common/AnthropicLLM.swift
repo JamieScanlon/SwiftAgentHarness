@@ -252,9 +252,18 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         ]
         if let temperature = config.temperature { body["temperature"] = temperature }
         if let topP = config.topP { body["top_p"] = topP }
-        let systemText = try await systemPrompt.generateSystemPrompt()
-        if !systemText.isEmpty { body["system"] = systemText }
-        body["messages"] = try anthropicMessages(from: messages)
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
+        if let systemText = plan.canonicalSystemText, !systemText.isEmpty {
+            body["system"] = systemText
+        }
+        body["messages"] = try anthropicMessages(from: plan.resolvedMessages)
         if !config.availableTools.isEmpty {
             body["tools"] = config.availableTools.map { tool in
                 [

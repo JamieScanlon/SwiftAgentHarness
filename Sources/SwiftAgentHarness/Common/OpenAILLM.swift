@@ -131,7 +131,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         
-        let openAIMessages = await openAIChatCompletionMessageParams(from: messages, config: config)
+        let openAIMessages = try await openAIChatCompletionMessageParams(from: messages, config: config)
         logPromptCacheNoOpIfNeeded(config: config)
         
         let query = makeChatQuery(openAIMessages: openAIMessages, config: config, stream: false, includeStreamUsage: false)
@@ -168,7 +168,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
                 )
                 do {
-                    let openAIMessages = await self.openAIChatCompletionMessageParams(from: messages, config: config)
+                    let openAIMessages = try await self.openAIChatCompletionMessageParams(from: messages, config: config)
                     self.logPromptCacheNoOpIfNeeded(config: config)
                     
                     let query = makeChatQuery(openAIMessages: openAIMessages, config: config, stream: true, includeStreamUsage: true)
@@ -303,23 +303,22 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         )
     }
     
-    private func openAIChatCompletionMessageParams(from messages: [Message], config: LLMRequestConfig) async -> [ChatQuery.ChatCompletionMessageParam] {
-        var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
-        openAIMessages.reserveCapacity(messages.count)
+    private func openAIChatCompletionMessageParams(from messages: [Message], config: LLMRequestConfig) async throws -> [ChatQuery.ChatCompletionMessageParam] {
         let attachmentDispositions = extractAttachmentDispositions(from: config.additionalParameters)
-        for message in messages {
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
+        var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
+        openAIMessages.reserveCapacity(plan.resolvedMessages.count)
+        for message in plan.resolvedMessages {
             let text: String
-            if message.role == .system, let systemPrompt {
-                do {
-                    let promptMetadata = extractSystemPromptMetadata(from: config.additionalParameters)
-                    text = try await systemPrompt.generateSystemPrompt(
-                        withUserSystemPrompt: message.content,
-                        additionalMetadata: promptMetadata
-                    )
-                } catch {
-                    logger?.error("Failed to generate system prompt: \(error)")
-                    text = ""
-                }
+            if message.role == .system {
+                text = message.content
             } else {
                 text = message.content + attachmentDispositionSuffix(
                     imageNames: message.images.map(\.name),

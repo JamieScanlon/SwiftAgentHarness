@@ -67,7 +67,7 @@ enum SuiteCheckpointSupport {
             decode: { ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: $0) },
             basedOnEventID: { $0.basedOnEventID },
             isValid: { wire, _ in
-                wire.schemaVersion == SystemPromptAssemblyCheckpointWire.currentSchemaVersion
+                (wire.schemaVersion == 1 || wire.schemaVersion == SystemPromptAssemblyCheckpointWire.currentSchemaVersion)
                     && !wire.assemblyFingerprint.isEmpty
                     && (expectedAssemblyFingerprint == nil || wire.assemblyFingerprint == expectedAssemblyFingerprint)
             }

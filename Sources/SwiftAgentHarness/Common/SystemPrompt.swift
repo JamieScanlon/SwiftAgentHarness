@@ -187,7 +187,40 @@ public struct SystemPrompt: Sendable {
         dynamicPrompt["sectionTriggers"] = sections[.triggers]
         dynamicPrompt["sectionAdditionalRequirements"] = sections[.additionalRequirements]
 
-        return dynamicPrompt.render()
+        let providerStablePrefix = additionalMetadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix]
+        return Self.assemblePromptWithCacheBoundary(
+            sections: sections,
+            includeDateTimePrefix: includeCurrentDateTime ? "Today is \(dateString).\n" : "",
+            providerStablePrefix: providerStablePrefix
+        )
+    }
+
+    private static func assemblePromptWithCacheBoundary(
+        sections: [SectionID: String],
+        includeDateTimePrefix: String,
+        providerStablePrefix: String?
+    ) -> String {
+        let stableIDs: [SectionID] = [.conversation, .subAgentContext, .workflow, .modeDirective, .memory]
+        let volatileIDs: [SectionID] = [.tools, .skills, .triggers, .additionalRequirements]
+        let stablePart = includeDateTimePrefix + stableIDs.map { sections[$0] ?? "" }.joined()
+        let volatilePart = volatileIDs.map { sections[$0] ?? "" }.joined()
+        var parts: [String] = []
+        if let prefix = providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
+            parts.append(prefix)
+            parts.append(ProviderPromptContribution.cacheBoundaryMarker)
+        }
+        let trimmedStable = stablePart.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedStable.isEmpty {
+            parts.append(stablePart)
+        }
+        let trimmedVolatile = volatilePart.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedVolatile.isEmpty {
+            if !parts.isEmpty {
+                parts.append(ProviderPromptContribution.cacheBoundaryMarker)
+            }
+            parts.append(volatilePart)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     public enum PromptsConfigError: Error {
@@ -373,23 +406,26 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         }
 
         let memoryMode = additionalMetadata["modeMemoryInjection"]?.lowercased() ?? "on"
+        let tier1Content = additionalMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         switch memoryMode {
         case "off":
             sections[.memory] = ""
         case "skills-only":
-            sections[.memory] = """
----
-# Memory
-Use retrieved memory context only when directly relevant to active skills and tool execution.
-
-"""
+            let includeSkills = (additionalMetadata["modeIncludeSkills"] ?? "true").lowercased() != "false"
+            guard includeSkills else {
+                sections[.memory] = ""
+                break
+            }
+            sections[.memory] = Self.memorySectionText(
+                guidance: "Use retrieved memory context only when directly relevant to active skills and tool execution.",
+                tier1Content: tier1Content
+            )
         default:
-            sections[.memory] = """
----
-# Memory
-Use retrieved memory context when it helps maintain correctness and continuity.
-
-"""
+            sections[.memory] = Self.memorySectionText(
+                guidance: "Use retrieved memory context when it helps maintain correctness and continuity.",
+                tier1Content: tier1Content
+            )
         }
 
         let includeToolGuidance = (additionalMetadata["modeIncludeToolGuidance"] ?? "true").lowercased() != "false"
@@ -402,6 +438,23 @@ Use retrieved memory context when it helps maintain correctness and continuity.
         }
 
         return sections
+    }
+
+    private static func memorySectionText(guidance: String, tier1Content: String) -> String {
+        var body = """
+---
+# Memory
+\(guidance)
+
+"""
+        if !tier1Content.isEmpty {
+            body += """
+<!-- provenance: engine:memory -->
+\(tier1Content)
+
+"""
+        }
+        return body
     }
 
     private func defaultSections(

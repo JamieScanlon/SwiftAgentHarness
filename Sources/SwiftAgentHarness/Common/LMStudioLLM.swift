@@ -83,7 +83,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         
-        let requestBody = await createLMStudioChatRequest(messages: messages, config: config, stream: false)
+        let requestBody = try await createLMStudioChatRequest(messages: messages, config: config, stream: false)
         
         logger?.debug("Preparing HTTP request - URL: \(serverURL.absoluteString)/api/v0/chat/completions, Model: \(model), MaxTokens: \(requestBody.maxTokens)")
         
@@ -154,7 +154,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                 
                 self.logger?.info("Starting streaming chat request\(LLMRequestPurposeReader.logSuffix(from: config)) - Model: \(self.model), Message count: \(messages.count)")
                 
-                let requestBody = await self.createLMStudioChatRequest(messages: messages, config: config, stream: true)
+                let requestBody = try await self.createLMStudioChatRequest(messages: messages, config: config, stream: true)
                 
                 self.logger?.debug("Preparing streaming HTTP request - URL: \(self.serverURL.absoluteString)/api/v0/chat/completions, Model: \(self.model)")
                 
@@ -516,26 +516,21 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         return "\n\n[Attachment projection]\n" + projected.joined(separator: "\n")
     }
     
-    private func createLMStudioChatRequest(messages: [Message], config: LLMRequestConfig, stream: Bool) async -> LMStudioChatRequest {
+    private func createLMStudioChatRequest(messages: [Message], config: LLMRequestConfig, stream: Bool) async throws -> LMStudioChatRequest {
         let attachmentDispositions = extractAttachmentDispositions(from: config.additionalParameters)
-        
-        // Convert messages to LM Studio format
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
         var lmStudioMessages: [LMStudioMessage] = []
-        for message in messages {
+        for message in plan.resolvedMessages {
             switch message.role {
             case .system:
-                let systemPromptText: String
-                do {
-                    let promptMetadata = extractSystemPromptMetadata(from: config.additionalParameters)
-                    systemPromptText = try await systemPrompt.generateSystemPrompt(
-                        withUserSystemPrompt: message.content,
-                        additionalMetadata: promptMetadata
-                    )
-                } catch {
-                    self.logger?.error("Failed to generate system prompt: \(error)")
-                    systemPromptText = ""
-                }
-                lmStudioMessages.append(LMStudioMessage(role: "system", content: systemPromptText))
+                lmStudioMessages.append(LMStudioMessage(role: "system", content: message.content))
             case .user:
                 lmStudioMessages.append(LMStudioMessage(
                     role: "user",

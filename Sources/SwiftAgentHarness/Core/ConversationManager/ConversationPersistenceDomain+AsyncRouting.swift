@@ -139,8 +139,16 @@ extension ConversationPersistenceDomain {
         )
     }
 
-    func persistSystemPromptAssemblyCheckpointIfNeededAsync(conversationID: UUID, fingerprint: String) async throws {
-        try persistSystemPromptAssemblyCheckpointIfNeeded(conversationID: conversationID, fingerprint: fingerprint)
+    func persistSystemPromptAssemblyCheckpointIfNeededAsync(
+        conversationID: UUID,
+        fingerprint: String,
+        assembledPromptDigest: String? = nil
+    ) async throws {
+        try persistSystemPromptAssemblyCheckpointIfNeeded(
+            conversationID: conversationID,
+            fingerprint: fingerprint,
+            assembledPromptDigest: assembledPromptDigest
+        )
     }
 
     func applyBackgroundCompactionIfEligibleAsync(conversationID: UUID) async {

@@ -235,7 +235,12 @@ public actor OrchestratorSessionRuntimeService {
             )
             if let conv {
                 do {
-                    try await persistSystemPromptAssemblyCheckpoint(conversation: conv, systemPrompt: systemPrompt, resolved: resolved)
+                    try await persistSystemPromptAssemblyCheckpoint(
+                        conversation: conv,
+                        systemPrompt: systemPrompt,
+                        resolved: resolved,
+                        assembledPromptText: text
+                    )
                 } catch {
                     logger?.warning("[OrchestratorSessionRuntimeService] system prompt assembly checkpoint (generateFullSystemPrompt): \(error)")
                 }
@@ -388,7 +393,8 @@ public actor OrchestratorSessionRuntimeService {
     private func persistSystemPromptAssemblyCheckpoint(
         conversation: ModelConversation,
         systemPrompt: SystemPrompt,
-        resolved: ResolvedModeProfile
+        resolved: ResolvedModeProfile,
+        assembledPromptText: String
     ) async throws {
         let routingNames = routingPolicyNames(for: conversation)
         let fingerprint = systemPrompt.assemblyFingerprintHex(
@@ -397,9 +403,11 @@ public actor OrchestratorSessionRuntimeService {
             routingPolicyTools: routingNames.tools,
             routingPolicySkills: routingNames.skills
         )
+        let digest = SystemPromptDispatchCodec.sha256Digest(of: assembledPromptText)
         try await persistenceDomain.persistSystemPromptAssemblyCheckpointIfNeededAsync(
             conversationID: conversation.id,
-            fingerprint: fingerprint
+            fingerprint: fingerprint,
+            assembledPromptDigest: digest
         )
     }
 

@@ -64,11 +64,13 @@ public actor ConversationPersistenceDomain {
 
     func persistSystemPromptAssemblyCheckpointIfNeeded(
         conversationID: UUID,
-        fingerprint: String
+        fingerprint: String,
+        assembledPromptDigest: String? = nil
     ) throws {
         try ContextCheckpointWriter.persistSystemPromptAssemblyCheckpointIfNeeded(
             conversationID: conversationID,
             fingerprint: fingerprint,
+            assembledPromptDigest: assembledPromptDigest,
             persistence: stack
         )
     }

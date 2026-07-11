@@ -267,6 +267,7 @@ enum ContextCheckpointWriter {
     static func persistSystemPromptAssemblyCheckpointIfNeeded(
         conversationID: UUID,
         fingerprint: String,
+        assembledPromptDigest: String? = nil,
         persistence: ConversationPersistenceStack
     ) throws {
         let (events, frontier) = persistence.conversationManager.loadConversationEventsWithFrontier(
@@ -282,6 +283,7 @@ enum ContextCheckpointWriter {
             schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
             basedOnEventID: frontier,
             assemblyFingerprint: fingerprint,
+            assembledPromptDigest: assembledPromptDigest,
             createdAt: Date()
         )
         try persistence.persistSystemPromptAssemblyCheckpoint(
@@ -301,6 +303,7 @@ enum ContextCheckpointWriter {
             try persistSystemPromptAssemblyCheckpointIfNeeded(
                 conversationID: spec.conversationID,
                 fingerprint: spec.fingerprint,
+                assembledPromptDigest: spec.assembledPromptDigest,
                 persistence: persistence
             )
         } catch {

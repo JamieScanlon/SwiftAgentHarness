@@ -253,6 +253,7 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
             schemaVersion: wire.schemaVersion,
             basedOnEventID: basedOnGlobal,
             assemblyFingerprint: wire.assemblyFingerprint,
+            assembledPromptDigest: wire.assembledPromptDigest,
             createdAt: wire.createdAt
         )
         try appendDerived(

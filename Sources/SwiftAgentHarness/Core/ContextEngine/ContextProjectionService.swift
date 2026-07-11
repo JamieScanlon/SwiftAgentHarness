@@ -49,6 +49,7 @@ actor ContextProjectionService {
     private var consecutiveLowSavingsCompactionsByConversationID: [UUID: Int] = [:]
     private var lastContextCompactionLLMDateByConversationID: [UUID: Date] = [:]
     private var lastAttachmentProjectionByConversationID: [UUID: ContextEngineAttachmentProjectionArtifact] = [:]
+    private var lastSystemPromptAssemblyByConversationID: [UUID: ContextEngineSystemPromptAssemblyArtifact] = [:]
     private var lastContextTransformSnapshotByConversationID: [UUID: ContextTransformSnapshot] = [:]
     private var pendingToolResultTransformRecordsByConversationID: [UUID: [String: PendingToolResultTransformRecord]] = [:]
     nonisolated let persistOriginalToolResultsDebugModeEnabled: Bool = true
@@ -80,6 +81,10 @@ actor ContextProjectionService {
 
     func cachedAttachmentProjection(conversationID: UUID) -> ContextEngineAttachmentProjectionArtifact? {
         lastAttachmentProjectionByConversationID[conversationID]
+    }
+
+    func cachedSystemPromptAssembly(conversationID: UUID) -> ContextEngineSystemPromptAssemblyArtifact? {
+        lastSystemPromptAssemblyByConversationID[conversationID]
     }
 
     func makeProjectionContext(
@@ -303,6 +308,9 @@ actor ContextProjectionService {
             }
             if let attachmentProjection = persistenceEffects.attachmentProjectionArtifactForCache {
                 lastAttachmentProjectionByConversationID[conversation.id] = attachmentProjection
+            }
+            if let systemPromptAssembly = persistenceEffects.systemPromptAssemblyArtifactForCache {
+                lastSystemPromptAssemblyByConversationID[conversation.id] = systemPromptAssembly
             }
             return result.messages
         }

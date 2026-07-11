@@ -242,34 +242,30 @@ struct ContextEngineTests {
         )
         conv.harnessPersistenceCwd = root.path
         let baseMessages = [Message(id: UUID(), role: .system, content: "system", timestamp: Date(), toolCalls: [])]
-        let request = ContextEngineAssembleRequest(
+        let policy = ContextEngineProjectionPolicyInput(
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: ResolvedModeProfile(
+                    id: InteractionMode.chat.rawValue,
+                    interactionMode: .chat,
+                    assemblyKind: .chat,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: false,
+                    builtInSeedVersion: ResolvedModeProfile.builtInSeedVersion,
+                    semanticLayerTags: []
+                ),
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: false,
+                includeDateTime: false,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            )
+        )
+        let request = makeAssembleRequest(
             messages: baseMessages,
             conversation: conv,
-            phase: .initial,
-            gatingOverride: nil,
-            compactionCustomInstructionsOverride: nil,
             enableContextTransform: true,
-            compactionConfig: .default,
-            transformMetadata: ConversationTransformMetadata(
-                conversationID: conv.id,
-                modelID: conv.model.id.uuidString,
-                modelName: conv.model.modelName,
-                interactionMode: .chat,
-                routingPolicyTools: [],
-                routingPolicySkills: [],
-                thinkingEnabled: false,
-                reasoningEffort: nil,
-                metadata: nil
-            ),
-            lastContextLimitTokens: nil,
-            lastPromptTokens: nil,
-            events: [],
-            eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
-            persistCompactionCheckpoint: false,
-            allowProactiveCompactionTriggers: true,
-            compactionLockAlreadyHeldByCaller: false,
-            derivedTailAtProjectionStart: 0
+            projectionPolicy: policy
         )
         let t1 = await engine.assemble(request: request) { input in
             ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
@@ -279,12 +275,25 @@ struct ContextEngineTests {
         }
         let s1 = t1.memoryInjectionSnapshot
         let s2 = t2.memoryInjectionSnapshot
-        #expect(s1 != nil)
-        #expect(s2 != nil)
-        #expect(s1?.memoryStoreVersion == s2?.memoryStoreVersion)
-        #expect(t1.messages.first?.role == .system)
-        #expect(t1.messages.first?.content.contains("[Memory Context]") == true)
-        #expect(t1.messages.first?.content.contains("project rule") == true)
+        #expect(s1 == nil)
+        #expect(s2 == nil)
+        let artifact = try #require(t1.projectionArtifact?.systemPromptAssembly)
+        #expect(artifact.tier1MemorySectionContent?.contains("project rule") == true)
+        #expect(artifact.memorySnapshotGeneration != nil)
+        #expect(!t1.messages.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryContext) }))
+        let prompt = try await SystemPrompt(
+            includeCurrentDateTime: false,
+            includeAgentSkills: false,
+            skillLoader: nil,
+            skipConfigLoad: true
+        )
+        var metadata = artifact.metadata
+        if let tier1 = artifact.tier1MemorySectionContent {
+            metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1
+        }
+        let rendered = try await prompt.generateSystemPrompt(additionalMetadata: metadata)
+        #expect(rendered.contains("project rule"))
+        #expect(rendered.contains("<!-- provenance: engine:memory -->"))
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -375,11 +384,10 @@ struct ContextEngineTests {
         let lastUserIndex = try #require(result.messages.lastIndex(where: { $0.role == .user }))
         #expect(recallIndex + 1 == lastUserIndex)
         #expect(result.messages[lastUserIndex].content == "big topic oversized recall")
-        #expect(result.messages.first?.content.contains(HarnessInjectedMessagePrefixes.memoryContext) == true)
         let recallBody = recallMessages[0].content
         #expect(recallBody.contains(MemoryRecallInjectionPolicy.truncationMarker))
         #expect(result.passthroughReason != "context_compacted")
-        #expect(result.memoryInjectionSnapshot?.injectedMemoryEntryIDs.count == 2)
+        #expect(result.memoryInjectionSnapshot?.injectedMemoryEntryIDs.count == 1)
     }
 
     @Test("ContextEngineSlotResolver resolves noop slot and unknown falls back")

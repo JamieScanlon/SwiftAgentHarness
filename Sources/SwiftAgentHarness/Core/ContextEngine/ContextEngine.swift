@@ -106,6 +106,8 @@ public struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
 public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let metadata: [String: String]
     let fingerprint: String
+    let tier1MemorySectionContent: String?
+    let memorySnapshotGeneration: Int?
 }
 
 /// Attachment projection artifact emitted by CE for provider/transformer consumption.
@@ -118,6 +120,7 @@ public struct ContextEngineAttachmentProjectionArtifact: Sendable {
 public struct ContextSystemPromptAssemblyCheckpointPersistenceSpec: Sendable {
     let conversationID: UUID
     let fingerprint: String
+    let assembledPromptDigest: String?
 }
 
 /// Persistable checkpoint trigger for CE attachment projection decisions.

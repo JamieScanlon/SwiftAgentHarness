@@ -374,6 +374,7 @@ extension ConversationManager {
                 schemaVersion: wire.schemaVersion,
                 basedOnEventID: remapEventID(wire.basedOnEventID),
                 assemblyFingerprint: wire.assemblyFingerprint,
+                assembledPromptDigest: wire.assembledPromptDigest,
                 createdAt: wire.createdAt
             )
             return ConversationEventCodec.encode(wire)
