@@ -176,7 +176,10 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         self.config = config
         self.logger = logger
         self.snapshotStore = MemorySessionSnapshotStore()
-        self.recallSelector = MemoryRecallSelector(llmSelector: llmRecallSelector)
+        self.recallSelector = MemoryRecallSelector(
+            llmSelector: llmRecallSelector,
+            heuristicMinScore: config.recallSelectorHeuristicMinScore
+        )
         self.extractor = BackgroundMemoryExtractor(config: config, logger: logger)
         self.activeMemory = ActiveMemoryPreReplyService(config: config, logger: logger)
         self.search = HybridMemorySearch()

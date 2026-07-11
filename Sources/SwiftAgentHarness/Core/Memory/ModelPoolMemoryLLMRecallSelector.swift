@@ -24,6 +24,12 @@ public struct ModelPoolMemoryLLMRecallSelector: MemoryLLMRecallSelecting {
     func selectRelevantFiles(request: MemoryRecallRequest) async throws -> [String] {
         let manifestLines = request.manifestEntries.map(MemoryManifestScanner.formatManifestLine)
         guard !manifestLines.isEmpty else { return [] }
+        let activeToolsLine: String
+        if request.activeToolNames.isEmpty {
+            activeToolsLine = "none"
+        } else {
+            activeToolsLine = request.activeToolNames.sorted().joined(separator: ", ")
+        }
         let system = Message(
             id: UUID(),
             role: .system,
@@ -33,6 +39,8 @@ Return JSON only: {"filenames":["file1.md"]}
 Be selective; if unsure, omit a file. At most 5 filenames.
 Use the exact selection key from the manifest: bare filenames for project-tier entries, `user/<filename>` for user-tier entries.
 Only use keys from the manifest below.
+Omit usage-reference memories for tools already invoked this turn (see active tools below) when those entries only document basic usage — but keep gotcha/known-issue memories about those tools.
+Active tools this turn: \(activeToolsLine)
 """
         )
         let user = Message(

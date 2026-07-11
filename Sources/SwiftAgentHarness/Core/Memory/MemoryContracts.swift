@@ -70,6 +70,19 @@ struct MemoryRecallRequest: Sendable {
     let session: MemorySessionContext
     let userQuery: String
     let manifestEntries: [MemoryManifestEntry]
+    let activeToolNames: Set<String>
+
+    init(
+        session: MemorySessionContext,
+        userQuery: String,
+        manifestEntries: [MemoryManifestEntry],
+        activeToolNames: Set<String> = []
+    ) {
+        self.session = session
+        self.userQuery = userQuery
+        self.manifestEntries = manifestEntries
+        self.activeToolNames = activeToolNames
+    }
 }
 
 struct MemoryRecallHit: Sendable, Equatable {

@@ -842,7 +842,8 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                   request: MemoryRecallRequest(
                       session: session,
                       userQuery: query,
-                      manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id)
+                      manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id),
+                      activeToolNames: MemoryRecallSelectionPolicy.activeToolNames(from: baseMessages)
                   )
               ),
               !recall.hits.isEmpty else {

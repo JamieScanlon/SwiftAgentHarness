@@ -18,6 +18,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
     var dreamingMinUniqueQueries: Int
     public var recallSelectorModel: String
     public var recallSelectorOllamaServerURL: URL
+    var recallSelectorHeuristicMinScore: Int
     /// Optional Model Pool pin (slug or UUID). When nil, active memory resolves via pool query + session last resort.
     var activeMemoryModelRef: String?
     /// Legacy Ollama endpoint still used by ``ModelPoolMemoryLLMRecallSelector`` until that path migrates.
@@ -64,6 +65,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         dreamingMinUniqueQueries: 2,
         recallSelectorModel: "llama3.2:3b",
         recallSelectorOllamaServerURL: URL(string: "http://127.0.0.1:11434")!,
+        recallSelectorHeuristicMinScore: 4,
         activeMemoryModelRef: nil,
         activeMemoryOllamaServerURL: URL(string: "http://127.0.0.1:11434")!,
         activeMemoryAllowCrossProviderTrust: false,
@@ -121,6 +123,9 @@ public enum MemoryConfigurationLoader {
         if let urlString = memory["recallSelectorOllamaServerURL"] as? String,
            let url = URL(string: urlString) {
             config.recallSelectorOllamaServerURL = url
+        }
+        if let v = memory["recallSelectorHeuristicMinScore"] as? Int {
+            config.recallSelectorHeuristicMinScore = max(1, v)
         }
         if let v = memory["activeMemoryModelRef"] as? String, !v.isEmpty {
             config.activeMemoryModelRef = v
