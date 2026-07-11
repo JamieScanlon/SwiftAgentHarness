@@ -64,6 +64,7 @@ protocol RuntimeContextPort: Sendable {
         compaction: CompactionHint,
         configuration: AgentRuntimeTurnConfiguration
     ) async throws -> [Message]
+    func projectedMemorySelectionKeys(conversationID: UUID) async -> Set<String>
     func afterTurn(conversationID: UUID, runID: UUID?, terminal: ConversationRunTerminalReason?) async
 }
 
@@ -132,7 +133,8 @@ protocol RuntimeMemoryPort: Sendable {
         conversationID: UUID,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String>
     ) async -> ActiveMemoryRecallOutcome
     func prefetchRecall(
         conversationID: UUID,

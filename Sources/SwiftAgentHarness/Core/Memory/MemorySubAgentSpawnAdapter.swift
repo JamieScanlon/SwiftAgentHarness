@@ -23,7 +23,7 @@ enum MemorySubAgentSpawnAdapter {
         logger: Logger?
     ) -> MemorySubAgentSpawnPort {
         MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { parentConversationID, userQuery, lane, timeoutMs, maxSummaryChars in
+            spawnBlockingRecall: { parentConversationID, userQuery, lane, timeoutMs, maxSummaryChars, excludedSelectionKeys in
                 guard let parent = await parentModel(parentConversationID) else {
                     logger?.debug("[ActiveMemory] parent conversation missing; skipping recall")
                     return nil
@@ -41,7 +41,8 @@ enum MemorySubAgentSpawnAdapter {
                     for: lane,
                     query: sanitizedQuery,
                     maxSummaryChars: maxSummaryChars,
-                    promptStyle: config.activeMemoryPromptStyle
+                    promptStyle: config.activeMemoryPromptStyle,
+                    excludedSelectionKeys: excludedSelectionKeys
                 )
                 let spawnRequest = SubAgentSpawnRequest(
                     context: .isolated,

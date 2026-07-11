@@ -134,7 +134,8 @@ protocol ActiveMemoryPreReplyRunning: Sendable {
         userQuery: String?,
         lane: RecallLane,
         timeoutMs: Int,
-        maxSummaryChars: Int
+        maxSummaryChars: Int,
+        excludedSelectionKeys: Set<String>
     ) async -> String?
 }
 
@@ -148,7 +149,8 @@ struct MemorySubAgentSpawnPort: Sendable {
         _ userQuery: String?,
         _ lane: RecallLane,
         _ timeoutMs: Int,
-        _ maxSummaryChars: Int
+        _ maxSummaryChars: Int,
+        _ excludedSelectionKeys: Set<String>
     ) async -> String?
 
     var spawnBackgroundExtraction: @Sendable (_ request: MemoryTurnEndedRequest) async -> Void

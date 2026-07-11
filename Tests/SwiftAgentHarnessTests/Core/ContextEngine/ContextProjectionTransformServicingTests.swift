@@ -23,6 +23,11 @@ struct ContextProjectionTransformServicingTests {
         func capturedGatingOverride() -> ContextCompactionGatingOptions? {
             lastGatingOverride
         }
+
+        func cachedProjectedMemorySelectionKeys(conversationID: UUID) async -> Set<String> {
+            let _ = conversationID
+            return []
+        }
     }
 
     @Test("existential call forwards gatingOverride")

@@ -294,6 +294,9 @@ extension AgentRuntimeSessionService {
                     gatingOverride: gatingOverride
                 )
             },
+            projectedMemorySelectionKeysFn: { conversationID in
+                await contextProjection.cachedProjectedMemorySelectionKeys(conversationID: conversationID)
+            },
             afterTurnFn: { [self] conversationID, runID, terminal in
                 await self.afterTurnContextEngineLifecycle(
                     conversationID: conversationID,
@@ -607,7 +610,7 @@ extension AgentRuntimeSessionService {
             }
         )
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled in
+            recallFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled, excludedSelectionKeys in
                 guard let memoryService = (self.deps.contextEngine as? DefaultContextEngine)?.memoryService,
                       let session = await memoryService.sessionContext(for: conversationID) else {
                     return .skipped(
@@ -619,7 +622,8 @@ extension AgentRuntimeSessionService {
                     session: session,
                     messages: messages,
                     anchorUserMessageID: anchorUserMessageID,
-                    sessionEnabled: sessionEnabled
+                    sessionEnabled: sessionEnabled,
+                    excludedSelectionKeys: excludedSelectionKeys
                 )
             },
             prefetchFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled in

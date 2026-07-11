@@ -50,6 +50,7 @@ actor ContextProjectionService {
     private var lastContextCompactionLLMDateByConversationID: [UUID: Date] = [:]
     private var lastAttachmentProjectionByConversationID: [UUID: ContextEngineAttachmentProjectionArtifact] = [:]
     private var lastSystemPromptAssemblyByConversationID: [UUID: ContextEngineSystemPromptAssemblyArtifact] = [:]
+    private var lastProjectedMemorySelectionKeysByConversationID: [UUID: [String]] = [:]
     private var lastContextTransformSnapshotByConversationID: [UUID: ContextTransformSnapshot] = [:]
     private var pendingToolResultTransformRecordsByConversationID: [UUID: [String: PendingToolResultTransformRecord]] = [:]
     nonisolated let persistOriginalToolResultsDebugModeEnabled: Bool = true
@@ -85,6 +86,10 @@ actor ContextProjectionService {
 
     func cachedSystemPromptAssembly(conversationID: UUID) -> ContextEngineSystemPromptAssemblyArtifact? {
         lastSystemPromptAssemblyByConversationID[conversationID]
+    }
+
+    func projectedMemorySelectionKeysSnapshot(conversationID: UUID) -> Set<String> {
+        Set(lastProjectedMemorySelectionKeysByConversationID[conversationID] ?? [])
     }
 
     func makeProjectionContext(
@@ -311,6 +316,11 @@ actor ContextProjectionService {
             }
             if let systemPromptAssembly = persistenceEffects.systemPromptAssemblyArtifactForCache {
                 lastSystemPromptAssemblyByConversationID[conversation.id] = systemPromptAssembly
+            }
+            if let projectedKeys = persistenceEffects.projectedMemorySelectionKeysForCache {
+                lastProjectedMemorySelectionKeysByConversationID[conversation.id] = projectedKeys
+            } else {
+                lastProjectedMemorySelectionKeysByConversationID[conversation.id] = []
             }
             return result.messages
         }

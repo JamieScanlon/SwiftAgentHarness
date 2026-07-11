@@ -388,6 +388,115 @@ struct ContextEngineTests {
         #expect(recallBody.contains(MemoryRecallInjectionPolicy.truncationMarker))
         #expect(result.passthroughReason != "context_compacted")
         #expect(result.memoryInjectionSnapshot?.injectedMemoryEntryIDs.count == 1)
+        #expect(result.projectedMemorySelectionKeys.contains("big-topic.md"))
+    }
+
+    @Test("DefaultContextEngine skips Tier 2 recall when tier1 already body-projects same selectionKey")
+    func engineTier2SkipsWhenTier1AlreadyProjectsBody() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-cross-tier-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let body = "dup fact from tier1"
+        let tier1Embedded = MemoryRecallBodyFormatter.format(scope: .project, filename: "dup-topic.md", body: body)
+        try tier1Embedded.write(to: root.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+
+        let service = DefaultMemoryService(
+            config: .default,
+            userConfigDir: root.appendingPathComponent("user", isDirectory: true)
+        )
+        let engine = DefaultContextEngine(compactionCoordinator: nil, memoryService: service, logger: nil)
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI,
+                maxContextLength: 200_000
+            ),
+            messages: [],
+            systemPrompt: "s"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let context = try service.makeSessionContext(conversationID: conv.id, cwd: root.path)
+        _ = try await service.bootstrapSession(context: context)
+        try """
+        ---
+        name: Dup Topic
+        description: cross-tier dedupe target
+        type: project
+        ---
+        \(body)
+        """.write(
+            to: context.memoryDirectory.appendingPathComponent("dup-topic.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let userID = UUID()
+        let policy = ContextEngineProjectionPolicyInput(
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: ResolvedModeProfile(
+                    id: InteractionMode.chat.rawValue,
+                    interactionMode: .chat,
+                    assemblyKind: .chat,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: false,
+                    builtInSeedVersion: ResolvedModeProfile.builtInSeedVersion,
+                    semanticLayerTags: []
+                ),
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: false,
+                includeDateTime: false,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            )
+        )
+        let request = ContextEngineAssembleRequest(
+            messages: [
+                Message(id: UUID(), role: .system, content: "system", timestamp: Date(), toolCalls: []),
+                Message(id: userID, role: .user, content: "dup topic cross tier dedupe", timestamp: Date(), toolCalls: []),
+            ],
+            conversation: conv,
+            phase: .initial,
+            gatingOverride: nil,
+            compactionCustomInstructionsOverride: nil,
+            enableContextTransform: true,
+            compactionConfig: .default,
+            transformMetadata: ConversationTransformMetadata(
+                conversationID: conv.id,
+                modelID: conv.model.id.uuidString,
+                modelName: conv.model.modelName,
+                interactionMode: .chat,
+                routingPolicyTools: [],
+                routingPolicySkills: [],
+                thinkingEnabled: false,
+                reasoningEffort: nil,
+                metadata: nil
+            ),
+            lastContextLimitTokens: 200_000,
+            lastPromptTokens: 100,
+            events: [],
+            eventLogFrontier: 0,
+            lastLLMDateByConversationID: [:],
+            persistCompactionCheckpoint: false,
+            allowProactiveCompactionTriggers: true,
+            compactionLockAlreadyHeldByCaller: false,
+            derivedTailAtProjectionStart: 0,
+            projectionPolicy: policy
+        )
+        let result = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let recallMessages = result.messages.filter {
+            $0.content.contains(HarnessInjectedMessagePrefixes.memoryRecall)
+        }
+        #expect(recallMessages.isEmpty)
+        #expect(result.projectedMemorySelectionKeys.isEmpty)
+        #expect(result.memoryInjectionSnapshot == nil)
     }
 
     @Test("ContextEngineSlotResolver resolves noop slot and unknown falls back")
@@ -2103,12 +2212,14 @@ private struct StubPreCompressMemoryRuntime: MemoryRuntime {
         session: MemorySessionContext,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String> = []
     ) async -> ActiveMemoryRecallOutcome {
         _ = session
         _ = messages
         _ = anchorUserMessageID
         _ = sessionEnabled
+        _ = excludedSelectionKeys
         return .skipped(reason: "stub", queryMode: .recent)
     }
 

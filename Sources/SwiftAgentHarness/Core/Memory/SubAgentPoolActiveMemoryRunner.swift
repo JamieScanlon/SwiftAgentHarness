@@ -17,7 +17,8 @@ struct SubAgentPoolActiveMemoryRunner: ActiveMemoryPreReplyRunning {
         userQuery: String?,
         lane: RecallLane,
         timeoutMs: Int,
-        maxSummaryChars: Int
+        maxSummaryChars: Int,
+        excludedSelectionKeys: Set<String> = []
     ) async -> String? {
         guard config.activeMemoryEnabled else { return nil }
         guard session.chatType == .direct else { return nil }
@@ -34,7 +35,8 @@ struct SubAgentPoolActiveMemoryRunner: ActiveMemoryPreReplyRunning {
             userQuery,
             lane,
             timeoutMs,
-            maxSummaryChars
+            maxSummaryChars,
+            excludedSelectionKeys
         )
     }
 }
@@ -58,15 +60,21 @@ enum ActiveMemoryPreReplyPrompts {
         for lane: RecallLane,
         query: String?,
         maxSummaryChars: Int = MemoryConfiguration.default.activeMemoryMaxSummaryChars,
-        promptStyle: ActiveMemoryPromptStyle = MemoryConfiguration.default.activeMemoryPromptStyle
+        promptStyle: ActiveMemoryPromptStyle = MemoryConfiguration.default.activeMemoryPromptStyle,
+        excludedSelectionKeys: Set<String> = []
     ) -> (system: String, user: String) {
+        let exclusion = MemoryCrossTierDedupPolicy.exclusionPromptFragment(keys: excludedSelectionKeys)
         switch lane {
         case .standing:
-            return (standingSystemPrompt(maxSummaryChars: maxSummaryChars), standingUserPrompt())
+            var system = standingSystemPrompt(maxSummaryChars: maxSummaryChars)
+            if let exclusion { system += "\n\n" + exclusion }
+            return (system, standingUserPrompt())
         case .situational:
             let sanitized = MemoryContextFencer.stripInjectedRecallArtifacts(query ?? "")
+            var system = situationalSystemPrompt(maxSummaryChars: maxSummaryChars, promptStyle: promptStyle)
+            if let exclusion { system += "\n\n" + exclusion }
             return (
-                situationalSystemPrompt(maxSummaryChars: maxSummaryChars, promptStyle: promptStyle),
+                system,
                 situationalUserPrompt(query: sanitized, maxSummaryChars: maxSummaryChars)
             )
         }

@@ -16,6 +16,8 @@ struct ContextAssemblyPersistenceSideEffects: Sendable {
     let attachmentProjectionArtifactForCache: ContextEngineAttachmentProjectionArtifact?
     /// When non-nil, caller should merge into **`lastSystemPromptAssemblyByConversationID`** (orchestrator path).
     let systemPromptAssemblyArtifactForCache: ContextEngineSystemPromptAssemblyArtifact?
+    /// Tier-2 projected memory file ids for cross-tier dedupe (MI3).
+    let projectedMemorySelectionKeysForCache: [String]?
 }
 
 /// Single place to apply ``ContextCheckpointWriter`` after a ``ContextEngineAssembleResult``.
@@ -81,7 +83,10 @@ enum ContextAssemblyPersistenceApplicator {
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
                 attachmentProjectionArtifactForCache: attachmentCache,
-                systemPromptAssemblyArtifactForCache: systemPromptCache
+                systemPromptAssemblyArtifactForCache: systemPromptCache,
+                projectedMemorySelectionKeysForCache: result.projectedMemorySelectionKeys.isEmpty
+                    ? nil
+                    : result.projectedMemorySelectionKeys
             )
 
         case .manualCompaction:
@@ -118,7 +123,8 @@ enum ContextAssemblyPersistenceApplicator {
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
                 attachmentProjectionArtifactForCache: nil,
-                systemPromptAssemblyArtifactForCache: nil
+                systemPromptAssemblyArtifactForCache: nil,
+                projectedMemorySelectionKeysForCache: nil
             )
         }
     }

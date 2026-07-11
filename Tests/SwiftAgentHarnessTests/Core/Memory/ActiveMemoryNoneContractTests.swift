@@ -50,10 +50,12 @@ struct ActiveMemoryNoneContractTests {
                 userQuery: String?,
                 lane: RecallLane,
                 timeoutMs: Int,
-                maxSummaryChars: Int
+                maxSummaryChars: Int,
+                excludedSelectionKeys: Set<String>
             ) async -> String? {
+                let _ = (session, userQuery, lane, timeoutMs, maxSummaryChars, excludedSelectionKeys)
                 // Simulate spawn adapter already parsing NONE → nil
-                ActiveMemoryRecallOutput.noteOrNil("NONE")
+                return ActiveMemoryRecallOutput.noteOrNil("NONE")
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)

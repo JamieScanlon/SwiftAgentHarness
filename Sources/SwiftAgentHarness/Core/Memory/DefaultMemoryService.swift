@@ -185,14 +185,16 @@ public actor DefaultMemoryService: MemoryServicing {
         session: MemorySessionContext,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool = true
+        sessionEnabled: Bool = true,
+        excludedSelectionKeys: Set<String> = []
     ) async -> ActiveMemoryRecallOutcome {
         let capability = await capabilityRegistry.activeCapability()
         return await capability.runtime.activeRecallSummary(
             session: session,
             messages: messages,
             anchorUserMessageID: anchorUserMessageID,
-            sessionEnabled: sessionEnabled
+            sessionEnabled: sessionEnabled,
+            excludedSelectionKeys: excludedSelectionKeys
         )
     }
 

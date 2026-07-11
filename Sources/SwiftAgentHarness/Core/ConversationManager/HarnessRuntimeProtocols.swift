@@ -87,6 +87,7 @@ protocol ContextProjectionTransformServicing: Sendable {
         configuration: HarnessRuntimeSession.Configuration,
         gatingOverride: ContextCompactionGatingOptions?
     ) async -> [Message]
+    func cachedProjectedMemorySelectionKeys(conversationID: UUID) async -> Set<String>
 }
 
 protocol SlashCommandRuntimeDispatching: Sendable {

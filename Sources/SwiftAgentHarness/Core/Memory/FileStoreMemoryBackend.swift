@@ -317,7 +317,8 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         session: MemorySessionContext,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String> = []
     ) async -> ActiveMemoryRecallOutcome {
         guard let query = ActiveMemorySituationalQueryBuilder.build(
             messages: messages,
@@ -329,7 +330,8 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         return await activeMemory.recallOutcomeIfEnabled(
             session: session,
             userQuery: query,
-            sessionEnabled: sessionEnabled
+            sessionEnabled: sessionEnabled,
+            excludedSelectionKeys: excludedSelectionKeys
         )
     }
 

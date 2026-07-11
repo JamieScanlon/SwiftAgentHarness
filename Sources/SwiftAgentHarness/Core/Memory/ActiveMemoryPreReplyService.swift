@@ -39,7 +39,8 @@ actor ActiveMemoryPreReplyService {
                 userQuery: nil,
                 lane: .standing,
                 timeoutMs: config.activeMemoryStandingBudgetMs,
-                maxSummaryChars: config.activeMemoryMaxSummaryChars
+                maxSummaryChars: config.activeMemoryMaxSummaryChars,
+                excludedSelectionKeys: []
             )
             await self.cache.store(key, summary: result)
             return result
@@ -47,12 +48,31 @@ actor ActiveMemoryPreReplyService {
         await cache.setInFlight(key, task: task)
     }
 
-    func standingSummary(session: MemorySessionContext, sessionEnabled: Bool = true) async -> String? {
+    func standingSummary(
+        session: MemorySessionContext,
+        sessionEnabled: Bool = true,
+        excludedSelectionKeys: Set<String> = []
+    ) async -> String? {
         guard softGatesPass(sessionEnabled: sessionEnabled),
               config.activeMemoryStandingEnabled,
               commonGatesPass(session: session) else { return nil }
         let key = ActiveMemoryRecallCache.Key(conversationID: session.conversationID, lane: .standing, queryFingerprint: nil)
-        if let cached = await cache.fresh(key, ttlMs: config.activeMemoryStandingTTLMs) { return cached }
+        if let cached = await cache.fresh(key, ttlMs: config.activeMemoryStandingTTLMs),
+           excludedSelectionKeys.isEmpty {
+            return cached
+        }
+        if !excludedSelectionKeys.isEmpty, let runner {
+            let result = await runner.blockingRecallSummary(
+                session: session,
+                userQuery: nil,
+                lane: .standing,
+                timeoutMs: config.activeMemoryStandingBudgetMs,
+                maxSummaryChars: config.activeMemoryMaxSummaryChars,
+                excludedSelectionKeys: excludedSelectionKeys
+            )
+            await cache.store(key, summary: result)
+            return result
+        }
         // cold: schedule warm and return nil (standing appears on next turn)
         await warmStanding(session: session, sessionEnabled: sessionEnabled)
         return nil
@@ -89,7 +109,8 @@ actor ActiveMemoryPreReplyService {
                 userQuery: trimmed,
                 lane: .situational,
                 timeoutMs: config.activeMemorySituationalTimeoutMs,
-                maxSummaryChars: config.activeMemoryMaxSummaryChars
+                maxSummaryChars: config.activeMemoryMaxSummaryChars,
+                excludedSelectionKeys: []
             )
             await self.cache.store(key, summary: result)
             return result
@@ -100,7 +121,8 @@ actor ActiveMemoryPreReplyService {
     func situationalSummary(
         session: MemorySessionContext,
         userQuery: String,
-        sessionEnabled: Bool = true
+        sessionEnabled: Bool = true,
+        excludedSelectionKeys: Set<String> = []
     ) async -> String? {
         guard softGatesPass(sessionEnabled: sessionEnabled),
               config.activeMemorySituationalEnabled,
@@ -110,7 +132,13 @@ actor ActiveMemoryPreReplyService {
         guard let runner else { return nil }
         let fp = queryFingerprint(trimmed)
         let key = ActiveMemoryRecallCache.Key(conversationID: session.conversationID, lane: .situational, queryFingerprint: fp)
-        if let cached = await cache.fresh(key, ttlMs: config.activeMemorySituationalTTLMs) { return cached }
+        if let cached = await cache.fresh(key, ttlMs: config.activeMemorySituationalTTLMs),
+           excludedSelectionKeys.isEmpty {
+            return cached
+        }
+        if !excludedSelectionKeys.isEmpty {
+            await cache.invalidate(conversationID: session.conversationID, lane: .situational)
+        }
         if let inFlight = await cache.existingInFlight(key) {
             return await awaitWithTimeout(timeoutMs: config.activeMemorySituationalTimeoutMs, task: inFlight)
         }
@@ -120,7 +148,8 @@ actor ActiveMemoryPreReplyService {
             userQuery: trimmed,
             lane: .situational,
             timeoutMs: config.activeMemorySituationalTimeoutMs,
-            maxSummaryChars: config.activeMemoryMaxSummaryChars
+            maxSummaryChars: config.activeMemoryMaxSummaryChars,
+            excludedSelectionKeys: excludedSelectionKeys
         )
         await cache.store(key, summary: result)
         return result
@@ -143,7 +172,8 @@ actor ActiveMemoryPreReplyService {
     func recallOutcomeIfEnabled(
         session: MemorySessionContext,
         userQuery: String,
-        sessionEnabled: Bool = true
+        sessionEnabled: Bool = true,
+        excludedSelectionKeys: Set<String> = []
     ) async -> ActiveMemoryRecallOutcome {
         let queryMode = config.activeMemoryQueryMode
         let started = ContinuousClock.now
@@ -165,11 +195,19 @@ actor ActiveMemoryPreReplyService {
         }
 
         logStart(conversationID: session.conversationID)
-        let standing = await standingSummary(session: session, sessionEnabled: sessionEnabled)
+        if !excludedSelectionKeys.isEmpty {
+            await cache.invalidate(conversationID: session.conversationID, lane: .situational)
+        }
+        let standing = await standingSummary(
+            session: session,
+            sessionEnabled: sessionEnabled,
+            excludedSelectionKeys: excludedSelectionKeys
+        )
         let situational = await situationalSummary(
             session: session,
             userQuery: userQuery,
-            sessionEnabled: sessionEnabled
+            sessionEnabled: sessionEnabled,
+            excludedSelectionKeys: excludedSelectionKeys
         )
         let parts = [standing, situational].compactMap { $0 }.filter { !$0.isEmpty }
         let note = parts.isEmpty ? nil : parts.joined(separator: "\n\n")

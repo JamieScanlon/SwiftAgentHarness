@@ -108,7 +108,8 @@ protocol MemoryRuntime: Sendable {
         session: MemorySessionContext,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String>
     ) async -> ActiveMemoryRecallOutcome
     func warmStandingRecall(session: MemorySessionContext, sessionEnabled: Bool) async
     func prefetchSituationalRecall(
@@ -225,12 +226,14 @@ struct LegacyLifecycleMemoryRuntime: MemoryRuntime {
         session: MemorySessionContext,
         messages: [Message],
         anchorUserMessageID: UUID?,
-        sessionEnabled: Bool
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String> = []
     ) async -> ActiveMemoryRecallOutcome {
         _ = session
         _ = messages
         _ = anchorUserMessageID
         _ = sessionEnabled
+        _ = excludedSelectionKeys
         return .skipped(reason: "legacy_provider", queryMode: .recent)
     }
 

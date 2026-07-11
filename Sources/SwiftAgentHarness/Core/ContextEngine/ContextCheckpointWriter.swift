@@ -77,10 +77,15 @@ enum ContextCheckpointWriter {
         guard let spec else { return }
         let entryIDs = Array(Set(spec.injectedMemoryEntryIDs)).sorted { $0.uuidString < $1.uuidString }
         guard !entryIDs.isEmpty else { return }
+        let selectionKeys = Array(Set(spec.projectedSelectionKeys)).sorted()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let snapshotData = try? encoder.encode(
-            MemoryStoreSnapshotJSON(memoryEntryIDs: entryIDs, memoryStoreVersion: spec.memoryStoreVersion)
+            MemoryStoreSnapshotJSON(
+                memoryEntryIDs: entryIDs,
+                memoryStoreVersion: spec.memoryStoreVersion,
+                projectedSelectionKeys: selectionKeys.isEmpty ? nil : selectionKeys
+            )
         ),
         let snapshotJSON = String(data: snapshotData, encoding: .utf8) else { return }
         let phaseRaw: String = switch spec.phase {
@@ -89,7 +94,8 @@ enum ContextCheckpointWriter {
         case .continuation(let round):
             "agent_build_continuation:\(round)"
         }
-        let fingerprintInput = "v2|\(phaseRaw)|\(spec.conversationID.uuidString)|\(spec.memoryStoreVersion)|\(entryIDs.map(\.uuidString).joined(separator: ","))"
+        let selectionKeySig = selectionKeys.joined(separator: ",")
+        let fingerprintInput = "v3|\(phaseRaw)|\(spec.conversationID.uuidString)|\(spec.memoryStoreVersion)|\(entryIDs.map(\.uuidString).joined(separator: ","))|\(selectionKeySig)"
         let fingerprint = SHA256.hash(data: Data(fingerprintInput.utf8))
             .map { String(format: "%02x", $0) }
             .joined()

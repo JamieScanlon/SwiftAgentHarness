@@ -118,12 +118,14 @@ struct TurnLoop {
             }
             if isFirstModelCall, let memoryPort = ports.memory {
                 if ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
+                    let excludedKeys = await ports.context.projectedMemorySelectionKeys(conversationID: conversationID)
                     // Use persisted conversation messages (same as prefetch) so cache fingerprints match.
                     let outcome = await memoryPort.blockingRecallSummary(
                         conversationID: conversationID,
                         messages: conv.messages,
                         anchorUserMessageID: anchorUserMessageID,
-                        sessionEnabled: sessionActiveMemoryEnabled
+                        sessionEnabled: sessionActiveMemoryEnabled,
+                        excludedSelectionKeys: excludedKeys
                     )
                     activeMemoryDiagnostics = outcome.diagnostics
                     if let recall = outcome.note {

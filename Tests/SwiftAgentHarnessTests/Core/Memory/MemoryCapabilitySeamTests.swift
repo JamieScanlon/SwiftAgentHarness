@@ -159,12 +159,14 @@ struct MemoryCapabilitySeamTests {
             session: MemorySessionContext,
             messages: [Message],
             anchorUserMessageID: UUID?,
-            sessionEnabled: Bool
+            sessionEnabled: Bool,
+            excludedSelectionKeys: Set<String> = []
         ) async -> ActiveMemoryRecallOutcome {
             _ = session
             _ = messages
             _ = anchorUserMessageID
             _ = sessionEnabled
+            _ = excludedSelectionKeys
             return .skipped(reason: "stub", queryMode: .recent)
         }
 

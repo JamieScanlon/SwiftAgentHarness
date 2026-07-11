@@ -7,6 +7,23 @@ public struct ContextMemoryInjectionSnapshotSpec: Sendable {
     let memoryStoreVersion: Int
     let memoryStoreNamespaceKey: String?
     let injectedMemoryEntryIDs: [UUID]
+    let projectedSelectionKeys: [String]
+
+    init(
+        conversationID: UUID,
+        phase: ContextTransformInvocationPhase,
+        memoryStoreVersion: Int,
+        memoryStoreNamespaceKey: String?,
+        injectedMemoryEntryIDs: [UUID],
+        projectedSelectionKeys: [String] = []
+    ) {
+        self.conversationID = conversationID
+        self.phase = phase
+        self.memoryStoreVersion = memoryStoreVersion
+        self.memoryStoreNamespaceKey = memoryStoreNamespaceKey
+        self.injectedMemoryEntryIDs = injectedMemoryEntryIDs
+        self.projectedSelectionKeys = projectedSelectionKeys
+    }
 }
 
 /// Optional policy input for pre-compaction memory flush behavior.
@@ -249,6 +266,7 @@ public struct ContextEngineAssembleResult: Sendable {
     let attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec?
     let preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
     let compactionLowSavings: Bool
+    let projectedMemorySelectionKeys: [String]
 
     init(
         messages: [Message],
@@ -261,7 +279,8 @@ public struct ContextEngineAssembleResult: Sendable {
         systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec? = nil,
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec? = nil,
         preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec? = nil,
-        compactionLowSavings: Bool = false
+        compactionLowSavings: Bool = false,
+        projectedMemorySelectionKeys: [String] = []
     ) {
         self.messages = messages
         self.transformOutput = transformOutput
@@ -274,6 +293,7 @@ public struct ContextEngineAssembleResult: Sendable {
         self.attachmentProjectionCheckpoint = attachmentProjectionCheckpoint
         self.preCompactionMemoryFlush = preCompactionMemoryFlush
         self.compactionLowSavings = compactionLowSavings
+        self.projectedMemorySelectionKeys = projectedMemorySelectionKeys
     }
 }
 

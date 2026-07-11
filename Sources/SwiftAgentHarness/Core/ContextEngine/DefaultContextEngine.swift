@@ -125,7 +125,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             compactionConfig: request.compactionConfig,
             lastContextLimitTokens: request.lastContextLimitTokens,
             lastPromptTokens: request.lastPromptTokens,
-            memoryStoreVersion: memoryStoreVersion
+            memoryStoreVersion: memoryStoreVersion,
+            tier1MemorySectionContent: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent
         )
         if tier2Result.injected, memoryStoreVersion > 0 {
             memorySnapshot = ContextMemoryInjectionSnapshotSpec(
@@ -133,7 +134,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 phase: request.phase,
                 memoryStoreVersion: memoryStoreVersion,
                 memoryStoreNamespaceKey: request.conversation.id.uuidString,
-                injectedMemoryEntryIDs: [Self.recallEntryID(generation: memoryStoreVersion)]
+                injectedMemoryEntryIDs: [Self.recallEntryID(generation: memoryStoreVersion)],
+                projectedSelectionKeys: tier2Result.projectedMemorySelectionKeys
             )
         }
         return ContextEngineAssembleResult(
@@ -147,7 +149,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             systemPromptCheckpoint: result.systemPromptCheckpoint,
             attachmentProjectionCheckpoint: result.attachmentProjectionCheckpoint,
             preCompactionMemoryFlush: result.preCompactionMemoryFlush,
-            compactionLowSavings: result.compactionLowSavings
+            compactionLowSavings: result.compactionLowSavings,
+            projectedMemorySelectionKeys: tier2Result.projectedMemorySelectionKeys
         )
     }
 
@@ -800,6 +803,7 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
     private struct Tier2RecallApplicationResult: Sendable {
         let messages: [Message]
         let injected: Bool
+        let projectedMemorySelectionKeys: [String]
     }
 
     @discardableResult
@@ -812,24 +816,25 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         compactionConfig: ContextCompactionConfiguration,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
-        memoryStoreVersion: Int
+        memoryStoreVersion: Int,
+        tier1MemorySectionContent: String?
     ) async -> Tier2RecallApplicationResult {
         guard case .initial = phase else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
         }
         switch modeMemoryInjection {
         case "off":
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
         case "skills-only":
             let includeSkills = resolvedProfile?.context.includeSkills ?? true
             guard includeSkills else {
-                return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+                return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
             }
         default:
             break
         }
         guard let memoryService else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
         }
         guard let query = latestUserQuery(from: baseMessages),
               let session = await memoryService.sessionContext(for: conversation.id),
@@ -841,14 +846,19 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                   )
               ),
               !recall.hits.isEmpty else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
+        }
+        let alreadyProjected = MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier1Content: tier1MemorySectionContent)
+        let dedupedHits = MemoryCrossTierDedupPolicy.filterTier2Hits(recall.hits, excluding: alreadyProjected)
+        guard !dedupedHits.isEmpty else {
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
         }
         let modelLimit = lastContextLimitTokens
             ?? conversation.model.maxContextLength
             ?? compactionConfig.fallbackContextLimitTokens
         let recallEntryID = Self.recallEntryID(generation: max(memoryStoreVersion, 1))
         let budgetedHits = MemoryRecallInjectionPolicy.hitsFittingCompactionGuard(
-            hits: recall.hits,
+            hits: dedupedHits,
             baseMessages: baseMessages,
             recallEntryID: recallEntryID,
             modelLimit: modelLimit,
@@ -859,10 +869,15 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             hits: budgetedHits,
             entryID: recallEntryID
         ) else {
-            return Tier2RecallApplicationResult(messages: baseMessages, injected: false)
+            return Tier2RecallApplicationResult(messages: baseMessages, injected: false, projectedMemorySelectionKeys: [])
         }
+        let projectedKeys = Array(MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier2Hits: budgetedHits)).sorted()
         let withRecall = MemoryRecallInjectionPolicy.insertLateRecall(recallMessage, into: baseMessages)
-        return Tier2RecallApplicationResult(messages: withRecall, injected: true)
+        return Tier2RecallApplicationResult(
+            messages: withRecall,
+            injected: true,
+            projectedMemorySelectionKeys: projectedKeys
+        )
     }
 
     private func latestUserQuery(from messages: [Message]) -> String? {

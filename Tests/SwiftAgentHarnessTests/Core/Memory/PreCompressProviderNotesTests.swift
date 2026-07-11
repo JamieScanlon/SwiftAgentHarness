@@ -131,7 +131,7 @@ struct PreCompressProviderNotesTests {
         )
         _ = try await service.bootstrapSession(context: context)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in true }
         )

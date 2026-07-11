@@ -16,10 +16,16 @@ public enum HarnessCheckpointWireKind: String, Codable, Sendable, CaseIterable {
 public struct MemoryStoreSnapshotJSON: Codable, Sendable, Equatable {
     public var memoryEntryIDs: [UUID]
     public var memoryStoreVersion: Int
+    public var projectedSelectionKeys: [String]?
 
-    public init(memoryEntryIDs: [UUID], memoryStoreVersion: Int) {
+    public init(
+        memoryEntryIDs: [UUID],
+        memoryStoreVersion: Int,
+        projectedSelectionKeys: [String]? = nil
+    ) {
         self.memoryEntryIDs = memoryEntryIDs
         self.memoryStoreVersion = memoryStoreVersion
+        self.projectedSelectionKeys = projectedSelectionKeys
     }
 }
 

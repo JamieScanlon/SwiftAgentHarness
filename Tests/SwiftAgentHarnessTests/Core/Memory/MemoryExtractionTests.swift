@@ -143,7 +143,7 @@ Promoted before compaction.
         _ = try await service.bootstrapSession(context: context)
         let gate = PreCompactionFlushGate()
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, middle, _ in
                 await gate.record(middleCount: middle.count)
@@ -192,7 +192,7 @@ Promoted before compaction.
         let mainPath = memoryDir.appendingPathComponent("main-note.md").path
         await service.recordMemoryWrite(path: mainPath, conversationID: conversationID)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in true }
         )
@@ -233,7 +233,7 @@ Promoted before compaction.
         await service.recordMemoryWrite(path: mainPath, conversationID: conversationID)
         let flushPath = try Self.validTopicFile(named: "flush-note.md", in: memoryDir)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in
                 await service.recordAuxiliaryMemoryWrite(path: flushPath, conversationID: conversationID)
@@ -275,7 +275,7 @@ Promoted before compaction.
         _ = try await service.bootstrapSession(context: context)
         let curatedPath = try Self.validTopicFile(named: "curated.md", in: memoryDir)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in
                 await service.recordAuxiliaryMemoryWrite(
@@ -454,7 +454,7 @@ struct MemorySubAgentSpawnAdapterTests {
     func recallSummaryCappedAndFenced() async {
         let longSummary = String(repeating: "x", count: 100)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, maxChars in
+            spawnBlockingRecall: { _, _, _, _, maxChars, _ in
                 MemoryContextFencer.fence(String(longSummary.prefix(maxChars)))
             },
             spawnBackgroundExtraction: { _ in },
@@ -482,7 +482,7 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("Group chat skips active recall")
     func groupChatSkipsRecall() async {
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in "should-not-run" },
+            spawnBlockingRecall: { _, _, _, _, _, _ in "should-not-run" },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in false }
         )
@@ -507,7 +507,7 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("Sub-agent scope skips active recall")
     func subAgentScopeSkipsRecall() async {
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in "should-not-run" },
+            spawnBlockingRecall: { _, _, _, _, _, _ in "should-not-run" },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in false }
         )
@@ -641,7 +641,8 @@ struct MemorySubAgentSpawnAdapterTests {
             "preferences?",
             .standing,
             5_000,
-            200
+            200,
+            []
         )
         #expect(summary == nil)
         let spawn = try #require(await capture.spawnRequest)
@@ -699,7 +700,8 @@ struct MemorySubAgentSpawnAdapterTests {
             contaminated,
             .situational,
             5_000,
-            200
+            200,
+            []
         )
         let spawn = try #require(await capture.spawnRequest)
         let prompt = try #require(spawn.prompt)

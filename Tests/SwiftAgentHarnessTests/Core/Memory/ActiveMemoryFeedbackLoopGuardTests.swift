@@ -39,4 +39,21 @@ struct ActiveMemoryFeedbackLoopGuardTests {
         #expect(!user.contains(HarnessInjectedMessagePrefixes.activeMemoryRecall))
         #expect(user.contains("fix the flaky test"))
     }
+
+    @Test("standing and situational prompts include exclusion fragment when keys passed")
+    func exclusionFragmentInPrompts() {
+        let prompts = ActiveMemoryPreReplyPrompts.prompts(
+            for: .situational,
+            query: "latency review",
+            excludedSelectionKeys: ["topic-a.md", "user/prefs.md"]
+        )
+        #expect(prompts.system.contains("topic-a.md, user/prefs.md"))
+        #expect(prompts.system.contains("do not read or summarize"))
+        let standing = ActiveMemoryPreReplyPrompts.prompts(
+            for: .standing,
+            query: nil,
+            excludedSelectionKeys: ["topic-a.md"]
+        )
+        #expect(standing.system.contains("topic-a.md"))
+    }
 }

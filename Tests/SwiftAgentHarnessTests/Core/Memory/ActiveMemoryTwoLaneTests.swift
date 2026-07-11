@@ -47,8 +47,10 @@ private struct SpyRunner: ActiveMemoryPreReplyRunning {
         userQuery: String?,
         lane: RecallLane,
         timeoutMs: Int,
-        maxSummaryChars: Int
+        maxSummaryChars: Int,
+        excludedSelectionKeys: Set<String>
     ) async -> String? {
+        let _ = (session, timeoutMs, maxSummaryChars, excludedSelectionKeys)
         await tracker.record(lane: lane, query: userQuery)
         return returnValue
     }
@@ -104,7 +106,8 @@ struct ActiveMemoryStandingLaneTests {
         struct BlockingRunner: ActiveMemoryPreReplyRunning {
             let tracker: RecallCallTracker
             let gate: AsyncStream<Void>
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
                 await tracker.record(lane: lane, query: userQuery)
                 // wait for unblock
                 for await _ in gate { break }
@@ -188,8 +191,9 @@ struct ActiveMemorySituationalLaneTests {
         var callMap: [String: String] = ["query-a": "result-a", "query-b": "result-b"]
         struct MapRunner: ActiveMemoryPreReplyRunning {
             let callMap: [String: String]
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
-                callMap[userQuery ?? ""]
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
+                return callMap[userQuery ?? ""]
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)
@@ -221,8 +225,9 @@ struct ActiveMemoryRecallCombinedTests {
     @Test("combined output places standing before situational")
     func standingBeforeSituational() async {
         struct LaneRunner: ActiveMemoryPreReplyRunning {
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
-                lane == .standing ? "standing-content" : "situational-content"
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
+                return lane == .standing ? "standing-content" : "situational-content"
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)

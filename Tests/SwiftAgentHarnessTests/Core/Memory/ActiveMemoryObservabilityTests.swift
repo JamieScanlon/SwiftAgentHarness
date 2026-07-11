@@ -135,9 +135,11 @@ struct ActiveMemoryObservabilityGateTests {
                 userQuery: String?,
                 lane: RecallLane,
                 timeoutMs: Int,
-                maxSummaryChars: Int
+                maxSummaryChars: Int,
+                excludedSelectionKeys: Set<String>
             ) async -> String? {
-                note
+                let _ = (session, userQuery, lane, timeoutMs, maxSummaryChars, excludedSelectionKeys)
+                return note
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)

@@ -113,7 +113,8 @@ enum ContextAssemblyPipeline {
             persistenceEffects: ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: false,
                 attachmentProjectionArtifactForCache: nil,
-                systemPromptAssemblyArtifactForCache: nil
+                systemPromptAssemblyArtifactForCache: nil,
+                projectedMemorySelectionKeysForCache: nil
             )
         )
     }
