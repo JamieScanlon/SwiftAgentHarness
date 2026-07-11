@@ -99,6 +99,67 @@ public enum ProviderRuntimeHooks {
         )
     }
 
+    public static func selectPromptCacheBreakpoints(
+        candidates: [PromptCacheBreakpointCandidate],
+        binding: ProviderBinding?,
+        capabilities: [LLMCapability],
+        strategy: PromptCacheStrategy,
+        messages: [Message]
+    ) -> ProviderPromptCacheBreakpointPlan {
+        guard let binding else { return .empty }
+        ProviderRegistry.ensureBootstrapped()
+        guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
+            return selectPromptCacheBreakpoints(
+                candidates: candidates,
+                binding: binding,
+                capabilities: capabilities,
+                strategy: strategy,
+                messages: messages
+            )
+        }
+        let eligibility = provider.cacheTtlEligibility(
+            ProviderSystemPromptContext(
+                providerID: provider.manifest.id,
+                endpointModelId: binding.endpointModelId
+            )
+        )
+        return provider.selectPromptCacheBreakpoints(
+            candidates,
+            context: ProviderPromptCacheBreakpointContext(
+                binding: binding,
+                capabilities: capabilities,
+                cacheTtlEligibility: eligibility,
+                strategy: strategy,
+                messages: messages
+            )
+        )
+    }
+
+    private static func selectPromptCacheBreakpoints(
+        candidates: [PromptCacheBreakpointCandidate],
+        binding: ProviderBinding,
+        capabilities: [LLMCapability],
+        strategy: PromptCacheStrategy,
+        messages: [Message]
+    ) -> ProviderPromptCacheBreakpointPlan {
+        let eligibility = cacheTtlEligibility(binding: binding)
+        let context = ProviderPromptCacheBreakpointContext(
+            binding: binding,
+            capabilities: capabilities,
+            cacheTtlEligibility: eligibility,
+            strategy: strategy,
+            messages: messages
+        )
+        switch binding.modelProtocol {
+        case .anthropic:
+            return PromptCacheBreakpointSelectionPolicy.anthropic(candidates: candidates, context: context)
+        case .lmStudio:
+            return PromptCacheBreakpointSelectionPolicy.lmStudio(candidates: candidates, context: context)
+        case .openAIAPI, .ollama:
+            return PromptCacheBreakpointSelectionPolicy.implicit(candidates: candidates, context: context)
+        }
+    }
+
     public static func failoverClassification(
         error: Error,
         providerID: ProviderID?

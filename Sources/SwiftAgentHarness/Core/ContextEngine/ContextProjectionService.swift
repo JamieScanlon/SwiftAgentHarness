@@ -88,6 +88,10 @@ actor ContextProjectionService {
         lastSystemPromptAssemblyByConversationID[conversationID]
     }
 
+    func lastLLMDate(for conversationID: UUID) -> Date? {
+        lastContextCompactionLLMDateByConversationID[conversationID]
+    }
+
     func seedSystemPromptAssembly(
         conversationID: UUID,
         artifact: ContextEngineSystemPromptAssemblyArtifact

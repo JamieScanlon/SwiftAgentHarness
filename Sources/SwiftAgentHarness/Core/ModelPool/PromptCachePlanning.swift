@@ -5,6 +5,7 @@ import SwiftAgentKit
 enum PromptCacheKnobKey {
     static let mode = "promptCacheMode"
     static let stablePrefixMessageCount = "promptCacheStablePrefixMessageCount"
+    static let breakpoints = "promptCacheBreakpoints"
 }
 
 public enum PromptCachePolicy: Sendable, Equatable {
@@ -26,10 +27,19 @@ public enum PromptCacheMode: Sendable, Equatable {
 public struct PromptCachePlan: Sendable, Equatable {
     public var mode: PromptCacheMode
     public var stablePrefixMessageCount: Int?
+    public var breakpoints: [PromptCacheBreakpointCandidate]
+    public var stablePrefixTokenEstimate: Int?
 
-    public init(mode: PromptCacheMode, stablePrefixMessageCount: Int? = nil) {
+    public init(
+        mode: PromptCacheMode,
+        stablePrefixMessageCount: Int? = nil,
+        breakpoints: [PromptCacheBreakpointCandidate] = [],
+        stablePrefixTokenEstimate: Int? = nil
+    ) {
         self.mode = mode
         self.stablePrefixMessageCount = stablePrefixMessageCount
+        self.breakpoints = breakpoints
+        self.stablePrefixTokenEstimate = stablePrefixTokenEstimate
     }
 }
 
@@ -115,44 +125,27 @@ public struct CapabilityDrivenPromptCachePlanner: PromptCachePlanning {
         guard case .enabled(let strategy) = input.policy else {
             return PromptCachePlan(mode: .none, stablePrefixMessageCount: nil)
         }
-        let capabilities = Set(input.modelCapabilities)
-        let supportsPersistent = capabilities.contains(.promptCachePersistent)
-        let supportsEphemeral = supportsPersistent || capabilities.contains(.promptCacheEphemeral)
-        guard supportsEphemeral else {
+        let candidates = PromptCacheBreakpointCandidates.build(input: input)
+        let selection = ProviderRuntimeHooks.selectPromptCacheBreakpoints(
+            candidates: candidates,
+            binding: input.binding,
+            capabilities: input.modelCapabilities,
+            strategy: strategy,
+            messages: input.messages
+        )
+        guard selection.mode != .none, !selection.breakpoints.isEmpty else {
             return PromptCachePlan(mode: .none, stablePrefixMessageCount: nil)
         }
-        let stablePrefix = stablePrefixMessageCount(messages: input.messages, strategy: strategy)
-        guard let stablePrefix, stablePrefix > 0 else {
-            return PromptCachePlan(mode: .none, stablePrefixMessageCount: nil)
+        var messageCount = selection.stablePrefixMessageCount
+        if strategy == .conservative, let count = messageCount {
+            messageCount = min(count, 3)
         }
-        switch strategy {
-        case .automatic:
-            if supportsPersistent && stablePrefix >= 3 {
-                return PromptCachePlan(mode: .persistent, stablePrefixMessageCount: stablePrefix)
-            }
-            return PromptCachePlan(mode: .ephemeral, stablePrefixMessageCount: stablePrefix)
-        case .conservative:
-            return PromptCachePlan(mode: .ephemeral, stablePrefixMessageCount: min(stablePrefix, 3))
-        }
-    }
-
-    private func stablePrefixMessageCount(messages: [Message], strategy: PromptCacheStrategy) -> Int? {
-        guard !messages.isEmpty else { return nil }
-        var count = 0
-        for message in messages {
-            switch message.role {
-            case .system, .user:
-                count += 1
-            case .assistant, .tool:
-                break
-            }
-            if message.role == .assistant || message.role == .tool {
-                break
-            }
-        }
-        guard count >= 2 else { return nil }
-        let cap = strategy == .conservative ? 4 : 8
-        return min(count, cap)
+        return PromptCachePlan(
+            mode: selection.mode,
+            stablePrefixMessageCount: messageCount,
+            breakpoints: selection.breakpoints,
+            stablePrefixTokenEstimate: selection.stablePrefixTokenEstimate
+        )
     }
 }
 
@@ -187,7 +180,16 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
         ))
         await PromptCachePlanningMetricsStore.shared.record(mode: plan.mode)
         let configured = apply(plan: plan, to: config)
-        let response = try await base.send(messages, config: configured)
+        let expectsRead = PromptCacheExpectsReadGate.evaluate(
+            plan: plan,
+            lastLLMDate: PromptCachePlanningMetadata.lastLLMDate(from: config.additionalParameters),
+            binding: binding,
+            referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: messages),
+            messages: messages
+        )
+        let response = try await ModelInvocationTaskContext.$promptCacheExpectsRead.withValue(expectsRead) {
+            try await base.send(messages, config: configured)
+        }
         await emitPromptCacheTelemetry(
             plan: plan,
             messages: messages,
@@ -214,20 +216,29 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
             await PromptCachePlanningMetricsStore.shared.record(mode: plan.mode)
         }
         let configured = apply(plan: plan, to: config)
-        let upstream = base.stream(messages, config: configured)
+        let expectsRead = PromptCacheExpectsReadGate.evaluate(
+            plan: plan,
+            lastLLMDate: PromptCachePlanningMetadata.lastLLMDate(from: config.additionalParameters),
+            binding: binding,
+            referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: messages),
+            messages: messages
+        )
         return AsyncThrowingStream { continuation in
             Task {
                 do {
-                    for try await event in upstream {
-                        if case .complete(let final) = event {
-                            await emitPromptCacheTelemetry(
-                                plan: plan,
-                                messages: messages,
-                                response: final,
-                                transportKnobApplied: transportKnobApplied(plan: plan)
-                            )
+                    try await ModelInvocationTaskContext.$promptCacheExpectsRead.withValue(expectsRead) {
+                        let upstream = base.stream(messages, config: configured)
+                        for try await event in upstream {
+                            if case .complete(let final) = event {
+                                await emitPromptCacheTelemetry(
+                                    plan: plan,
+                                    messages: messages,
+                                    response: final,
+                                    transportKnobApplied: transportKnobApplied(plan: plan)
+                                )
+                            }
+                            continuation.yield(event)
                         }
-                        continuation.yield(event)
                     }
                     continuation.finish()
                 } catch {
@@ -252,6 +263,16 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
         }
         if let stablePrefix = plan.stablePrefixMessageCount {
             object[PromptCacheKnobKey.stablePrefixMessageCount] = .integer(stablePrefix)
+        }
+        if !plan.breakpoints.isEmpty {
+            object[PromptCacheKnobKey.breakpoints] = .array(
+                plan.breakpoints.map { candidate in
+                    .object([
+                        "kind": .string(candidate.kind.rawValue),
+                        "estimatedPrefixTokens": .integer(candidate.estimatedPrefixTokens),
+                    ])
+                }
+            )
         }
         return LLMRequestConfig(
             maxTokens: config.maxTokens,
@@ -308,8 +329,9 @@ struct PromptCachePlanningLLM: LLMProtocol, AdapterAuthProbing {
         let valuesAreProviderReported = CanonicalUsageExtraction.valuesAreProviderReported(from: response.metadata)
             || reported?.cacheReadTokens != nil
             || reported?.cacheWriteTokens != nil
-        let stablePrefixCount = max(0, plan.stablePrefixMessageCount ?? 0)
-        let estimatedStablePrefixTokens = estimateTokens(in: Array(messages.prefix(stablePrefixCount)))
+        let estimatedStablePrefixTokens = plan.stablePrefixTokenEstimate
+            ?? PromptCacheBreakpointCandidates.stablePrefixTokenEstimate(from: plan.breakpoints)
+            ?? 0
         let inputTokens = reported?.inputTokens ?? response.metadata?.promptTokens ?? estimateTokens(in: messages)
         let cachedInputTokens = reported?.cacheReadTokens ?? estimatedCachedInputFallback(
             providerApplied: providerAppliedPromptCache(

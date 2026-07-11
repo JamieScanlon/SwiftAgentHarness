@@ -265,7 +265,10 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             providerStablePrefix: providerStablePrefix
         )
         if let systemText = plan.canonicalSystemText, !systemText.isEmpty {
-            body["system"] = systemText
+            body["system"] = AnthropicPromptCacheWire.systemPayload(
+                systemText: systemText,
+                additionalParameters: config.additionalParameters
+            )
         }
         body["messages"] = try anthropicMessages(from: plan.resolvedMessages)
         if !config.availableTools.isEmpty {

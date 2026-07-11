@@ -372,6 +372,12 @@ public actor OrchestratorRuntimeService {
         if let thinkingConfig {
             payload["thinkingConfig"] = thinkingConfigJSON(thinkingConfig)
         }
+        if let conversationID = conversation?.id,
+           let lastLLMDate = await contextProjection.lastLLMDate(for: conversationID) {
+            payload[PromptCacheDispatchMetadataKeys.lastLLMDateISO] = .string(
+                ISO8601DateFormatter().string(from: lastLLMDate)
+            )
+        }
 
         return .object(payload)
     }

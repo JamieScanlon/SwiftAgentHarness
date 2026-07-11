@@ -20,6 +20,10 @@ public protocol TextInferenceProviding: Sendable {
     func validateReplayTurns(_ messages: [Message], context: ProviderReplayTurnContext) -> [ProviderReplayValidationIssue]
     func resolveSystemPromptContribution(_ context: ProviderSystemPromptContext) -> ProviderSystemPromptContribution?
     func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility
+    func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan
     func failoverError(_ error: Error) -> ProviderFailoverClassification
 }
 
@@ -76,6 +80,13 @@ public extension TextInferenceProviding {
 
     func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
         .none
+    }
+
+    func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan {
+        PromptCacheBreakpointSelectionPolicy.implicit(candidates: candidates, context: context)
     }
 
     func failoverError(_ error: Error) -> ProviderFailoverClassification {

@@ -41,6 +41,13 @@ public struct OpenAITextInferenceProvider: TextInferenceProviding {
         context.endpointModelId.hasPrefix("gpt-") ? .long : .short
     }
 
+    public func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan {
+        PromptCacheBreakpointSelectionPolicy.implicit(candidates: candidates, context: context)
+    }
+
     public func failoverError(_ error: Error) -> ProviderFailoverClassification {
         if DefaultProviderFailoverClassifier.isCredentialExhausted(error) {
             return .credentialExhausted
@@ -77,6 +84,13 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
 
     public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
         .long
+    }
+
+    public func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan {
+        PromptCacheBreakpointSelectionPolicy.anthropic(candidates: candidates, context: context)
     }
 
     public func failoverError(_ error: Error) -> ProviderFailoverClassification {
@@ -254,6 +268,13 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
 
     public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
         ProviderLLMBridge.makeLMStudioAdapter(context: context)
+    }
+
+    public func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan {
+        PromptCacheBreakpointSelectionPolicy.lmStudio(candidates: candidates, context: context)
     }
 
     private func lmStudioCapabilities(

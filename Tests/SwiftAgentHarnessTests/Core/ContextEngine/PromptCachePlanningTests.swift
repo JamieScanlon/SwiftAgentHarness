@@ -156,12 +156,13 @@ struct PromptCachePlanningTests {
             serverURL: URL(string: "http://localhost:1234")!,
             priority: 0
         )
+        let largeStableSystem = String(repeating: "a", count: 12_000)
         let input = PromptCachePlanningInput(
             modelID: UUID(),
             binding: binding,
             modelCapabilities: [.completion, .promptCachePersistent],
             messages: [
-                Message(id: UUID(), role: .system, content: "system", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .system, content: largeStableSystem, timestamp: Date(), toolCalls: []),
                 Message(id: UUID(), role: .user, content: "user", timestamp: Date(), toolCalls: []),
                 Message(id: UUID(), role: .user, content: "second", timestamp: Date(), toolCalls: [])
             ],
@@ -171,6 +172,7 @@ struct PromptCachePlanningTests {
         let plan = planner.plan(for: input)
         #expect(plan.mode == .persistent)
         #expect((plan.stablePrefixMessageCount ?? 0) >= 2)
+        #expect((plan.stablePrefixTokenEstimate ?? 0) >= 3000)
     }
 
     @Test("stable prefix counting does not require Memory Context harness message")
@@ -183,12 +185,13 @@ struct PromptCachePlanningTests {
             serverURL: URL(string: "http://localhost:1234")!,
             priority: 0
         )
+        let largeStableSystem = String(repeating: "a", count: 12_000)
         let input = PromptCachePlanningInput(
             modelID: UUID(),
             binding: binding,
             modelCapabilities: [.completion, .promptCachePersistent],
             messages: [
-                Message(id: UUID(), role: .system, content: "canonical system", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .system, content: largeStableSystem, timestamp: Date(), toolCalls: []),
                 Message(id: UUID(), role: .user, content: "user", timestamp: Date(), toolCalls: []),
                 Message(id: UUID(), role: .user, content: "second", timestamp: Date(), toolCalls: []),
             ],
@@ -262,7 +265,7 @@ struct PromptCachePlanningTests {
         let hasPromptCacheTelemetry = rows.contains { row in
             row.kind == .promptCache &&
                 row.outcome == .observed &&
-                row.promptCacheMode == "persistent" &&
+                (row.promptCacheMode == "persistent" || row.promptCacheMode == "ephemeral") &&
                 row.promptCacheProviderApplied == true &&
                 (row.promptCacheEstimatedCachedInputTokens ?? 0) > 0
         }
@@ -349,7 +352,7 @@ struct PromptCachePlanningTests {
         try await ModelInvocationTaskContext.$promptCacheExpectsRead.withValue(true) {
             _ = try await wrapper.send(
                 [
-                    Message(id: UUID(), role: .system, content: "system baseline", timestamp: Date(), toolCalls: []),
+                    Message(id: UUID(), role: .system, content: String(repeating: "a", count: 5000), timestamp: Date(), toolCalls: []),
                     Message(id: UUID(), role: .user, content: "user request", timestamp: Date(), toolCalls: []),
                     Message(id: UUID(), role: .user, content: "stable context", timestamp: Date(), toolCalls: []),
                 ],
