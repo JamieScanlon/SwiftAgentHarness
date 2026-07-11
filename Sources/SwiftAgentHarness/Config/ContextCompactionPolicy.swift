@@ -49,6 +49,7 @@ public enum ContextCompactionPolicy: Sendable {
                 enabled: config.deterministicAttachmentDocumentHygieneEnabled,
                 maxImagesPerMessage: max(0, config.deterministicMaxImagesPerMessage),
                 documentCharacterThreshold: max(0, config.deterministicDocumentCharacterThreshold),
+                documentPreviewMaxBytes: max(0, config.deterministicDocumentPreviewMaxBytes),
                 imagePlaceholder: config.deterministicImagePlaceholder,
                 documentPlaceholder: config.deterministicDocumentPlaceholder
             )

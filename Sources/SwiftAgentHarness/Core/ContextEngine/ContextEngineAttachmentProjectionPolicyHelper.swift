@@ -12,8 +12,17 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             var copy = message
             if policy.documentCharacterThreshold > 0,
                copy.content.count > policy.documentCharacterThreshold,
-               isLikelyDocumentLikeContent(copy.content) {
-                copy.content = policy.documentPlaceholder
+               isLikelyDocumentLikeContent(copy.content),
+               !DocumentHygieneReceiptEnvelope.isReceiptEnvelope(
+                   copy.content,
+                   marker: policy.documentPlaceholder
+               ) {
+                copy.content = DocumentHygieneReceiptEnvelope.make(
+                    originalContent: copy.content,
+                    messageID: copy.id,
+                    marker: policy.documentPlaceholder,
+                    previewMaxBytes: policy.documentPreviewMaxBytes
+                )
             }
             if policy.maxImagesPerMessage >= 0, copy.images.count > policy.maxImagesPerMessage {
                 copy.images = Array(copy.images.prefix(policy.maxImagesPerMessage))
@@ -30,9 +39,6 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
     static func isLikelyDocumentLikeContent(_ content: String) -> Bool {
         let lowered = content.lowercased()
         if lowered.contains("<document>") || lowered.contains("attachment:") {
-            return true
-        }
-        if lowered.contains("```") {
             return true
         }
         return content.split(separator: "\n").count >= 40

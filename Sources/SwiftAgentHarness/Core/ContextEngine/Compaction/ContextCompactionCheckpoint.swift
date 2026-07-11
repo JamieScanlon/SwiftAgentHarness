@@ -216,6 +216,7 @@ enum ContextCompactionCheckpointSupport {
             config.deterministicMaxImagesPerMessage,
             config.deterministicDocumentCharacterThreshold,
             config.deterministicDocumentPlaceholder,
+            config.deterministicDocumentPreviewMaxBytes,
             config.deterministicImagePlaceholder,
         ]
         let tail: [Any] = [

@@ -53,6 +53,7 @@ public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
     public let enabled: Bool
     public let maxImagesPerMessage: Int
     public let documentCharacterThreshold: Int
+    public let documentPreviewMaxBytes: Int
     public let imagePlaceholder: String
     public let documentPlaceholder: String
 
@@ -60,12 +61,14 @@ public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
         enabled: Bool,
         maxImagesPerMessage: Int,
         documentCharacterThreshold: Int,
+        documentPreviewMaxBytes: Int = 2048,
         imagePlaceholder: String,
         documentPlaceholder: String
     ) {
         self.enabled = enabled
         self.maxImagesPerMessage = maxImagesPerMessage
         self.documentCharacterThreshold = documentCharacterThreshold
+        self.documentPreviewMaxBytes = max(0, documentPreviewMaxBytes)
         self.imagePlaceholder = imagePlaceholder
         self.documentPlaceholder = documentPlaceholder
     }

@@ -802,7 +802,10 @@ struct ContextCompactionTransformerTests {
             )
         )
         let captured = await summarizer.snapshot().messages
-        #expect(captured.contains(where: { $0.content == "[document trimmed]" }))
+        let trimmedDocument = captured.first(where: { $0.id == doc.id })
+        #expect(trimmedDocument?.content.contains("[document trimmed]") == true)
+        #expect(trimmedDocument?.content.contains("original_byte_count:") == true)
+        #expect(trimmedDocument?.content.contains("message_id: \(doc.id.uuidString)") == true)
         let trimmedImageMessage = captured.first(where: { $0.id == imageHeavy.id })
         #expect(trimmedImageMessage?.images.count == 1)
         #expect(trimmedImageMessage?.content.contains("[image trimmed]") == true)

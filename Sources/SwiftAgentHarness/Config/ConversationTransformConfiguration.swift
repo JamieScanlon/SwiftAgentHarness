@@ -84,6 +84,8 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var deterministicDocumentCharacterThreshold: Int
     /// Placeholder used when document-like payload content is replaced by deterministic hygiene.
     public var deterministicDocumentPlaceholder: String
+    /// Max UTF-8 preview bytes included in document hygiene receipts.
+    public var deterministicDocumentPreviewMaxBytes: Int
     /// Placeholder used when image attachments are trimmed by deterministic hygiene.
     public var deterministicImagePlaceholder: String
     /// Optional pre-compaction memory flush stage before summarization.
@@ -213,6 +215,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         deterministicMaxImagesPerMessage: 3,
         deterministicDocumentCharacterThreshold: 12_000,
         deterministicDocumentPlaceholder: "[Document content cleared for context compaction]",
+        deterministicDocumentPreviewMaxBytes: 2048,
         deterministicImagePlaceholder: "[Image attachment omitted for context compaction]",
         preCompactionMemoryFlushEnabled: true,
         preCompactionMemoryFlushMaxEntries: 64,
@@ -283,6 +286,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         deterministicMaxImagesPerMessage: Int = 3,
         deterministicDocumentCharacterThreshold: Int = 12_000,
         deterministicDocumentPlaceholder: String = "[Document content cleared for context compaction]",
+        deterministicDocumentPreviewMaxBytes: Int = 2048,
         deterministicImagePlaceholder: String = "[Image attachment omitted for context compaction]",
         preCompactionMemoryFlushEnabled: Bool = true,
         preCompactionMemoryFlushMaxEntries: Int = 64,
@@ -351,6 +355,7 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.deterministicMaxImagesPerMessage = deterministicMaxImagesPerMessage
         self.deterministicDocumentCharacterThreshold = deterministicDocumentCharacterThreshold
         self.deterministicDocumentPlaceholder = deterministicDocumentPlaceholder
+        self.deterministicDocumentPreviewMaxBytes = max(0, deterministicDocumentPreviewMaxBytes)
         self.deterministicImagePlaceholder = deterministicImagePlaceholder
         self.preCompactionMemoryFlushEnabled = preCompactionMemoryFlushEnabled
         self.preCompactionMemoryFlushMaxEntries = preCompactionMemoryFlushMaxEntries
@@ -935,6 +940,12 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.deterministicDocumentPlaceholder
             }()
+            let deterministicDocumentPreviewMaxBytes: Int = {
+                if let value = payload["deterministicDocumentPreviewMaxBytes"] as? Int {
+                    return Swift.min(1_000_000, Swift.max(0, value))
+                }
+                return def.deterministicDocumentPreviewMaxBytes
+            }()
             let deterministicImagePlaceholder: String = {
                 if let value = payload["deterministicImagePlaceholder"] as? String {
                     return value
@@ -1018,6 +1029,7 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 deterministicMaxImagesPerMessage: deterministicMaxImagesPerMessage,
                 deterministicDocumentCharacterThreshold: deterministicDocumentCharacterThreshold,
                 deterministicDocumentPlaceholder: deterministicDocumentPlaceholder,
+                deterministicDocumentPreviewMaxBytes: deterministicDocumentPreviewMaxBytes,
                 deterministicImagePlaceholder: deterministicImagePlaceholder,
                 preCompactionMemoryFlushEnabled: preCompactionMemoryFlushEnabled,
                 preCompactionMemoryFlushMaxEntries: preCompactionMemoryFlushMaxEntries,
