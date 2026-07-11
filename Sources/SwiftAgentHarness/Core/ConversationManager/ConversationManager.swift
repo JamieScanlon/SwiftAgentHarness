@@ -942,9 +942,13 @@ final class ConversationManager {
                 existing: conversations[index].metadata,
                 incoming: withActivatedSkills
             )
-            updatedConversation.metadata = ConversationMetadataSubagentPromptComposition.mergingPreservingCompositionMetadata(
+            let withFrozenMemory = ConversationMetadataFrozenMemoryTier1.mergingPreservingFrozenMemoryTier1(
                 existing: conversations[index].metadata,
                 incoming: withFrozenSkills
+            )
+            updatedConversation.metadata = ConversationMetadataSubagentPromptComposition.mergingPreservingCompositionMetadata(
+                existing: conversations[index].metadata,
+                incoming: withFrozenMemory
             )
         } else {
             updatedConversation.metadata = nil
@@ -960,6 +964,11 @@ final class ConversationManager {
         }
         if updatedConversation.modeProfileID != priorModeProfileID {
             modeChanged = true
+        }
+        if modeChanged {
+            updatedConversation.metadata = ConversationMetadataFrozenMemoryTier1.clearingFrozenMemoryTier1(
+                from: updatedConversation.metadata
+            )
         }
         updatedConversation.updatedAt = Date()
         conversations[index] = updatedConversation
@@ -1016,9 +1025,12 @@ final class ConversationManager {
             )
             updated.metadata = ConversationMetadataSubagentPromptComposition.mergingPreservingCompositionMetadata(
                 existing: updated.metadata,
-                incoming: ConversationMetadataFrozenSkillsIndex.mergingPreservingFrozenSkillsIndex(
+                incoming: ConversationMetadataFrozenMemoryTier1.mergingPreservingFrozenMemoryTier1(
                     existing: updated.metadata,
-                    incoming: withActivatedSkills
+                    incoming: ConversationMetadataFrozenSkillsIndex.mergingPreservingFrozenSkillsIndex(
+                        existing: updated.metadata,
+                        incoming: withActivatedSkills
+                    )
                 )
             )
             updated.lineageKind = .root
@@ -1085,6 +1097,9 @@ final class ConversationManager {
         if modelChange, let newModel = model {
             updatedConversation.model = newModel
             updatedConversation.isModelAvailable = true
+            updatedConversation.metadata = ConversationMetadataFrozenMemoryTier1.clearingFrozenMemoryTier1(
+                from: updatedConversation.metadata
+            )
         }
 
         if promptChange, let newPrompt = userSystemPrompt {

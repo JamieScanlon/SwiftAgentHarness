@@ -317,6 +317,10 @@ actor ContextProjectionService {
                 lastContextCompactionLLMDateByConversationID[conversation.id] = Date()
                 await topics.publishContextCompactionCheckpointTopic(spec: spec)
                 deps.logger?.debug("[ContextProjectionService] persisted compaction checkpoint for \(spec.conversationID)")
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .compactionCommit
+                )
             }
             if let attachmentProjection = persistenceEffects.attachmentProjectionArtifactForCache {
                 lastAttachmentProjectionByConversationID[conversation.id] = attachmentProjection
@@ -327,6 +331,13 @@ actor ContextProjectionService {
                     conversationID: conversation.id,
                     conversation: conversation,
                     frozenSkillsIndexXML: systemPromptAssembly.frozenSkillsIndexXML
+                )
+                await persistFrozenMemoryTier1IfNeeded(
+                    conversationID: conversation.id,
+                    conversation: conversation,
+                    workspaceSectionContent: systemPromptAssembly.workspaceSectionContent,
+                    tier1MemorySectionContent: systemPromptAssembly.tier1MemorySectionContent,
+                    memorySnapshotGeneration: systemPromptAssembly.memorySnapshotGeneration
                 )
             }
             if let projectedKeys = persistenceEffects.projectedMemorySelectionKeysForCache {
@@ -629,6 +640,10 @@ actor ContextProjectionService {
                 consecutiveLowSavingsCompactionsByConversationID[conversation.id] = 0
                 lastContextCompactionLLMDateByConversationID[conversation.id] = Date()
                 await topics.publishContextCompactionCheckpointTopic(spec: spec)
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .manualCompaction
+                )
             }
             deps.logger?.info(
                 "[ContextProjectionService] Manual compaction (\(trigger.rawValue)) for \(conversation.id) -> \(messages.count)→\(output.messages.count) messages, persisted=\(persisted)\(output.diagnostics.map { " diag=\($0)" } ?? "")"
@@ -806,6 +821,57 @@ actor ContextProjectionService {
         let result = await operation(true)
         await deps.compactionCoordinator.release(for: conversationID)
         return result
+    }
+
+    private func persistFrozenMemoryTier1IfNeeded(
+        conversationID: UUID,
+        conversation: ModelConversation,
+        workspaceSectionContent: String?,
+        tier1MemorySectionContent: String?,
+        memorySnapshotGeneration: Int?
+    ) async {
+        guard ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) == nil else {
+            return
+        }
+        guard let memorySnapshotGeneration else { return }
+        let workspace = workspaceSectionContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tier1 = tier1MemorySectionContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !workspace.isEmpty || !tier1.isEmpty else { return }
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        updated.metadata = ConversationMetadataFrozenMemoryTier1.mergingFrozenMemoryTier1(
+            workspaceInstructionSection: workspace,
+            tier1Content: tier1,
+            snapshotGeneration: memorySnapshotGeneration,
+            into: updated.metadata
+        )
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func clearFrozenMemoryTier1ForBreakEvent(
+        conversationID: UUID,
+        reason: CacheBreakEventReason
+    ) async {
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        guard ConversationMetadataFrozenMemoryTier1.frozenSlice(from: updated.metadata) != nil else { return }
+        updated.metadata = ConversationMetadataFrozenMemoryTier1.clearingFrozenMemoryTier1(from: updated.metadata)
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
+        deps.logger?.info(
+            "[ContextProjectionService] cache-breaking event \(reason.rawValue) cleared frozen memory tier1 for \(conversationID)"
+        )
     }
 
     private func persistFrozenSkillsIndexIfNeeded(

@@ -273,9 +273,11 @@ public struct SystemPrompt: Sendable {
         includeDateTimePrefix: String,
         providerStablePrefix: String?
     ) -> String {
-        let stablePart = includeDateTimePrefix
-            + SystemPromptSectionName.stableAssemblyOrder.map { sections[$0] ?? "" }.joined()
-        let volatilePart = SystemPromptSectionName.volatileAssemblyOrder.map { sections[$0] ?? "" }.joined()
+        let stablePart = SystemPromptSectionName.stableAssemblyOrder.map { sections[$0] ?? "" }.joined()
+        var volatilePart = SystemPromptSectionName.volatileAssemblyOrder.map { sections[$0] ?? "" }.joined()
+        if !includeDateTimePrefix.isEmpty {
+            volatilePart = includeDateTimePrefix + volatilePart
+        }
         var parts: [String] = []
         if let prefix = providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
             parts.append(prefix)

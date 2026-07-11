@@ -272,6 +272,21 @@ struct SystemPromptModeContextSwitchTests {
         #expect(result.contains("should not appear") == false)
     }
 
+    @Test("datetime renders below cache boundary when enabled")
+    func datetimeBelowCacheBoundary() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: true, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: "dynamic requirement",
+            additionalMetadata: [
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "stable memory",
+            ]
+        )
+        let marker = ProviderPromptContribution.cacheBoundaryMarker
+        let boundaryRange = try #require(result.range(of: marker))
+        let todayRange = try #require(result.range(of: "Today is "))
+        #expect(todayRange.lowerBound > boundaryRange.lowerBound)
+    }
+
     @Test("cache boundary separates stable prefix from volatile sections")
     func cacheBoundaryBetweenStableAndVolatile() async throws {
         let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)

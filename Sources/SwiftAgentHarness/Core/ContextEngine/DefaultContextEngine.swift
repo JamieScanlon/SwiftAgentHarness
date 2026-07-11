@@ -1282,6 +1282,12 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             break
         }
         guard let memoryService else { return nil }
+        if let frozen = ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) {
+            return LoadedMemoryBlocks(
+                blocks: ConversationMetadataFrozenMemoryTier1.memorySystemPromptBlocks(from: frozen),
+                generation: frozen.snapshotGeneration
+            )
+        }
         guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
             return nil
         }
@@ -1314,6 +1320,13 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         }
         guard let memoryService else {
             return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        if let frozen = ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) {
+            let tier1 = frozen.tier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tier1.isEmpty else {
+                return Tier1MemorySectionContent(content: nil, generation: frozen.snapshotGeneration)
+            }
+            return Tier1MemorySectionContent(content: tier1, generation: frozen.snapshotGeneration)
         }
         guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
             return Tier1MemorySectionContent(content: nil, generation: nil)
