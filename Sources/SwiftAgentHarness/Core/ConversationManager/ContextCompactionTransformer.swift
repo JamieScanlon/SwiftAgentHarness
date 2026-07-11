@@ -852,29 +852,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         return [marker] + middle
     }
 
-    private func applyCacheAwarePruningIfConfigured(
-        middle: [Message],
-        cachePolicy: ContextCompactionCachePolicy?
-    ) -> [Message] {
-        guard let cachePolicy, cachePolicy.enabled else {
-            return middle
-        }
-        let stablePrefixCount = min(max(0, cachePolicy.stablePrefixMessageCount), middle.count)
-        let prefix = Array(middle.prefix(stablePrefixCount))
-        var suffix = Array(middle.dropFirst(stablePrefixCount))
-        if let ttl = cachePolicy.ttlSeconds, ttl > 0 {
-            let cutoff = Date().addingTimeInterval(-ttl)
-            suffix = suffix.filter { message in
-                // Keep assistant/tool rows to avoid slicing through tool-call pair state.
-                if message.role == .assistant || message.role == .tool {
-                    return true
-                }
-                return message.timestamp >= cutoff
-            }
-        }
-        return prefix + suffix
-    }
-
     private func applyDeterministicPreCompactionHygiene(
         input: ContextTransformInput,
         head: [Message],
@@ -888,10 +865,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             head: head,
             middle: middle,
             includeBranchContextMarker: includeBranchContextMarker
-        )
-        staged = applyCacheAwarePruningIfConfigured(
-            middle: staged,
-            cachePolicy: input.compactionCachePolicy
         )
         staged = applyAttachmentDocumentImageHygieneIfConfigured(
             middle: staged,

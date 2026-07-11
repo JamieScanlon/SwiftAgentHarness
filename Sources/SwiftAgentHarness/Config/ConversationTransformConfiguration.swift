@@ -65,6 +65,12 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var cacheStablePrefixMessageCount: Int
     /// Optional TTL for middle messages in cache-aware pruning stage (`nil` / `<=0` disables age pruning).
     public var cachePruningTTLSeconds: Double?
+    /// Projection-time context pruning mode (`off`, `cacheTTL`). When unset, derived from `cacheAwarePruningEnabled`.
+    public var contextPruningMode: String?
+    /// Number of most recent tool results to keep when TTL pruning runs at assemble/projection time.
+    public var contextPruningKeepRecentToolResults: Int
+    /// Optional tool-name filter for TTL pruning; `nil` means all eligible tools.
+    public var contextPruningTargetTools: [String]?
     /// Deterministic stage toggle for tool-result pruning before summarizer invocation.
     public var deterministicToolResultPruningEnabled: Bool
     /// Enables deterministic attachment/image/document hygiene before summarizer invocation.
@@ -195,6 +201,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         cacheAwarePruningEnabled: false,
         cacheStablePrefixMessageCount: 4,
         cachePruningTTLSeconds: nil,
+        contextPruningMode: nil,
+        contextPruningKeepRecentToolResults: 5,
+        contextPruningTargetTools: nil,
         deterministicToolResultPruningEnabled: true,
         deterministicAttachmentDocumentHygieneEnabled: false,
         deterministicMaxImagesPerMessage: 3,
@@ -261,6 +270,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         cacheAwarePruningEnabled: Bool = false,
         cacheStablePrefixMessageCount: Int = 4,
         cachePruningTTLSeconds: Double? = nil,
+        contextPruningMode: String? = nil,
+        contextPruningKeepRecentToolResults: Int = 5,
+        contextPruningTargetTools: [String]? = nil,
         deterministicToolResultPruningEnabled: Bool = true,
         deterministicAttachmentDocumentHygieneEnabled: Bool = false,
         deterministicMaxImagesPerMessage: Int = 3,
@@ -325,6 +337,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.cacheAwarePruningEnabled = cacheAwarePruningEnabled
         self.cacheStablePrefixMessageCount = cacheStablePrefixMessageCount
         self.cachePruningTTLSeconds = cachePruningTTLSeconds
+        self.contextPruningMode = contextPruningMode
+        self.contextPruningKeepRecentToolResults = contextPruningKeepRecentToolResults
+        self.contextPruningTargetTools = contextPruningTargetTools
         self.deterministicToolResultPruningEnabled = deterministicToolResultPruningEnabled
         self.deterministicAttachmentDocumentHygieneEnabled = deterministicAttachmentDocumentHygieneEnabled
         self.deterministicMaxImagesPerMessage = deterministicMaxImagesPerMessage
@@ -854,6 +869,32 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.cachePruningTTLSeconds
             }()
+            let contextPruningMode: String? = {
+                if payload["contextPruningMode"] is NSNull { return nil }
+                if let value = payload["contextPruningMode"] as? String, !value.isEmpty {
+                    return value
+                }
+                return def.contextPruningMode
+            }()
+            let contextPruningKeepRecentToolResults: Int = {
+                if let value = payload["contextPruningKeepRecentToolResults"] as? Int {
+                    return Swift.min(200, Swift.max(0, value))
+                }
+                if let value = payload["context_pruning_keep_recent_tool_results"] as? Int {
+                    return Swift.min(200, Swift.max(0, value))
+                }
+                return def.contextPruningKeepRecentToolResults
+            }()
+            let contextPruningTargetTools: [String]? = {
+                if payload["contextPruningTargetTools"] is NSNull { return nil }
+                if let value = payload["contextPruningTargetTools"] as? [String] {
+                    return value.isEmpty ? nil : value
+                }
+                if let value = payload["context_pruning_target_tools"] as? [String] {
+                    return value.isEmpty ? nil : value
+                }
+                return def.contextPruningTargetTools
+            }()
             let deterministicToolResultPruningEnabled =
                 (payload["deterministicToolResultPruningEnabled"] as? Bool)
                 ?? def.deterministicToolResultPruningEnabled
@@ -952,6 +993,9 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 cacheAwarePruningEnabled: cacheAwarePruningEnabled,
                 cacheStablePrefixMessageCount: cacheStablePrefixMessageCount,
                 cachePruningTTLSeconds: cachePruningTTLSeconds,
+                contextPruningMode: contextPruningMode,
+                contextPruningKeepRecentToolResults: contextPruningKeepRecentToolResults,
+                contextPruningTargetTools: contextPruningTargetTools,
                 deterministicToolResultPruningEnabled: deterministicToolResultPruningEnabled,
                 deterministicAttachmentDocumentHygieneEnabled: deterministicAttachmentDocumentHygieneEnabled,
                 deterministicMaxImagesPerMessage: deterministicMaxImagesPerMessage,

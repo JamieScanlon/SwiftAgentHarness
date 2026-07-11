@@ -85,6 +85,20 @@ public enum ProviderRuntimeHooks {
         return ProviderCatalogLoader.systemPromptContribution(for: binding)
     }
 
+    public static func cacheTtlEligibility(binding: ProviderBinding?) -> ProviderCacheTTLEligibility {
+        guard let binding else { return .none }
+        ProviderRegistry.ensureBootstrapped()
+        guard let provider = ProviderRegistry.textInferenceProvider(forBinding: binding) else {
+            return .none
+        }
+        return provider.cacheTtlEligibility(
+            ProviderSystemPromptContext(
+                providerID: provider.manifest.id,
+                endpointModelId: binding.endpointModelId
+            )
+        )
+    }
+
     public static func failoverClassification(
         error: Error,
         providerID: ProviderID?

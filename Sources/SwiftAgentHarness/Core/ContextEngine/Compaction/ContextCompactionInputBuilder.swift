@@ -136,7 +136,6 @@ enum ContextCompactionInputBuilder: Sendable {
             branchParentConversationID: conversation.parentConversationID,
             explicitFocusQuery: resolvedFocusQuery
         )
-        let cachePolicy = ContextCompactionPolicy.resolvedCachePolicy(config: compactionConfig)
         let deterministicHygienePolicy = ContextCompactionPolicy.resolvedDeterministicHygienePolicy(
             config: compactionConfig
         )
@@ -218,7 +217,7 @@ enum ContextCompactionInputBuilder: Sendable {
             compactionStrategy: strategy,
             compactionFocusQuery: resolvedFocusQuery,
             branchParentConversationID: conversation.parentConversationID,
-            compactionCachePolicy: cachePolicy,
+            compactionCachePolicy: nil,
             compactionDeterministicHygienePolicy: deterministicHygienePolicy,
             compactionIdentifierPreservationPolicy: identifierPreservationPolicy,
             compactionPreviousSummaryText: previousSummaryText,
@@ -254,7 +253,7 @@ enum ContextCompactionInputBuilder: Sendable {
             phase: phase,
             effectiveContextLimitTokens: effective,
             compactionStrategy: .default,
-            compactionCachePolicy: ContextCompactionPolicy.resolvedCachePolicy(config: compactionConfig),
+            compactionCachePolicy: nil,
             compactionDeterministicHygienePolicy: ContextCompactionPolicy.resolvedDeterministicHygienePolicy(
                 config: compactionConfig
             ),

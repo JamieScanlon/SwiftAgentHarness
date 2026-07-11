@@ -176,7 +176,7 @@ struct ContextCompactionMessageDTO: Codable, Sendable, Equatable {
 enum ContextCompactionCheckpointSupport {
     /// Stable string over every field that affects compaction LLM behavior, gating, or eligibility.
     static func configFingerprint(_ config: ContextCompactionConfiguration) -> String {
-        [
+        let head: [Any] = [
             config.enabled,
             config.ollamaServerURL.absoluteString,
             config.model,
@@ -208,12 +208,17 @@ enum ContextCompactionCheckpointSupport {
             config.cacheAwarePruningEnabled,
             config.cacheStablePrefixMessageCount,
             config.cachePruningTTLSeconds.map { String(describing: $0) } ?? "",
+            config.contextPruningMode ?? "",
+            config.contextPruningKeepRecentToolResults,
+            config.contextPruningTargetTools?.joined(separator: ",") ?? "",
             config.deterministicToolResultPruningEnabled,
             config.deterministicAttachmentDocumentHygieneEnabled,
             config.deterministicMaxImagesPerMessage,
             config.deterministicDocumentCharacterThreshold,
             config.deterministicDocumentPlaceholder,
             config.deterministicImagePlaceholder,
+        ]
+        let tail: [Any] = [
             config.preCompactionMemoryFlushEnabled,
             config.preCompactionMemoryFlushMaxEntries,
             config.softThresholdTokens,
@@ -238,7 +243,8 @@ enum ContextCompactionCheckpointSupport {
             config.compactionCircuitBreakerMaxFailures,
             config.compactionMinPromptTokenSavingsFraction,
             config.useSessionTreeProjection,
-        ].map { String(describing: $0) }.joined(separator: "|")
+        ]
+        return (head + tail).map { String(describing: $0) }.joined(separator: "|")
     }
 
     /// Head / middle / tail definition lives in `ContextCompactionMessageSplit` (Compaction/).

@@ -350,6 +350,8 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.manualToolEnabled == true)
         #expect(config.defaultSummarizationStrategy == "default")
         #expect(config.cacheAwarePruningEnabled == false)
+        #expect(config.contextPruningKeepRecentToolResults == 5)
+        #expect(config.contextPruningTargetTools == nil)
         #expect(config.deterministicToolResultPruningEnabled == true)
         #expect(config.deterministicAttachmentDocumentHygieneEnabled == false)
         #expect(config.compactionSummarizerMaxOutputTokens == 20_000)
@@ -357,6 +359,38 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.compactionReinjectionEnabled == true)
         #expect(config.compactionCircuitBreakerMaxFailures == 3)
         #expect(config.useSessionTreeProjection == true)
+    }
+
+    @Test("contextPruning fields decode with backward-compatible cacheAwarePruningEnabled")
+    func parserPreservesContextPruningFields() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "cacheAwarePruningEnabled": true,
+                "contextPruningKeepRecentToolResults": 3,
+                "contextPruningTargetTools": ["read_file"],
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        let resolved = ContextPruningPolicyResolver.resolve(config: config)
+        #expect(config.cacheAwarePruningEnabled == true)
+        #expect(config.contextPruningKeepRecentToolResults == 3)
+        #expect(config.contextPruningTargetTools == ["read_file"])
+        #expect(resolved.mode == .off)
+    }
+
+    @Test("Explicit contextPruningMode with TTL decodes")
+    func parserPreservesExplicitContextPruningMode() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "contextPruningMode": "cacheTTL",
+                "cachePruningTTLSeconds": 90,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        let resolved = ContextPruningPolicyResolver.resolve(config: config)
+        #expect(config.contextPruningMode == "cacheTTL")
+        #expect(resolved.mode == .cacheTTL)
+        #expect(resolved.ttlSeconds == 90)
     }
 
     @Test("Explicit contextCompaction JSON values are preserved")

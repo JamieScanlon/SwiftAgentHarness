@@ -60,6 +60,13 @@ public enum ContextCompactionToolResultPruning: Sendable {
         )
     }
 
+    static func toolCallIdToCallMap(
+        resolutionContext: [Message],
+        messages: [Message]
+    ) -> [String: ToolCall] {
+        buildToolCallIdToCall(resolutionContext: resolutionContext, middle: messages)
+    }
+
     // MARK: - Private
 
     /// Merges `toolCalls` from the optional **head** (or other prefix) with `middle` so tool results in the middle still resolve when the calling assistant is outside the middle slice. Carries the full `ToolCall` (arguments included) so rung-2 summaries can reconstruct intent.

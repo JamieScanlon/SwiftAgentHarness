@@ -74,6 +74,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
     let attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput?
     let useSessionTreeProjection: Bool
     let sessionTranscriptEntries: [SessionTranscriptEntry]?
+    let contextPruningPolicy: ContextPruningPolicy?
 
     init(
         requestInputTrustRaw: String? = nil,
@@ -85,7 +86,8 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput? = nil,
         attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput? = nil,
         useSessionTreeProjection: Bool = false,
-        sessionTranscriptEntries: [SessionTranscriptEntry]? = nil
+        sessionTranscriptEntries: [SessionTranscriptEntry]? = nil,
+        contextPruningPolicy: ContextPruningPolicy? = nil
     ) {
         self.requestInputTrustRaw = requestInputTrustRaw
         self.safeDefaultTrustClass = safeDefaultTrustClass
@@ -97,6 +99,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         self.attachmentProjectionPolicy = attachmentProjectionPolicy
         self.useSessionTreeProjection = useSessionTreeProjection
         self.sessionTranscriptEntries = sessionTranscriptEntries
+        self.contextPruningPolicy = contextPruningPolicy
     }
 }
 

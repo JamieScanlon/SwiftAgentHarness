@@ -64,10 +64,13 @@ enum ContextEngineProjectionPolicyBuilder {
         )
         let routingNames = ConversationRoutingPolicyNames.names(for: conversation)
         var providerContribution: SystemPromptContribution?
+        var providerEligibility: ProviderCacheTTLEligibility = .none
         if let entry = await deps.registryEntryProvider?(conversation.model.id),
-           let binding = entry.primaryBinding,
-           let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
-            providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+           let binding = entry.primaryBinding {
+            providerEligibility = ProviderRuntimeHooks.cacheTtlEligibility(binding: binding)
+            if let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+                providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+            }
         }
         let promptPolicy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolvedProfile,
@@ -80,6 +83,10 @@ enum ContextEngineProjectionPolicyBuilder {
             providerContribution: providerContribution
         )
         let compactionCfg = deps.conversationTransformConfiguration.contextCompaction
+        let contextPruningPolicy = ContextPruningPolicyResolver.resolve(
+            config: compactionCfg,
+            providerEligibility: providerEligibility
+        )
         var transcriptEntries: [SessionTranscriptEntry]?
         if compactionCfg.useSessionTreeProjection,
            let entries = try? await deps.persistenceDomain.sessionTreeTranscriptEntries(conversationID: conversation.id),
@@ -96,7 +103,8 @@ enum ContextEngineProjectionPolicyBuilder {
             systemPromptAssemblyPolicy: promptPolicy,
             attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(),
             useSessionTreeProjection: compactionCfg.useSessionTreeProjection,
-            sessionTranscriptEntries: transcriptEntries
+            sessionTranscriptEntries: transcriptEntries,
+            contextPruningPolicy: contextPruningPolicy
         )
     }
 

@@ -120,9 +120,15 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
+        let ttlPruned = applyCacheTTLPruningIfNeeded(messages: result.messages, request: request)
+        if ttlPruned.transformationKind == .cacheEditing {
+            logger?.debug(
+                "[ContextEngine] cache TTL pruning substituted stale tool results conversation=\(request.conversation.id)"
+            )
+        }
         let selectorConfigFingerprint = await memoryService?.recallSelectorConfigFingerprint() ?? ""
         let tier2Result = await applyTier2MemoryRecallIfNeeded(
-            into: result.messages,
+            into: ttlPruned.messages,
             conversation: request.conversation,
             phase: request.phase,
             modeMemoryInjection: modeSwitches.memoryInjectionMode,
@@ -320,7 +326,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             charactersPerToken: request.compactionConfig.charactersPerToken
         )
         let remaining = max(0, contextLimit - promptTokens)
-        let cachePolicy = ContextCompactionPolicy.resolvedCachePolicy(config: request.compactionConfig)
+        let cachePolicy = ContextPruningPolicyResolver.resolve(config: request.compactionConfig)
         let focusQuery = request.compactionConfig.focusedCompactionQuery
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let strategy = ContextCompactionPolicy.resolvedStrategy(
@@ -332,8 +338,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             contextLimitTokens: contextLimit,
             promptTokens: promptTokens,
             remainingTokens: remaining,
-            cacheStablePrefixMessageCount: cachePolicy.enabled ? cachePolicy.stablePrefixMessageCount : nil,
-            cachePruningTTLSeconds: cachePolicy.ttlSeconds.map { Double($0) },
+            cacheStablePrefixMessageCount: nil,
+            cachePruningTTLSeconds: cachePolicy.ttlSeconds,
             compactionStrategy: strategy.rawValue
         )
     }
@@ -790,7 +796,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                                 kind: kind,
                                 config: request.compactionConfig,
                                 strategyRawValue: input.compactionStrategy.rawValue,
-                                cachePolicyFingerprint: cachePolicyFingerprint(for: input.compactionCachePolicy),
+                                cachePolicyFingerprint: contextPruningPolicyFingerprint(
+                                    for: ContextPruningPolicyResolver.resolve(config: request.compactionConfig)
+                                ),
                                 expectedDerivedSequence: request.derivedTailAtProjectionStart,
                                 firstKeptTailMessageID: before.tail.first?.id,
                                 summaryBodyForTranscript: summaryBody,
@@ -1015,12 +1023,29 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         return content
     }
 
-    private func cachePolicyFingerprint(for policy: ContextCompactionCachePolicy?) -> String? {
-        guard let policy else { return nil }
+    private func applyCacheTTLPruningIfNeeded(
+        messages: [Message],
+        request: ContextEngineAssembleRequest
+    ) -> (messages: [Message], transformationKind: CacheProjectionTransformationKind) {
+        guard let policy = request.projectionPolicy?.contextPruningPolicy else {
+            return (messages, .cacheNeutral)
+        }
+        return ContextCacheTTLPruning.applyIfNeeded(
+            messages: messages,
+            policy: policy,
+            lastLLMDate: request.lastLLMDateByConversationID[request.conversation.id],
+            referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages),
+            toolCallResolutionContext: request.messages
+        )
+    }
+
+    private func contextPruningPolicyFingerprint(for policy: ContextPruningPolicy) -> String? {
+        guard policy.mode != .off else { return nil }
         return [
-            policy.enabled ? "1" : "0",
-            String(policy.stablePrefixMessageCount),
-            policy.ttlSeconds.map { String(describing: $0) } ?? ""
+            policy.mode.rawValue,
+            policy.ttlSeconds.map { String(describing: $0) } ?? "",
+            String(policy.keepRecentToolResults),
+            policy.targetTools?.sorted().joined(separator: ",") ?? ""
         ].joined(separator: "|")
     }
 
