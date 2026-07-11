@@ -13,6 +13,7 @@ public enum ProviderPromptContribution {
             guard let canonical = SystemPromptSectionName.canonicalSection(forLegacyKey: section.rawValue) else {
                 continue
             }
+            guard !SystemPromptSectionName.overrideProof.contains(canonical) else { continue }
             sectionOverrides[canonical] = value
         }
         let stablePrefix = contribution.stablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty

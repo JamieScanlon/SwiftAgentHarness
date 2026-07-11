@@ -39,8 +39,11 @@ public enum SystemPromptSectionName: String, Sendable, CaseIterable, Hashable, C
         }
     }
 
+    /// Sections whose body only harness defaults may set; contributions may not override, suppress, or directive-append.
+    public static let overrideProof: Set<SystemPromptSectionName> = [.constraints]
+
     /// Sections that file- or conversation-sourced layers must not suppress.
-    public static let nonSuppressible: Set<SystemPromptSectionName> = [.constraints]
+    public static let nonSuppressible: Set<SystemPromptSectionName> = overrideProof
 
     /// Maps legacy mode-profile / provider suppress and override keys to canonical section names.
     public static func canonicalSection(forLegacyKey raw: String) -> SystemPromptSectionName? {

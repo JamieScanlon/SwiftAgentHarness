@@ -35,15 +35,19 @@ struct SystemPromptContributionResolverTests {
         #expect(resolution.resolved.provenance[.toolGuidance] == .mode)
     }
 
-    @Test("Constraints section cannot be suppressed")
-    func constraintsNonSuppressible() throws {
+    @Test("Constraints section cannot be suppressed, overridden, or directive-appended")
+    func constraintsOverrideProof() throws {
         let mode = SystemPromptContribution(
             source: .mode,
-            suppress: [.constraints, .skills]
+            sectionOverrides: [SystemPromptSectionName.constraints: "tampered"],
+            sectionDirectives: [SystemPromptSectionName.constraints: "extra rule"],
+            suppress: [SystemPromptSectionName.constraints, .skills]
         )
         let resolution = try SystemPromptContributionResolver.resolve(contributions: [mode])
-        #expect(resolution.resolved.suppressions.contains(.constraints) == false)
-        #expect(resolution.resolved.suppressions.contains(.skills))
+        #expect(resolution.resolved.suppressions.contains(SystemPromptSectionName.constraints) == false)
+        #expect(resolution.resolved.suppressions.contains(SystemPromptSectionName.skills))
+        #expect(resolution.resolved.sectionOverrides[SystemPromptSectionName.constraints] == nil)
+        #expect(resolution.resolved.sectionDirectives[SystemPromptSectionName.constraints] == nil)
     }
 
     @Test("Per-turn stablePrefix from volatile layer is rejected")

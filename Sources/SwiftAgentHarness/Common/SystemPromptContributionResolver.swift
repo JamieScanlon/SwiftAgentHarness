@@ -94,13 +94,14 @@ public enum SystemPromptContributionResolver: Sendable {
             }
 
             for section in contribution.suppress {
-                guard !SystemPromptSectionName.nonSuppressible.contains(section) else { continue }
+                guard !SystemPromptSectionName.overrideProof.contains(section) else { continue }
                 result.suppressions.insert(section)
             }
 
             for (section, override) in contribution.sectionOverrides {
                 let trimmed = override.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
+                guard !SystemPromptSectionName.overrideProof.contains(section) else { continue }
                 if let prior = overrideSources[section] {
                     throw SystemPromptContributionConflict.duplicateSectionOverride(
                         section: section,
@@ -115,6 +116,7 @@ public enum SystemPromptContributionResolver: Sendable {
             for (section, directive) in contribution.sectionDirectives {
                 let trimmed = directive.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
+                guard !SystemPromptSectionName.overrideProof.contains(section) else { continue }
                 if let existing = result.sectionDirectives[section], !existing.isEmpty {
                     result.sectionDirectives[section] = existing + "\n\n" + directive
                 } else {

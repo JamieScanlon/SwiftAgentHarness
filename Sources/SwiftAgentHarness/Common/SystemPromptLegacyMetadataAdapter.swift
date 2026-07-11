@@ -71,12 +71,14 @@ enum SystemPromptLegacyMetadataAdapter: Sendable {
         let suppressions = (metadata["modeSuppressSections"] ?? "")
             .split(separator: ",")
             .compactMap { SystemPromptSectionName.canonicalSection(forLegacyKey: String($0)) }
+            .filter { !SystemPromptSectionName.overrideProof.contains($0) }
         mode.suppress = Set(suppressions)
 
         for (key, value) in metadata {
             if key.hasPrefix("modeSectionOverride.") {
                 let raw = String(key.dropFirst("modeSectionOverride.".count))
-                if let section = SystemPromptSectionName.canonicalSection(forLegacyKey: raw) {
+                if let section = SystemPromptSectionName.canonicalSection(forLegacyKey: raw),
+                   !SystemPromptSectionName.overrideProof.contains(section) {
                     mode.sectionOverrides[section] = value
                 }
             }
@@ -92,7 +94,8 @@ enum SystemPromptLegacyMetadataAdapter: Sendable {
         }
         for (key, value) in metadata where key.hasPrefix("providerSectionOverride.") {
             let raw = String(key.dropFirst("providerSectionOverride.".count))
-            if let section = SystemPromptSectionName.canonicalSection(forLegacyKey: raw) {
+            if let section = SystemPromptSectionName.canonicalSection(forLegacyKey: raw),
+               !SystemPromptSectionName.overrideProof.contains(section) {
                 provider.sectionOverrides[section] = value
             }
         }
