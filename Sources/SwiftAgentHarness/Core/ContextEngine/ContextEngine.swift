@@ -109,6 +109,30 @@ public struct ContextEngineSystemPromptAssemblyPolicyInput: Sendable {
     let toolPolicySignature: String
     let routingPolicyTools: [String]
     let routingPolicySkills: [String]
+    let providerStablePrefix: String?
+    let providerSectionOverrides: [String: String]
+
+    init(
+        resolvedModeProfile: ResolvedModeProfile,
+        strictAgentHarnessPrompts: Bool,
+        includeAgentSkills: Bool,
+        includeDateTime: Bool,
+        toolPolicySignature: String,
+        routingPolicyTools: [String],
+        routingPolicySkills: [String],
+        providerStablePrefix: String? = nil,
+        providerSectionOverrides: [String: String] = [:]
+    ) {
+        self.resolvedModeProfile = resolvedModeProfile
+        self.strictAgentHarnessPrompts = strictAgentHarnessPrompts
+        self.includeAgentSkills = includeAgentSkills
+        self.includeDateTime = includeDateTime
+        self.toolPolicySignature = toolPolicySignature
+        self.routingPolicyTools = routingPolicyTools
+        self.routingPolicySkills = routingPolicySkills
+        self.providerStablePrefix = providerStablePrefix
+        self.providerSectionOverrides = providerSectionOverrides
+    }
 }
 
 /// Inputs for deterministic attachment inlining/summarization projection decisions.
@@ -134,6 +158,8 @@ public struct ContextEngineSystemPromptAssemblyArtifact: Sendable {
     let fingerprint: String
     let tier1MemorySectionContent: String?
     let memorySnapshotGeneration: Int?
+    let assembledSystemPromptText: String?
+    let assembledPromptDigest: String?
 }
 
 /// Attachment projection artifact emitted by CE for provider/transformer consumption.

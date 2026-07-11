@@ -337,14 +337,14 @@ public actor OrchestratorRuntimeService {
             thinkingConfig = nil
         }
         var enrichedMetadata = metadata
-        if let conversation,
-           let entry = await deps.registryEntryProvider?(conversation.model.id),
-           let binding = entry.primaryBinding,
-           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
-            ProviderPromptContribution.applySectionOverrides(
-                metadata: &enrichedMetadata,
-                contribution: contribution
-            )
+        if let conversationID = conversation?.id,
+           let assembly = await contextProjection.cachedSystemPromptAssembly(conversationID: conversationID) {
+            if let digest = assembly.assembledPromptDigest {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = digest
+            }
+            if let generation = assembly.memorySnapshotGeneration {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+            }
         }
         if enrichedMetadata.isEmpty, thinkingConfig == nil {
             return nil
@@ -354,17 +354,6 @@ public actor OrchestratorRuntimeService {
         if !enrichedMetadata.isEmpty {
             payload["systemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
             payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
-        }
-        if let conversationID = conversation?.id,
-           let assembly = await contextProjection.cachedSystemPromptAssembly(conversationID: conversationID) {
-            if let tier1 = assembly.tier1MemorySectionContent?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !tier1.isEmpty {
-                enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1
-            }
-            if let generation = assembly.memorySnapshotGeneration {
-                enrichedMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
-            }
         }
         if let conversationID = conversation?.id,
            let attachmentProjection = await contextProjection.cachedAttachmentProjection(conversationID: conversationID) {

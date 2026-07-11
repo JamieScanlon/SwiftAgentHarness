@@ -82,4 +82,51 @@ recalled chunk
         #expect(text.contains(MemoryContextFencer.systemNote))
         #expect(!text.contains("[Memory Context]"))
     }
+
+    @Test("digest match skips generateSystemPrompt and returns messages unchanged")
+    func digestMatchPassthrough() async throws {
+        let preRendered = """
+---
+# Conversation
+CE-assembled system prompt body
+"""
+        let digest = SystemPromptDispatchCodec.sha256Digest(of: preRendered)
+        let canonical = Message(id: UUID(), role: .system, content: preRendered, timestamp: Date(), toolCalls: [])
+        let expandingPrompt = try await SystemPrompt(
+            includeCurrentDateTime: true,
+            includeAgentSkills: false,
+            skillLoader: nil,
+            skipConfigLoad: true
+        )
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: [canonical],
+            systemPrompt: expandingPrompt,
+            promptMetadata: [SystemPromptAssemblyMetadataKeys.assembledPromptDigest: digest],
+            providerStablePrefix: nil
+        )
+        #expect(plan.resolvedMessages.count == 1)
+        #expect(plan.resolvedMessages[0].content == preRendered)
+        #expect(plan.assembledPromptDigest == digest)
+        #expect(!plan.resolvedMessages[0].content.contains("Today is "))
+    }
+
+    @Test("digest mismatch falls back to legacy generateSystemPrompt expansion")
+    func digestMismatchLegacyExpand() async throws {
+        let canonical = Message(id: UUID(), role: .system, content: "user seed", timestamp: Date(), toolCalls: [])
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: [canonical],
+            systemPrompt: try await SystemPrompt(
+                includeCurrentDateTime: false,
+                includeAgentSkills: false,
+                skillLoader: nil,
+                skipConfigLoad: true
+            ),
+            promptMetadata: [SystemPromptAssemblyMetadataKeys.assembledPromptDigest: "deadbeef"],
+            providerStablePrefix: nil
+        )
+        let text = try #require(plan.canonicalSystemText)
+        #expect(text.contains("# Conversation"))
+        #expect(text.contains("user seed"))
+        #expect(plan.assembledPromptDigest != "deadbeef")
+    }
 }

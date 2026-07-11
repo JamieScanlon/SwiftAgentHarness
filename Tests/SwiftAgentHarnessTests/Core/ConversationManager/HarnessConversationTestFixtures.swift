@@ -291,7 +291,20 @@ enum HarnessConversationTestFixtures {
             harnessSessionPersistenceOverride: local
         )
         let compactionCoordinator = CompactionConcurrencyCoordinator()
-        let contextEngine = DefaultContextEngine(compactionCoordinator: compactionCoordinator, logger: logger)
+        let skillLoaderBridge = SystemPromptSkillLoaderBridge()
+        let systemPromptAssemblyRenderer = DefaultSystemPromptAssemblyRenderer(
+            skillLoaderProvider: { conversationID in
+                await skillLoaderBridge.skillLoader(for: conversationID)
+            },
+            logger: logger
+        )
+        let memoryService = DefaultMemoryService(config: .default, logger: logger)
+        let contextEngine = DefaultContextEngine(
+            compactionCoordinator: compactionCoordinator,
+            memoryService: memoryService,
+            systemPromptAssemblyRenderer: systemPromptAssemblyRenderer,
+            logger: logger
+        )
         let (host, services) = HarnessRuntimeSession.makeProduction(
             persistenceDomain: domain,
             logger: logger,
@@ -313,6 +326,9 @@ enum HarnessConversationTestFixtures {
             runtimeLaneConfiguration: .default,
             runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal
         )
+        skillLoaderBridge.configure { conversationID in
+            await services.skillActivationService.skillLoader(for: conversationID)
+        }
         return HarnessRuntimeHostFixture(host: host, services: services, local: local, root: root, stack: stack)
     }
 

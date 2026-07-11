@@ -76,4 +76,28 @@ struct HarnessRuntimeSessionSystemPromptMetadataTests {
         #expect(prompt.contains("This conversation id is: \(conversationID.uuidString)"))
         #expect(prompt.contains("This conversation was started on: \(expectedDate)"))
     }
+
+    @Test("orchestrator additional parameters carry assembled prompt digest without tier1 re-merge")
+    func additionalParametersCarryDigestNotTier1() async throws {
+        let fixture = try HarnessConversationTestFixtures.makeHarnessRuntimeHost(label: "prompt-digest-meta")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        try await fixture.host.createConversation(
+            with: model,
+            userSystemPrompt: "You are helpful.",
+            interactionMode: .agent
+        )
+        let conversation = try #require(await fixture.host.currentConversation())
+        _ = await fixture.host.contextProjectionService.transformedContextMessages(
+            from: conversation.messages,
+            conversation: conversation,
+            phase: .initial
+        )
+
+        let params = await fixture.host.orchestratorRuntimeService.orchestratorAdditionalParameters(for: conversation)
+        let metadata = SystemPromptDispatchCodec.extractPromptMetadata(from: params)
+        let digest = try #require(metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest])
+        #expect(!digest.isEmpty)
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] == nil)
+    }
 }

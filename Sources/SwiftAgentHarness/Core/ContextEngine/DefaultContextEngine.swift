@@ -11,6 +11,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
     private let reinjectionSkillProvider: any CompactionReinjectionSkillProviding
     private let reinjectionInstructionProvider: any CompactionReinjectionInstructionProviding
+    private let systemPromptAssemblyRenderer: (any SystemPromptAssemblyRendering)?
     private let logger: Logger?
 
     public init(
@@ -21,6 +22,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         self.init(
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
+            systemPromptAssemblyRenderer: nil,
             preCompactionMemoryFlushRunner: nil,
             reinjectionSkillProvider: nil,
             reinjectionInstructionProvider: nil,
@@ -31,6 +33,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     init(
         compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
         memoryService: DefaultMemoryService? = nil,
+        systemPromptAssemblyRenderer: (any SystemPromptAssemblyRendering)? = nil,
         preCompactionMemoryFlushRunner: (any PreCompactionMemoryFlushRunning)? = nil,
         reinjectionSkillProvider: (any CompactionReinjectionSkillProviding)? = nil,
         reinjectionInstructionProvider: (any CompactionReinjectionInstructionProviding)? = nil,
@@ -38,6 +41,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     ) {
         self.compactionCoordinator = compactionCoordinator
         self.memoryService = memoryService
+        self.systemPromptAssemblyRenderer = systemPromptAssemblyRenderer
         if let preCompactionMemoryFlushRunner {
             self.preCompactionMemoryFlushRunner = preCompactionMemoryFlushRunner
         } else if let memoryService {
@@ -315,7 +319,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
                 fingerprint: $0.fingerprint,
-                assembledPromptDigest: nil
+                assembledPromptDigest: $0.assembledPromptDigest
             )
         }
         let attachmentCheckpoint = projectionArtifact.attachmentProjection.map {
@@ -1011,6 +1015,7 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             await buildSystemPromptAssemblyArtifact(
                 conversation: conversation,
                 policy: assemblyPolicy,
+                projectedMessages: projected,
                 modeMemoryInjection: ContextSystemPromptModeSwitches.build(
                     conversation: conversation,
                     strictAgentHarnessPrompts: assemblyPolicy.strictAgentHarnessPrompts,
@@ -1020,6 +1025,9 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             )
         } else {
             nil as ContextEngineSystemPromptAssemblyArtifact?
+        }
+        if let assembledText = promptArtifact?.assembledSystemPromptText {
+            projected = SystemPromptAssemblyApplicator.apply(assembledText: assembledText, to: projected)
         }
         let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjection(
             catalog: policy.attachmentCatalog,
@@ -1039,10 +1047,11 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
     private func buildSystemPromptAssemblyArtifact(
         conversation: ModelConversation,
         policy: ContextEngineSystemPromptAssemblyPolicyInput,
+        projectedMessages: [Message],
         modeMemoryInjection: String,
         resolvedProfile: ResolvedModeProfile?
     ) async -> ContextEngineSystemPromptAssemblyArtifact {
-        let metadata = ContextSystemPromptModeSwitches.build(
+        var metadata = ContextSystemPromptModeSwitches.build(
             conversation: conversation,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
             resolvedProfile: policy.resolvedModeProfile
@@ -1052,6 +1061,22 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             modeMemoryInjection: modeMemoryInjection,
             resolvedProfile: resolvedProfile
         )
+        if let tier1Content = tier1.content?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !tier1Content.isEmpty {
+            metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] = tier1Content
+        }
+        if let generation = tier1.generation {
+            metadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+        }
+        if let providerStablePrefix = policy.providerStablePrefix?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerStablePrefix.isEmpty {
+            metadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = providerStablePrefix
+        }
+        for (key, value) in policy.providerSectionOverrides {
+            metadata[key] = value
+        }
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
@@ -1063,11 +1088,33 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             memorySnapshotGeneration: tier1.generation,
             tier1MemorySectionContent: tier1.content
         )
+        let referenceDate = Date()
+        var assembledSystemPromptText: String?
+        if let renderer = systemPromptAssemblyRenderer {
+            let userSystemPrompt = SystemPromptAssemblyApplicator.userSystemPrompt(from: projectedMessages)
+            do {
+                assembledSystemPromptText = try await renderer.render(
+                    conversation: conversation,
+                    policy: policy,
+                    userSystemPrompt: userSystemPrompt,
+                    enrichedMetadata: metadata,
+                    referenceDate: referenceDate
+                )
+            } catch {
+                logger?.warning("[DefaultContextEngine] system prompt assembly render failed: \(error)")
+            }
+        }
+        let assembledPromptDigest = assembledSystemPromptText.map { SystemPromptDispatchCodec.sha256Digest(of: $0) }
+        if let assembledPromptDigest {
+            metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
+        }
         return ContextEngineSystemPromptAssemblyArtifact(
             metadata: metadata,
             fingerprint: fingerprint,
             tier1MemorySectionContent: tier1.content,
-            memorySnapshotGeneration: tier1.generation
+            memorySnapshotGeneration: tier1.generation,
+            assembledSystemPromptText: assembledSystemPromptText,
+            assembledPromptDigest: assembledPromptDigest
         )
     }
 

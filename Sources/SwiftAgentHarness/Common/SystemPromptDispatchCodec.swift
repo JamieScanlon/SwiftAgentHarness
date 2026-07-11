@@ -17,6 +17,12 @@ enum SystemPromptDispatchCodec: Sendable {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    static func canonicalSystemMessageIndex(in messages: [Message]) -> Int? {
+        messages.firstIndex { message in
+            message.role == .system && !HarnessInjectedMessageMetadata.isHarnessInjected(message)
+        }
+    }
+
     static func resolve(
         messages: [Message],
         systemPrompt: SystemPrompt?,
@@ -29,8 +35,20 @@ enum SystemPromptDispatchCodec: Sendable {
             metadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = providerStablePrefix
         }
 
-        let canonicalIndex = messages.firstIndex { message in
-            message.role == .system && !HarnessInjectedMessageMetadata.isHarnessInjected(message)
+        let canonicalIndex = canonicalSystemMessageIndex(in: messages)
+
+        if let canonicalIndex,
+           let expectedDigest = metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !expectedDigest.isEmpty {
+            let canonicalContent = messages[canonicalIndex].content
+            if sha256Digest(of: canonicalContent) == expectedDigest {
+                return DispatchPlan(
+                    canonicalSystemText: canonicalContent,
+                    resolvedMessages: messages,
+                    assembledPromptDigest: expectedDigest
+                )
+            }
         }
 
         var canonicalText: String?

@@ -677,6 +677,96 @@ struct ContextEngineTests {
         #expect(metadata["modeSectionOverride.tools"] == "Only cite tools when explicitly requested.")
     }
 
+    @Test("DefaultContextEngine embeds assembled system prompt when renderer is wired")
+    func engineEmbedsAssembledSystemPromptWithDigest() async throws {
+        struct StubRenderer: SystemPromptAssemblyRendering {
+            func render(
+                conversation: ModelConversation,
+                policy: ContextEngineSystemPromptAssemblyPolicyInput,
+                userSystemPrompt: String?,
+                enrichedMetadata: [String: String],
+                referenceDate: Date
+            ) async throws -> String {
+                let tier1 = enrichedMetadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent] ?? ""
+                let iso = enrichedMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] ?? ""
+                return "ASSEMBLED:\(userSystemPrompt ?? ""):\(tier1):\(iso)"
+            }
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ce-sp1-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "tier-one rule".write(to: root.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+        let memoryService = DefaultMemoryService(
+            config: .default,
+            userConfigDir: root.appendingPathComponent("user", isDirectory: true)
+        )
+        let engine = DefaultContextEngine(
+            compactionCoordinator: nil,
+            memoryService: memoryService,
+            systemPromptAssemblyRenderer: StubRenderer(),
+            logger: nil
+        )
+        var conv = ModelConversation(
+            model: Model(
+                protocol: .openAIAPI,
+                modelName: "x",
+                serverURL: URL(string: "http://localhost:1")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            ),
+            messages: [],
+            systemPrompt: "seed prompt"
+        )
+        conv.harnessPersistenceCwd = root.path
+        let policy = ContextEngineProjectionPolicyInput(
+            systemPromptAssemblyPolicy: ContextEngineSystemPromptAssemblyPolicyInput(
+                resolvedModeProfile: ResolvedModeProfile(
+                    id: InteractionMode.chat.rawValue,
+                    interactionMode: .chat,
+                    assemblyKind: .chat,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: false,
+                    builtInSeedVersion: ResolvedModeProfile.builtInSeedVersion,
+                    semanticLayerTags: []
+                ),
+                strictAgentHarnessPrompts: true,
+                includeAgentSkills: false,
+                includeDateTime: false,
+                toolPolicySignature: "toolsig",
+                routingPolicyTools: [],
+                routingPolicySkills: []
+            )
+        )
+        let request = makeAssembleRequest(
+            messages: [Message(id: UUID(), role: .system, content: "seed prompt", timestamp: Date(), toolCalls: [])],
+            conversation: conv,
+            enableContextTransform: false,
+            projectionPolicy: policy
+        )
+        let first = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let second = await engine.assemble(request: request) { input in
+            ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)
+        }
+        let artifact = try #require(first.projectionArtifact?.systemPromptAssembly)
+        let canonical = try #require(
+            first.messages.first(where: { $0.role == .system && !HarnessInjectedMessageMetadata.isHarnessInjected($0) })
+        )
+        #expect(canonical.content.hasPrefix("ASSEMBLED:seed prompt:"))
+        #expect(canonical.content.contains("tier-one rule"))
+        #expect(artifact.assembledPromptDigest == SystemPromptDispatchCodec.sha256Digest(of: canonical.content))
+        #expect(first.systemPromptCheckpoint?.assembledPromptDigest == artifact.assembledPromptDigest)
+        #expect(
+            second.messages.first(where: { $0.role == .system && !HarnessInjectedMessageMetadata.isHarnessInjected($0) })?
+                .content == canonical.content
+        )
+        let metadata = artifact.metadata
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] == artifact.assembledPromptDigest)
+        #expect(metadata[SystemPromptAssemblyMetadataKeys.tier1MemoryContent]?.contains("tier-one rule") == true)
+    }
+
     @Test("System prompt checkpoint fingerprint changes with context override value changes")
     func systemPromptFingerprintTracksContextOverrideValues() async {
         let engine = DefaultContextEngine(compactionCoordinator: nil, logger: nil)

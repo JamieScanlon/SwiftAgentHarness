@@ -175,6 +175,24 @@ struct SystemPromptConversationMetadataTests {
         #expect(result.contains("This conversation id is: ABC-123"))
         #expect(result.contains("This conversation was started on: unknown"))
     }
+
+    @Test("assembleReferenceDateISO freezes datetime token at assemble time")
+    func frozenAssembleReferenceDate() async throws {
+        let frozen = Date(timeIntervalSince1970: 1_700_000_000)
+        let iso = SystemPrompt.assembleReferenceDateISOString(from: frozen)
+        let prompt = try await SystemPrompt(
+            includeCurrentDateTime: true,
+            includeAgentSkills: false,
+            skillLoader: nil,
+            skipConfigLoad: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            additionalMetadata: [SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO: iso]
+        )
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d, yyyy"
+        #expect(result.contains("Today is \(formatter.string(from: frozen))."))
+    }
 }
 
 @Suite("SystemPrompt — Mode context switches")

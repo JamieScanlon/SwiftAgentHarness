@@ -369,9 +369,17 @@ public actor HarnessRuntimeSession {
             logger: logger,
             llmRecallSelector: memoryRecallSelector
         )
+        let systemPromptSkillLoaderBridge = SystemPromptSkillLoaderBridge()
+        let systemPromptAssemblyRenderer = DefaultSystemPromptAssemblyRenderer(
+            skillLoaderProvider: { conversationID in
+                await systemPromptSkillLoaderBridge.skillLoader(for: conversationID)
+            },
+            logger: logger
+        )
         let resolvedContextEngine = contextEngine ?? DefaultContextEngine(
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
+            systemPromptAssemblyRenderer: systemPromptAssemblyRenderer,
             logger: logger
         )
         let runtimeDependencies = ConversationRuntimeDependencies(
@@ -401,6 +409,9 @@ public actor HarnessRuntimeSession {
             persistenceDomain: persistenceDomain,
             tenancyPolicy: tenancyPolicy
         )
+        systemPromptSkillLoaderBridge.configure { conversationID in
+            await services.skillActivationService.skillLoader(for: conversationID)
+        }
         self.init(
             persistenceDomain: persistenceDomain,
             runtimeDependencies: runtimeDependencies,

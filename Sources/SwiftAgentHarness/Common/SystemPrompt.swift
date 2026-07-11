@@ -121,10 +121,11 @@ public struct SystemPrompt: Sendable {
     public func generateSystemPrompt(withUserSystemPrompt userSystemPrompt: String? = nil, additionalMetadata: [String: String] = [:]) async throws -> String {
         var dynamicPrompt = DynamicPrompt(template: promptTemplate)
 
+        let referenceDate = Self.referenceDate(from: additionalMetadata)
         let dateString: String = {
             let formatter = DateFormatter()
             formatter.dateFormat = "EEEE, MMM d, yyyy"
-            return formatter.string(from: Date())
+            return formatter.string(from: referenceDate)
         }()
         dynamicPrompt["datetime"] = dateString
 
@@ -371,8 +372,13 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
         )
         let overrides = additionalMetadata
             .compactMap { key, value -> (String, String)? in
-                guard key.hasPrefix("modeSectionOverride.") else { return nil }
-                return (String(key.dropFirst("modeSectionOverride.".count)).lowercased(), value)
+                if key.hasPrefix("modeSectionOverride.") {
+                    return (String(key.dropFirst("modeSectionOverride.".count)).lowercased(), value)
+                }
+                if key.hasPrefix("providerSectionOverride.") {
+                    return (String(key.dropFirst("providerSectionOverride.".count)).lowercased(), value)
+                }
+                return nil
             }
             .reduce(into: [String: String]()) { partial, pair in
                 partial[pair.0] = pair.1
@@ -631,6 +637,28 @@ You are executing the plan in build mode: update task status with **update_plan_
         default:
             return nil
         }
+    }
+
+    static func referenceDate(from additionalMetadata: [String: String]) -> Date {
+        guard let iso = additionalMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !iso.isEmpty else {
+            return Date()
+        }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = fractional.date(from: iso) {
+            return parsed
+        }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: iso) ?? Date()
+    }
+
+    static func assembleReferenceDateISOString(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     func assemblyFingerprintHex(

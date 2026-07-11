@@ -63,6 +63,17 @@ enum ContextEngineProjectionPolicyBuilder {
             logger: deps.logger
         )
         let routingNames = ConversationRoutingPolicyNames.names(for: conversation)
+        var providerStablePrefix: String?
+        var providerSectionOverrides: [String: String] = [:]
+        if let entry = await deps.registryEntryProvider?(conversation.model.id),
+           let binding = entry.primaryBinding,
+           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+            providerStablePrefix = contribution.stablePrefix
+            ProviderPromptContribution.applySectionOverrides(
+                metadata: &providerSectionOverrides,
+                contribution: contribution
+            )
+        }
         let promptPolicy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolvedProfile,
             strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
@@ -70,7 +81,9 @@ enum ContextEngineProjectionPolicyBuilder {
             includeDateTime: SystemPrompt.loadIncludeCurrentDateTimeFromConfig(),
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
-            routingPolicySkills: routingNames.skills
+            routingPolicySkills: routingNames.skills,
+            providerStablePrefix: providerStablePrefix,
+            providerSectionOverrides: providerSectionOverrides
         )
         let compactionCfg = deps.conversationTransformConfiguration.contextCompaction
         var transcriptEntries: [SessionTranscriptEntry]?

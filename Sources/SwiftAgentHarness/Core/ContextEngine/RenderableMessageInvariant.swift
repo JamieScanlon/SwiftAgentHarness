@@ -42,8 +42,9 @@ enum RenderableMessageInvariant: Sendable {
     }
 
     /// Guarantees at least one `.system` message exists. When none is present, a harness-injected
-    /// system message with empty content is prepended; provider adapters expand empty `.system`
-    /// content into the base harness prompt via ``SystemPrompt/generateSystemPrompt``.
+    /// system message with empty content is prepended as a last resort. CE assemble is responsible
+    /// for canonical system prompt expansion; adapter expansion remains a legacy fallback when the
+    /// assembled prompt digest is absent from dispatch metadata.
     static func ensuringSystemPrompt(_ messages: [Message]) -> [Message] {
         guard !messages.contains(where: { $0.role == .system }) else { return messages }
         let injected = HarnessInjectedMessageMetadata.systemMessage(id: UUID(), content: "")
