@@ -7,6 +7,24 @@ struct ResponseCachingLLM: LLMProtocol, AdapterAuthProbing {
     let modelID: UUID
     let providerScopeKey: String
     let policy: ResponseCachePolicy
+    /// `""` = shared non-strict partition; non-empty = per-owner strict partition; `nil` = bypass cache.
+    let cacheOwnerScopeKey: String?
+
+    init(
+        base: any LLMProtocol,
+        store: ResponseCacheStore,
+        modelID: UUID,
+        providerScopeKey: String,
+        policy: ResponseCachePolicy,
+        cacheOwnerScopeKey: String? = ""
+    ) {
+        self.base = base
+        self.store = store
+        self.modelID = modelID
+        self.providerScopeKey = providerScopeKey
+        self.policy = policy
+        self.cacheOwnerScopeKey = cacheOwnerScopeKey
+    }
 
     var currentState: LLMRuntimeState { base.currentState }
     var stateUpdates: AsyncStream<LLMRuntimeState> { base.stateUpdates }
@@ -19,6 +37,9 @@ struct ResponseCachingLLM: LLMProtocol, AdapterAuthProbing {
     }
 
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        guard let cacheOwnerScopeKey else {
+            return try await base.send(messages, config: config)
+        }
         guard case .enabled(let maxEntries, let ttlSeconds, let stablePrefixMessageCount) = policy,
               isCacheEligibleRequest(messages: messages)
         else {
@@ -26,6 +47,7 @@ struct ResponseCachingLLM: LLMProtocol, AdapterAuthProbing {
         }
 
         let key = ResponseCacheKey.make(
+            ownerScopeKey: cacheOwnerScopeKey,
             modelID: modelID,
             providerScopeKey: providerScopeKey,
             messages: messages,
@@ -68,4 +90,3 @@ struct ResponseCachingLLM: LLMProtocol, AdapterAuthProbing {
         response.toolCalls.isEmpty
     }
 }
-

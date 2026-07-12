@@ -274,9 +274,12 @@ public actor HarnessRuntimeSession {
             conversationTransformConfiguration: conversationTransformConfiguration
         )
         let runtimeLaneCoordinator = RuntimeLaneCoordinator(configuration: runtimeLaneConfiguration)
-        let alignedFactory = StandardModelLLMFactory.aligningAccounting(
-            factory: llmFactory,
-            delegateCostTracker: delegateCostTracker
+        let alignedFactory = Self.factoryApplyingTenancyPolicy(
+            StandardModelLLMFactory.aligningAccounting(
+                factory: llmFactory,
+                delegateCostTracker: delegateCostTracker
+            ),
+            tenancyPolicy: tenancyPolicy
         )
         let runtimeDependencies = ConversationRuntimeDependencies(
             persistenceDomain: persistenceDomain,
@@ -348,9 +351,12 @@ public actor HarnessRuntimeSession {
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
-        let alignedFactory = StandardModelLLMFactory.aligningAccounting(
-            factory: llmFactory,
-            delegateCostTracker: delegateCostTracker
+        let alignedFactory = Self.factoryApplyingTenancyPolicy(
+            StandardModelLLMFactory.aligningAccounting(
+                factory: llmFactory,
+                delegateCostTracker: delegateCostTracker
+            ),
+            tenancyPolicy: tenancyPolicy
         )
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -1220,6 +1226,15 @@ public actor HarnessRuntimeSession {
         )
         await applySubagentCheckpointInvalidationIfNeeded(response.checkpointInvalidation)
         return response
+    }
+
+    private static func factoryApplyingTenancyPolicy(
+        _ factory: any ModelLLMFactoring,
+        tenancyPolicy: TenancyPolicySettings
+    ) -> any ModelLLMFactoring {
+        guard var std = factory as? StandardModelLLMFactory else { return factory }
+        std.tenancyPolicy = tenancyPolicy
+        return std
     }
 }
 

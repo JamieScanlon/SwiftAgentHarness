@@ -11,6 +11,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
     public var responseCacheStore: ResponseCacheStore
     public var authProfileStore: AuthProfileStore
     public var authProfileCooldownRegistry: AuthProfileCooldownRegistry
+    public var tenancyPolicy: TenancyPolicySettings
     /// Test seam: bypasses the provider switch to exercise factory failover wiring without network I/O.
     var testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)?
 
@@ -21,6 +22,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         responseCacheStore: ResponseCacheStore = ResponseCacheStore(),
         authProfileStore: AuthProfileStore = .production(),
         authProfileCooldownRegistry: AuthProfileCooldownRegistry = AuthProfileCooldownRegistry(),
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)? = nil
     ) {
         self.advanced = advanced
@@ -29,6 +31,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         self.responseCacheStore = responseCacheStore
         self.authProfileStore = authProfileStore
         self.authProfileCooldownRegistry = authProfileCooldownRegistry
+        self.tenancyPolicy = tenancyPolicy
         self.testBindingAdapterOverride = testBindingAdapterOverride
     }
 
@@ -125,6 +128,8 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
                 responseCacheStore: responseCacheStore,
                 logger: logger,
                 modelID: model.id,
+                ownerAccountID: ownerAccountID,
+                tenancyPolicy: tenancyPolicy,
                 attemptObserver: attemptObserver,
                 testBindingAdapterOverride: testBindingAdapterOverride
             )
@@ -164,9 +169,15 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         responseCacheStore: ResponseCacheStore,
         logger: Logger?,
         modelID: UUID,
+        ownerAccountID: UUID?,
+        tenancyPolicy: TenancyPolicySettings,
         attemptObserver: (@Sendable (ModelCallAttemptObservation) async -> Void)?,
         testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)?
     ) -> any LLMProtocol {
+        let cacheOwnerScopeKey = ResponseCacheOwnerScope.resolve(
+            ownerAccountID: ownerAccountID,
+            tenancyPolicy: tenancyPolicy
+        )
         let credentialPool = (try? authProfileStore.resolveCredentialPool(
             providerID: binding.canonicalProviderID(),
             authProfileLabel: binding.authProfile
@@ -207,7 +218,8 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
                     store: responseCacheStore,
                     modelID: model.id,
                     providerScopeKey: providerScopeKey,
-                    policy: advanced.responseCache
+                    policy: advanced.responseCache,
+                    cacheOwnerScopeKey: cacheOwnerScopeKey
                 )
             } else {
                 cached = promptPlanned

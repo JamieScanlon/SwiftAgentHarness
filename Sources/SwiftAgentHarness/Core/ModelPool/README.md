@@ -17,6 +17,12 @@ Disable at runtime with `SAH_MODEL_POOL_BUDGET_DISABLED=1`.
 
 Per-conversation `ConversationBudgetSnapshot.maxUSD` is enforced as a tighter cap when present (hydrated at startup and updated on spend snapshot persistence).
 
+## Response cache
+
+Optional in-process response cache (`ResponseCachingLLM` / `ResponseCacheStore`) keys completions by owner scope (first), then model id, provider credential scope, message digest, and request config digest. Enable via `ServerConfig.modelPoolResponseCacheEnabled`.
+
+Under strict authenticated tenancy (`TenancyPolicySettings.requireAuthenticatedOwnerOnMutations`), `ownerScopeKey` is the conversation owner's UUID — two owners with byte-identical prompts cannot share cached completions. Non-strict deployments use an empty owner scope (legacy process-wide shared cache). Strict tenancy without a resolved `ownerAccountID` bypasses the cache entirely (always calls the provider).
+
 ## Thinking config vs thinking signal
 
 **Request config (modes-owned):** `ThinkingConfigResolver` in ConversationManager resolves mode profile + conversation routing prefs into a `ThinkingConfig`, passed through orchestrator `additionalParameters` to adapters (`OpenAILLM`, `OllamaLLM`, `LMStudioLLM`, `AnthropicLLM`).
