@@ -413,7 +413,8 @@ sequenceDiagram
 1. Implement `APILayerRESTEndpointModule` (see `APILayerRESTModules.swift`).
 2. Register routes in `registerRoutes(on:dependencies:)`.
 3. Append the module in `APILayerModuleAssembly.restModules()`.
-4. Add tests.
+4. Add an entry to [`openapi/route-tenancy-inventory.json`](../../../../../../openapi/route-tenancy-inventory.json) (and pass `APILayerTenancyGuardInvariantTests`) for mutating or conversation-scoped handlers.
+5. Add tests.
 
 ### New harness topic or REST route
 

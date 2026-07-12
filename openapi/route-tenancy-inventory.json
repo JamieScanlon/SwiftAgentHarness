@@ -1,0 +1,361 @@
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"status\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/system_prompt/full",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"system_prompt\", \"full\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/models",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"models\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/models/query",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.post(\"models\", \"query\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/models/{id}/state",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"models\", \":id\", \"state\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/models/{id}/calls",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"models\", \":id\", \"calls\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/models/{id}/calls/events",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"models\", \":id\", \"calls\", \"events\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations",
+      "tenancy_guard": "collectionScope",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationListHTTPResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/search",
+      "tenancy_guard": "collectionScope",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationSearchHTTPResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/events",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"events\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/plan",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"plan\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/tools",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"tools\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/skills",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"skills\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/slash-commands",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"slash-commands\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/preview-context-compaction",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"preview-context-compaction\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/compact",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"compact\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/server-metadata",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"server-metadata\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/branch",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"branch\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/revert",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"revert\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/sub-agents/active",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"sub-agents\", \"active\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/sub-agents/{lifecycleID}/cancel",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"sub-agents\", \":lifecycleID\", \"cancel\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/completion-announcements",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"completion-announcements\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/tool-approvals",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"tool-approvals\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/checkpoints",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"checkpoints\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/checkpoints/latest",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"checkpoints\", \"latest\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/runs",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"runs\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/runs/{runId}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"runs\", \":runId\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/runs/{runId}/cancel",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"runs\", \":runId\", \"cancel\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/cancel",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"cancel\")"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/conversations/{id}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.patch(\":id\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/projection",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"projection\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations",
+      "tenancy_guard": "createMutation",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post {"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/conversations/{id}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.delete(\":id\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/engine-artifacts",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"engine-artifacts\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/engine-artifacts/{key}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"engine-artifacts\", \":key\")"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/conversations/{id}/engine-artifacts/{key}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.put(\":id\", \"engine-artifacts\", \":key\")"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/conversations/{id}/engine-artifacts/{key}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.delete(\":id\", \"engine-artifacts\", \":key\")"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/conversations/{id}/engine-artifacts",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.delete(\":id\", \"engine-artifacts\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/messages",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "sendMessageResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tools",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"tools\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/skills",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"skills\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/sub-agents",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"sub-agents\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/modes",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"modes\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/modes/reload",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.post(\"modes\", \"reload\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/traces/{conversationId}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.get(\"traces\", \":conversationId\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/upload",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "api.post(\"upload\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/exec-approvals/grants",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "execApprovalsPath.get(\"grants\")"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/exec-approvals/grants/{commandName}",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "execApprovalsPath.delete(\"grants\", \":commandName\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/exec-approvals/{id}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "resolveExecApprovalViaREST"
+    },
+    {
+      "method": "POST",
+      "path": "/api/approvals/{id}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "resolveExecApprovalViaREST"
+    }
+  ]
+}
