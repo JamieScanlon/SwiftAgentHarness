@@ -141,11 +141,17 @@ public actor HarnessRuntimeSession {
         contextEngineSlotID: String = "default",
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         compactionProviderFactory: (any ContextCompactionProviderFactoring)? = nil,
-        modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost())
+        modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost()),
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
-            coordinator: invocationCoordinator
+            coordinator: invocationCoordinator,
+            tenancyPolicy: tenancyPolicy
+        )
+        let alignedScheduler = Self.schedulerApplyingTenancyPolicy(
+            resolvedScheduler,
+            tenancyPolicy: tenancyPolicy
         )
         let (resolvedFactory, resolvedTracker) = ModelPoolRuntimeWiring.resolve(
             llmFactory: llmFactory,
@@ -167,7 +173,7 @@ public actor HarnessRuntimeSession {
             logger: logger
         )
         let compactionScheduling = ContextCompactionLLMScheduling(
-            scheduler: resolvedScheduler,
+            scheduler: alignedScheduler,
             modelID: ContextCompactionLLMScheduling.modelID(
                 model: transformConfig.contextCompaction.model,
                 ollamaServerURL: transformConfig.contextCompaction.ollamaServerURL
@@ -192,13 +198,16 @@ public actor HarnessRuntimeSession {
             registryEntryProvider: registryEntryProvider,
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: resolvedTracker,
-            callScheduler: resolvedScheduler,
+            callScheduler: alignedScheduler,
             invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
             modeRegistry: modeRegistry,
-            runtimeLaneConfiguration: runtimeLaneConfiguration,
-            runtimeExecutorFactory: runtimeExecutorFactory
+            runtimeLaneConfiguration: runtimeLaneConfiguration.applyingStrictTenancyDefaults(
+                tenancyPolicy: tenancyPolicy
+            ),
+            runtimeExecutorFactory: runtimeExecutorFactory,
+            tenancyPolicy: tenancyPolicy
         )
     }
 
@@ -273,7 +282,14 @@ public actor HarnessRuntimeSession {
             persistenceDomain: persistenceDomain,
             conversationTransformConfiguration: conversationTransformConfiguration
         )
-        let runtimeLaneCoordinator = RuntimeLaneCoordinator(configuration: runtimeLaneConfiguration)
+        let resolvedLaneConfiguration = runtimeLaneConfiguration.applyingStrictTenancyDefaults(
+            tenancyPolicy: tenancyPolicy
+        )
+        let runtimeLaneCoordinator = RuntimeLaneCoordinator(configuration: resolvedLaneConfiguration)
+        let alignedScheduler = Self.schedulerApplyingTenancyPolicy(
+            callScheduler,
+            tenancyPolicy: tenancyPolicy
+        )
         let alignedFactory = Self.factoryApplyingTenancyPolicy(
             StandardModelLLMFactory.aligningAccounting(
                 factory: llmFactory,
@@ -288,7 +304,7 @@ public actor HarnessRuntimeSession {
             contextAssemblyRuntime: contextAssemblyRuntime,
             modeRegistry: modeRegistry,
             llmFactory: alignedFactory,
-            callScheduler: callScheduler,
+            callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,
             toolPolicy: toolPolicy,
@@ -317,7 +333,7 @@ public actor HarnessRuntimeSession {
             registryEntryProvider: registryEntryProvider,
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: delegateCostTracker,
-            callScheduler: callScheduler,
+            callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: contextEngine,
@@ -362,10 +378,17 @@ public actor HarnessRuntimeSession {
             persistenceDomain: persistenceDomain,
             conversationTransformConfiguration: conversationTransformConfiguration
         )
-        let runtimeLaneCoordinator = RuntimeLaneCoordinator(configuration: runtimeLaneConfiguration)
+        let resolvedLaneConfiguration = runtimeLaneConfiguration.applyingStrictTenancyDefaults(
+            tenancyPolicy: tenancyPolicy
+        )
+        let runtimeLaneCoordinator = RuntimeLaneCoordinator(configuration: resolvedLaneConfiguration)
+        let alignedScheduler = Self.schedulerApplyingTenancyPolicy(
+            callScheduler,
+            tenancyPolicy: tenancyPolicy
+        )
         let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
         let memoryRecallSelector = ModelPoolMemoryLLMRecallSelector(
-            scheduler: callScheduler,
+            scheduler: alignedScheduler,
             modelName: memoryConfig.recallSelectorModel,
             serverURL: memoryConfig.recallSelectorOllamaServerURL,
             logger: logger
@@ -396,7 +419,7 @@ public actor HarnessRuntimeSession {
             contextAssemblyRuntime: contextAssemblyRuntime,
             modeRegistry: modeRegistry,
             llmFactory: alignedFactory,
-            callScheduler: callScheduler,
+            callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,
             toolPolicy: toolPolicy,
@@ -434,7 +457,7 @@ public actor HarnessRuntimeSession {
             registryEntryProvider: registryEntryProvider,
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: delegateCostTracker,
-            callScheduler: callScheduler,
+            callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
@@ -1228,12 +1251,29 @@ public actor HarnessRuntimeSession {
         return response
     }
 
+    private static func schedulerApplyingTenancyPolicy(
+        _ scheduler: any ModelCallScheduling,
+        tenancyPolicy: TenancyPolicySettings
+    ) -> any ModelCallScheduling {
+        guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return scheduler }
+        guard let concrete = scheduler as? ModelCallScheduler else {
+            return ModelCallScheduler(tenancyPolicy: tenancyPolicy)
+        }
+        if concrete.storedConfiguration.tenancyPolicy.requireAuthenticatedOwnerOnMutations {
+            return concrete
+        }
+        return ModelCallScheduler.reconfigured(from: concrete, tenancyPolicy: tenancyPolicy)
+    }
+
     private static func factoryApplyingTenancyPolicy(
         _ factory: any ModelLLMFactoring,
         tenancyPolicy: TenancyPolicySettings
     ) -> any ModelLLMFactoring {
         guard var std = factory as? StandardModelLLMFactory else { return factory }
         std.tenancyPolicy = tenancyPolicy
+        if let budgetConfiguration = std.budgetConfiguration {
+            std.advanced.budget = budgetConfiguration.resolvedPolicy(tenancyPolicy: tenancyPolicy)
+        }
         return std
     }
 }

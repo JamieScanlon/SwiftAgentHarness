@@ -301,6 +301,55 @@ struct ContextProjectionServiceTests {
         #expect(await counter.callCount == 4)
     }
 
+    @Test("recordProjectionApplyMetrics increments staleProjectionDropCount when frontier lags")
+    func recordProjectionApplyMetricsIncrementsOnStaleFrontier() async throws {
+        let container = try makeContainer()
+        let deps = makeDependencies(container: container)
+        let service = await makeService(deps: deps, lastPromptTokens: nil, lastContextLimitTokens: nil)
+        let emptyMetrics = ConversationProjection.ProjectionMetrics(
+            causalityRejectedSummaryCount: 0,
+            overlapConflictResolvedCount: 0,
+            decodeRejectedSummaryCount: 0,
+            invalidStructuralSummaryCount: 0,
+            unsuccessfulSummarySkippedCount: 0,
+            deduplicatedSummaryEventCount: 0
+        )
+        await service.recordProjectionApplyMetrics(
+            metrics: emptyMetrics,
+            projectedFrontierEventID: 10,
+            currentFrontierEventID: 20
+        )
+        let metrics = await service.projectionHardeningMetrics()
+        #expect(metrics.staleProjectionDropCount == 1)
+    }
+
+    @Test("recordProjectionApplyMetrics leaves staleProjectionDropCount unchanged when frontier is current")
+    func recordProjectionApplyMetricsUnchangedOnCurrentFrontier() async throws {
+        let container = try makeContainer()
+        let deps = makeDependencies(container: container)
+        let service = await makeService(deps: deps, lastPromptTokens: nil, lastContextLimitTokens: nil)
+        let emptyMetrics = ConversationProjection.ProjectionMetrics(
+            causalityRejectedSummaryCount: 0,
+            overlapConflictResolvedCount: 0,
+            decodeRejectedSummaryCount: 0,
+            invalidStructuralSummaryCount: 0,
+            unsuccessfulSummarySkippedCount: 0,
+            deduplicatedSummaryEventCount: 0
+        )
+        await service.recordProjectionApplyMetrics(
+            metrics: emptyMetrics,
+            projectedFrontierEventID: 20,
+            currentFrontierEventID: 20
+        )
+        await service.recordProjectionApplyMetrics(
+            metrics: emptyMetrics,
+            projectedFrontierEventID: 25,
+            currentFrontierEventID: 20
+        )
+        let metrics = await service.projectionHardeningMetrics()
+        #expect(metrics.staleProjectionDropCount == 0)
+    }
+
     @Test("projectModelContextPreview returns projected messages without persisting checkpoints")
     func projectModelContextPreviewIsReadOnly() async throws {
         let container = try makeContainer()

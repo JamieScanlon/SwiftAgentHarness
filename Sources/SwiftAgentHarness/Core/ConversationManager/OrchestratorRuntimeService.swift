@@ -995,6 +995,7 @@ public actor OrchestratorRuntimeService {
             modelID: model.id,
             conversationID: conversationID,
             credentialKey: schedulerCredentialKey(for: providerBindings),
+            ownerAccountID: ownerAccountID,
             coordinator: deps.invocationCoordinator
         )
     }
@@ -1197,6 +1198,7 @@ public actor OrchestratorRuntimeService {
                 modelID: effectivePrimaryModel.id,
                 conversationID: activeConversationID,
                 credentialKey: credentialKey,
+                ownerAccountID: activeConversation?.ownerAccountID,
                 coordinator: deps.invocationCoordinator
             )
         }

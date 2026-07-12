@@ -24,7 +24,9 @@ protocol ContextCompactionSummarizing: Sendable {
         previousSummaryText: String?,
         providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID?,
+        conversationID: UUID?
     ) async throws -> [Message]
 }
 
@@ -38,7 +40,9 @@ extension ContextCompactionSummarizing {
         previousSummaryText _: String?,
         providerPreCompressNotes _: String?,
         summaryBudgetTokens _: Int,
-        maxOutputTokens _: Int
+        maxOutputTokens _: Int,
+        ownerAccountID _: UUID? = nil,
+        conversationID _: UUID? = nil
     ) async throws -> [Message] {
         try await summarizeMiddle(
             messages: messages,
@@ -101,14 +105,18 @@ public struct ContextCompactionLLMScheduling: Sendable {
 
 func wrapCompactionLLMForScheduling(
     _ base: any LLMProtocol,
-    scheduling: ContextCompactionLLMScheduling?
+    scheduling: ContextCompactionLLMScheduling?,
+    conversationID: UUID? = nil,
+    ownerAccountID: UUID? = nil
 ) -> any LLMProtocol {
     guard let scheduling else { return base }
     return SchedulingLLM(
         baseLLM: base,
         scheduler: scheduling.scheduler,
         modelID: scheduling.modelID,
-        priority: .background
+        conversationID: conversationID,
+        priority: .background,
+        ownerAccountID: ownerAccountID
     )
 }
 
@@ -213,7 +221,9 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
         previousSummaryText: String?,
         providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID? = nil,
+        conversationID: UUID? = nil
     ) async throws -> [Message] {
         do {
             return try await primary.summarizeMiddle(
@@ -225,7 +235,9 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 previousSummaryText: previousSummaryText,
                 providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
-                maxOutputTokens: maxOutputTokens
+                maxOutputTokens: maxOutputTokens,
+                ownerAccountID: ownerAccountID,
+                conversationID: conversationID
             )
         } catch {
             logger?.warning("[ContextCompactionProvider] primary summarizeMiddle failed; falling back: \(error)")
@@ -238,7 +250,9 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 previousSummaryText: previousSummaryText,
                 providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
-                maxOutputTokens: maxOutputTokens
+                maxOutputTokens: maxOutputTokens,
+                ownerAccountID: ownerAccountID,
+                conversationID: conversationID
             )
         }
     }
@@ -778,7 +792,9 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             previousSummaryText: input.compactionPreviousSummaryText,
             providerPreCompressNotes: input.compactionProviderPreCompressNotes,
             summaryBudgetTokens: summaryBudget,
-            maxOutputTokens: config.resolvedSummarizerMaxOutputTokens
+            maxOutputTokens: config.resolvedSummarizerMaxOutputTokens,
+            ownerAccountID: input.conversation.ownerAccountID,
+            conversationID: input.conversation.conversationID
         )
         return Self.validateCompactedMiddleMessages(raw, maxMessages: middleBudget)
     }
@@ -1072,10 +1088,15 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
         previousSummaryText: String?,
         providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID? = nil,
+        conversationID: UUID? = nil
     ) async throws -> [Message] {
         guard !messages.isEmpty else { return [] }
-        let llm = try await resolveLLM()
+        let llm = try await resolveLLM(
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
         // `workingMiddle` is recreated from the `messages` parameter on every call. We never store
         // it on `self`; subsequent invocations always start with the full incoming middle (state
         // hygiene invariant).
@@ -1338,8 +1359,11 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
         )
     }
 
-    private func resolveLLM() async throws -> any LLMProtocol {
-        if let llm {
+    private func resolveLLM(
+        conversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil
+    ) async throws -> any LLMProtocol {
+        if scheduling == nil, let llm {
             return llm
         }
         let prompt = try await SystemPrompt(
@@ -1357,8 +1381,15 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             systemPrompt: prompt,
             logger: logger
         )
-        let resolved = wrapCompactionLLMForScheduling(base, scheduling: scheduling)
-        llm = resolved
+        let resolved = wrapCompactionLLMForScheduling(
+            base,
+            scheduling: scheduling,
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
+        if scheduling == nil {
+            llm = resolved
+        }
         return resolved
     }
 
@@ -1436,7 +1467,10 @@ actor OllamaTurnSummarizer: TurnSummarizing {
         guard !turnMessages.isEmpty else {
             return TurnSummaryDecision(succeeded: false, summary: "")
         }
-        let llm = try await resolveLLM()
+        let llm = try await resolveLLM(
+            conversationID: conversation.conversationID,
+            ownerAccountID: conversation.ownerAccountID
+        )
         let transcript = turnMessages.enumerated().map { index, message in
             "[\(index)] role=\(message.role.rawValue) toolCallId=\(message.toolCallId ?? "nil")\n\(message.content)"
         }.joined(separator: "\n\n")
@@ -1482,8 +1516,11 @@ actor OllamaTurnSummarizer: TurnSummarizing {
         return try Self.decodeDecision(from: response.content)
     }
 
-    private func resolveLLM() async throws -> any LLMProtocol {
-        if let llm {
+    private func resolveLLM(
+        conversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil
+    ) async throws -> any LLMProtocol {
+        if scheduling == nil, let llm {
             return llm
         }
         let prompt = try await SystemPrompt(
@@ -1501,8 +1538,15 @@ actor OllamaTurnSummarizer: TurnSummarizing {
             systemPrompt: prompt,
             logger: logger
         )
-        let resolved = wrapCompactionLLMForScheduling(base, scheduling: scheduling)
-        llm = resolved
+        let resolved = wrapCompactionLLMForScheduling(
+            base,
+            scheduling: scheduling,
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
+        if scheduling == nil {
+            llm = resolved
+        }
         return resolved
     }
 

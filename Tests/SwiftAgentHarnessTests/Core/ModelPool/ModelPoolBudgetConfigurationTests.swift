@@ -42,6 +42,30 @@ struct ModelPoolBudgetConfigurationTests {
         #expect(fallback == .allowWhenUnknown)
     }
 
+    @Test("strict tenancy defaults per-account cap to per-conversation when unset")
+    func strictTenancyDefaultsPerAccountCap() {
+        let strict = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        let policy = ModelPoolBudgetConfiguration.safeDefaults.resolvedPolicy(tenancyPolicy: strict)
+        guard case .enabled(_, let perConversation, _, let perAccount, _) = policy else {
+            Issue.record("expected enabled policy")
+            return
+        }
+        #expect(perAccount == perConversation)
+    }
+
+    @Test("explicit per-account cap wins under strict tenancy")
+    func explicitPerAccountCapWins() {
+        let strict = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        var config = ModelPoolBudgetConfiguration.safeDefaults
+        config.maxUSDPerAccount = 25.0
+        let policy = config.resolvedPolicy(tenancyPolicy: strict)
+        guard case .enabled(_, _, _, let perAccount, _) = policy else {
+            Issue.record("expected enabled policy")
+            return
+        }
+        #expect(perAccount == 25.0)
+    }
+
     @Test("ServerConfig overrides apply on top of bundle config")
     func serverConfigOverrides() {
         let base = ModelPoolBudgetConfiguration.safeDefaults

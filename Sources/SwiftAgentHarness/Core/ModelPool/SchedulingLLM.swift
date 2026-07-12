@@ -16,6 +16,7 @@ struct SchedulingLLM: LLMProtocol {
     private let priority: ModelRequestPriority
     /// Optional stable scheduler credential key (for per-credential caps/token buckets).
     private let credentialKey: String?
+    private let ownerAccountID: UUID?
     private let coordinator: (any ModelInvocationLifecycleTracking)?
 
     init(
@@ -25,6 +26,7 @@ struct SchedulingLLM: LLMProtocol {
         conversationID: UUID? = nil,
         priority: ModelRequestPriority = .foreground,
         credentialKey: String? = nil,
+        ownerAccountID: UUID? = nil,
         coordinator: (any ModelInvocationLifecycleTracking)? = nil
     ) {
         self.baseLLM = baseLLM
@@ -33,6 +35,7 @@ struct SchedulingLLM: LLMProtocol {
         self.conversationID = conversationID
         self.priority = priority
         self.credentialKey = credentialKey
+        self.ownerAccountID = ownerAccountID
         self.coordinator = coordinator
     }
 
@@ -166,6 +169,7 @@ struct SchedulingLLM: LLMProtocol {
             modelID: modelID,
             priority: priority,
             conversationID: conversationID,
+            ownerAccountID: ownerAccountID,
             credentialKey: credentialKey,
             estimatedTotalTokens: estimatedTotalTokens
         )

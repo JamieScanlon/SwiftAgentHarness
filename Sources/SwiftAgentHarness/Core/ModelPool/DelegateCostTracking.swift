@@ -232,8 +232,10 @@ public actor ModelPoolCostLedger: DelegateCostTracking {
             }
         }
 
-        if let maxUSDPerAccount,
-           let resolvedAccountID {
+        if let maxUSDPerAccount {
+            guard let resolvedAccountID else {
+                throw LLMError.quotaExceeded
+            }
             let currentAccountSpend = spendForAccount(resolvedAccountID)
             if currentAccountSpend + projected > maxUSDPerAccount {
                 throw LLMError.quotaExceeded

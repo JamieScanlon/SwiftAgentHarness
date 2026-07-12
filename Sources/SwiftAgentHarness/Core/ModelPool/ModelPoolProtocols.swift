@@ -38,6 +38,7 @@ public struct ModelCallReservation: Sendable, Equatable {
     public var modelID: UUID
     public var priority: ModelRequestPriority
     public var conversationID: UUID?
+    public var ownerAccountID: UUID?
     public var credentialKey: String?
     public var estimatedTotalTokens: Int?
 
@@ -45,12 +46,14 @@ public struct ModelCallReservation: Sendable, Equatable {
         modelID: UUID,
         priority: ModelRequestPriority,
         conversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil,
         credentialKey: String? = nil,
         estimatedTotalTokens: Int? = nil
     ) {
         self.modelID = modelID
         self.priority = priority
         self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
         self.credentialKey = credentialKey
         self.estimatedTotalTokens = estimatedTotalTokens
     }
@@ -59,17 +62,20 @@ public struct ModelCallReservation: Sendable, Equatable {
 public struct ModelCallAcquisition: Sendable, Equatable {
     public var modelID: UUID
     public var credentialKey: String?
+    public var ownerScopeKey: String?
     public var reservedRequestUnits: Int
     public var reservedTokenUnits: Int
 
     public init(
         modelID: UUID,
         credentialKey: String? = nil,
+        ownerScopeKey: String? = nil,
         reservedRequestUnits: Int = 0,
         reservedTokenUnits: Int = 0
     ) {
         self.modelID = modelID
         self.credentialKey = credentialKey
+        self.ownerScopeKey = ownerScopeKey
         self.reservedRequestUnits = reservedRequestUnits
         self.reservedTokenUnits = reservedTokenUnits
     }

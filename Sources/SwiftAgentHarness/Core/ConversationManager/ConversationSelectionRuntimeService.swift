@@ -157,6 +157,10 @@ actor ConversationSelectionRuntimeService {
             return .runtimeLaneUnavailable(reason: "global_cron_lane_capacity_reached:\(limit)")
         case .parentFanoutExceeded(let limit):
             return .runtimeLaneUnavailable(reason: "parent_fanout_limit_reached:\(limit)")
+        case .perOwnerSubagentLaneAtCapacity(let limit):
+            return .runtimeLaneUnavailable(reason: "per_owner_subagent_lane_capacity_reached:\(limit)")
+        case .perOwnerSubagentFanoutExceeded(let limit):
+            return .runtimeLaneUnavailable(reason: "per_owner_subagent_fanout_limit_reached:\(limit)")
         }
     }
 

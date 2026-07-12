@@ -73,7 +73,8 @@ Memory manifest (headers only):
             baseLLM: base,
             scheduler: scheduler,
             modelID: Self.modelID(model: modelName, serverURL: serverURL),
-            priority: .background
+            priority: .background,
+            ownerAccountID: request.session.ownerAccountID
         )
         let response = try await llm.send([system, user], config: .harnessTagged(.memoryRecallSelector))
         return Self.parseFilenames(from: response.content, allowed: Set(request.manifestEntries.map(\.selectionKey)))

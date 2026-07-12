@@ -40,7 +40,9 @@ struct ContextCompactionTransformerTests {
             previousSummaryText: String?,
             providerPreCompressNotes: String?,
             summaryBudgetTokens _: Int,
-            maxOutputTokens _: Int
+            maxOutputTokens _: Int,
+            ownerAccountID _: UUID? = nil,
+            conversationID _: UUID? = nil
         ) async throws -> [Message] {
             capturedMessages = messages
             capturedPreviousSummaryText = previousSummaryText

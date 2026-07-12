@@ -51,6 +51,46 @@ struct RuntimeLaneCoordinatorTests {
         #expect(await coordinator.tryAcquireSubagentRun(parentRunID: parent, runID: UUID()) == .parentFanoutExceeded(limit: 2))
     }
 
+    @Test("per-owner subagent lane cap isolates owners")
+    func perOwnerSubagentLaneCap() async {
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let coordinator = RuntimeLaneCoordinator(
+            configuration: RuntimeLaneConfiguration(
+                sessionMaxConcurrentRuns: 1,
+                globalMainLaneLimit: 4,
+                globalSubagentLaneLimit: 8,
+                globalCronLaneLimit: 2,
+                maxChildrenPerAgent: 5,
+                perOwnerSubagentLaneLimit: 1
+            )
+        )
+        #expect(
+            await coordinator.tryAcquireSubagentRun(
+                parentRunID: nil,
+                parentConversationID: UUID(),
+                ownerAccountID: ownerA,
+                runID: UUID()
+            ) == nil
+        )
+        #expect(
+            await coordinator.tryAcquireSubagentRun(
+                parentRunID: nil,
+                parentConversationID: UUID(),
+                ownerAccountID: ownerA,
+                runID: UUID()
+            ) == .perOwnerSubagentLaneAtCapacity(limit: 1)
+        )
+        #expect(
+            await coordinator.tryAcquireSubagentRun(
+                parentRunID: nil,
+                parentConversationID: UUID(),
+                ownerAccountID: ownerB,
+                runID: UUID()
+            ) == nil
+        )
+    }
+
     @Test("parent conversation identity enforces fanout when parent run is absent")
     func subagentFanoutCapByParentConversationID() async {
         let coordinator = RuntimeLaneCoordinator(

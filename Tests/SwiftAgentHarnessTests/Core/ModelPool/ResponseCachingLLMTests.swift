@@ -152,11 +152,11 @@ struct ResponseCachingLLMTests {
         let modelID = UUID()
         let ownerA = UUID()
         let ownerB = UUID()
-        let scopeA = ResponseCacheOwnerScope.resolve(
+        let scopeA = ModelPoolOwnerScope.resolve(
             ownerAccountID: ownerA,
             tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
         )!
-        let scopeB = ResponseCacheOwnerScope.resolve(
+        let scopeB = ModelPoolOwnerScope.resolve(
             ownerAccountID: ownerB,
             tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
         )!
@@ -239,17 +239,17 @@ struct ResponseCachingLLMTests {
         #expect(await base.observedSendCalls() == 2)
     }
 
-    @Test("ResponseCacheOwnerScope produces distinct keys for different owners")
+    @Test("ModelPoolOwnerScope produces distinct keys for different owners")
     func ownerScopeResolverDistinctOwners() {
         let strict = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
         let ownerA = UUID()
         let ownerB = UUID()
-        let scopeA = ResponseCacheOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: strict)
-        let scopeB = ResponseCacheOwnerScope.resolve(ownerAccountID: ownerB, tenancyPolicy: strict)
+        let scopeA = ModelPoolOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: strict)
+        let scopeB = ModelPoolOwnerScope.resolve(ownerAccountID: ownerB, tenancyPolicy: strict)
         #expect(scopeA != scopeB)
         #expect(scopeA == AgentMemoryPathResolver.ownerSegment(ownerA))
-        #expect(ResponseCacheOwnerScope.resolve(ownerAccountID: nil, tenancyPolicy: strict) == nil)
-        #expect(ResponseCacheOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: .disabled) == "")
+        #expect(ModelPoolOwnerScope.resolve(ownerAccountID: nil, tenancyPolicy: strict) == nil)
+        #expect(ModelPoolOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: .disabled) == "")
     }
 }
 

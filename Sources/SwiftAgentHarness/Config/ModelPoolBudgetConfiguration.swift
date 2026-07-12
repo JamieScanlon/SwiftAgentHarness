@@ -121,7 +121,19 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
     }
 
     public func resolvedPolicy() -> BudgetPolicy {
+        resolvedPolicy(tenancyPolicy: .disabled)
+    }
+
+    public func resolvedPolicy(tenancyPolicy: TenancyPolicySettings) -> BudgetPolicy {
         guard enabled else { return .disabled }
+        let effectiveMaxUSDPerAccount: Double?
+        if let maxUSDPerAccount {
+            effectiveMaxUSDPerAccount = maxUSDPerAccount
+        } else if tenancyPolicy.requireAuthenticatedOwnerOnMutations {
+            effectiveMaxUSDPerAccount = maxUSDPerConversation
+        } else {
+            effectiveMaxUSDPerAccount = nil
+        }
         let fallback: BudgetPolicy.ProjectedCostFallback = denyWhenUnknownProjectedCost
             ? .denyWhenUnknown
             : .allowWhenUnknown
@@ -129,7 +141,7 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
             maxUSDPerCall: maxUSDPerCall,
             maxUSDPerConversation: maxUSDPerConversation,
             maxUSDGlobal: maxUSDGlobal,
-            maxUSDPerAccount: maxUSDPerAccount,
+            maxUSDPerAccount: effectiveMaxUSDPerAccount,
             projectedCostFallback: fallback
         )
     }

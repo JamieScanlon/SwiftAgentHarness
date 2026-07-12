@@ -105,6 +105,7 @@ public struct ContextCompactionIdentifierPreservationPolicy: Sendable {
 
 public struct ConversationTransformMetadata: Sendable {
     let conversationID: UUID
+    let ownerAccountID: UUID?
     let modelID: String
     let modelName: String
     let interactionMode: InteractionMode
@@ -115,6 +116,7 @@ public struct ConversationTransformMetadata: Sendable {
 
     init(
         conversationID: UUID,
+        ownerAccountID: UUID? = nil,
         modelID: String,
         modelName: String,
         interactionMode: InteractionMode,
@@ -124,6 +126,7 @@ public struct ConversationTransformMetadata: Sendable {
         metadata: JSON?
     ) {
         self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
         self.modelID = modelID
         self.modelName = modelName
         self.interactionMode = interactionMode
@@ -135,6 +138,7 @@ public struct ConversationTransformMetadata: Sendable {
 
     init(
         conversationID: UUID,
+        ownerAccountID: UUID? = nil,
         modelID: String,
         modelName: String,
         interactionMode: InteractionMode,
@@ -163,6 +167,7 @@ public struct ConversationTransformMetadata: Sendable {
         }
         self.init(
             conversationID: conversationID,
+            ownerAccountID: ownerAccountID,
             modelID: modelID,
             modelName: modelName,
             interactionMode: interactionMode,

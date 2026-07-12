@@ -50,14 +50,15 @@ struct DreamingControlStoreTests {
 
 @Suite("MemoryDreamingBridge")
 struct MemoryDreamingBridgeTests {
-    private func makeProjectsTree() throws -> (root: URL, projects: URL, memory: URL) {
+    private func makeProjectsTree() throws -> (root: URL, projects: URL, owners: URL, memory: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("dream-bridge-\(UUID().uuidString)", isDirectory: true)
         let projects = root.appendingPathComponent("projects", isDirectory: true)
+        let owners = root.appendingPathComponent("owners", isDirectory: true)
         let project = projects.appendingPathComponent("proj-a", isDirectory: true)
         let memory = project.appendingPathComponent("memory", isDirectory: true)
         try FileManager.default.createDirectory(at: memory, withIntermediateDirectories: true)
-        return (root, projects, memory)
+        return (root, projects, owners, memory)
     }
 
     @Test("disabled control store skips sweeps")
@@ -84,7 +85,8 @@ struct MemoryDreamingBridgeTests {
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: control,
-            projectsRoot: tree.projects
+            projectsRoot: tree.projects,
+            ownersRoot: tree.owners
         )
         let swept = try await bridge.runDueSweeps()
         #expect(swept == 0)
@@ -105,7 +107,8 @@ struct MemoryDreamingBridgeTests {
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: control,
-            projectsRoot: tree.projects
+            projectsRoot: tree.projects,
+            ownersRoot: tree.owners
         )
         let swept = try await bridge.runDueSweeps()
         #expect(swept == 0)
@@ -139,7 +142,8 @@ struct MemoryDreamingBridgeTests {
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: control,
-            projectsRoot: tree.projects
+            projectsRoot: tree.projects,
+            ownersRoot: tree.owners
         )
         let swept = try await bridge.runDueSweeps()
         #expect(swept == 1)
@@ -162,7 +166,8 @@ struct MemoryDreamingBridgeTests {
         let bridge = MemoryDreamingBridge(
             config: config,
             controlStore: DreamingControlStore(rootDirectory: root),
-            projectsRoot: projects
+            projectsRoot: projects,
+            ownersRoot: root.appendingPathComponent("owners", isDirectory: true)
         )
         let swept = try await bridge.runDueSweeps()
         #expect(swept == 0)
@@ -330,7 +335,8 @@ struct MemoryDreamingCronInstallerTests {
         let bridge = MemoryDreamingBridge(
             config: bridgeConfig,
             controlStore: control,
-            projectsRoot: projects
+            projectsRoot: projects,
+            ownersRoot: tmp.appendingPathComponent("owners", isDirectory: true)
         )
         let deliver = MemoryDreamingDeliver.wrap(dispatch: dispatch, bridge: bridge)
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))

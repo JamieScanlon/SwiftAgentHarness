@@ -15,6 +15,7 @@ actor RuntimeLaneSubAgentRunScheduler: SubAgentRunScheduling {
         if let admission = await runtimeLaneCoordinator.tryAcquireSubagentRun(
             parentRunID: reservation.parentRunID,
             parentConversationID: reservation.parentConversationID,
+            ownerAccountID: reservation.ownerAccountID,
             runID: runID,
             sessionKey: sessionKey
         ) {

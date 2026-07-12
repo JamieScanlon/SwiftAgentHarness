@@ -1,3 +1,5 @@
+// Integration tests for conversation replay through HarnessRuntimeSession.
+// TODO: Move this suite to a dedicated `SwiftAgentHarnessIntegrationTests` target (see docs/process/replay-projection-unit-test-gaps.md).
 import EasyJSON
 import Foundation
 import SwiftData
@@ -42,8 +44,8 @@ private actor StreamCountCollector {
     }
 }
 
-@Suite("HarnessRuntimeSession replay processing", .serialized, .timeLimit(.minutes(2)))
-struct HarnessRuntimeSessionReplayProcessingTests {
+@Suite("HarnessRuntimeSession replay processing integration", .serialized, .timeLimit(.minutes(2)))
+struct HarnessRuntimeSessionReplayProcessingIntegrationTests {
     /// Compaction disabled so token-based gating does not skip `transformContext` on short replay transcripts.
     private func replayTransformConfig() -> ConversationTransformConfiguration {
         let d = ConversationTransformConfiguration.default
@@ -256,6 +258,8 @@ struct HarnessRuntimeSessionReplayProcessingTests {
 
     @Test("replay stream drives projection without stale drops under churn")
     func replayStreamProjectionStableUnderChurn() async throws {
+        // Integration: exercises replay → append → projection refresh → message-stream publish under bulk churn.
+        // Unit coverage for individual steps is tracked in docs/process/replay-projection-unit-test-gaps.md.
         let fixture = try HarnessConversationTestFixtures.makeInMemoryHarnessRuntimeHost()
         let model = makeModel()
         let conversationID = try await seedBulkReplayConversation(

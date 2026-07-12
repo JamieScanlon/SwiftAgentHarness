@@ -171,6 +171,26 @@ struct DelegateCostLedgerTests {
         }
     }
 
+    @Test("authorize denies when per-account cap is set but account is unresolved")
+    func authorizeDeniesWithoutAccountWhenPerAccountCapSet() async {
+        let ledger = DelegateCostLedger()
+        let policy: BudgetPolicy = .enabled(
+            maxUSDPerCall: nil,
+            maxUSDPerConversation: nil,
+            maxUSDGlobal: nil,
+            maxUSDPerAccount: 0.05
+        )
+        await #expect(throws: LLMError.self) {
+            try await ledger.authorize(
+                policy: policy,
+                modelID: UUID(),
+                conversationID: UUID(),
+                accountID: nil,
+                projectedCostUSD: 0.01
+            )
+        }
+    }
+
     @Test("denyWhenUnknown rejects authorize when projected cost is nil")
     func denyUnknownProjection() async {
         let ledger = DelegateCostLedger()

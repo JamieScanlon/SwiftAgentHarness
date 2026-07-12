@@ -173,9 +173,11 @@ public actor SubAgentSpawnService {
             }
         }
         let parentRunID = await deps.persistenceDomain.modelConversation(id: parentConversationID)?.currentRunID
+        let parentOwnerAccountID = await deps.persistenceDomain.modelConversation(id: parentConversationID)?.ownerAccountID
         let reservation = SubAgentRunReservation(
             parentConversationID: parentConversationID,
             parentRunID: parentRunID,
+            ownerAccountID: parentOwnerAccountID,
             lifecycleID: lifecycleID,
             priority: .foreground
         )

@@ -2,23 +2,6 @@ import CryptoKit
 import Foundation
 import SwiftAgentKit
 
-enum ResponseCacheOwnerScope {
-    /// Returns `nil` when strict tenancy requires an owner but none is present (cache bypass).
-    /// Returns `""` when tenancy is off (legacy shared cache partition).
-    static func resolve(
-        ownerAccountID: UUID?,
-        tenancyPolicy: TenancyPolicySettings
-    ) -> String? {
-        guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else {
-            return ""
-        }
-        guard let ownerAccountID else {
-            return nil
-        }
-        return AgentMemoryPathResolver.ownerSegment(ownerAccountID)
-    }
-}
-
 struct ResponseCacheKey: Hashable, Sendable {
     let ownerScopeKey: String
     let modelID: UUID

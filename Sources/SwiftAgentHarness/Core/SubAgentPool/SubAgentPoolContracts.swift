@@ -553,17 +553,20 @@ enum SubAgentRequestPriority: Sendable, Equatable {
 struct SubAgentRunReservation: Sendable, Equatable {
     var parentConversationID: UUID
     var parentRunID: UUID?
+    var ownerAccountID: UUID?
     var lifecycleID: String
     var priority: SubAgentRequestPriority
 
     init(
         parentConversationID: UUID,
         parentRunID: UUID? = nil,
+        ownerAccountID: UUID? = nil,
         lifecycleID: String,
         priority: SubAgentRequestPriority = .foreground
     ) {
         self.parentConversationID = parentConversationID
         self.parentRunID = parentRunID
+        self.ownerAccountID = ownerAccountID
         self.lifecycleID = lifecycleID
         self.priority = priority
     }
