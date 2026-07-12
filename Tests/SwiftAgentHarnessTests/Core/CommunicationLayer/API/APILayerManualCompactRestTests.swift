@@ -113,6 +113,9 @@ struct APILayerManualCompactRestTests {
                 req.body = .init(string: "{}")
             }, afterResponse: { res async throws in
                 #expect(res.status == .forbidden)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(json?["type"] as? String == "error")
+                #expect((json?["message"] as? String)?.isEmpty == false)
             })
         }
     }
@@ -143,6 +146,9 @@ struct APILayerManualCompactRestTests {
                 req.body = .init(string: "{}")
             }, afterResponse: { res async throws in
                 #expect(res.status == .unauthorized)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(json?["type"] as? String == "error")
+                #expect((json?["message"] as? String)?.isEmpty == false)
             })
         }
     }
@@ -169,6 +175,9 @@ struct APILayerManualCompactRestTests {
                 req.body = .init(string: "{}")
             }, afterResponse: { res async throws in
                 #expect(res.status == .badRequest)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(json?["type"] as? String == "error")
+                #expect((json?["message"] as? String)?.contains("Invalid conversation ID") == true)
             })
         }
     }

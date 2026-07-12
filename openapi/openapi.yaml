@@ -540,10 +540,40 @@ paths:
                 $ref: "#/components/schemas/WireJSONObject"
         "401":
           description: Missing/invalid preview token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Preview route enabled but no token configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "400":
+          description: Invalid conversation id or request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Route disabled or not found
+          description: Route disabled, unknown conversation, or not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "501":
           description: Not implemented on provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /conversations/{id}/compact:
     post:
@@ -567,8 +597,40 @@ paths:
                 $ref: "#/components/schemas/WireJSONObject"
         "401":
           description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Manual compaction enabled but no preview token configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "400":
+          description: Invalid conversation id or request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Disabled
+          description: Disabled or unknown conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: Not implemented on provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /conversations/{id}/server-metadata:
     get:

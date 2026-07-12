@@ -177,4 +177,34 @@ struct APILayerSubAgentsRouteTests {
         #expect(cancelled?.error == "cancelled_by_operator")
     }
 
+    @Test("POST cancel with unknown lifecycle id returns typed error envelope")
+    func cancelUnknownLifecycleIDReturnsErrorEnvelope() async throws {
+        let container = try APILayerRESTRouteTestSupport.makeContainer()
+        let model = APILayerRESTRouteTestSupport.makeTestModel()
+        let runtimeSession = APILayerRESTRouteTestSupport.makeChatManager(container: container)
+        try await runtimeSession.createConversation(with: model, userSystemPrompt: "parent-cancel-missing")
+        guard let parentID = await runtimeSession.currentConversationID else {
+            Issue.record("Expected parent conversation")
+            return
+        }
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: APILayerRESTStubModelProvider(models: [model]))
+            try await app.testing().test(
+                .POST,
+                "/api/conversations/\(parentID.uuidString)/sub-agents/missing-lifecycle-id/cancel",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifMatch, value: "\"conv-v1\"")
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notFound)
+                    let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    #expect(json?["type"] as? String == "error")
+                    #expect((json?["message"] as? String)?.contains("Sub-agent invocation not found") == true)
+                }
+            )
+        }
+    }
+
 }

@@ -22,7 +22,7 @@ This document describes the **public wire contract** between a harness client an
 - **JSON:** REST bodies and WebSocket text frames use JSON.
 - **Dates (REST):** **`GET /api/conversations/:id`** and several other REST payloads encode `Date` fields with `JSONEncoder.dateEncodingStrategy = .iso8601` (ISO-8601 strings). **`GET /api/conversations`** (list) may still use Vapor defaults for some nested shapes—mirror a known-good client decoder or capture a response when in doubt.
 - **UUIDs:** Conversation and model IDs are UUID strings unless noted.
-- **Errors:** Many REST failure paths return a small JSON object `{"type":"error","message":"..."}` with a 4xx status. Some routes (notably compaction preview/compact auth failures) return plain text bodies instead. WebSocket control-plane errors use `{"kind":"error","message":"..."}`.
+- **Errors:** REST failure paths return a small JSON object `{"type":"error","message":"..."}` (`ErrorEnvelope` in OpenAPI) with an appropriate 4xx/5xx status and `Content-Type: application/json`. WebSocket control-plane errors use `{"kind":"error","message":"..."}`.
 - **HTTP preconditions:** Key reads emit `ETag` and honor `If-None-Match` (**304** on match). Guarded mutations accept optional `If-Match` (conversation control-plane revision); mismatches return **412**, and strict precondition mode returns **428** when a required `If-Match` is missing.
 - **Session semantics:** Conversation-scoped routes are explicit-id based; no REST/WS “select conversation” control-plane operation exists.
 - **Authentication (strict tenancy):** When `ServerConfig.requireAuthenticatedTenantOnAPI` is true, mutating routes and tenant-scoped WS subscribe checks require **`Authorization: Bearer <JWT>`** (HS256; `sub` = owner account UUID). Configure `ServerConfig.apiAccessTokenHS256Secret` (and optional `apiAccessTokenIssuer` / `apiAccessTokenAudience`). `APILayer.start()` refuses to boot strict tenancy without a configured secret. **`X-SAH-Authenticated-Owner` is not trusted.** Reverse proxies must strip client-supplied `Authorization` and inject a validated harness JWT. Strict tenancy scopes API and topic access by owner; it does **not** isolate the process, tool execution environment, or on-disk persistence — see [COMMUNICATION_POLICY.md § Strict tenancy scope](../COMMUNICATION_POLICY.md#strict-tenancy-scope-authorization-not-isolation).
@@ -169,7 +169,7 @@ Unlike preview, this endpoint **mutates server state**: a successful run writes 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/conversations/:id/plan` | **200** `{"markdown":<String>}` when readable. Invalid `:id` → **400** (plain text body). Missing/unreadable plan → **404** + error JSON. |
+| GET | `/api/conversations/:id/plan` | **200** `{"markdown":<String>}` when readable. Invalid `:id` → **400** + error JSON. Missing/unreadable plan → **404** + error JSON. |
 | GET | `/api/conversations/:id/slash-commands` | **200** `[SlashCommandAutocompleteEntry]` for the conversation context. |
 
 ### Conversation control, runs, and artifacts

@@ -30,6 +30,7 @@ struct TriggerEmbeddedLoopbackTests {
   @Test("HarnessTriggerRuntimeAdapter falls back to runtime gateway when transport unset")
   func triggerAdapterUsesRuntimeFallback() async throws {
     await HarnessMutationTransportHolder.shared.setTransport(nil)
+    #expect(await HarnessMutationTransportHolder.shared.currentTransport() == nil)
     let container = try HarnessTestModelContainer.makeInMemory()
     let model = Model(
       protocol: .openAIAPI,
@@ -60,5 +61,6 @@ struct TriggerEmbeddedLoopbackTests {
 
     let messages = try await runtimeSession.listMessages(conversationID: conversationID)
     #expect(messages.contains(where: { $0.role == .user && $0.content.contains("trigger body") }))
+    await HarnessMutationTransportHolder.shared.setTransport(nil)
   }
 }

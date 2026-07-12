@@ -5,6 +5,25 @@ import Logging
 import SwiftAgentKit
 import Vapor
 
+/// Canonical REST failure envelope: `{"type":"error","message":"..."}` (`ErrorEnvelope` in OpenAPI).
+enum APILayerRESTErrorResponse {
+    private struct Body: Encodable {
+        var type: String = "error"
+        var message: String
+    }
+
+    static func error(status: HTTPStatus, message: String) -> Response {
+        let data = (try? JSONEncoder().encode(Body(message: message))) ?? Data()
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "application/json")
+        return Response(status: status, headers: headers, body: .init(data: data))
+    }
+
+    static func invalidConversationID() -> Response {
+        error(status: .badRequest, message: "Invalid conversation ID")
+    }
+}
+
 protocol APILayerRESTConflictRepresenting: Error {
     var apiLayerRESTConflictBody: Data? { get }
 }
