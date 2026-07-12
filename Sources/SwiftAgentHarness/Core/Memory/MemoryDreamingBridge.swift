@@ -9,6 +9,7 @@ struct MemoryDreamingBridge: Sendable {
     let config: MemoryConfiguration
     let controlStore: DreamingControlStore
     let projectsRoot: URL
+    let ownersRoot: URL
     let logger: Logger?
     let now: @Sendable () -> Date
 
@@ -16,13 +17,17 @@ struct MemoryDreamingBridge: Sendable {
         config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
         controlStore: DreamingControlStore = DreamingControlStore(),
         projectsRoot: URL? = nil,
+        ownersRoot: URL? = nil,
         logger: Logger? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        let configHome = MemoryConfigHome.resolve()
         self.config = config
         self.controlStore = controlStore
         self.projectsRoot = projectsRoot
-            ?? MemoryConfigHome.resolve().appendingPathComponent("projects", isDirectory: true)
+            ?? configHome.appendingPathComponent("projects", isDirectory: true)
+        self.ownersRoot = ownersRoot
+            ?? configHome.appendingPathComponent("owners", isDirectory: true)
         self.logger = logger
         self.now = now
     }
@@ -46,7 +51,7 @@ struct MemoryDreamingBridge: Sendable {
         }
         let dirs = discoverMemoryDirectories()
         guard !dirs.isEmpty else {
-            logger?.info("[Dreaming] no project memory directories under \(projectsRoot.path)")
+            logger?.info("[Dreaming] no project memory directories under \(projectsRoot.path) or \(ownersRoot.path)")
             return 0
         }
         let scheduler = DreamingConsolidationScheduler(config: config, logger: logger, now: now)
@@ -64,10 +69,42 @@ struct MemoryDreamingBridge: Sendable {
     }
 
     func discoverMemoryDirectories() -> [URL] {
+        var results: [URL] = []
+        results.append(contentsOf: discoverLegacyProjectMemoryDirectories())
+        results.append(contentsOf: discoverOwnerScopedMemoryDirectories())
+        return results.sorted { $0.path < $1.path }
+    }
+
+    private func discoverLegacyProjectMemoryDirectories() -> [URL] {
+        discoverMemoryUnderProjectsRoot(projectsRoot)
+    }
+
+    private func discoverOwnerScopedMemoryDirectories() -> [URL] {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: projectsRoot.path),
+        guard fm.fileExists(atPath: ownersRoot.path),
+              let owners = try? fm.contentsOfDirectory(
+                  at: ownersRoot,
+                  includingPropertiesForKeys: [.isDirectoryKey],
+                  options: [.skipsHiddenFiles]
+              )
+        else {
+            return []
+        }
+        var results: [URL] = []
+        for owner in owners {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: owner.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let ownerProjects = owner.appendingPathComponent("projects", isDirectory: true)
+            results.append(contentsOf: discoverMemoryUnderProjectsRoot(ownerProjects))
+        }
+        return results
+    }
+
+    private func discoverMemoryUnderProjectsRoot(_ root: URL) -> [URL] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path),
               let projects = try? fm.contentsOfDirectory(
-                  at: projectsRoot,
+                  at: root,
                   includingPropertiesForKeys: [.isDirectoryKey],
                   options: [.skipsHiddenFiles]
               )
@@ -83,7 +120,7 @@ struct MemoryDreamingBridge: Sendable {
             guard directoryLooksLikeMemory(memoryDir) else { continue }
             results.append(memoryDir)
         }
-        return results.sorted { $0.path < $1.path }
+        return results
     }
 
     private func directoryLooksLikeMemory(_ memoryDir: URL) -> Bool {

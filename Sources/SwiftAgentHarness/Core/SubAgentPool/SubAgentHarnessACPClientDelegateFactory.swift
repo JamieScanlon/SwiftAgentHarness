@@ -27,7 +27,8 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
         if let memoryService,
            let context = try? memoryService.makeSessionContext(
             conversationID: conversation.id,
-            cwd: workspaceRoot
+            cwd: workspaceRoot,
+            ownerAccountID: conversation.ownerAccountID
            ) {
             memoryDirectory = context.memoryDirectory
             userMemoryDirectory = context.userMemoryDirectory

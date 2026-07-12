@@ -901,7 +901,11 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         guard generation == 0 else { return }
         let cwd = conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
         do {
-            let context = try memoryService.makeSessionContext(conversationID: conversation.id, cwd: cwd)
+            let context = try memoryService.makeSessionContext(
+                conversationID: conversation.id,
+                cwd: cwd,
+                ownerAccountID: conversation.ownerAccountID
+            )
             _ = try await memoryService.bootstrapSession(context: context)
         } catch {
             logger?.error("[ContextEngine] memory bootstrap failed conversation=\(conversation.id): \(error)")

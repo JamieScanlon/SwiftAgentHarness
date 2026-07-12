@@ -65,6 +65,10 @@ extension SlashCommandDispatchService {
         else {
             return nil
         }
-        return try? memoryService.makeSessionContext(conversationID: conversationID, cwd: cwd).memoryDirectory
+        return try? memoryService.makeSessionContext(
+            conversationID: conversationID,
+            cwd: cwd,
+            ownerAccountID: conv.ownerAccountID
+        ).memoryDirectory
     }
 }

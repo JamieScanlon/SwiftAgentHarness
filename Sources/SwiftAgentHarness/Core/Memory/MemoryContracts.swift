@@ -15,6 +15,7 @@ struct MemorySessionContext: Sendable, Equatable {
     let userMemoryDirectory: URL
     let chatType: MemoryChatType
     let agentID: String?
+    let ownerAccountID: UUID?
 
     init(
         conversationID: UUID,
@@ -23,7 +24,8 @@ struct MemorySessionContext: Sendable, Equatable {
         memoryDirectory: URL,
         userMemoryDirectory: URL? = nil,
         chatType: MemoryChatType = .direct,
-        agentID: String? = nil
+        agentID: String? = nil,
+        ownerAccountID: UUID? = nil
     ) {
         self.conversationID = conversationID
         self.cwd = cwd
@@ -38,6 +40,7 @@ struct MemorySessionContext: Sendable, Equatable {
         }
         self.chatType = chatType
         self.agentID = agentID
+        self.ownerAccountID = ownerAccountID
     }
 }
 
@@ -278,4 +281,5 @@ enum MemoryPathValidationError: Error, Equatable {
     case nullByte
     case unsafeTildeExpansion
     case invalidPath(String)
+    case ownerAccountIDRequiredUnderStrictTenancy
 }

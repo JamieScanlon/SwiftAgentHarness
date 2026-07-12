@@ -367,7 +367,8 @@ public actor HarnessRuntimeSession {
         let memoryService = DefaultMemoryService(
             config: memoryConfig,
             logger: logger,
-            llmRecallSelector: memoryRecallSelector
+            llmRecallSelector: memoryRecallSelector,
+            tenancyPolicy: tenancyPolicy
         )
         let systemPromptSkillLoaderBridge = SystemPromptSkillLoaderBridge()
         let systemPromptAssemblyRenderer = DefaultSystemPromptAssemblyRenderer(

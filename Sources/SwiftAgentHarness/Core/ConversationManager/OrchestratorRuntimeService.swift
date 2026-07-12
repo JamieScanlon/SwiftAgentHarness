@@ -615,7 +615,11 @@ public actor OrchestratorRuntimeService {
             var memoryDirectory: URL?
             var userMemoryDirectory: URL?
             if let memoryService, let conv = activeConversation,
-               let context = try? memoryService.makeSessionContext(conversationID: conv.id, cwd: workspaceRoot) {
+               let context = try? memoryService.makeSessionContext(
+                   conversationID: conv.id,
+                   cwd: workspaceRoot,
+                   ownerAccountID: conv.ownerAccountID
+               ) {
                 memoryDirectory = context.memoryDirectory
                 userMemoryDirectory = context.userMemoryDirectory
             }

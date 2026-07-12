@@ -166,7 +166,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     private var extractionRunner: MemoryExtractionRunning?
     private var sessionByConversation: [UUID: MemorySessionContext] = [:]
     private var storeByConversation: [UUID: AgentMemoryStore] = [:]
-    private var userStore: AgentMemoryStore?
+    private var userStoreByDirectory: [String: AgentMemoryStore] = [:]
 
     init(
         config: MemoryConfiguration,
@@ -192,15 +192,31 @@ actor FileStoreMemoryBackend: MemoryRuntime {
         let store = AgentMemoryStore(memoryDirectory: context.memoryDirectory)
         try store.ensureLayout()
         storeByConversation[context.conversationID] = store
-        if userStore == nil {
-            let sharedUserStore = AgentMemoryStore(
-                memoryDirectory: context.userMemoryDirectory,
-                indexCapProfile: .user
-            )
-            try sharedUserStore.ensureLayout()
-            userStore = sharedUserStore
-        }
+        try ensureUserStore(for: context.userMemoryDirectory)
         Task { await self.activeMemory.warmStanding(session: context) }
+    }
+
+    private func userStoreDirectoryKey(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    private func userStore(for context: MemorySessionContext) -> AgentMemoryStore? {
+        userStoreByDirectory[userStoreDirectoryKey(context.userMemoryDirectory)]
+    }
+
+    @discardableResult
+    private func ensureUserStore(for userMemoryDirectory: URL) throws -> AgentMemoryStore {
+        let key = userStoreDirectoryKey(userMemoryDirectory)
+        if let existing = userStoreByDirectory[key] {
+            return existing
+        }
+        let store = AgentMemoryStore(
+            memoryDirectory: userMemoryDirectory,
+            indexCapProfile: .user
+        )
+        try store.ensureLayout()
+        userStoreByDirectory[key] = store
+        return store
     }
 
     func endSession(conversationID: UUID) async {
@@ -227,7 +243,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
             guard let resolved = MemoryRecallSelectionResolver.resolve(
                 selectionKey: selectionKey,
                 projectStore: projectStore,
-                userStore: userStore
+                userStore: userStore(for: session)
             ),
                   let body = try resolved.store.readTopicBody(filename: resolved.filename) else {
                 continue
@@ -270,8 +286,14 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     }
 
     func manifestEntries(conversationID: UUID) async -> [MemoryManifestEntry] {
-        MemoryManifestAggregator.combinedEntries(
-            userStore: userStore,
+        let sessionUserStore: AgentMemoryStore?
+        if let session = sessionByConversation[conversationID] {
+            sessionUserStore = userStore(for: session)
+        } else {
+            sessionUserStore = nil
+        }
+        return MemoryManifestAggregator.combinedEntries(
+            userStore: sessionUserStore,
             projectStore: storeByConversation[conversationID]
         )
     }
@@ -313,7 +335,7 @@ actor FileStoreMemoryBackend: MemoryRuntime {
     }
 
     func userTierStore() async -> AgentMemoryStore? {
-        userStore
+        nil
     }
 
     func sessionContext(for conversationID: UUID) async -> MemorySessionContext? {

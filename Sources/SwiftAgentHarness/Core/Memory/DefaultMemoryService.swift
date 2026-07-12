@@ -14,25 +14,35 @@ public actor DefaultMemoryService: MemoryServicing {
     private var preCompactionFlushDedupeByConversation: [UUID: PreCompactionFlushDedupeState] = [:]
     private var preCompactionFlushWriteGuardByConversation: [UUID: PreCompactionFlushWriteGuard.Policy] = [:]
     private let userConfigDir: URL
+    private let tenancyPolicy: TenancyPolicySettings
 
     public init(
         config: MemoryConfiguration,
         logger: Logger? = nil,
-        userConfigDir: URL? = nil
+        userConfigDir: URL? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
-        self.init(config: config, logger: logger, userConfigDir: userConfigDir, llmRecallSelector: nil)
+        self.init(
+            config: config,
+            logger: logger,
+            userConfigDir: userConfigDir,
+            llmRecallSelector: nil,
+            tenancyPolicy: tenancyPolicy
+        )
     }
 
     init(
         config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
         logger: Logger? = nil,
         userConfigDir: URL? = nil,
-        llmRecallSelector: MemoryLLMRecallSelecting? = nil
+        llmRecallSelector: MemoryLLMRecallSelecting? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.config = config
         self.logger = logger
         self.writeTracker = MemoryWriteTracker()
         self.userConfigDir = userConfigDir ?? MemoryConfigHome.resolve().appendingPathComponent("user", isDirectory: true)
+        self.tenancyPolicy = tenancyPolicy
         let factory = FileStoreMemoryCapabilityFactory.makeDefault(
             config: config,
             logger: logger,
@@ -465,17 +475,31 @@ public actor DefaultMemoryService: MemoryServicing {
         try await capability.runtime.runDreamingSweep(memoryDirectory: context.memoryDirectory, rollback: rollback)
     }
 
-    nonisolated func makeSessionContext(conversationID: UUID, cwd: String, chatType: MemoryChatType = .direct) throws -> MemorySessionContext {
+    nonisolated func makeSessionContext(
+        conversationID: UUID,
+        cwd: String,
+        ownerAccountID: UUID? = nil,
+        chatType: MemoryChatType = .direct
+    ) throws -> MemorySessionContext {
         let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
-        let memoryDir = try AgentMemoryPathResolver.resolveMemoryDirectory(canonicalGitRoot: gitRoot, cwd: cwd)
-        let userMemoryDir = try AgentMemoryPathResolver.resolveUserMemoryDirectory()
+        let memoryDir = try AgentMemoryPathResolver.resolveMemoryDirectory(
+            canonicalGitRoot: gitRoot,
+            cwd: cwd,
+            ownerAccountID: ownerAccountID,
+            tenancyPolicy: tenancyPolicy
+        )
+        let userMemoryDir = try AgentMemoryPathResolver.resolveUserMemoryDirectory(
+            ownerAccountID: ownerAccountID,
+            tenancyPolicy: tenancyPolicy
+        )
         return MemorySessionContext(
             conversationID: conversationID,
             cwd: cwd,
             canonicalGitRoot: gitRoot,
             memoryDirectory: memoryDir,
             userMemoryDirectory: userMemoryDir,
-            chatType: chatType
+            chatType: chatType,
+            ownerAccountID: ownerAccountID
         )
     }
 
