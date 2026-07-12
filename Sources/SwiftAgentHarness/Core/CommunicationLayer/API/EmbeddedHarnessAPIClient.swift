@@ -1,17 +1,16 @@
 import Foundation
 import NIOCore
 import Vapor
-import VaporTesting
 
 struct EmbeddedLoopbackHTTPResponse: Sendable {
     var status: HTTPResponseStatus
     var headers: HTTPHeaders
     var body: ByteBuffer
 
-    init(testingResponse: TestingHTTPResponse) {
-        status = testingResponse.status
-        headers = testingResponse.headers
-        body = testingResponse.body
+    init(status: HTTPResponseStatus, headers: HTTPHeaders, body: ByteBuffer) {
+        self.status = status
+        self.headers = headers
+        self.body = body
     }
 }
 
@@ -31,26 +30,20 @@ public actor EmbeddedHarnessAPIClient: HarnessMutationTransporting {
         body: ByteBuffer? = nil
     ) async throws -> EmbeddedLoopbackHTTPResponse {
         let normalizedPath = Self.normalizeAPIPath(path)
-        var captured: EmbeddedLoopbackHTTPResponse?
-        try await app.testing().test(method, normalizedPath, beforeRequest: { req in
-            var headers = additionalHeaders
-            if let namespace = session.connectionNamespace {
-                headers.replaceOrAdd(name: "X-SAH-Client-Session", value: namespace.uuidString)
-            }
-            if let authorization = session.authorizationHeader {
-                headers.replaceOrAdd(name: .authorization, value: authorization)
-            }
-            req.headers = headers
-            if let body {
-                req.body = .init(buffer: body)
-            }
-        }, afterResponse: { response in
-            captured = EmbeddedLoopbackHTTPResponse(testingResponse: response)
-        })
-        guard let captured else {
-            throw HarnessMutationTransportError.invalidResponse
+        var headers = additionalHeaders
+        if let namespace = session.connectionNamespace {
+            headers.replaceOrAdd(name: "X-SAH-Client-Session", value: namespace.uuidString)
         }
-        return captured
+        if let authorization = session.authorizationHeader {
+            headers.replaceOrAdd(name: .authorization, value: authorization)
+        }
+        return try await EmbeddedHarnessInProcessHTTP.perform(
+            app: app,
+            method: method,
+            path: normalizedPath,
+            headers: headers,
+            body: body ?? ByteBufferAllocator().buffer(capacity: 0)
+        )
     }
 
     public func createConversation(

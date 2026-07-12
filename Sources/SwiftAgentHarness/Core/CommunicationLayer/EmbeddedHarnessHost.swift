@@ -72,7 +72,6 @@ public struct EmbeddedHarnessHost: Sendable {
 
         let app = try await apiLayer.makeEmbeddedApplication()
         let apiClient = EmbeddedHarnessAPIClient(app: app)
-        await HarnessMutationTransportHolder.shared.setTransport(apiClient)
 
         return EmbeddedHarnessHost(
             runtimeSession: runtimeSession,
@@ -84,6 +83,11 @@ public struct EmbeddedHarnessHost: Sendable {
                 authorizationHeader: authorizationHeader
             )
         )
+    }
+
+    /// Wires this host's loopback client into ``HarnessMutationTransportHolder`` for trigger / CLI mutation paths.
+    public func registerMutationTransportWithGlobalHolder() async {
+        await HarnessMutationTransportHolder.shared.setTransport(apiClient)
     }
 
     public func shutdown() async throws {
