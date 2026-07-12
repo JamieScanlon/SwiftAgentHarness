@@ -5,9 +5,14 @@ import SwiftAgentKit
 
 struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
     private let runtime: any APILayerChatRuntimeManaging
+    private let session: EmbeddedHarnessAPISession
 
-    init(runtime: any APILayerChatRuntimeManaging) {
+    init(
+        runtime: any APILayerChatRuntimeManaging,
+        session: EmbeddedHarnessAPISession = EmbeddedHarnessAPISession()
+    ) {
         self.runtime = runtime
+        self.session = session
     }
 
     func dispatchTriggerMessage(
@@ -21,18 +26,18 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         originSurface: String?,
         originSenderID: String?
     ) async throws {
-        _ = try await runtime.apiSendMessageAndStreamResponse(
+        try await HarnessEmbeddedMutation.dispatchTriggerMessage(
             conversationID: conversationID,
-            text,
-            images: [],
-            enableTools: enableTools,
-            enableAgents: enableAgents,
-            expectedPreviousTailHarnessMessageID: nil,
+            text: text,
+            systemReminder: systemReminder,
             inputTrustRaw: inputTrustRaw,
             resolvedInputTrustClass: resolvedInputTrustClass,
-            systemReminder: systemReminder,
+            enableTools: enableTools,
+            enableAgents: enableAgents,
             originSurface: originSurface,
-            originSenderID: originSenderID
+            originSenderID: originSenderID,
+            session: session,
+            fallbackRuntime: runtime
         )
     }
 }

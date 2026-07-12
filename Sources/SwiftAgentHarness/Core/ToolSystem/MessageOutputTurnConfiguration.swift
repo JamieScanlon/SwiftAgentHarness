@@ -48,10 +48,12 @@ enum MessageOutputTurnConfiguration {
         expectedPreviousTailHarnessMessageID: UUID?,
         inputTrustRaw: String?,
         resolvedInputTrustClass: TrustPolicyClass?,
+        originSurface: String? = nil,
         originSenderID: String? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
     ) -> AgentRuntimeTurnConfiguration {
-        forInteractiveSend(
+        let surface = originSurface?.isEmpty == false ? originSurface! : InteractiveSurfaceID.rest
+        return forInteractiveSend(
             base: AgentRuntimeTurnConfiguration(
                 enableTools: enableTools,
                 enableAgents: enableAgents,
@@ -59,7 +61,7 @@ enum MessageOutputTurnConfiguration {
                 inputTrustRaw: inputTrustRaw,
                 resolvedInputTrustClass: resolvedInputTrustClass
             ),
-            originSurface: InteractiveSurfaceID.rest,
+            originSurface: surface,
             originSenderID: originSenderID,
             harness: harness
         )

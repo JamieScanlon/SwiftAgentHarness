@@ -37,6 +37,8 @@ let package = Package(
                 .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),
                 .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),
                 .product(name: "JWTKit", package: "jwt-kit"),
+                .product(name: "Vapor", package: "vapor"),
+                .product(name: "VaporTesting", package: "vapor"),
             ],
             resources: [
                 .process("Backends/ExecutionEnvironments/manifests"),

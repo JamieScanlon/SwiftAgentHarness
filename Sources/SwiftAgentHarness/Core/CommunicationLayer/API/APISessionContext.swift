@@ -9,4 +9,7 @@ enum APISessionContext {
     /// Multi-tenant authenticated principal for REST/WebSocket (see ``ClientSessionMiddleware`` and validated Bearer JWT on WS upgrade).
     /// When ``TenancyPolicySettings/requireAuthenticatedOwnerOnMutations`` is enabled, mutations require this to be non-nil.
     @TaskLocal public static var authenticatedOwnerAccountID: UUID?
+
+    /// True while a Vapor REST handler is actively serving a request (suppresses nested embedded loopback).
+    @TaskLocal public static var servingRESTRequest: Bool = false
 }

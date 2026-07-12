@@ -1081,6 +1081,15 @@ public actor HarnessRuntimeSession {
     private let rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?
     private let callScheduler: any ModelCallScheduling
     private let invocationCoordinator: any ModelInvocationLifecycleTracking
+
+    /// Wire-bound model invocation coordinator for ``APILayer`` / embedded host setup.
+    public var wireModelInvocationCoordinator: ModelInvocationCoordinator {
+        if let coordinator = invocationCoordinator as? ModelInvocationCoordinator {
+            return coordinator
+        }
+        return ModelInvocationCoordinator()
+    }
+
     let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
     private var delegateCostTracker: (any DelegateCostTracking)?
     let runtimeExecutorFactory: AgentRuntimeExecutorFactory

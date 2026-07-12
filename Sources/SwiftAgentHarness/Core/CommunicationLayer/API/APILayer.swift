@@ -930,31 +930,52 @@ public actor APILayer {
         guard let chatGateway = chatGateway, let modelManager = modelManager else {
             throw APIError.componentsNotInitialized
         }
-        
-        // Create a new Vapor application with a sanitized environment to avoid CLI parsing
+
         var env = Environment.production
         env.arguments = ["SwiftAgentHarness"]
         let app = try await Application.make(env)
         self.app = app
-        
-        // Configure the server to listen on the specified port
+
         app.http.server.configuration.port = port
         app.http.server.configuration.hostname = "0.0.0.0"
-        
-        // Configure maximum body size (100MB)
+
+        try configureServingApplication(app: app, chatGateway: chatGateway, modelManager: modelManager)
+
+        try await app.startup()
+    }
+
+    /// Registers REST + WebSocket routes on a Vapor application without binding a listen socket.
+    public func makeEmbeddedApplication() async throws -> Application {
+        try validateStartupPreconditions()
+        guard let chatGateway = chatGateway, let modelManager = modelManager else {
+            throw APIError.componentsNotInitialized
+        }
+        var env = Environment.testing
+        env.arguments = ["SwiftAgentHarness"]
+        let app = try await Application.make(env)
+        app.http.server.configuration.port = 0
+        app.http.server.configuration.hostname = "127.0.0.1"
+        try configureServingApplication(app: app, chatGateway: chatGateway, modelManager: modelManager)
+        try await app.startup()
+        return app
+    }
+
+    /// In-process REST loopback client over ``makeEmbeddedApplication()``.
+    public func makeEmbeddedAPIClient() async throws -> EmbeddedHarnessAPIClient {
+        let app = try await makeEmbeddedApplication()
+        return EmbeddedHarnessAPIClient(app: app)
+    }
+
+    private func configureServingApplication(
+        app: Application,
+        chatGateway: APILayerChatGatewayServices,
+        modelManager: APILayerModelManaging
+    ) throws {
         app.routes.defaultMaxBodySize = "100mb"
         app.middleware.use(APIRouteDiagnosticsMiddleware(logger: logger))
         logger.warning("APIRouteDiagnosticsMiddleware installed (v2)")
-        
-        // Set up REST API routes
         configureRESTRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
-        
-        // Set up WebSocket routes
         configureWebSocketRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
-        
-        // Start the server programmatically to avoid CLI command parsing
-        try await app.startup()
-        
     }
 
     /// Bound listen port after ``start()``; when initialized with `0`, returns the OS-assigned ephemeral port.

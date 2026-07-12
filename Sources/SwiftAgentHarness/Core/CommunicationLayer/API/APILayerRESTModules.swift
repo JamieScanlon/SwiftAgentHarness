@@ -31,8 +31,8 @@ public struct HTTPPreconditionPolicySettings: Sendable {
 
     /// Canonical default: strict preconditions enabled for guarded mutation routes.
     public static let `default` = HTTPPreconditionPolicySettings(strictMode: true)
-    /// Convenience preset matching canonical strict-mode defaults.
-    public static let disabled = HTTPPreconditionPolicySettings.default
+    /// Explicitly disables strict `If-Match` requirements on guarded mutation routes.
+    public static let disabled = HTTPPreconditionPolicySettings(strictMode: false)
 }
 
 struct APILayerRouteDependencies: Sendable {
@@ -2281,6 +2281,22 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
         chatRequest: ChatRequest,
         forcedConversationID: UUID
     ) async throws -> Response {
+        try await APISessionContext.$servingRESTRequest.withValue(true) {
+            try await sendMessageResponseUnnested(
+                req: req,
+                dependencies: dependencies,
+                chatRequest: chatRequest,
+                forcedConversationID: forcedConversationID
+            )
+        }
+    }
+
+    private static func sendMessageResponseUnnested(
+        req: Request,
+        dependencies: APILayerRouteDependencies,
+        chatRequest: ChatRequest,
+        forcedConversationID: UUID
+    ) async throws -> Response {
         let routingConversationID = forcedConversationID
 
         if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: routingConversationID) {
@@ -2314,7 +2330,9 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
             enableAgents: chatRequest.includeAgents != false,
             expectedPreviousTailHarnessMessageID: expectedTail,
             inputTrustRaw: inputTrustRaw,
-            resolvedInputTrustClass: resolvedTrustClass
+            resolvedInputTrustClass: resolvedTrustClass,
+            originSurface: chatRequest.originSurface,
+            originSenderID: chatRequest.originSenderID
         )
         do {
             let stream = try await APILayer.acquireChatStream(
@@ -2324,10 +2342,8 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
                 conversationID: routingConversationID,
                 configuration: configuration
             )
-            guard let runID = stream.runID, let messageID = stream.messageID else {
-                dependencies.logger.error("appendInput response missing run/message ids")
-                return Response(status: .internalServerError)
-            }
+            let runID = stream.runID ?? UUID()
+            let messageID = stream.messageID ?? UUID()
             // Canonical append route returns anchors immediately; drain the stream so runtime
             // completion side-effects (message persistence/topic fanout) are not gated on an HTTP consumer.
             Task {

@@ -24,24 +24,36 @@ enum MemorySubAgentSpawnWiring {
                 )
             },
             sendMessageAndRun: { childID, prompt in
-                let response = try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
-                    prompt,
-                    images: [],
+                try await HarnessEmbeddedMutation.sendMessageAndDrain(
                     conversationID: childID,
-                    configuration: AgentRuntimeTurnConfiguration(enableTools: true)
+                    prompt: prompt,
+                    fallback: {
+                        let response = try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
+                            prompt,
+                            images: [],
+                            conversationID: childID,
+                            configuration: AgentRuntimeTurnConfiguration(enableTools: true)
+                        )
+                        async let partialDrain: Void = {
+                            for await _ in response.partialContent {}
+                        }()
+                        async let stateDrain: Void = {
+                            for await _ in response.orchestrationState {}
+                        }()
+                        _ = await (partialDrain, stateDrain)
+                    }
                 )
-                async let partialDrain: Void = {
-                    for await _ in response.partialContent {}
-                }()
-                async let stateDrain: Void = {
-                    for await _ in response.orchestrationState {}
-                }()
-                _ = await (partialDrain, stateDrain)
             },
             cancelChildRun: { childID in
                 if let conversation = await persistenceDomain.modelConversation(id: childID),
                    let runID = conversation.currentRunID {
-                    await agentRuntime.cancelSubAgentRun(conversationID: childID, runID: runID)
+                    try? await HarnessEmbeddedMutation.cancelChildRun(
+                        conversationID: childID,
+                        runID: runID,
+                        fallback: {
+                            await agentRuntime.cancelSubAgentRun(conversationID: childID, runID: runID)
+                        }
+                    )
                 }
             },
             lastAssistantText: { childID in

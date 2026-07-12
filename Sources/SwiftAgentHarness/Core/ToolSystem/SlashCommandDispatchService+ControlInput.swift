@@ -124,6 +124,16 @@ extension SlashCommandDispatchService {
         conversationID: UUID,
         authorization: ControlInputAuthorization
     ) async throws {
+        if let conversation = await deps.persistenceDomain.modelConversation(id: conversationID),
+           try await HarnessEmbeddedMutation.persistDirectives(
+            directives: directives,
+            conversationID: conversationID,
+            authorization: authorization,
+            currentConversation: conversation,
+            rankedRegistryEntriesProvider: deps.rankedRegistryEntriesProvider
+           ) {
+            return
+        }
         for directive in directives {
             switch directive.kind {
             case .think, .reasoning:

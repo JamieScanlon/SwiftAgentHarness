@@ -278,7 +278,7 @@
       "path": "/api/conversations/{id}/messages",
       "tenancy_guard": "conversationAccess",
       "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
-      "handler_anchor": "sendMessageResponse"
+      "handler_anchor": "sendMessageResponseUnnested"
     },
     {
       "method": "GET",
