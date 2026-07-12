@@ -25,9 +25,7 @@ channels:
     description: Bidirectional WebSocket; each text frame is one JSON object.
     publish:
       message:
-        oneOf:
-          - $ref: "#/components/messages/CommClientControl"
-          - $ref: "#/components/messages/LegacyClientFrame"
+        $ref: "#/components/messages/CommClientControl"
     subscribe:
       message:
         oneOf:
@@ -46,19 +44,6 @@ components:
       title: Topic snapshot, event, or lagging
       payload:
         $ref: "./schemas/ws/comm-resource-topic.schema.json"
-    LegacyClientFrame:
-      name: legacyClient
-      title: Legacy client frame (e.g. type — see ARCHITECTURE)
-      payload:
-        type: object
-        additionalProperties: true
-        description: |
-          Legacy request frames exclude retired control-plane mutations.
-          `send_message`, `send_trigger_message`, `patch_conversation`, `revert_to_message`, `split_conversation`, `stop_agent_build`, `spawn_sub_agent`, `resolve_tool_approval`, and `push_completion_announce` are removed and return deterministic error envelopes
-          instructing canonical REST routes. Message send/read control plane is REST-only on
-          `/api/conversations/{id}/messages` and `/api/conversations/{id}`; legacy `/api/messages`
-          aliases are removed. Trigger ingress API routes are removed and trigger dispatch stays
-          behind a separate non-API trigger gate boundary outside communication-layer scope.
     HarnessServerControlResponse:
       name: harnessServerControlResponse
       title: Harness server control response

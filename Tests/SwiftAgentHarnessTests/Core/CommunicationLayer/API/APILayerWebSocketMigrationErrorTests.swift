@@ -22,18 +22,27 @@ struct APILayerWebSocketMigrationErrorTests {
         "push_completion_announce",
     ]
 
-    @Test("Legacy type frames require harness kind")
-    func legacyTypeFramesRequireKind() {
+    private static let legacyTypeRemovalMessage =
+        "Legacy WebSocket type frames are removed; use REST control plane and harness kind subscribe"
+
+    @Test("Legacy type frames are rejected with migration error")
+    func legacyTypeFramesRejected() {
         for op in Self.legacyOps {
             let obj: [String: Any] = ["type": op, "id": UUID().uuidString]
             let err = WebSocketCommClientControlValidator.validationError(jsonObject: obj)
-            #expect(err == "Harness control message requires kind", "op=\(op)")
+            #expect(err == Self.legacyTypeRemovalMessage, "op=\(op)")
         }
     }
 
     @Test("Unknown legacy type is rejected the same way")
     func unknownLegacyTypeRejected() {
         let obj: [String: Any] = ["type": "unknown_type"]
+        #expect(WebSocketCommClientControlValidator.validationError(jsonObject: obj) == Self.legacyTypeRemovalMessage)
+    }
+
+    @Test("Missing kind without type still requires kind")
+    func missingKindWithoutType() {
+        let obj: [String: Any] = ["topic": "pool/health"]
         #expect(WebSocketCommClientControlValidator.validationError(jsonObject: obj) == "Harness control message requires kind")
     }
 

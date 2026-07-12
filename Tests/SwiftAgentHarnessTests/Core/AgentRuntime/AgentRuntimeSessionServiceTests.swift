@@ -90,8 +90,8 @@ struct AgentRuntimeSessionServiceTests {
         await service.testing_setActiveStreamingRun(conversationID: nil, runID: nil)
     }
 
-    @Test("service orchestration emission deduplicates identical out-of-band pushes")
-    func serviceOrchestrationEmissionDeduplicatesOutOfBandPush() async throws {
+    @Test("service orchestration emission deduplicates identical topic refresh handler invocations")
+    func serviceOrchestrationEmissionDeduplicatesTopicRefresh() async throws {
         let container = try AgentRuntimeSessionServiceTestSupport.makeContainer()
         let host = HarnessRuntimeSession(
             container: container,
@@ -102,22 +102,21 @@ struct AgentRuntimeSessionServiceTests {
         try await host.createConversation(with: model, userSystemPrompt: "sys")
         let conversationID = try #require(await host.currentConversationID)
 
-        actor PushCapture {
+        actor RefreshCapture {
             private(set) var count = 0
             func record() { count += 1 }
-            func pushCount() -> Int { count }
+            func refreshCount() -> Int { count }
         }
-        let capture = PushCapture()
-        let captureID = UUID()
-        await service.setOrchestrationStateOutOfBandPush(id: captureID) { _ in
+        let capture = RefreshCapture()
+        await service.setOrchestrationStateTopicRefreshHandler { _, _ in
             await capture.record()
         }
 
         await service.emitOrchestrationStateFromLiveSources(preferredConversationID: conversationID)
         await service.emitOrchestrationStateFromLiveSources(preferredConversationID: conversationID)
 
-        #expect(await capture.pushCount() == 1)
-        await service.clearOrchestrationStateOutOfBandPush(id: captureID)
+        #expect(await capture.refreshCount() == 1)
+        await service.clearOrchestrationStateTopicRefreshHandler()
     }
 
     @Test("clearTurnLoopStopRequest(for:) preserves stop requests for other conversations")

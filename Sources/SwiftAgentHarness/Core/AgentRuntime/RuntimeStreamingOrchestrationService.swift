@@ -115,12 +115,14 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         await agentRuntime.cancelMessageStreamForAPI()
     }
 
-    public func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
-        await agentRuntime.setOrchestrationStateOutOfBandPush(id: id, push: push)
+    public func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async {
+        await agentRuntime.setOrchestrationStateTopicRefreshHandler(handler)
     }
 
-    public func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {
-        await agentRuntime.clearOrchestrationStateOutOfBandPush(id: id)
+    public func apiClearOrchestrationStateTopicRefreshHandler() async {
+        await agentRuntime.clearOrchestrationStateTopicRefreshHandler()
     }
 
     public func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws {

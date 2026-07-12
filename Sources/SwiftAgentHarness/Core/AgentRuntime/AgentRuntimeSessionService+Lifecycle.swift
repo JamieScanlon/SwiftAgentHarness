@@ -187,17 +187,14 @@ extension AgentRuntimeSessionService {
         await cancelMessageStream()
     }
 
-    func setOrchestrationStateOutOfBandPush(
-        id: UUID,
-        push: @escaping @Sendable (ConversationOrchestrationState) async -> Void
+    func setOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
     ) async {
-        sessionState.orchestrationStateOutOfBandPush = (id, push)
+        sessionState.orchestrationStateTopicRefreshHandler = handler
     }
 
-    func clearOrchestrationStateOutOfBandPush(id: UUID) async {
-        if sessionState.orchestrationStateOutOfBandPush?.id == id {
-            sessionState.orchestrationStateOutOfBandPush = nil
-        }
+    func clearOrchestrationStateTopicRefreshHandler() async {
+        sessionState.orchestrationStateTopicRefreshHandler = nil
     }
 
     func streamingGenerationSettled(conversationID: UUID, runID: UUID?) async -> Bool {

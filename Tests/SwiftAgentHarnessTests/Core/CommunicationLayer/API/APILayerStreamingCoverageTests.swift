@@ -390,9 +390,11 @@ private actor FakeStreamingChatStore {
 
     func apiCancelMessageStream() async {}
 
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {}
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async {}
 
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {}
+    func apiClearOrchestrationStateTopicRefreshHandler() async {}
 
     func apiStartConversationReplay(enableTools: Bool, enableAgents: Bool) async throws {}
 
@@ -631,11 +633,13 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
     }
 
     func apiCancelMessageStream() async { await store.apiCancelMessageStream() }
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
-        await store.apiSetOrchestrationStateOutOfBandPush(id: id, push)
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async {
+        await store.apiSetOrchestrationStateTopicRefreshHandler(handler)
     }
 
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async { await store.apiClearOrchestrationStateOutOfBandPush(id: id) }
+    func apiClearOrchestrationStateTopicRefreshHandler() async { await store.apiClearOrchestrationStateTopicRefreshHandler() }
     func apiStartConversationReplay(enableTools: Bool, enableAgents: Bool) async throws { try await store.apiStartConversationReplay(enableTools: enableTools, enableAgents: enableAgents) }
     func apiStopConversationReplay() async { await store.apiStopConversationReplay() }
     func apiIsConversationReplayActive() async -> Bool { await store.apiIsConversationReplayActive() }

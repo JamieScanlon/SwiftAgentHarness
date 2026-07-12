@@ -141,8 +141,6 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     func apiProjectionContextBudget(conversationID: UUID) async -> ConversationContextBudget?
     /// Server-local `plan.md` markdown for the conversation (empty when no file yet).
     func apiReadPlanMarkdown(conversationID: UUID) async throws -> String
-    /// Conversation id the in-process orchestrator is bound to, if any (WebSocket OOB routing).
-    func apiOrchestratorBoundConversationID() async -> UUID?
 
     /// Non-persisting context compaction run (harness). See `POST /api/conversations/:id/preview-context-compaction`.
     func apiPreviewContextCompaction(
@@ -255,9 +253,11 @@ public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
     func apiRevertToUserMessageAndStreamResponse(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse
     func apiSplitConversationAtUserMessage(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse
     func apiCancelMessageStream() async
-    /// Registers a handler to receive orchestration snapshots when no active send stream is attached (background LLM work). Cleared by ``apiClearOrchestrationStateOutOfBandPush(id:)``.
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async
+    /// Publishes orchestration transitions to `conversation/{id}/state` via ``refreshConversationStateOnWire``. Registered once at composition root.
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async
+    func apiClearOrchestrationStateTopicRefreshHandler() async
     func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws
     func apiStopConversationReplay(conversationID: UUID) async
     func apiIsConversationReplayActive(conversationID: UUID) async -> Bool
@@ -402,8 +402,6 @@ extension APILayerConversationManaging {
     func apiListSubAgentRegistryEntries() async throws -> [SubAgentRegistryEntry] {
         throw APILayerConversationAPIError.unsupported
     }
-
-    func apiOrchestratorBoundConversationID() async -> UUID? { nil }
 
     func apiSnapshotOrchestrationState(conversationID: UUID) async -> ConversationOrchestrationState? {
         _ = conversationID
@@ -974,6 +972,14 @@ public actor APILayer {
         app.routes.defaultMaxBodySize = "100mb"
         app.middleware.use(APIRouteDiagnosticsMiddleware(logger: logger))
         logger.warning("APIRouteDiagnosticsMiddleware installed (v2)")
+        Task { [weak self] in
+            await chatGateway.runtime.apiSetOrchestrationStateTopicRefreshHandler { [weak self] conversationID, state in
+                await self?.refreshConversationStateOnWire(
+                    conversationID: conversationID,
+                    orchestrationOverride: state
+                )
+            }
+        }
         configureRESTRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
         configureWebSocketRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
     }
@@ -1158,12 +1164,6 @@ public actor APILayer {
         let wireRuntime = chatGateway.runtime
         let wireBudgetReporting: any BudgetReporting = budgetReporting
         let wireTenancyPolicy = tenancyPolicySettings
-        let wireAfterOrchestrationStateChanged: @Sendable (UUID, ConversationOrchestrationState) async -> Void = { [weak self] id, orchestration in
-            await self?.refreshConversationStateOnWire(
-                conversationID: id,
-                orchestrationOverride: orchestration
-            )
-        }
         
         // WebSocket route for chat
         app.webSocket("ws", maxFrameSize: WebSocketMaxFrameSize(integerLiteral: Int(UInt32.max))) { req, ws in
@@ -1303,27 +1303,6 @@ public actor APILayer {
             }
             // Stable scope for this socket's ledger row (mirrors REST X-SAH-Client-Session / cookie semantics).
             let connectionNamespace = UUID()
-            let orchestrationOutOfBandID = UUID()
-            let orchestrationPushGate = WebSocketOrchestrationPushGate()
-            Task {
-                await wireRuntime.apiSetOrchestrationStateOutOfBandPush(id: orchestrationOutOfBandID) { state in
-                    guard orchestrationPushGate.allowsPush else { return }
-                    logger.debug(
-                        "WS orchestration out-of-band received llm=\(state.llmRuntimePhase.rawValue) request=\(state.llmRequestPhase?.rawValue ?? "nil") agentic=\(state.agenticPhase.rawValue) runID=\(state.currentRunID?.uuidString ?? "nil")"
-                    )
-                    let routingConversationID = await APISessionContext.$connectionNamespace.withValue(connectionNamespace) {
-                        await APISessionContext.$authenticatedOwnerAccountID.withValue(wsAuthenticatedOwner) {
-                            await wireConversation.apiOrchestratorBoundConversationID()
-                        }
-                    }
-                    if let cid = routingConversationID {
-                        logger.debug("WS orchestration out-of-band routing conversationID=\(cid.uuidString)")
-                        await wireAfterOrchestrationStateChanged(cid, state)
-                    } else {
-                        logger.debug("WS orchestration out-of-band ignored: no orchestrator-bound conversation")
-                    }
-                }
-            }
             
             // Handle incoming WebSocket messages
             ws.onText { ws, text in
@@ -1418,7 +1397,6 @@ public actor APILayer {
             let conversationsRegistryHubForClose = wireConversationsRegistryHub
             let subAgentLifecycleHubForClose = wireSubAgentLifecycleHub
             ws.onClose.whenComplete { _ in
-                orchestrationPushGate.markClosed()
                 Task {
                     if let token = topicRegistration.modelTopicHubToken, let hub = topicHubForClose {
                         await hub.unregisterConnection(token)
@@ -1441,7 +1419,6 @@ public actor APILayer {
                     if let token = topicRegistration.conversationsRegistryTopicHubToken, let hub = conversationsRegistryHubForClose {
                         await hub.unregisterConnection(token)
                     }
-                    await wireRuntime.apiClearOrchestrationStateOutOfBandPush(id: orchestrationOutOfBandID)
                     await wireRuntime.apiCancelMessageStream()
                 }
             }
@@ -1465,19 +1442,6 @@ public actor APILayer {
 enum APILayerChatWireSeams {
     typealias ConversationSession = APILayerConversationManaging
     typealias StreamingRuntime = APILayerChatRuntimeManaging
-}
-
-/// One WebSocket’s “still allow orchestration out-of-band pushes” flag; shared between `onText` and `onClose`.
-private struct WebSocketOrchestrationPushGate: ~Copyable, Sendable {
-    private let openFlag = Mutex(true)
-
-    func markClosed() {
-        openFlag.withLock { $0 = false }
-    }
-
-    var allowsPush: Bool {
-        openFlag.withLock { $0 }
-    }
 }
 
 actor WebSocketOutboundSchemaViolationTracker {

@@ -3,12 +3,15 @@ import Foundation
 /// Structural validation for inbound harness control frames (`kind: subscribe|unsubscribe|ack|dedupe_check_and_set`) before Codable decode.
 /// Matches [`comm-client-control.schema.json`](../../../openapi/schemas/ws/comm-client-control.schema.json).
 enum WebSocketCommClientControlValidator {
-    /// Returns an English error message suitable for `{"type":"error","message":...}`, or `nil` if valid.
+    /// Returns an English error message suitable for `{"kind":"error","message":...}`, or `nil` if valid.
     static func validationError(jsonObject: Any) -> String? {
         guard let obj = jsonObject as? [String: Any] else {
             return "Harness control message must be a JSON object"
         }
         guard let kind = obj["kind"] as? String else {
+            if obj["type"] != nil {
+                return "Legacy WebSocket type frames are removed; use REST control plane and harness kind subscribe"
+            }
             return "Harness control message requires kind"
         }
 

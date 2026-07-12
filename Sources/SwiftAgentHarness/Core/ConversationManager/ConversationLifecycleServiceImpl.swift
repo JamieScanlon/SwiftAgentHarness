@@ -312,10 +312,6 @@ struct ConversationResidualAPIServiceImpl: ConversationResidualAPIServicing {
         try await deps.persistenceDomain.readPlanMarkdown(for: conversationID)
     }
 
-    func orchestratorBoundConversationID() async -> UUID? {
-        await orchestrationCore.lastOrchestrationEmissionConversationID()
-    }
-
     func previewContextCompaction(
         conversationID: UUID,
         gating: ContextCompactionGatingOptions,

@@ -215,11 +215,10 @@ protocol AgentRuntimeStreamingServicing: Sendable {
         configuration: AgentRuntimeTurnConfiguration
     ) async throws -> ChatStreamResponse
     func cancelMessageStreamForAPI() async
-    func setOrchestrationStateOutOfBandPush(
-        id: UUID,
-        push: @escaping @Sendable (ConversationOrchestrationState) async -> Void
+    func setOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
     ) async
-    func clearOrchestrationStateOutOfBandPush(id: UUID) async
+    func clearOrchestrationStateTopicRefreshHandler() async
     func requestTurnLoopStop(conversationID: UUID) async
 }
 

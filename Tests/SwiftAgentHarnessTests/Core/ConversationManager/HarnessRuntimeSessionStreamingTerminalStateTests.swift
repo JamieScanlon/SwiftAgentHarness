@@ -88,8 +88,8 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         #expect(afterSnapshot.currentRunID == nil)
     }
 
-    @Test("Out-of-band orchestration emission forces idle snapshot when no active streaming run")
-    func outOfBandEmissionForcesTerminalIdleWhenNoActiveRun() async throws {
+    @Test("Topic orchestration refresh forces idle snapshot when no active streaming run")
+    func topicRefreshForcesTerminalIdleWhenNoActiveRun() async throws {
         let container = try StreamingTerminalStateTestSupport.makeContainer()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = StreamingTerminalStateTestSupport.makeModel()
@@ -97,8 +97,6 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         let conversationID = try #require(await manager.currentConversationID)
         let staleRunID = UUID()
         let capture = SnapshotCapture()
-        let captureID = UUID()
-
         // Reproduce stale persisted runtime flags with no active runtime run.
         await manager.testing_setConversationRuntimeState(
             conversationID: conversationID,
@@ -108,7 +106,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
             currentRunID: staleRunID
         )
         await manager.testing_setActiveStreamingRun(conversationID: nil, runID: nil)
-        await manager.agentRuntimeSessionService.setOrchestrationStateOutOfBandPush(id: captureID) { snapshot in
+        await manager.agentRuntimeSessionService.setOrchestrationStateTopicRefreshHandler { _, snapshot in
             await capture.store(snapshot)
         }
 
@@ -118,7 +116,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         #expect(emitted.agenticPhase == .idle)
         #expect(emitted.llmRequestPhase == .idle)
         #expect(emitted.currentRunID == nil)
-        await manager.agentRuntimeSessionService.clearOrchestrationStateOutOfBandPush(id: captureID)
+        await manager.agentRuntimeSessionService.clearOrchestrationStateTopicRefreshHandler()
     }
 
     @Test("Terminal completion clears active run even when generation token mismatches")
@@ -130,8 +128,6 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         let conversationID = try #require(await manager.currentConversationID)
         let runID = UUID()
         let capture = SnapshotCapture()
-        let captureID = UUID()
-
         await manager.testing_setConversationRuntimeState(
             conversationID: conversationID,
             state: .generating,
@@ -160,7 +156,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
             llmRequestPhase: .queued,
             currentRunID: runID
         )
-        await manager.agentRuntimeSessionService.setOrchestrationStateOutOfBandPush(id: captureID) { snapshot in
+        await manager.agentRuntimeSessionService.setOrchestrationStateTopicRefreshHandler { _, snapshot in
             await capture.store(snapshot)
         }
 
@@ -170,7 +166,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         #expect(emitted.agenticPhase == .idle)
         #expect(emitted.llmRequestPhase == .idle)
         #expect(emitted.currentRunID == nil)
-        await manager.agentRuntimeSessionService.clearOrchestrationStateOutOfBandPush(id: captureID)
+        await manager.agentRuntimeSessionService.clearOrchestrationStateTopicRefreshHandler()
     }
 
     @Test("Message append path preserves latest runtime idle state")
@@ -255,16 +251,14 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         #expect(after.messages.count == before.messages.count)
     }
 
-    @Test("Duplicate idle orchestration emissions coalesce out-of-band push")
-    func duplicateIdleOrchestrationEmissionsCoalesceOutOfBandPush() async throws {
+    @Test("Duplicate idle orchestration emissions coalesce topic refresh")
+    func duplicateIdleOrchestrationEmissionsCoalesceTopicRefresh() async throws {
         let container = try StreamingTerminalStateTestSupport.makeContainer()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = StreamingTerminalStateTestSupport.makeModel()
         try await manager.createConversation(with: model, userSystemPrompt: "sys")
         let conversationID = try #require(await manager.currentConversationID)
         let capture = SnapshotCapture()
-        let captureID = UUID()
-
         await manager.testing_setConversationRuntimeState(
             conversationID: conversationID,
             state: .idle,
@@ -273,7 +267,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
             currentRunID: nil
         )
         await manager.testing_setActiveStreamingRun(conversationID: nil, runID: nil)
-        await manager.agentRuntimeSessionService.setOrchestrationStateOutOfBandPush(id: captureID) { snapshot in
+        await manager.agentRuntimeSessionService.setOrchestrationStateTopicRefreshHandler { _, snapshot in
             await capture.store(snapshot)
         }
 
@@ -281,19 +275,17 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         await manager.emitOrchestrationStateFromLiveSources(preferredConversationID: conversationID)
 
         #expect(await capture.pushCount == 1)
-        await manager.agentRuntimeSessionService.clearOrchestrationStateOutOfBandPush(id: captureID)
+        await manager.agentRuntimeSessionService.clearOrchestrationStateTopicRefreshHandler()
     }
 
-    @Test("Orchestration emission forwards out-of-band push even when stream continuation is active")
-    func orchestrationEmissionForwardsOutOfBandPushWhileContinuationActive() async throws {
+    @Test("Orchestration emission forwards topic refresh even when stream continuation is active")
+    func orchestrationEmissionForwardsTopicRefreshWhileContinuationActive() async throws {
         let container = try StreamingTerminalStateTestSupport.makeContainer()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = StreamingTerminalStateTestSupport.makeModel()
         try await manager.createConversation(with: model, userSystemPrompt: "sys")
         let conversationID = try #require(await manager.currentConversationID)
         let capture = SnapshotCapture()
-        let captureID = UUID()
-
         await manager.testing_setConversationRuntimeState(
             conversationID: conversationID,
             state: .generating,
@@ -303,7 +295,7 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         )
         await manager.testing_setActiveStreamingRun(conversationID: conversationID, runID: UUID())
         await manager.testing_installTurnStateContinuation()
-        await manager.agentRuntimeSessionService.setOrchestrationStateOutOfBandPush(id: captureID) { snapshot in
+        await manager.agentRuntimeSessionService.setOrchestrationStateTopicRefreshHandler { _, snapshot in
             await capture.store(snapshot)
         }
 
@@ -312,24 +304,33 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         let emitted = await capture.latest
         #expect(emitted != nil)
 
-        await manager.agentRuntimeSessionService.clearOrchestrationStateOutOfBandPush(id: captureID)
+        await manager.agentRuntimeSessionService.clearOrchestrationStateTopicRefreshHandler()
         await manager.testing_clearTurnStateContinuation()
     }
 
-    @Test("Orchestration routing resolves latest emitted conversation when orchestrator binding is nil")
-    func orchestrationRoutingFallsBackToLatestEmittedConversation() async throws {
+    @Test("Orchestration topic refresh receives emitted conversation id")
+    func orchestrationTopicRefreshReceivesEmittedConversationID() async throws {
         let container = try StreamingTerminalStateTestSupport.makeContainer()
         let manager = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container))
         let model = StreamingTerminalStateTestSupport.makeModel()
         try await manager.createConversation(with: model, userSystemPrompt: "sys")
         let conversationID = try #require(await manager.currentConversationID)
 
-        // No orchestrator is bound in this setup; ensure a snapshot emission still
-        // records the routing conversation used by API-layer out-of-band refresh.
+        actor RefreshCapture {
+            private(set) var conversationID: UUID?
+            func store(cid: UUID, _: ConversationOrchestrationState) {
+                conversationID = cid
+            }
+        }
+        let capture = RefreshCapture()
+        await manager.agentRuntimeSessionService.setOrchestrationStateTopicRefreshHandler { cid, snapshot in
+            await capture.store(cid: cid, snapshot)
+        }
+
         await manager.emitOrchestrationStateFromLiveSources(preferredConversationID: conversationID)
 
-        let routed = await manager.conversationDomainServices.residualAPI.orchestratorBoundConversationID()
-        #expect(routed == conversationID)
+        #expect(await capture.conversationID == conversationID)
+        await manager.agentRuntimeSessionService.clearOrchestrationStateTopicRefreshHandler()
     }
 
     @Test("Snapshot forces streaming phases even without bound orchestrator")

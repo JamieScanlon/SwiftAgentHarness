@@ -9,10 +9,7 @@ struct RunSnapshotKey: Hashable, Sendable {
 struct AgentRuntimeSessionState {
     var pendingTerminalReasons: [RunSnapshotKey: ConversationRunTerminalReason] = [:]
     var turnStateContinuation: AsyncStream<ConversationOrchestrationState>.Continuation?
-    var orchestrationStateOutOfBandPush: (
-        id: UUID,
-        push: @Sendable (ConversationOrchestrationState) async -> Void
-    )?
-    var lastOrchestrationOutOfBandWireSnapshot: ConversationOrchestrationState?
+    var orchestrationStateTopicRefreshHandler: (@Sendable (UUID, ConversationOrchestrationState) async -> Void)?
+    var lastTopicRefreshOrchestrationSnapshot: ConversationOrchestrationState?
     var messageStreamContinuation: AsyncStream<[Message]>.Continuation?
 }
