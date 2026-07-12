@@ -114,7 +114,7 @@ This folder owns the *spine* and the eight layers that don't have natural homes 
 |---|---|
 | Backends | [persistence/](../backends/persistence/), [execution-environments/](../backends/execution-environments/), [providers/](../backends/providers/) |
 | Surfaces | [interface/](../surfaces/interface/), [triggers/](../surfaces/triggers/) |
-| Cross-cutting | [extensibility/](../cross-cutting/extensibility/) (plugin/hook host, MCP server registry); observability not yet a topic folder |
+| Cross-cutting | [extensibility/](../cross-cutting/extensibility/) (plugin/hook host, MCP server registry), [observability/](../cross-cutting/observability/) |
 
 ## Pages
 
@@ -126,14 +126,6 @@ This folder owns the *spine* and the eight layers that don't have natural homes 
 - [agent-runtime/](./agent-runtime/) — The inner loop itself. Stateless across calls, takes a conversation as input, emits events. The argument for keeping it dumb and pushing smarts into the layers around it.
 - [conversation-manager/](./conversation-manager/) — Conversation as a first-class resource. CRUD, branching, mode, attached resources, lifecycle. Sub-agents as nested conversations.
 - [communication-layer/](./communication-layer/) — Wire protocol, multi-topic event bus, control / data plane split, reconcile-and-watch, message envelope shape. The boundary between the inner ring and the outside world.
-
-## Open sub-topics (not yet drafted)
-
-- **Where the plugin/hook host sits.** It's cross-cutting, but somebody has to load and lifecycle-manage plugins; the plugin host itself wants a home. The MCP server registry now lives here too. Probably a sub-page under `extensibility/` rather than here, but the boundary deserves a deliberate call.
-- **Observability as a first-class topic.** Currently absent from the template. The trace topic on the Comm Layer is one part of it; structured spans across model / tool / sub-agent / turn / memory-write boundaries is another. Worth promoting to its own folder eventually.
-- **The library-vs-server boundary in practice.** This README asserts the inner ring is library-shaped and the Comm Layer is the server. In practice, harnesses often start library-shaped and add the server later; the migration path (especially for state that was implicit in the library use case) deserves its own page.
-- **Multi-tenant deployment.** Everything here assumes a single-user (or single-trusted-org) Gateway. Multi-tenant adds isolation concerns at every Pool, the Memory layer, and the Comm Layer that haven't been touched.
-
-## Citation conventions
-
-Line references in this template refer to the OSS snapshots in the research corpus. Where a recommendation is grounded in a specific design, the architectural pattern is named; where approaches disagree, the page explains the trade-off.
+- [layer-dependencies.md](./layer-dependencies.md) — The dependency graph across the eight layers and the auxiliary tiers; the two intentional cycles; sanity checks the graph encodes.
+- [library-vs-server-boundary.md](./library-vs-server-boundary.md) — What "the inner ring is library-shaped" costs to keep true. The inventory of state that's implicit in the library case, the staged library→server migration path, and why the ids-and-envelopes stage is the one that can't be deferred.
+- [multi-tenant-deployment.md](./multi-tenant-deployment.md) — What changes when the single-user Gateway assumption falls. Multi-user vs true tenancy, instance-per-tenant as the default posture, the per-layer isolation bill for shared-process tenancy, and the tenant-id-as-address invariant.
