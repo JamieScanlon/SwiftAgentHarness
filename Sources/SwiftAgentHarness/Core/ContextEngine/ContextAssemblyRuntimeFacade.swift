@@ -20,7 +20,8 @@ struct ContextAssemblyRuntimeFacade {
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
         lastModelRequestAtByConversationID: [UUID: Date],
-        lastContextCompactionLLMDateByConversationID: [UUID: Date]
+        lastContextCompactionLLMDateByConversationID: [UUID: Date],
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) async -> ContextEngineAssembleRequest {
         await persistenceDomain.makeContextEngineAssembleRequest(
             messages: messages,
@@ -37,7 +38,8 @@ struct ContextAssemblyRuntimeFacade {
             lastPromptTokens: lastPromptTokens,
             lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
-            conversationTransformConfiguration: conversationTransformConfiguration
+            conversationTransformConfiguration: conversationTransformConfiguration,
+            workspacePolicy: workspacePolicy
         )
     }
 }

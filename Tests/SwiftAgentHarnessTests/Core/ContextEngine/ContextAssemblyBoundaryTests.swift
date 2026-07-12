@@ -267,6 +267,7 @@ struct ContextAssemblyBoundaryTests {
             lastPromptTokens: nil,
             lastModelRequestAtByConversationID: [:],
             lastContextCompactionLLMDateByConversationID: [:],
+            workspacePolicy: .default,
             logger: nil,
             performTransform: { input in
                 ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)

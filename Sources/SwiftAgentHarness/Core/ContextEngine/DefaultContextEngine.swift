@@ -78,7 +78,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextEngineAssembleRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextEngineAssembleResult {
-        await ensureMemoryBootstrapped(conversation: request.conversation)
+        await ensureMemoryBootstrapped(conversation: request.conversation, policy: request.workspacePolicy)
         let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
         let modeSwitches = ContextSystemPromptModeSwitches.build(
             conversation: request.conversation,
@@ -118,7 +118,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             projectionPolicy: request.projectionPolicy,
             preCompactionMemoryFlushPolicy: request.preCompactionMemoryFlushPolicy,
             sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction ?? sessionMemoryNote,
-            preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
+            preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec,
+            workspacePolicy: request.workspacePolicy
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
         let ttlPruned = applyCacheTTLPruningIfNeeded(messages: result.messages, request: preparedTurnRequest)
@@ -432,13 +433,18 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             let reinjectableSkills = await reinjectionSkillProvider.reinjectableSkillContent(
                 activatedSkillNames: activatedSkillNames
             )
-            let cwd = request.conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
-            let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
-            let postCompactionInstructionContext = await reinjectionInstructionProvider.postCompactionInstructionContext(
-                cwd: cwd,
-                canonicalGitRoot: gitRoot,
-                config: request.compactionConfig
-            )
+            let promptCwd = HarnessWorkspaceResolver.resolveForPromptContext(conversation: request.conversation)
+            let postCompactionInstructionContext: String?
+            if let promptCwd {
+                let gitRoot = GitRootResolver.canonicalGitRoot(for: promptCwd)
+                postCompactionInstructionContext = await reinjectionInstructionProvider.postCompactionInstructionContext(
+                    cwd: promptCwd,
+                    canonicalGitRoot: gitRoot,
+                    config: request.compactionConfig
+                )
+            } else {
+                postCompactionInstructionContext = nil
+            }
             let initial = ContextCompactionInputBuilder.buildInitialPhaseInput(
                 messages: compactionTranscript,
                 conversation: request.conversation,
@@ -895,11 +901,19 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         UUID(uuidString: String(format: "00000000-0000-4000-9000-%012x", generation)) ?? UUID()
     }
 
-    private func ensureMemoryBootstrapped(conversation: ModelConversation) async {
+    private func ensureMemoryBootstrapped(conversation: ModelConversation, policy: HarnessWorkspacePolicy) async {
         guard let memoryService else { return }
         let generation = await memoryService.currentSnapshotGeneration(conversationID: conversation.id)
         guard generation == 0 else { return }
-        let cwd = conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
+        let cwd: String
+        if let recorded = HarnessWorkspaceResolver.recordedCwd(on: conversation) {
+            cwd = recorded
+        } else if policy.allowAmbientWorkspaceFallback,
+                  let ambient = HarnessWorkspaceResolver.ambientIfKnown() {
+            cwd = ambient
+        } else {
+            return
+        }
         do {
             let context = try memoryService.makeSessionContext(
                 conversationID: conversation.id,

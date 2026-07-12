@@ -109,7 +109,8 @@ public actor ConversationPersistenceDomain {
         lastPromptTokens: Int?,
         lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
-        conversationTransformConfiguration: ConversationTransformConfiguration
+        conversationTransformConfiguration: ConversationTransformConfiguration,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) -> ContextEngineAssembleRequest {
         let (events, frontier) = stack.conversationManager.loadConversationEventsWithFrontier(conversationID: conversation.id)
         let derivedTailAtProjectionStart = events
@@ -139,7 +140,8 @@ public actor ConversationPersistenceDomain {
             compactionLockAlreadyHeldByCaller: compactionLockAlreadyHeldByCaller,
             derivedTailAtProjectionStart: derivedTailAtProjectionStart,
             projectionPolicy: projectionPolicy,
-            preCompactionMemoryFlushPolicy: preCompactionMemoryFlushPolicy
+            preCompactionMemoryFlushPolicy: preCompactionMemoryFlushPolicy,
+            workspacePolicy: workspacePolicy
         )
     }
 

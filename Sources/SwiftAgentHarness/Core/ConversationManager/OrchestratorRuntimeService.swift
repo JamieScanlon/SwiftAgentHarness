@@ -608,9 +608,16 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
-        let workspaceRoot = activeConversation?.harnessPersistenceCwd
-            ?? FileManager.default.currentDirectoryPath
-        if !workspaceRoot.isEmpty {
+        let workspaceRoot: String?
+        if let conv = activeConversation {
+            workspaceRoot = try? await deps.persistenceDomain.resolveHarnessPersistenceCwdForSideEffects(
+                conversationID: conv.id,
+                policy: deps.workspacePolicy
+            )
+        } else {
+            workspaceRoot = nil
+        }
+        if let workspaceRoot {
             let memoryService = (deps.contextEngine as? DefaultContextEngine)?.memoryService
             var memoryDirectory: URL?
             var userMemoryDirectory: URL?
@@ -792,7 +799,7 @@ public actor OrchestratorRuntimeService {
         if let additionalToolProviderFactory {
             let context = HarnessToolProviderContext(
                 conversation: activeConversation,
-                workspaceRoot: workspaceRoot.isEmpty ? nil : workspaceRoot,
+                workspaceRoot: workspaceRoot,
                 logger: logger,
                 pluginGroupID: "plugins"
             )

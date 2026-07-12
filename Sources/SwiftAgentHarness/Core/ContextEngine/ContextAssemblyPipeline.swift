@@ -13,6 +13,26 @@ struct ContextAssemblyPipelineRunOutput: Sendable {
 }
 
 enum ContextAssemblyPipeline {
+    private static func conversationPreparedForAssembly(
+        persistenceDomain: ConversationPersistenceDomain,
+        conversationID: UUID,
+        conversation: ModelConversation,
+        workspacePolicy: HarnessWorkspacePolicy
+    ) async -> ModelConversation {
+        guard workspacePolicy.allowAmbientWorkspaceFallback,
+              HarnessWorkspaceResolver.recordedCwd(on: conversation) == nil else {
+            return conversation
+        }
+        _ = try? await persistenceDomain.resolveHarnessPersistenceCwdForSideEffects(
+            conversationID: conversationID,
+            policy: workspacePolicy
+        )
+        if let refreshed = await persistenceDomain.modelConversation(id: conversationID) {
+            return refreshed
+        }
+        return conversation
+    }
+
     /// Orchestrator turn path: **`ingestBatch`** → **`assemble`** → **`applyContextAssemblyPersistence`** (orchestrator scope).
     static func ingestAndOrchestratorAssemble(
         contextEngine: ContextEngine,
@@ -30,17 +50,24 @@ enum ContextAssemblyPipeline {
         lastPromptTokens: Int?,
         lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
+        workspacePolicy: HarnessWorkspacePolicy,
         logger: Logger?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextAssemblyPipelineRunOutput {
         let hydratedMessages = await persistenceDomain.hydrateBlobImages(in: messages, conversationID: conversationID)
+        let conversationForAssembly = await conversationPreparedForAssembly(
+            persistenceDomain: persistenceDomain,
+            conversationID: conversationID,
+            conversation: conversation,
+            workspacePolicy: workspacePolicy
+        )
         // Lifecycle hook for alternate ContextEngine slots; default slot is a no-op.
         _ = await contextEngine.ingestBatch(
             request: ContextEngineIngestBatchRequest(conversationID: conversationID, messages: hydratedMessages)
         )
         let assembleRequest = await runtimeFacade.makeAssembleRequest(
             messages: hydratedMessages,
-            conversation: conversation,
+            conversation: conversationForAssembly,
             phase: phase,
             gatingOverride: gatingOverride,
             compactionCustomInstructionsOverride: nil,
@@ -52,7 +79,8 @@ enum ContextAssemblyPipeline {
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
             lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
-            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
+            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            workspacePolicy: workspacePolicy
         )
         let result = await contextEngine.assemble(request: assembleRequest, performTransform: performTransform)
         let persistenceEffects = await persistenceDomain.applyContextAssemblyPersistence(
@@ -87,16 +115,23 @@ enum ContextAssemblyPipeline {
         lastPromptTokens: Int?,
         lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
+        workspacePolicy: HarnessWorkspacePolicy,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextAssemblyPipelineRunOutput {
         let hydratedMessages = await persistenceDomain.hydrateBlobImages(in: messages, conversationID: conversationID)
+        let conversationForAssembly = await conversationPreparedForAssembly(
+            persistenceDomain: persistenceDomain,
+            conversationID: conversationID,
+            conversation: conversation,
+            workspacePolicy: workspacePolicy
+        )
         // Lifecycle hook for alternate ContextEngine slots; default slot is a no-op.
         _ = await contextEngine.ingestBatch(
             request: ContextEngineIngestBatchRequest(conversationID: conversationID, messages: hydratedMessages)
         )
         let assembleRequest = await runtimeFacade.makeAssembleRequest(
             messages: hydratedMessages,
-            conversation: conversation,
+            conversation: conversationForAssembly,
             phase: phase,
             gatingOverride: gatingOverride,
             compactionCustomInstructionsOverride: nil,
@@ -108,7 +143,8 @@ enum ContextAssemblyPipeline {
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
             lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
-            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
+            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            workspacePolicy: workspacePolicy
         )
         let result = await contextEngine.assemble(request: assembleRequest, performTransform: performTransform)
         return ContextAssemblyPipelineRunOutput(
@@ -138,17 +174,24 @@ enum ContextAssemblyPipeline {
         lastPromptTokens: Int?,
         lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
+        workspacePolicy: HarnessWorkspacePolicy,
         logger: Logger?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextAssemblyPipelineRunOutput {
         let hydratedMessages = await persistenceDomain.hydrateBlobImages(in: messages, conversationID: conversationID)
+        let conversationForAssembly = await conversationPreparedForAssembly(
+            persistenceDomain: persistenceDomain,
+            conversationID: conversationID,
+            conversation: conversation,
+            workspacePolicy: workspacePolicy
+        )
         // Lifecycle hook for alternate ContextEngine slots; default slot is a no-op.
         _ = await contextEngine.ingestBatch(
             request: ContextEngineIngestBatchRequest(conversationID: conversationID, messages: hydratedMessages)
         )
         let assembleRequest = await runtimeFacade.makeAssembleRequest(
             messages: hydratedMessages,
-            conversation: conversation,
+            conversation: conversationForAssembly,
             phase: .initial,
             gatingOverride: .forcedReactiveRetry,
             compactionCustomInstructionsOverride: compactionCustomInstructionsOverride,
@@ -160,7 +203,8 @@ enum ContextAssemblyPipeline {
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
             lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
-            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID
+            lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            workspacePolicy: workspacePolicy
         )
         let compactRequest = ContextEngineCompactRequest(assemble: assembleRequest)
         let result = await contextEngine.compact(request: compactRequest, performTransform: performTransform)

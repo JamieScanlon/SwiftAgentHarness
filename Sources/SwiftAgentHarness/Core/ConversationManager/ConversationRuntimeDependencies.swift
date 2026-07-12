@@ -23,6 +23,7 @@ struct ConversationRuntimeDependencies {
     let rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?
     let delegateCostTracker: (any DelegateCostTracking)?
     let runtimeExecutorFactory: AgentRuntimeExecutorFactory
+    let workspacePolicy: HarnessWorkspacePolicy
     let logger: Logger?
 
     init(
@@ -45,6 +46,7 @@ struct ConversationRuntimeDependencies {
         rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?,
         delegateCostTracker: (any DelegateCostTracking)?,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
+        workspacePolicy: HarnessWorkspacePolicy = .default,
         logger: Logger?
     ) {
         self.persistenceDomain = persistenceDomain
@@ -66,6 +68,7 @@ struct ConversationRuntimeDependencies {
         self.rankedRegistryEntriesProvider = rankedRegistryEntriesProvider
         self.delegateCostTracker = delegateCostTracker
         self.runtimeExecutorFactory = runtimeExecutorFactory
+        self.workspacePolicy = workspacePolicy
         self.logger = logger
     }
 }

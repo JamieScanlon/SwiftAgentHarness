@@ -40,6 +40,8 @@ enum ConversationServiceError: Error, Sendable, Equatable {
     case invalidSubAgentSpawn
     /// Runtime lane admission rejected due to capacity/fanout/session constraints.
     case runtimeLaneUnavailable(reason: String)
+    /// Conversation has no recorded workspace; side-effecting paths refuse until cwd is set (e.g. via PATCH).
+    case harnessWorkspaceNotRecorded(conversationID: UUID)
 }
 
 extension ConversationServiceError: APILayerConversationRouteErrorRepresenting {
@@ -99,6 +101,10 @@ extension ConversationServiceError: APILayerRESTConflictRepresenting {
             )
         case let .runtimeLaneUnavailable(reason):
             return try? JSONEncoder().encode(["code": "runtime_lane_unavailable", "reason": reason])
+        case let .harnessWorkspaceNotRecorded(conversationID):
+            return try? JSONEncoder().encode(
+                HarnessWorkspaceNotRecordedConflictBody(conversationID: conversationID)
+            )
         default:
             return nil
         }

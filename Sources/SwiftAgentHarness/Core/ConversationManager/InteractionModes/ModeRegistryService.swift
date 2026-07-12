@@ -50,7 +50,7 @@ public actor ModeRegistryService {
 
     /// Production registry wired to an operator-controlled project config directory.
     public static func makeForHost(
-        cwd: String = FileManager.default.currentDirectoryPath,
+        cwd: String,
         fileManager: FileManager = .default,
         logger: Logger? = nil,
         seedingBuiltIns: Bool = true,

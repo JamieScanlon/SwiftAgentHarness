@@ -384,6 +384,7 @@ public struct ContextEngineAssembleRequest: Sendable {
     let preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput?
     let sessionMemoryNoteForCompaction: String?
     let preCompactionMemoryFlushSpec: ContextPreCompactionMemoryFlushSpec?
+    let workspacePolicy: HarnessWorkspacePolicy
 
     init(
         messages: [Message],
@@ -407,7 +408,8 @@ public struct ContextEngineAssembleRequest: Sendable {
         projectionPolicy: ContextEngineProjectionPolicyInput? = nil,
         preCompactionMemoryFlushPolicy: ContextEnginePreCompactionMemoryFlushPolicyInput? = nil,
         sessionMemoryNoteForCompaction: String? = nil,
-        preCompactionMemoryFlushSpec: ContextPreCompactionMemoryFlushSpec? = nil
+        preCompactionMemoryFlushSpec: ContextPreCompactionMemoryFlushSpec? = nil,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) {
         self.messages = messages
         self.conversation = conversation
@@ -431,6 +433,7 @@ public struct ContextEngineAssembleRequest: Sendable {
         self.preCompactionMemoryFlushPolicy = preCompactionMemoryFlushPolicy
         self.sessionMemoryNoteForCompaction = sessionMemoryNoteForCompaction
         self.preCompactionMemoryFlushSpec = preCompactionMemoryFlushSpec
+        self.workspacePolicy = workspacePolicy
     }
 }
 

@@ -141,7 +141,8 @@ public actor HarnessRuntimeSession {
         contextEngineSlotID: String = "default",
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         compactionProviderFactory: (any ContextCompactionProviderFactoring)? = nil,
-        modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost()),
+        modeRegistry: (any ModeRegistryAccessing)? = nil,
+        workspacePolicy: HarnessWorkspacePolicy = .default,
         tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
@@ -202,12 +203,13 @@ public actor HarnessRuntimeSession {
             invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
-            modeRegistry: modeRegistry,
+            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
             runtimeLaneConfiguration: runtimeLaneConfiguration.applyingStrictTenancyDefaults(
                 tenancyPolicy: tenancyPolicy
             ),
             runtimeExecutorFactory: runtimeExecutorFactory,
-            tenancyPolicy: tenancyPolicy
+            tenancyPolicy: tenancyPolicy,
+            workspacePolicy: workspacePolicy
         )
     }
 
@@ -230,7 +232,8 @@ public actor HarnessRuntimeSession {
         contextEngine: any ContextEngine,
         modeRegistry: any ModeRegistryAccessing,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -252,7 +255,8 @@ public actor HarnessRuntimeSession {
             modeRegistry: modeRegistry,
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
-            tenancyPolicy: tenancyPolicy
+            tenancyPolicy: tenancyPolicy,
+            workspacePolicy: workspacePolicy
         )
     }
 
@@ -276,7 +280,8 @@ public actor HarnessRuntimeSession {
         modeRegistry: any ModeRegistryAccessing,
         runtimeLaneConfiguration: RuntimeLaneConfiguration,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -317,6 +322,7 @@ public actor HarnessRuntimeSession {
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: delegateCostTracker,
             runtimeExecutorFactory: runtimeExecutorFactory,
+            workspacePolicy: workspacePolicy,
             logger: logger
         )
         let (session, services) = HarnessRuntimeSessionFactory.makeSession(
@@ -362,10 +368,11 @@ public actor HarnessRuntimeSession {
         invocationCoordinator: any ModelInvocationLifecycleTracking,
         compactionCoordinator: CompactionConcurrencyCoordinator,
         contextEngine: (any ContextEngine)?,
-        modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost()),
+        modeRegistry: (any ModeRegistryAccessing)? = nil,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) {
         let alignedFactory = Self.factoryApplyingTenancyPolicy(
             StandardModelLLMFactory.aligningAccounting(
@@ -417,7 +424,7 @@ public actor HarnessRuntimeSession {
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
             contextAssemblyRuntime: contextAssemblyRuntime,
-            modeRegistry: modeRegistry,
+            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
             llmFactory: alignedFactory,
             callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
@@ -432,6 +439,7 @@ public actor HarnessRuntimeSession {
             rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
             delegateCostTracker: delegateCostTracker,
             runtimeExecutorFactory: runtimeExecutorFactory,
+            workspacePolicy: workspacePolicy,
             logger: logger
         )
         let services = HarnessRuntimeSessionFactory.makeServices(
@@ -509,6 +517,14 @@ public actor HarnessRuntimeSession {
         self.services = services
     }
 
+    private static func defaultModeRegistry(workspacePolicy: HarnessWorkspacePolicy) -> ModeRegistryPortAdapter {
+        if workspacePolicy.allowAmbientWorkspaceFallback,
+           let cwd = HarnessWorkspaceResolver.ambientIfKnown() {
+            return ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost(cwd: cwd))
+        }
+        return ModeRegistryPortAdapter(service: ModeRegistryService())
+    }
+
     /// Initializer for testing with an in-memory container.
     init(
         container: ModelContainer,
@@ -529,9 +545,10 @@ public actor HarnessRuntimeSession {
         contextEngine: (any ContextEngine)? = nil,
         derivedEventStore: (any DerivedEventStore)? = nil,
         harnessSessionPersistenceOverride: (any HarnessSessionPersistence)? = nil,
-        modeRegistry: any ModeRegistryAccessing = ModeRegistryPortAdapter(service: ModeRegistryService()),
+        modeRegistry: (any ModeRegistryAccessing)? = nil,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
-        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
+        workspacePolicy: HarnessWorkspacePolicy = HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true)
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
@@ -561,9 +578,10 @@ public actor HarnessRuntimeSession {
             invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: contextEngine,
-            modeRegistry: modeRegistry,
+            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
             runtimeLaneConfiguration: runtimeLaneConfiguration,
-            runtimeExecutorFactory: runtimeExecutorFactory
+            runtimeExecutorFactory: runtimeExecutorFactory,
+            workspacePolicy: workspacePolicy
         )
     }
 

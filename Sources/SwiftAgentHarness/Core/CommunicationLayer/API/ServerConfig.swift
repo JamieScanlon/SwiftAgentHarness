@@ -103,6 +103,8 @@ public struct ServerConfig {
     public var engineArtifactMaxUploadBytes: Int = 16_777_216
     /// Optional override for Application Support directory naming and related on-disk layout.
     public var hostLayout: HarnessHostLayout? = nil
+    /// When true, CLI/embedded hosts may resolve sanctioned ambient workspace and backfill ``ModelConversation/harnessPersistenceCwd`` once.
+    public var allowAmbientWorkspaceFallback: Bool = false
 
     public init(
         port: Int = 8080,
@@ -157,7 +159,8 @@ public struct ServerConfig {
         serverTraceOperatorOwnerIDs: Set<UUID> = [],
         enforceOperatorForServerTraceSubscribe: Bool = true,
         engineArtifactMaxUploadBytes: Int = 16_777_216,
-        hostLayout: HarnessHostLayout? = nil
+        hostLayout: HarnessHostLayout? = nil,
+        allowAmbientWorkspaceFallback: Bool = false
     ) {
         self.port = port
         self.enableDiscovery = enableDiscovery
@@ -212,6 +215,7 @@ public struct ServerConfig {
         self.enforceOperatorForServerTraceSubscribe = enforceOperatorForServerTraceSubscribe
         self.engineArtifactMaxUploadBytes = max(1024, engineArtifactMaxUploadBytes)
         self.hostLayout = hostLayout
+        self.allowAmbientWorkspaceFallback = allowAmbientWorkspaceFallback
     }
 
     /// Resolved trace/server subscribe policy (multi-tenant mode always enforces operator allowlist).

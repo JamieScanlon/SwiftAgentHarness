@@ -308,3 +308,16 @@ public struct ConversationRevisionConflictBody: Codable, Sendable, Equatable {
         self.currentRevision = currentRevision
     }
 }
+
+/// JSON body for `409`/`422` when side-effecting paths require a recorded workspace.
+public struct HarnessWorkspaceNotRecordedConflictBody: Codable, Sendable, Equatable {
+    public static let errorCode = "harness_workspace_not_recorded"
+
+    public let code: String
+    public let conversationID: UUID
+
+    public init(conversationID: UUID) {
+        self.code = Self.errorCode
+        self.conversationID = conversationID
+    }
+}

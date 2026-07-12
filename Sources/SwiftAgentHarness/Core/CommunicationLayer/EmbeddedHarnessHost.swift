@@ -44,7 +44,10 @@ public struct EmbeddedHarnessHost: Sendable {
         httpPreconditions: HTTPPreconditionPolicySettings = .disabled,
         authorizationHeader: String? = nil
     ) async throws -> EmbeddedHarnessHost {
-        let runtimeSession = HarnessRuntimeSession(container: container)
+        let runtimeSession = HarnessRuntimeSession(
+            container: container,
+            workspacePolicy: HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true)
+        )
         let communicationLayer = EmbeddedHarnessGatewayFactory.makeCommunicationLayer()
         await runtimeSession.setConversationTopicPublisher(communicationLayer)
         await runtimeSession.setTraceTopicPublisher(communicationLayer)

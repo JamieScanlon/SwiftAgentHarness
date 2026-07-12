@@ -699,6 +699,8 @@ public struct ConversationPatch: Codable, Sendable {
     public var expectedRevision: UInt64
     /// Conversation-level routing tool policy (harness `routing.toolWhitelist`). Intersects with mode profile tools.
     public var routingToolPolicy: ConversationExplicitToolPolicy?
+    /// Explicit workspace root for tool/memory path resolution (``ModelConversation/harnessPersistenceCwd``).
+    public var cwd: String?
 
     public init(
         expectedRevision: UInt64,
@@ -711,7 +713,8 @@ public struct ConversationPatch: Codable, Sendable {
         lifecycle: ConversationLifecycleState? = nil,
         modelRef: String? = nil,
         userSystemPrompt: String? = nil,
-        routingToolPolicy: ConversationExplicitToolPolicy? = nil
+        routingToolPolicy: ConversationExplicitToolPolicy? = nil,
+        cwd: String? = nil
     ) {
         self.topic = topic
         self.description = description
@@ -724,6 +727,7 @@ public struct ConversationPatch: Codable, Sendable {
         self.userSystemPrompt = userSystemPrompt
         self.expectedRevision = expectedRevision
         self.routingToolPolicy = routingToolPolicy
+        self.cwd = cwd
     }
 }
 

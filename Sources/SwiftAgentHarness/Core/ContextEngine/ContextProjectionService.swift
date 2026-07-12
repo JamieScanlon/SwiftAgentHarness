@@ -318,6 +318,7 @@ actor ContextProjectionService {
                 lastPromptTokens: projectionContext.lastPromptTokens,
                 lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+                workspacePolicy: deps.workspacePolicy,
                 logger: deps.logger,
                 performTransform: { input in
                     try await ContextAssemblyService.runTransformWithTimeout(
@@ -440,6 +441,7 @@ actor ContextProjectionService {
             lastPromptTokens: projectionContext.lastPromptTokens,
             lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            workspacePolicy: deps.workspacePolicy,
             performTransform: { input in
                 try await ContextAssemblyService.runTransformWithTimeout(
                     transformTimeoutSeconds: self.deps.conversationTransformConfiguration.transformTimeoutSeconds,
@@ -636,6 +638,7 @@ actor ContextProjectionService {
                 lastPromptTokens: projectionContext.lastPromptTokens,
                 lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+                workspacePolicy: deps.workspacePolicy,
                 logger: deps.logger,
                 performTransform: { input in
                     try await ContextAssemblyService.runTransformWithTimeout(

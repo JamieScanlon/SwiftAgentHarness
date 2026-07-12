@@ -251,6 +251,12 @@ actor ConversationControlPlaneServiceImpl: ConversationControlPlaneServicing {
                 )
             }
         }
+        if let cwd = patch.cwd {
+            _ = try await deps.persistenceDomain.recordHarnessPersistenceCwd(
+                conversationID: conversationID,
+                cwd: cwd
+            )
+        }
         await messaging.refreshProjectedConversationMessages(conversationID: conversationID, baseMessagesOverride: nil)
         if !skipControlPlaneRevisionBump {
             try await deps.persistenceDomain.bumpControlPlaneRevision(conversationID: conversationID)

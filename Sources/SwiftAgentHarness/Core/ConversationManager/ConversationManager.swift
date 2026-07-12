@@ -366,18 +366,11 @@ final class ConversationManager {
     }
 
     private static func harnessCatalogWorkingDirectoryIfKnown() -> String? {
-        if let v = ProcessInfo.processInfo.environment["SAH_SESSION_CWD"], !v.isEmpty { return v }
-        if let v = ProcessInfo.processInfo.environment["PWD"], !v.isEmpty { return v }
-        let cur = FileManager.default.currentDirectoryPath
-        if cur.isEmpty || cur == "/" { return nil }
-        return cur
+        HarnessWorkspaceResolver.ambientIfKnown()
     }
 
     private static func normalizedCwd(_ cwd: String?) -> String? {
-        guard let trimmed = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
+        HarnessWorkspaceResolver.normalizedCwd(cwd)
     }
 
     private func applyDefaultHarnessPersistenceMetadata(to conversation: inout ModelConversation, cwd: String? = nil) {
@@ -1229,6 +1222,42 @@ final class ConversationManager {
             logger?.error("[ConversationManager] syncConversationCatalogStateToSessionBackend failed conversationID=\(conversation.id) title=\(conversation.topic ?? "nil") error=\(error)")
             throw error
         }
+    }
+
+    /// Persists an explicit workspace root on the conversation (create, PATCH, or sanctioned ambient backfill).
+    func recordHarnessPersistenceCwd(conversationID: UUID, cwd: String) throws -> ModelConversation {
+        guard let normalized = HarnessWorkspaceResolver.normalizedCwd(cwd) else {
+            throw ConversationServiceError.harnessWorkspaceNotRecorded(conversationID: conversationID)
+        }
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else {
+            throw ConversationServiceError.conversationNotFound
+        }
+        conversations[index].harnessPersistenceCwd = normalized
+        conversations[index].updatedAt = Date()
+        try syncConversationCatalogStateToSessionBackend(conversation: conversations[index])
+        return conversations[index]
+    }
+
+    /// Resolves workspace for side-effecting paths; backfills when policy permits sanctioned ambient.
+    func resolveHarnessPersistenceCwdForSideEffects(
+        conversationID: UUID,
+        policy: HarnessWorkspacePolicy
+    ) throws -> String {
+        guard var conversation = modelConversation(id: conversationID) else {
+            throw ConversationServiceError.conversationNotFound
+        }
+        if let recorded = HarnessWorkspaceResolver.recordedCwd(on: conversation) {
+            return recorded
+        }
+        let resolved = try HarnessWorkspaceResolver.resolveForSideEffects(
+            conversation: conversation,
+            policy: policy
+        )
+        if HarnessWorkspaceResolver.recordedCwd(on: conversation) == nil,
+           policy.allowAmbientWorkspaceFallback {
+            conversation = try recordHarnessPersistenceCwd(conversationID: conversationID, cwd: resolved)
+        }
+        return resolved
     }
 
     private func bootstrapInMemoryCatalogIfMissing(

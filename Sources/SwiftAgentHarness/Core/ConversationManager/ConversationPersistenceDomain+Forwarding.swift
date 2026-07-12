@@ -523,6 +523,20 @@ extension ConversationPersistenceDomain {
         )
     }
 
+    func recordHarnessPersistenceCwd(conversationID: UUID, cwd: String) throws -> ModelConversation {
+        try stack.conversationManager.recordHarnessPersistenceCwd(conversationID: conversationID, cwd: cwd)
+    }
+
+    func resolveHarnessPersistenceCwdForSideEffects(
+        conversationID: UUID,
+        policy: HarnessWorkspacePolicy
+    ) throws -> String {
+        try stack.conversationManager.resolveHarnessPersistenceCwdForSideEffects(
+            conversationID: conversationID,
+            policy: policy
+        )
+    }
+
     func createIsolatedSubAgent(
         parentConversationID: UUID,
         selectedModel: Model,

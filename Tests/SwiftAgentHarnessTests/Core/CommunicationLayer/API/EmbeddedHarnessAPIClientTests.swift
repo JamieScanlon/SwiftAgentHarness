@@ -57,13 +57,15 @@ struct EmbeddedHarnessAPIClientTests {
         conversationID: conversationID,
         patch: ConversationPatch(
           expectedRevision: beforePatch.controlPlaneRevision,
-          description: "patched"
+          description: "patched",
+          cwd: "/embedded/patched/workspace"
         ),
         ifMatch: ifMatch
       )
 
       let conversation = try #require(await host.runtimeSession.modelConversation(id: conversationID))
       #expect(conversation.description == "patched")
+      #expect(conversation.harnessPersistenceCwd == "/embedded/patched/workspace")
     }
   }
 
