@@ -19,6 +19,8 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
     public var frozenSkillsIndexXML: String?
     /// Dispatch-only; never interpolated into the prompt template.
     public var assembledPromptDigest: String?
+    /// Canonical workspace root for filesystem tool path resolution.
+    public var workspaceRoot: String?
 
     public init(
         conversationID: String,
@@ -35,7 +37,8 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
         registryProfileID: String? = nil,
         modeCompactionLevel: String? = nil,
         frozenSkillsIndexXML: String? = nil,
-        assembledPromptDigest: String? = nil
+        assembledPromptDigest: String? = nil,
+        workspaceRoot: String? = nil
     ) {
         self.conversationID = conversationID
         self.conversationStartDate = conversationStartDate
@@ -52,5 +55,6 @@ public struct SystemPromptAssemblyContext: Sendable, Equatable {
         self.modeCompactionLevel = modeCompactionLevel
         self.frozenSkillsIndexXML = frozenSkillsIndexXML
         self.assembledPromptDigest = assembledPromptDigest
+        self.workspaceRoot = workspaceRoot
     }
 }

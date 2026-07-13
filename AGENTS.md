@@ -40,7 +40,7 @@ In order to avoid flaky tests it is important that tests do not depend on shared
 - Follow Swift 6 strict concurrency
 - Use Swift @Observable over ObservableObject
 - Use code comments sparingly and only for non obvious implementations, gotchas, etc. (SwiftDoc-style documentation are the exception). Never referece plans or other non-code documents in code comments.
-- **Tool descriptions** — Treat `ToolDefinition.description` and model-facing parameter `description` fields as prompt text. Do not reword for style without stating behavioral intent. When changing descriptions, document affected tool names and rationale in the PR/commit message and follow [docs/process/tool-description-change-control.md](./docs/process/tool-description-change-control.md). Update [CHANGELOG.md](./CHANGELOG.md) for non-typo behavioral edits.
+- **Tool descriptions** — Treat `ToolDefinition.description` and model-facing parameter `description` fields as prompt text. Do not reword for style without stating behavioral intent. When changing descriptions, document affected tool names and rationale in the PR/commit message.
 
 ## Antipatterns
 

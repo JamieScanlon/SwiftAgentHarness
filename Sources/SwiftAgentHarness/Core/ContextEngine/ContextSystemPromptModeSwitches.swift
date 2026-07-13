@@ -59,7 +59,8 @@ enum ContextSystemPromptModeSwitches {
             includeToolGuidance: context.includeToolGuidance ?? true,
             subAgentContextPrompt: subAgentPrompt,
             registryProfileID: resolvedProfile.id,
-            modeCompactionLevel: compactionLevel
+            modeCompactionLevel: compactionLevel,
+            workspaceRoot: conversation.harnessPersistenceCwd?.trimmedOrNil
         )
 
         var modeContribution = SystemPromptContribution(source: .mode)

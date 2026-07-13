@@ -14,6 +14,12 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     public static let processSendKeysToolName = "process_send_keys"
     public static let bashSandboxAdapterTag = "execution.environment.adapter:tool-env.local.sandbox"
 
+    static let filePathParameterDescription =
+        "Workspace-relative path (preferred) or absolute path under the workspace. Paths are resolved from the workspace root, not the shell home. Do not prefix with ~ or $HOME; use MyProject/src/File.swift instead of ~/Projects/MyProject/...."
+
+    static let grepPathParameterDescription =
+        "Optional workspace-relative subdirectory to search (same path rules as file_path: no ~ or $HOME)."
+
     private let workspaceRoot: String
     private let execRuntime: ExecRuntimeService
     private let runtimeContext: ExecRuntimeContext
@@ -116,7 +122,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 name: Self.readFileToolName,
                 description: "Read a file from the workspace. Returns at most 256KB per call; use offset (1-based line) and limit (max lines) to read larger files in windows.",
                 parameters: [
-                    .init(name: "file_path", description: "Absolute or workspace-relative path", type: "string", required: true),
+                    .init(name: "file_path", description: Self.filePathParameterDescription, type: "string", required: true),
                     .init(name: "offset", description: "Optional 1-based line number to start reading from", type: "integer", required: false),
                     .init(name: "limit", description: "Optional maximum number of lines to return", type: "integer", required: false),
                 ],
@@ -126,7 +132,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 name: Self.writeFileToolName,
                 description: "Write a file in the workspace or memory directory.",
                 parameters: [
-                    .init(name: "file_path", description: "Target path", type: "string", required: true),
+                    .init(name: "file_path", description: Self.filePathParameterDescription, type: "string", required: true),
                     .init(name: "content", description: "Full file content", type: "string", required: true),
                 ],
                 type: .function
@@ -135,7 +141,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 name: Self.editFileToolName,
                 description: "Replace old_string with new_string in a file.",
                 parameters: [
-                    .init(name: "file_path", description: "Target path", type: "string", required: true),
+                    .init(name: "file_path", description: Self.filePathParameterDescription, type: "string", required: true),
                     .init(name: "old_string", description: "Exact text to replace", type: "string", required: true),
                     .init(name: "new_string", description: "Replacement text", type: "string", required: true),
                 ],
@@ -154,7 +160,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 description: "Search file contents under workspace root; returns path:line:content for each match.",
                 parameters: [
                     .init(name: "pattern", description: "Regular expression", type: "string", required: true),
-                    .init(name: "path", description: "Optional subdirectory", type: "string", required: false),
+                    .init(name: "path", description: Self.grepPathParameterDescription, type: "string", required: false),
                 ],
                 type: .function
             ),
@@ -242,8 +248,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     }
 
     private func readFile(_ toolCall: ToolCall) async -> ToolResult {
+        let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
         do {
-            let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let offsetLine = extractInt(from: toolCall.arguments, key: "offset")
             let limitLines = extractInt(from: toolCall.arguments, key: "limit")
             if let spillContent = try readAllowlistedSpillFile(
@@ -264,7 +270,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 limitLines: limitLines
             )
         } catch {
-            return err(toolCall, pathErrorMessage(error))
+            return err(toolCall, pathErrorMessage(error, raw: raw))
         }
     }
 
@@ -322,9 +328,9 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     }
 
     private func writeFile(_ toolCall: ToolCall) async -> ToolResult {
+        let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
         do {
             let bridge = try await execRuntime.fsBridge(context: runtimeContext)
-            let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let content = extractString(from: toolCall.arguments, key: "content") ?? ""
             let path = try resolveToolPath(raw: raw, requireExists: false)
             try MemoryContentScanner.validateWriteIfSensitiveTarget(
@@ -348,14 +354,14 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             await notifyMemoryWrite(path)
             return ok(toolCall, "Wrote \(path)")
         } catch {
-            return err(toolCall, pathErrorMessage(error))
+            return err(toolCall, pathErrorMessage(error, raw: raw))
         }
     }
 
     private func editFile(_ toolCall: ToolCall) async -> ToolResult {
+        let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
         do {
             let bridge = try await execRuntime.fsBridge(context: runtimeContext)
-            let raw = extractString(from: toolCall.arguments, key: "file_path") ?? ""
             let oldString = extractString(from: toolCall.arguments, key: "old_string") ?? ""
             let newString = extractString(from: toolCall.arguments, key: "new_string") ?? ""
             let path = try resolveToolPath(raw: raw, requireExists: true)
@@ -387,7 +393,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             await notifyMemoryWrite(path)
             return ok(toolCall, "Edited \(path)")
         } catch {
-            return err(toolCall, pathErrorMessage(error))
+            return err(toolCall, pathErrorMessage(error, raw: raw))
         }
     }
 
@@ -478,16 +484,17 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func grep(_ toolCall: ToolCall) async -> ToolResult {
         let pattern = extractString(from: toolCall.arguments, key: "pattern") ?? ""
+        let rawPath = extractString(from: toolCall.arguments, key: "path")
         let sub: String
         do {
             sub = try PathPolicy.resolveSearchRoot(
-                raw: extractString(from: toolCall.arguments, key: "path"),
+                raw: rawPath,
                 workspaceRoot: workspaceRoot,
                 memoryDirectory: runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) },
                 memoryWriteOnly: runtimeContext.memoryWriteOnly
             )
         } catch {
-            return err(toolCall, pathErrorMessage(error))
+            return err(toolCall, pathErrorMessage(error, raw: rawPath))
         }
         switch await WorkspaceGrepRunner.run(
             pattern: pattern,
@@ -697,9 +704,14 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         await onMemoryWrite?(path)
     }
 
-    private func pathErrorMessage(_ error: Error) -> String {
+    private func pathErrorMessage(_ error: Error, raw: String? = nil) -> String {
+        let rawPath = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let usesShellHomePrefix = rawPath.hasPrefix("~") || rawPath.contains("$HOME")
         switch error {
         case WorkspaceFilesystemError.outsideAllowedRoots:
+            if usesShellHomePrefix {
+                return "Path expands outside the workspace. Use a workspace-relative path from the workspace root shown in the Tools section (e.g. MyProject/src/File.swift). Do not use ~ or $HOME."
+            }
             return "Path is outside the allowed workspace or memory directory"
         case WorkspaceFilesystemError.symlinkEscape:
             return "Path escapes allowed roots via symlink"
@@ -709,6 +721,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             return "Path outside memory directory"
         case WorkspaceFilesystemError.invalidPath:
             return "Invalid path"
+        case WorkspaceFilesystemError.invalidPathSyntax(let message):
+            return message
         case WorkspaceFilesystemError.notFound(let path):
             return "File not found: \(path)"
         case WorkspaceFilesystemError.readWindowRequired(let message):

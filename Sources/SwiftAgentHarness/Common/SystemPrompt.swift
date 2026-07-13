@@ -589,7 +589,7 @@ This conversation was started on: \(assemblyContext.conversationStartDate)
                 strictAgentHarnessPrompts: strictAgentHarnessPrompts
             ),
             .memory: "",
-            .toolGuidance: toolGuidanceSectionTemplate(),
+            .toolGuidance: toolGuidanceSectionTemplate(workspaceRoot: assemblyContext.workspaceRoot),
             .skills: skillsSectionTemplate(
                 skillsFolderPath: skillsFolderPath,
                 availableSkills: availableSkills
@@ -609,14 +609,25 @@ This conversation was started on: \(assemblyContext.conversationStartDate)
         return sections
     }
 
-    private static func toolGuidanceSectionTemplate() -> String {
-        """
+    private static func toolGuidanceSectionTemplate(workspaceRoot: String? = nil) -> String {
+        var filesystemGuidance = """
+
+## Filesystem paths (read_file, write_file, edit_file, glob, grep)
+- Paths resolve against the **workspace root**, not your shell home directory.
+- Prefer workspace-relative paths: `MyProject/Sources/App.swift`
+- Absolute paths are OK when they lie under the workspace root.
+- Do not use `~` or `$HOME` in file tool paths.
+"""
+        if let workspaceRoot = workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines), !workspaceRoot.isEmpty {
+            filesystemGuidance += "\n- Workspace root: `\(workspaceRoot)`\n"
+        }
+        return """
 ---
 # Tools
 In this environment you have access to a set of tools you can use to help you gather information and perform tasks.
 
 **IMPORTANT** When you need to use tools do not describe, announce, or explain what tool you plan on using. Just call the tool via the function call. If your response inlcudes the phrase "let me..." but does not contain a tool call you are doing something wrong
-
+\(filesystemGuidance)
 ## Examples
 ### WRONG - you should never do this
 ```

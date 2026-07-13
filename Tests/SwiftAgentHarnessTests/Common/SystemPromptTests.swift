@@ -218,6 +218,60 @@ struct SystemPromptModeContextSwitchTests {
         #expect(result.contains("# Tools") == false)
     }
 
+    @Test("tool guidance includes filesystem path rules")
+    func toolGuidanceIncludesFilesystemPathRules() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Filesystem paths"))
+        #expect(result.contains("Do not use `~` or `$HOME`"))
+    }
+
+    @Test("tool guidance includes workspace root when provided")
+    func toolGuidanceIncludesWorkspaceRoot() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let workspace = "/Users/me/Projects"
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true,
+            workspaceRoot: workspace
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Workspace root: `\(workspace)`"))
+    }
+
+    @Test("tool guidance omits workspace root line when unset")
+    func toolGuidanceOmitsWorkspaceRootWhenUnset() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Workspace root:") == false)
+    }
+
     @Test("Section override replaces tool section body")
     func sectionOverrideReplacesToolsSection() async throws {
         let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)

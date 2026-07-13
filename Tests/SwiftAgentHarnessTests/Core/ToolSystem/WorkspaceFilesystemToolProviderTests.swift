@@ -119,6 +119,62 @@ struct WorkspaceFilesystemToolProviderTests {
         ToolCall(name: name, arguments: .object(args), id: id)
     }
 
+    @Test("file tools share file_path parameter description")
+    func fileToolsShareFilePathDescription() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let tools = await provider(workspace: fixture.workspace, memory: fixture.memory).availableTools()
+        let expected = WorkspaceFilesystemToolProvider.filePathParameterDescription
+        for name in [
+            WorkspaceFilesystemToolProvider.readFileToolName,
+            WorkspaceFilesystemToolProvider.writeFileToolName,
+            WorkspaceFilesystemToolProvider.editFileToolName,
+        ] {
+            let tool = tools.first { $0.name == name }
+            let param = tool?.parameters.first { $0.name == "file_path" }
+            #expect(param?.description == expected)
+        }
+    }
+
+    @Test("write_file with tilde path writes to expanded location not literal tilde directory")
+    func writeFileTildePathWritesExpandedLocation() async throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let testID = UUID().uuidString
+        let projectsRoot = (home as NSString).appendingPathComponent("wsp-provider-tilde-\(testID)/Projects")
+        let workspace = URL(fileURLWithPath: projectsRoot, isDirectory: true)
+        let memory = workspace.deletingLastPathComponent().appendingPathComponent("memory", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: memory, withIntermediateDirectories: true)
+
+        let raw = "~/wsp-provider-tilde-\(testID)/Projects/MyApp/file.txt"
+        let result = try await provider(workspace: workspace, memory: memory).executeTool(call(
+            WorkspaceFilesystemToolProvider.writeFileToolName,
+            args: ["file_path": raw, "content": "hello"]
+        ))
+        #expect(result.success == true)
+
+        let literalTildePath = workspace.appendingPathComponent("~/wsp-provider-tilde-\(testID)/Projects/MyApp/file.txt")
+        #expect(FileManager.default.fileExists(atPath: literalTildePath.path) == false)
+
+        let expected = (projectsRoot as NSString).appendingPathComponent("MyApp/file.txt")
+        #expect(FileManager.default.fileExists(atPath: expected))
+        let content = try String(contentsOf: URL(fileURLWithPath: expected), encoding: .utf8)
+        #expect(content == "hello")
+    }
+
+    @Test("write_file rejects relative path with literal tilde directory segment")
+    func writeFileRejectsLiteralTildeSegment() async throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace) }
+        let result = try await provider(workspace: fixture.workspace, memory: fixture.memory).executeTool(call(
+            WorkspaceFilesystemToolProvider.writeFileToolName,
+            args: ["file_path": "Projects/~/foo.txt", "content": "hello"]
+        ))
+        #expect(result.success == false)
+        #expect(result.error?.contains("literal '~'") == true)
+    }
+
     @Test("read_file rejects oversized file without offset and limit")
     func readFileRejectsOversizedWithoutWindow() async throws {
         let fixture = try makeFixture()
