@@ -96,8 +96,8 @@ actor ConversationToolModePolicyRuntimeService {
             model: conversation.model,
             conversation: conversation
         )
+        // Do not call orchestrator.shutdown() — managers are session-owned / shared.
         if let orchestrator {
-            defer { Task { await orchestrator.shutdown() } }
             return await OrchestrationToolCatalog.registryEntriesForListing(
                 orchestrator: orchestrator,
                 dataProvider: installedToolData,

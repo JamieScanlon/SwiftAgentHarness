@@ -435,8 +435,8 @@ public actor OrchestratorSessionRuntimeService {
         } else {
             orchestrator = nil
         }
+        // Do not call orchestrator.shutdown() — managers are session-owned / shared.
         if let orchestrator {
-            defer { Task { await orchestrator.shutdown() } }
             return await OrchestrationToolCatalog.registryEntriesForListing(
                 orchestrator: orchestrator,
                 dataProvider: toolData,
