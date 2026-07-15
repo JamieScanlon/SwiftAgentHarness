@@ -90,6 +90,35 @@ struct AgentRuntimeSessionServiceTests {
         await service.testing_setActiveStreamingRun(conversationID: nil, runID: nil)
     }
 
+    @Test("streaming generation stays unsettled while currentStreamingRunID matches after generationTask is cleared")
+    func streamingGenerationUnsettledWhileStreamingRunIDMatchesWithoutTask() async throws {
+        let container = try AgentRuntimeSessionServiceTestSupport.makeContainer()
+        let host = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let service = await host.agentRuntimeSessionService
+        let model = AgentRuntimeSessionServiceTestSupport.makeModel()
+        try await host.createConversation(with: model, userSystemPrompt: "sys")
+        let conversationID = try #require(await host.currentConversationID)
+        let conversation = try #require(await host.currentConversation())
+        await host.orchestratorRuntimeService.setupOrchestrator(with: model, activeConversation: conversation)
+        let runID = UUID()
+
+        await service.testing_setActiveStreamingRun(conversationID: conversationID, runID: runID)
+        await service.testing_setGenerationTaskActive(false)
+
+        let settled = await service.streamingGenerationSettled(conversationID: conversationID, runID: runID)
+        #expect(settled == false)
+
+        await service.testing_setActiveStreamingRun(conversationID: conversationID, runID: nil)
+        let settledAfterClear = await service.streamingGenerationSettled(
+            conversationID: conversationID,
+            runID: runID
+        )
+        #expect(settledAfterClear == true)
+    }
+
     @Test("service orchestration emission deduplicates identical topic refresh handler invocations")
     func serviceOrchestrationEmissionDeduplicatesTopicRefresh() async throws {
         let container = try AgentRuntimeSessionServiceTestSupport.makeContainer()

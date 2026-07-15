@@ -199,11 +199,45 @@ extension AgentRuntimeSessionService {
 
     func streamingGenerationSettled(conversationID: UUID, runID: UUID?) async -> Bool {
         let lifecycle = await currentLifecycleSnapshot(for: conversationID)
+        // Soft cancel nils generationTask immediately while leaving currentStreamingRunID
+        // until terminal cleanup releases the lane; a waited run must stay unsettled until then.
+        if let runID, lifecycle.currentStreamingRunID == runID {
+            return false
+        }
         guard lifecycle.generationTask != nil else { return true }
         guard lifecycle.activeStreamingConversationID == conversationID else { return true }
         guard let runID else { return false }
-        guard let activeRunID = lifecycle.currentStreamingRunID else { return false }
-        return activeRunID != runID
+        // Task still active for this conversation without a current streaming run id.
+        guard lifecycle.currentStreamingRunID != nil else { return false }
+        return true
+    }
+
+    func waitUntilRunLaneReleased(runID: UUID, timeoutMS: Int = 60_000) async {
+        guard timeoutMS > 0 else { return }
+        let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
+        while Date() < deadline {
+            if await !deps.runtimeLaneCoordinator.isRunAdmitted(runID: runID) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func waitUntilStreamingGenerationQuiesced(
+        conversationID: UUID,
+        runID: UUID,
+        timeoutMS: Int = 60_000
+    ) async {
+        guard timeoutMS > 0 else { return }
+        let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
+        while Date() < deadline {
+            if await streamingGenerationSettled(conversationID: conversationID, runID: runID) {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let remainingMS = max(0, Int(deadline.timeIntervalSinceNow * 1000))
+        await waitUntilRunLaneReleased(runID: runID, timeoutMS: remainingMS > 0 ? remainingMS : 1)
     }
 
     func testing_resetContextTokenSnapshot() async {

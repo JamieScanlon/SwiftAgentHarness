@@ -16,6 +16,17 @@ struct RuntimeLaneCoordinatorTests {
         #expect(await coordinator.tryAcquireMainRun(sessionKey: sessionKey, runID: runB) == nil)
     }
 
+    @Test("isRunAdmitted tracks admission until release")
+    func isRunAdmittedTracksAdmission() async {
+        let coordinator = RuntimeLaneCoordinator()
+        let runID = UUID()
+        #expect(await coordinator.isRunAdmitted(runID: runID) == false)
+        #expect(await coordinator.tryAcquireMainRun(sessionKey: "session:admit", runID: runID) == nil)
+        #expect(await coordinator.isRunAdmitted(runID: runID) == true)
+        await coordinator.release(runID: runID)
+        #expect(await coordinator.isRunAdmitted(runID: runID) == false)
+    }
+
     @Test("global main lane cap is enforced")
     func globalMainLaneCap() async {
         let coordinator = RuntimeLaneCoordinator(

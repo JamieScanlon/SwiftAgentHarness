@@ -143,6 +143,13 @@ actor RecordingConversationMessagingPort: ConversationMessagingPort {
 
     func syncProjectionFromRegistry(conversationID: UUID) async {}
 
+    func publishPrunedProjectionAfterRewind(
+        conversation: ModelConversation,
+        baseMessagesOverride: [Message]
+    ) async {
+        refreshCalls.append((conversation.id, baseMessagesOverride))
+    }
+
     func applyStreamingUserCancellation(conversationID: UUID) async {}
 
     func applySendFailure(_ error: Error, conversationID: UUID) async {}

@@ -14,8 +14,8 @@ enum RuntimeTurnTerminalHandler {
         runID: UUID?,
         activeAnchorUserMessageID: UUID?,
         setPendingTerminalReason: @Sendable (UUID, UUID, ConversationRunTerminalReason?) async -> Void,
-        stripRunTailAfterAnchorIfNeeded: @Sendable (UUID, UUID) async -> Void,
-        applyStreamingUserCancellation: @Sendable (UUID) async -> Void,
+        stripRunTailAfterAnchorIfNeeded: @Sendable (UUID, UUID?, UUID) async -> Void,
+        applyStreamingUserCancellation: @Sendable (UUID, UUID?) async -> Void,
         applySendFailure: @Sendable (Error) async -> Void,
         logInfo: @Sendable (String) async -> Void,
         logError: @Sendable (String) async -> Void
@@ -32,9 +32,9 @@ enum RuntimeTurnTerminalHandler {
         case .cancelled:
             await logInfo("[HarnessRuntimeSession] Streaming orchestration task cancelled for \(conversationID)")
             if let activeAnchorUserMessageID {
-                await stripRunTailAfterAnchorIfNeeded(conversationID, activeAnchorUserMessageID)
+                await stripRunTailAfterAnchorIfNeeded(conversationID, runID, activeAnchorUserMessageID)
             }
-            await applyStreamingUserCancellation(conversationID)
+            await applyStreamingUserCancellation(conversationID, runID)
             return RuntimeTurnTerminalStatus(status: .cancelled, markerKind: runCancelledMarkerKind)
         case .failed:
             let classification = result.errorPolicy?.errorClass.rawValue ?? "unknown"
@@ -52,4 +52,3 @@ enum RuntimeTurnTerminalHandler {
         }
     }
 }
-

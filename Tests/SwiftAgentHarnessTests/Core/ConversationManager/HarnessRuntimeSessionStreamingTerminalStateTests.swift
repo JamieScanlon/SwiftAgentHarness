@@ -408,6 +408,94 @@ struct HarnessRuntimeSessionStreamingTerminalStateTests {
         #expect(snapshot.currentRunID == nil)
     }
 
+    @Test("cancelled run cleanup ignores conversation already owned by a newer run")
+    func cancelTerminalDoesNotIdleNewerRevertRun() async throws {
+        let container = try StreamingTerminalStateTestSupport.makeContainer()
+        let manager = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let model = StreamingTerminalStateTestSupport.makeModel()
+        try await manager.createConversation(with: model, userSystemPrompt: "sys")
+        let conversationID = try #require(await manager.currentConversationID)
+        try await StreamingTerminalStateTestSupport.warmPool(manager, model: model, conversationID: conversationID)
+
+        let runA = UUID()
+        let runB = UUID()
+        let userAnchorID = UUID()
+        await manager.appendMessagesToConversation(
+            [
+                Message(id: userAnchorID, role: .user, content: "anchor", timestamp: Date(), toolCalls: []),
+                Message(id: UUID(), role: .assistant, content: "partial-from-A", timestamp: Date(), toolCalls: []),
+            ],
+            conversationID: conversationID
+        )
+        await manager.testing_setConversationRuntimeState(
+            conversationID: conversationID,
+            state: .generating,
+            agenticPhase: .started,
+            llmRequestPhase: .queued,
+            currentRunID: runB
+        )
+        await manager.testing_setActiveStreamingRun(conversationID: conversationID, runID: runB)
+        defer { Task { await manager.testing_setActiveStreamingRun(conversationID: nil, runID: nil) } }
+
+        let service = await manager.agentRuntimeSessionService
+        await service.stripRunTailIfBound(
+            conversationID: conversationID,
+            forRunID: runA,
+            anchorUserMessageID: userAnchorID
+        )
+        await service.applyStreamingUserCancellationIfBound(
+            conversationID: conversationID,
+            forRunID: runA
+        )
+
+        let conversation = try #require(await manager.modelConversation(id: conversationID))
+        #expect(conversation.currentRunID == runB)
+        #expect(conversation.state == .generating)
+        #expect(conversation.agenticPhase == .started)
+        #expect(conversation.llmRequestPhase == .queued)
+        let messages = try await manager.listMessages(conversationID: conversationID)
+        #expect(messages.contains(where: { $0.content == "partial-from-A" }))
+    }
+
+    @Test("cancelled run cleanup idles when cancelled run still owns conversation")
+    func cancelTerminalIdlesWhenCancelledRunStillOwns() async throws {
+        let container = try StreamingTerminalStateTestSupport.makeContainer()
+        let manager = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        let model = StreamingTerminalStateTestSupport.makeModel()
+        try await manager.createConversation(with: model, userSystemPrompt: "sys")
+        let conversationID = try #require(await manager.currentConversationID)
+        try await StreamingTerminalStateTestSupport.warmPool(manager, model: model, conversationID: conversationID)
+
+        let runA = UUID()
+        await manager.testing_setConversationRuntimeState(
+            conversationID: conversationID,
+            state: .generating,
+            agenticPhase: .started,
+            llmRequestPhase: .queued,
+            currentRunID: runA
+        )
+        await manager.testing_setActiveStreamingRun(conversationID: conversationID, runID: runA)
+        defer { Task { await manager.testing_setActiveStreamingRun(conversationID: nil, runID: nil) } }
+
+        let service = await manager.agentRuntimeSessionService
+        await service.applyStreamingUserCancellationIfBound(
+            conversationID: conversationID,
+            forRunID: runA
+        )
+
+        let conversation = try #require(await manager.modelConversation(id: conversationID))
+        #expect(conversation.currentRunID == nil)
+        #expect(conversation.state == .idle)
+        #expect(conversation.agenticPhase == .idle)
+        #expect(conversation.llmRequestPhase == nil || conversation.llmRequestPhase == .idle)
+    }
+
     @Test("Orchestrator message routing falls back to active streaming conversation in API sessions")
     func orchestratorMessageRoutingFallsBackToActiveStreamingConversationInAPISession() async throws {
         let namespace = UUID()

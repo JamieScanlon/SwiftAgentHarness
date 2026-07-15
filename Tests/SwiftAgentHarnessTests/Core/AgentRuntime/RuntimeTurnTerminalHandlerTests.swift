@@ -4,8 +4,8 @@ import Testing
 
 private actor RuntimeTurnTerminalCapture {
     private(set) var pendingReasons: [(conversationID: UUID, runID: UUID, reason: ConversationRunTerminalReason?)] = []
-    private(set) var stripped: [(conversationID: UUID, anchorID: UUID)] = []
-    private(set) var cancelledConversationIDs: [UUID] = []
+    private(set) var stripped: [(conversationID: UUID, runID: UUID?, anchorID: UUID)] = []
+    private(set) var cancelled: [(conversationID: UUID, runID: UUID?)] = []
     private(set) var failures: [String] = []
     private(set) var infoLogs: [String] = []
     private(set) var errorLogs: [String] = []
@@ -14,12 +14,12 @@ private actor RuntimeTurnTerminalCapture {
         pendingReasons.append((conversationID, runID, reason))
     }
 
-    func appendStripped(conversationID: UUID, anchorID: UUID) {
-        stripped.append((conversationID, anchorID))
+    func appendStripped(conversationID: UUID, runID: UUID?, anchorID: UUID) {
+        stripped.append((conversationID, runID, anchorID))
     }
 
-    func appendCancelled(_ conversationID: UUID) {
-        cancelledConversationIDs.append(conversationID)
+    func appendCancelled(conversationID: UUID, runID: UUID?) {
+        cancelled.append((conversationID, runID))
     }
 
     func appendFailure(_ message: String) {
@@ -52,8 +52,12 @@ struct RuntimeTurnTerminalHandlerTests {
             runID: runID,
             activeAnchorUserMessageID: anchorID,
             setPendingTerminalReason: { cid, rid, reason in await capture.setPendingReason(conversationID: cid, runID: rid, reason: reason) },
-            stripRunTailAfterAnchorIfNeeded: { cid, aid in await capture.appendStripped(conversationID: cid, anchorID: aid) },
-            applyStreamingUserCancellation: { cid in await capture.appendCancelled(cid) },
+            stripRunTailAfterAnchorIfNeeded: { cid, rid, aid in
+                await capture.appendStripped(conversationID: cid, runID: rid, anchorID: aid)
+            },
+            applyStreamingUserCancellation: { cid, rid in
+                await capture.appendCancelled(conversationID: cid, runID: rid)
+            },
             applySendFailure: { error in await capture.appendFailure(error.localizedDescription) },
             logInfo: { message in await capture.appendInfo(message) },
             logError: { message in await capture.appendError(message) }
@@ -64,8 +68,12 @@ struct RuntimeTurnTerminalHandlerTests {
         let stripped = await capture.stripped
         #expect(stripped.count == 1)
         #expect(stripped.first?.conversationID == conversationID)
+        #expect(stripped.first?.runID == runID)
         #expect(stripped.first?.anchorID == anchorID)
-        #expect((await capture.cancelledConversationIDs).contains(conversationID))
+        let cancelled = await capture.cancelled
+        #expect(cancelled.count == 1)
+        #expect(cancelled.first?.conversationID == conversationID)
+        #expect(cancelled.first?.runID == runID)
         #expect(await capture.failures.isEmpty)
     }
 
@@ -83,8 +91,12 @@ struct RuntimeTurnTerminalHandlerTests {
             runID: runID,
             activeAnchorUserMessageID: nil,
             setPendingTerminalReason: { cid, rid, reason in await capture.setPendingReason(conversationID: cid, runID: rid, reason: reason) },
-            stripRunTailAfterAnchorIfNeeded: { _, _ in await capture.appendStripped(conversationID: UUID(), anchorID: UUID()) },
-            applyStreamingUserCancellation: { cid in await capture.appendCancelled(cid) },
+            stripRunTailAfterAnchorIfNeeded: { cid, rid, aid in
+                await capture.appendStripped(conversationID: cid, runID: rid, anchorID: aid)
+            },
+            applyStreamingUserCancellation: { cid, rid in
+                await capture.appendCancelled(conversationID: cid, runID: rid)
+            },
             applySendFailure: { error in await capture.appendFailure(error.localizedDescription) },
             logInfo: { message in await capture.appendInfo(message) },
             logError: { message in await capture.appendError(message) }
@@ -93,7 +105,6 @@ struct RuntimeTurnTerminalHandlerTests {
         #expect(terminal.status == .failed)
         #expect(terminal.markerKind == nil)
         #expect((await capture.failures).count == 1)
-        #expect(await capture.cancelledConversationIDs.isEmpty)
+        #expect(await capture.cancelled.isEmpty)
     }
 }
-

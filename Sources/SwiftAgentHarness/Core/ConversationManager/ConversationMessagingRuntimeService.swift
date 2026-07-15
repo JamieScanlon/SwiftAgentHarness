@@ -234,6 +234,19 @@ actor ConversationMessagingRuntimeService {
         }
     }
 
+    /// Clears publish frontier, truncates registry messages to the active prefix, then refreshes/publishes projection.
+    func publishPrunedProjectionAfterRewind(
+        conversation: ModelConversation,
+        baseMessagesOverride: [Message]
+    ) async {
+        await sessionProjection.invalidateProjectionPublishState(conversationID: conversation.id)
+        await persistenceDomain.applyRegistryTranscriptTruncation(conversation)
+        await refreshProjectedConversationMessages(
+            conversationID: conversation.id,
+            baseMessagesOverride: baseMessagesOverride
+        )
+    }
+
     func refreshProjectedConversationMessages(
         conversationID: UUID,
         baseMessagesOverride: [Message]? = nil

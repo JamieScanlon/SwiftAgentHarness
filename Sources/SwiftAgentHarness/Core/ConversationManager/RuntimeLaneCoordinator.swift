@@ -94,6 +94,10 @@ actor RuntimeLaneCoordinator {
         return nil
     }
 
+    func isRunAdmitted(runID: UUID) -> Bool {
+        admissionContextByRunID[runID] != nil
+    }
+
     func release(runID: UUID) {
         guard let context = admissionContextByRunID.removeValue(forKey: runID) else { return }
         release(context)
