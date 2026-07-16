@@ -38,16 +38,14 @@ public struct ModelPoolFailoverConfiguration: Sendable, Equatable {
         self.rateLimitCooldown = rateLimitCooldown
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolFailoverConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            return .specDefaults
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = root["settings"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ModelPoolFailoverConfiguration {
+        guard let settings = document.foundationObject(forKey: "settings") else {
             return .specDefaults
         }
         return configuration(fromSettingsJSON: settings)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromSettingsJSON settings: [String: Any]) -> ModelPoolFailoverConfiguration {
         guard let raw = settings["modelPoolFailover"] as? [String: Any] else {

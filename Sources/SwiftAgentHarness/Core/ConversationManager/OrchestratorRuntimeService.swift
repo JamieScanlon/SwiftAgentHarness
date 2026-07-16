@@ -29,9 +29,10 @@ public actor OrchestratorRuntimeService {
     nonisolated(unsafe) private var toolData: (any ConversationToolDataProviding)!
     internal let subAgentPool: any SubAgentPooling
     nonisolated(unsafe) private var toolApproval: (any ToolApprovalRuntimeServicing)!
-    internal let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    internal let toolSystemGateway: any ToolSystemGatewaying
 
     nonisolated(unsafe) private var additionalToolProviderFactory: HarnessToolProviderFactory?
+    nonisolated(unsafe) private var additionalToolProviderVisibilityGrant: ToolVisibilityGrant = .inheritModeLists
     nonisolated(unsafe) private var channelRegistry: (any ChannelPluginLooking)?
     nonisolated(unsafe) private var topicPublication: ConversationTopicPublicationPort?
 
@@ -49,6 +50,7 @@ public actor OrchestratorRuntimeService {
         self.contextProjection = contextProjection
         self.subAgentPool = subAgentPool
         self.selection = selection
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installStartup(_ startup: ConversationStartupService) {
@@ -86,9 +88,24 @@ public actor OrchestratorRuntimeService {
         self.toolData = toolData
     }
 
-    nonisolated public func installAdditionalToolProviders(_ factory: @escaping HarnessToolProviderFactory) {
+    nonisolated public func installAdditionalToolProviders(
+        _ factory: @escaping HarnessToolProviderFactory,
+        visibilityGrant: ToolVisibilityGrant = .inheritModeLists
+    ) {
         precondition(self.additionalToolProviderFactory == nil, "Additional tool providers already installed")
         self.additionalToolProviderFactory = factory
+        self.additionalToolProviderVisibilityGrant = visibilityGrant
+        if case .grant = visibilityGrant {
+            deps.visibilityGrants.register(
+                ToolVisibilityGrantRecord(
+                    id: ToolVisibilityGrantStore.hostProvidersRegistrationID,
+                    grant: visibilityGrant,
+                    match: .groupPolicyTag("plugins")
+                )
+            )
+        } else {
+            deps.visibilityGrants.remove(id: ToolVisibilityGrantStore.hostProvidersRegistrationID)
+        }
     }
 
     nonisolated func installChannelRegistry(_ registry: any ChannelPluginLooking, holder: ChannelRegistryHolder? = nil) {
@@ -681,7 +698,7 @@ public actor OrchestratorRuntimeService {
                 approvalDelivery: approvalDelivery,
                 logger: logger
             )
-            let skillsDirectory = (try? SystemPrompt.loadSkillsFolderPathFromConfig())
+            let skillsDirectory = (PromptAssemblyConfiguration.default.skillsFolderPath)
                 .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
             let runtimeContext = ExecRuntimeContext(
                 sessionKey: sessionKey,
@@ -761,9 +778,9 @@ public actor OrchestratorRuntimeService {
                     providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
                 }
             }
-            let workshopConfig = SkillWorkshopConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
+            let workshopConfig = deps.configurationSet.skillWorkshop
             if workshopConfig.enabled,
-               let skillsPath = try? SystemPrompt.loadSkillsFolderPathFromConfig() {
+               let skillsPath = deps.configurationSet.promptAssembly.skillsFolderPath {
                 let gitRoot = GitRootResolver.canonicalGitRoot(for: workspaceRoot)
                 let workspaceKey = AgentMemoryPathResolver.sanitizedProjectKey(
                     canonicalGitRoot: gitRoot,

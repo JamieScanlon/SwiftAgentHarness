@@ -33,7 +33,8 @@ extension SlashCommandDispatchService {
                 configuration: runtimeConfiguration,
                 toolPolicy: deps.toolPolicy,
                 trustPolicy: deps.trustPolicyConfiguration,
-                subAgentToolClassifier: subAgentPool
+                subAgentToolClassifier: subAgentPool,
+                gateway: toolSystemGateway
             )
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
@@ -79,6 +80,7 @@ extension SlashCommandDispatchService {
             toolPolicy: deps.toolPolicy,
             trustPolicy: deps.trustPolicyConfiguration,
             subAgentToolClassifier: subAgentPool,
+            gateway: toolSystemGateway,
             filterToolName: filterToolName,
             gatingArgumentPreview: gatingPreview
         )
@@ -86,7 +88,8 @@ extension SlashCommandDispatchService {
             entries: entries,
             modePolicyContext: modeCtx,
             toolPolicy: deps.toolPolicy,
-            conversation: conversation
+            conversation: conversation,
+            grantTable: deps.visibilityGrants.snapshot()
         )
 
         return try await deliverSyntheticSlashAssistantResponse(

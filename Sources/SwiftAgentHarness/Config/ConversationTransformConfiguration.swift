@@ -650,18 +650,14 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
         }
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ConversationTransformConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; conversation transform defaults")
-            return .default
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let block = json["conversationTransforms"] as? [String: Any]
-        else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ConversationTransformConfiguration {
+        guard let block = document.foundationObject(forKey: "conversationTransforms") else {
             return .default
         }
         return configuration(fromJSON: block)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromJSON block: [String: Any]) -> ConversationTransformConfiguration {
         func bool(_ key: String, default def: Bool) -> Bool {

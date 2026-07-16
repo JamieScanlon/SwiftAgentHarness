@@ -53,11 +53,11 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
             authProfileCooldownRegistry: authProfileCooldownRegistry
         )
         let budgetConfiguration = ModelPoolBudgetConfiguration
-            .loadFromPromptConfigBundle(logger: logger)
+            .safeDefaults
             .applyingOverrides(serverConfig: serverConfig)
             .applyingEnvironmentOverrides()
         let failoverConfiguration = ModelPoolFailoverConfiguration
-            .loadFromPromptConfigBundle(logger: logger)
+            .specDefaults
             .applyingOverrides(serverConfig: serverConfig)
         factory.advanced.budget = budgetConfiguration.resolvedPolicy()
         factory.budgetConfiguration = budgetConfiguration

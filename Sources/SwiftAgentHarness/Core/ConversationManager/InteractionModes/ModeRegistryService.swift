@@ -31,7 +31,7 @@ public actor ModeRegistryService {
         if seedingBuiltIns {
             ModeProfileBuiltInCatalog.seed(into: &profiles)
         }
-        let loaded = modeProfileConfiguration ?? ModeProfileConfiguration.loadFromPromptConfigBundle()
+        let loaded = modeProfileConfiguration ?? .empty
         diagnostics.append(contentsOf: loaded.diagnostics)
         Self.mergeConfigurationProfiles(loaded.profiles, into: &profiles, diagnostics: &diagnostics)
         Self.loadAndMergeProjectProfiles(
@@ -264,6 +264,10 @@ public actor ModeRegistryService {
         let seedVersion = base.builtInSeedVersion == ResolvedModeProfile.builtInSeedVersion && raw.extends == nil && raw.id == base.id
             ? ResolvedModeProfile.builtInSeedVersion
             : 0
+        if raw.allowsHostGrants == true,
+           ConversationLineageInference.machineSubAgentModeProfileIDs.contains(raw.id) {
+            diagnostics.append("modeProfiles[\(raw.id)] allowsHostGrants=true ignored for machine profile")
+        }
 
         return ResolvedModeProfile(
             id: raw.id,
@@ -271,6 +275,7 @@ public actor ModeRegistryService {
             assemblyKind: assemblyKind,
             allowsProactiveCompactionTriggers: allowsCompaction,
             appliesAgentBuildOrchestratorHarness: appliesHarness,
+            allowsHostGrants: raw.allowsHostGrants,
             builtInSeedVersion: seedVersion,
             semanticLayerTags: tags,
             label: label,
@@ -322,9 +327,17 @@ public actor ModeRegistryService {
                 diagnostics: &diagnostics
             )
         }
+        if let extra = o.stringArray(for: "allow+"),
+           let currentAllow = allow,
+           !currentAllow.contains("*") {
+            allow = Array(Set(currentAllow + extra)).sorted()
+        }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
             deny = Array(Set(parent.deny + extra)).sorted()
+        }
+        if let extra = o.stringArray(for: "deny+") {
+            deny = Array(Set(deny + extra)).sorted()
         }
         var approval = parent.approvalPolicy
         if let raw = o.optionalString(for: "approvalPolicy"),
@@ -350,9 +363,17 @@ public actor ModeRegistryService {
                 diagnostics: &diagnostics
             )
         }
+        if let extra = o.stringArray(for: "allow+"),
+           let currentAllow = allow,
+           !currentAllow.contains("*") {
+            allow = Array(Set(currentAllow + extra)).sorted()
+        }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
             deny = Array(Set(parent.deny + extra)).sorted()
+        }
+        if let extra = o.stringArray(for: "deny+") {
+            deny = Array(Set(deny + extra)).sorted()
         }
         return ModeProfileSkillsSlice(allow: allow, deny: deny)
     }

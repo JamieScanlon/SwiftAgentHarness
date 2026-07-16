@@ -56,16 +56,6 @@ public struct SystemPrompt: Sendable {
         var resolvedIncludeAgentSkills = true
         var resolvedStrictAgentHarnessPrompts = true
 
-        if !skipConfigLoad {
-            do {
-                let config = try Self.loadConfigFromBundle()
-                resolvedIncludeCurrentDateTime = config.includeCurrentDateTime
-                resolvedIncludeAgentSkills = config.includeAgentSkills
-                resolvedStrictAgentHarnessPrompts = config.strictAgentHarnessPrompts
-            } catch {
-                logger?.error("Error loading prompt config: \(error)")
-            }
-        }
         if skipConfigLoad {
             if let includeCurrentDateTime {
                 resolvedIncludeCurrentDateTime = includeCurrentDateTime
@@ -303,96 +293,10 @@ public struct SystemPrompt: Sendable {
         case skillLoaderNotFound
     }
 
-    /// Whether `options.includeAgentSkills` is enabled in PromptConfig (defaults to `true` if unset).
-    public static func loadIncludeAgentSkillsFromConfig() -> Bool {
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let optionsObject = jsonResult["options"] as? [String: Any],
-              let includeAgentSkills = optionsObject["includeAgentSkills"] as? Bool else {
-            return true
-        }
-        return includeAgentSkills
-    }
-
-    /// Whether `options.includeCurrentDateTime` is enabled in PromptConfig (defaults to `true` if unset).
-    public static func loadIncludeCurrentDateTimeFromConfig() -> Bool {
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let optionsObject = jsonResult["options"] as? [String: Any],
-              let includeCurrentDateTime = optionsObject["includeCurrentDateTime"] as? Bool else {
-            return true
-        }
-        return includeCurrentDateTime
-    }
-
-    /// Sub-agent self-awareness block from `lineagePromptSections.subAgent` in PromptConfig.json.
-    static func loadSubAgentContextTemplateFromConfig() -> String {
-        let fallback = """
-You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {{subAgentRootConversationID}}. Your conversation ID is {{subAgentConversationID}}. Parent conversation: {{subAgentParentConversationID}}. Work only within this sub-agent thread; do not switch conversations or assume the user's foreground selection.
-"""
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let sections = jsonResult["lineagePromptSections"] as? [String: Any],
-              let template = sections["subAgent"] as? String,
-              !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return fallback
-        }
-        return template
-    }
-
-    /// Loads the skills folder path from PromptConfig.json. Use when creating a SkillLoader with a root URL before SystemPrompt is initialized.
-    public static func loadSkillsFolderPathFromConfig() throws -> String? {
-        guard let jsonData = PromptConfigBundleResource.data() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-        guard let settingsObject = jsonResult["settings"] as? [String: Any] else {
-            return nil
-        }
-        return settingsObject["skillsFolderPath"] as? String
-    }
-
     private struct PromptConfigValues {
         let includeCurrentDateTime: Bool
         let includeAgentSkills: Bool
         let strictAgentHarnessPrompts: Bool
-    }
-
-    private static func loadConfigFromBundle() throws -> PromptConfigValues {
-        guard let jsonData = PromptConfigBundleResource.data() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-
-        guard let optionsObject = jsonResult["options"] as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-
-        var includeCurrentDateTime = true
-        var includeAgentSkills = true
-        var strictAgentHarnessPrompts = true
-
-        if let value = optionsObject["includeCurrentDateTime"] as? Bool {
-            includeCurrentDateTime = value
-        }
-        if let value = optionsObject["includeAgentSkills"] as? Bool {
-            includeAgentSkills = value
-        }
-
-        if let harness = jsonResult["agentHarness"] as? [String: Any],
-           let strict = harness["strictAgentHarnessPrompts"] as? Bool {
-            strictAgentHarnessPrompts = strict
-        }
-
-        return PromptConfigValues(
-            includeCurrentDateTime: includeCurrentDateTime,
-            includeAgentSkills: includeAgentSkills,
-            strictAgentHarnessPrompts: strictAgentHarnessPrompts
-        )
     }
 
     private static func makePromptTemplate(includeCurrentDateTime: Bool) -> String {

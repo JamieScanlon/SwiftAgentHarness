@@ -1,14 +1,14 @@
 import Foundation
 import Logging
 
-struct CustomEndpointBinding: Sendable, Equatable {
-    var url: URL
-    var method: String
-    var authHeaderName: String?
-    var authHeaderValue: String?
-    var timeoutSeconds: TimeInterval
+public struct CustomEndpointBinding: Sendable, Equatable {
+    public var url: URL
+    public var method: String
+    public var authHeaderName: String?
+    public var authHeaderValue: String?
+    public var timeoutSeconds: TimeInterval
 
-    init(
+    public init(
         url: URL,
         method: String = "POST",
         authHeaderName: String? = nil,
@@ -23,18 +23,21 @@ struct CustomEndpointBinding: Sendable, Equatable {
     }
 }
 
-struct SubAgentCustomEndpointConfiguration: Sendable {
-    var bindingsByDelegateToolName: [String: CustomEndpointBinding]
+public struct SubAgentCustomEndpointConfiguration: Sendable {
+    public var bindingsByDelegateToolName: [String: CustomEndpointBinding]
 
-    static let empty = SubAgentCustomEndpointConfiguration(bindingsByDelegateToolName: [:])
+    public static let empty = SubAgentCustomEndpointConfiguration(bindingsByDelegateToolName: [:])
 
-    func binding(for delegateToolName: String) -> CustomEndpointBinding? {
+    public init(bindingsByDelegateToolName: [String: CustomEndpointBinding]) {
+        self.bindingsByDelegateToolName = bindingsByDelegateToolName
+    }
+
+    public func binding(for delegateToolName: String) -> CustomEndpointBinding? {
         bindingsByDelegateToolName[delegateToolName]
     }
 
-    static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SubAgentCustomEndpointConfiguration {
-        guard let data = PromptConfigBundleResource.data(),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> SubAgentCustomEndpointConfiguration {
+        guard let json = document.foundationRoot() else {
             return .empty
         }
         return fromPromptConfigRoot(json, logger: logger)

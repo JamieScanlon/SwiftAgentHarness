@@ -92,14 +92,14 @@ public struct MemoryConfiguration: Sendable, Equatable {
 }
 
 public enum MemoryConfigurationLoader {
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> MemoryConfiguration {
-        guard let data = PromptConfigBundleResource.data(),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let memory = json["memory"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> MemoryConfiguration {
+        guard let memory = document.foundationObject(forKey: "memory") else {
             return .default
         }
         return load(fromMemoryObject: memory)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     /// Applies a PromptConfig `memory` object onto defaults (testable without the bundle).
     public static func load(fromMemoryObject memory: [String: Any]) -> MemoryConfiguration {

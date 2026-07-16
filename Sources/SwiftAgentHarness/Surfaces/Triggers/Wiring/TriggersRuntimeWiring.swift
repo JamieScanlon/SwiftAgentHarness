@@ -260,7 +260,7 @@ public enum TriggersRuntimeWiring {
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
         )
         let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
-        let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
+        let memoryConfig = MemoryConfiguration.default
         let dreamingBridge = MemoryDreamingBridge(config: memoryConfig, logger: logger)
         let dreamingDeliver = MemoryDreamingDeliver.wrap(
             dispatch: dispatch,

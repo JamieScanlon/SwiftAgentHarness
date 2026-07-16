@@ -235,20 +235,37 @@ enum ToolPolicyAvailabilityExplainer {
             groupIndex: groupIndex,
             entry: entry
         ) {
-            let allowRules = modePolicyContext.resolvedProfile.tools.allow.flatMap {
-                ToolPolicyRulesCache.parseList($0)
-            } ?? []
-            let allowList = modePolicyContext.resolvedProfile.tools.allow ?? []
-            record(.modeAllow, .fail(
-                scope: .modeAllow,
-                detail: allowList.isEmpty
-                    ? "Closed-world mode allow list is empty."
-                    : "Not matched by mode allow list.",
-                matchedRule: allowList.isEmpty ? nil : allowList.joined(separator: ", ")
-            ))
-            let _ = allowRules
+            let grants = (gateway as? DefaultToolSystemGateway)?.visibilityGrants.snapshot()
+                ?? ToolVisibilityGrantTable.empty
+            let profile = modePolicyContext.resolvedProfile
+            if grants.admits(entry: entry, profile: profile) {
+                record(.modeAllow, .pass)
+                record(.hostVisibilityGrant, .pass)
+            } else if let cause = grants.rejectionCause(for: entry, profile: profile) {
+                record(.modeAllow, .fail(
+                    scope: .modeAllow,
+                    detail: "Not matched by mode allow list.",
+                    matchedRule: nil
+                ))
+                record(.hostVisibilityGrant, .fail(
+                    scope: .hostVisibilityGrant,
+                    detail: cause.explainDetail,
+                    matchedRule: cause.rawValue
+                ))
+            } else {
+                let allowList = modePolicyContext.resolvedProfile.tools.allow ?? []
+                record(.modeAllow, .fail(
+                    scope: .modeAllow,
+                    detail: allowList.isEmpty
+                        ? "Closed-world mode allow list is empty."
+                        : "Not matched by mode allow list.",
+                    matchedRule: allowList.isEmpty ? nil : allowList.joined(separator: ", ")
+                ))
+                record(.hostVisibilityGrant, .pass)
+            }
         } else {
             record(.modeAllow, .pass)
+            record(.hostVisibilityGrant, .pass)
         }
 
         if !routingToolPolicyPermits(
@@ -322,7 +339,19 @@ enum ToolPolicyAvailabilityExplainer {
             }.map { ToolPolicyScopeVerdictFormatting.detailText(for: $0.verdict) } ?? nil
         }
 
-        let fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
+        let fixIt: String?
+        if let cause = gatewayDecision.grantRejectionCause {
+            fixIt = cause.fixItConfigKey(profileID: context.profileID)
+        } else {
+            fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
+        }
+
+        let resolvedPrimaryDetail: String?
+        if let cause = gatewayDecision.grantRejectionCause {
+            resolvedPrimaryDetail = cause.explainDetail
+        } else {
+            resolvedPrimaryDetail = primaryDetail
+        }
 
         var gatingAppendix: ToolPolicyGatingExplainAppendix?
         if let gatingArgumentPreview {
@@ -349,7 +378,7 @@ enum ToolPolicyAvailabilityExplainer {
             source: entry.source,
             status: status,
             primaryScope: primaryScope,
-            primaryDetail: primaryDetail,
+            primaryDetail: resolvedPrimaryDetail,
             fixItConfigKey: fixIt,
             scopeTrace: trace,
             gatewayBlockReason: gatewayDecision.blockReason,

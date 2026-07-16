@@ -145,7 +145,8 @@ struct A2ASubAgentTransportAdapterTests {
             adapters: SubAgentDefaultAdapters.make(
                 a2aManagerProvider: provider,
                 sessionStore: sessionStore
-            )
+            ),
+            hostingPolicyConfiguration: .empty
         )
         let parentConversationID = UUID()
         let toolEntry = ToolRegistryEntry(

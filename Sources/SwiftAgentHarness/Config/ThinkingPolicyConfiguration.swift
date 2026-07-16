@@ -18,17 +18,14 @@ public struct ThinkingPolicyConfiguration: Sendable, Equatable {
         self.thinkingBudgets = thinkingBudgets
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ThinkingPolicyConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; thinking policy defaults")
-            return .default
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = root["settings"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ThinkingPolicyConfiguration {
+        guard let settings = document.foundationObject(forKey: "settings") else {
             return .default
         }
         return configuration(fromSettingsJSON: settings)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromSettingsJSON settings: [String: Any]) -> ThinkingPolicyConfiguration {
         let defaultThinkingConfig = parseThinkingConfig(settings["defaultThinkingConfig"]) ?? .disabled

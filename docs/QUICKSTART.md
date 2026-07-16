@@ -25,12 +25,13 @@ Credentials come from auth profiles. `AuthProfileStore.production()` reads the p
 
 ## 3. Build the composition root
 
-`HarnessRuntimeSession.makeProduction(...)` takes each layer explicitly — there is no hidden global wiring. The defaults below give you on-disk persistence, the standard context engine, and config loaded from the bundled prompt-config:
+Resolve the host-delivered prompt configuration once, then pass that immutable snapshot to the composition root:
 
 ```swift
 import Logging
 
 let logger = Logger(label: "harness")
+let configuration = HarnessConfigurationSet.resolveFromAmbient(logger: logger)
 
 let persistence = ConversationPersistenceDomain.makeProduction(
     logger: logger, dataStoreURL: nil, allowsSwiftDataSave: true
@@ -41,17 +42,13 @@ let (scheduler, coordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
 let llmFactory = StandardModelLLMFactory.productionConfigured(
     accounting: AlwaysAllowBudgetAccounting(), logger: logger
 )
-let transformConfig = ConversationTransformConfiguration.loadFromPromptConfigBundle(logger: logger)
+let transformConfig = configuration.conversationTransforms
 let compactionCoordinator = CompactionConcurrencyCoordinator()
 
 let (session, services) = HarnessRuntimeSession.makeProduction(
     persistenceDomain: persistence,
     logger: logger,
-    toolPolicy: ToolPolicyConfiguration.loadFromPromptConfigBundle(logger: logger),
-    trustPolicyConfiguration: TrustPolicyConfiguration.loadFromPromptConfigBundle(logger: logger),
-    agentHarness: AgentHarnessConfiguration.loadFromPromptConfigBundle(logger: logger),
-    thinkingPolicyConfiguration: ThinkingPolicyConfiguration.loadFromPromptConfigBundle(logger: logger),
-    conversationTransformConfiguration: transformConfig,
+    configuration: configuration,
     conversationTransformer: ContextCompactionTransformer.makeProduction(
         config: transformConfig.contextCompaction,
         scheduling: ContextCompactionLLMScheduling(

@@ -12,8 +12,6 @@ import Foundation
 ///    server deployments where the config is a deployed file rather than a bundled resource.
 /// 3. **`Bundle.main`** — picks up `PromptConfig.json` bundled into the host app/executable target.
 /// 4. **Host-registered bundles** — added via ``registerBundle(_:)`` for multi-module hosts.
-/// 5. **`Bundle.module`** — the library's own copy, if one is ever shipped.
-/// 6. **SwiftPM test resource bundles** — fallback so unit tests resolve their bundled copy.
 ///
 /// The first location that yields a readable config wins.
 public enum PromptConfigBundleResource {
@@ -33,6 +31,7 @@ public enum PromptConfigBundleResource {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var override: Override?
     nonisolated(unsafe) private static var registeredBundles: [Bundle] = []
+    nonisolated(unsafe) private static var testBundleFallbackEnabled = false
 
     // MARK: - Host configuration
 
@@ -52,7 +51,7 @@ public enum PromptConfigBundleResource {
         setOverride(.data(data))
     }
 
-    /// Register an additional bundle to search after `Bundle.main` but before `Bundle.module`.
+    /// Register an additional bundle to search after `Bundle.main`.
     public static func registerBundle(_ bundle: Bundle) {
         lock.lock()
         defer { lock.unlock() }
@@ -67,6 +66,14 @@ public enum PromptConfigBundleResource {
         defer { lock.unlock() }
         override = nil
         registeredBundles = []
+        testBundleFallbackEnabled = false
+    }
+
+    /// Enables SwiftPM test-resource discovery. This is intentionally unavailable to production callers.
+    static func enableTestBundleFallbackForTesting() {
+        lock.lock()
+        defer { lock.unlock() }
+        testBundleFallbackEnabled = true
     }
 
     // MARK: - Resolution
@@ -96,7 +103,7 @@ public enum PromptConfigBundleResource {
     // MARK: - Internals
 
     private static func candidateURLs() -> [URL] {
-        let (override, registered) = snapshot()
+        let (override, registered, testBundleFallbackEnabled) = snapshot()
         var urls: [URL] = []
 
         if let override {
@@ -116,10 +123,16 @@ public enum PromptConfigBundleResource {
             urls.append(envURL)
         }
 
-        for bundle in candidateBundles(registered: registered) {
+        for bundle in candidateBundles(
+            registered: registered,
+            includeTestBundles: testBundleFallbackEnabled
+        ) {
             if let url = bundle.url(forResource: resourceName, withExtension: resourceExtension) {
                 urls.append(url)
             }
+        }
+        if testBundleFallbackEnabled {
+            urls.append(contentsOf: testBundleResourceURLs())
         }
 
         return urls
@@ -134,7 +147,7 @@ public enum PromptConfigBundleResource {
         return URL(fileURLWithPath: expanded)
     }
 
-    private static func candidateBundles(registered: [Bundle]) -> [Bundle] {
+    private static func candidateBundles(registered: [Bundle], includeTestBundles: Bool) -> [Bundle] {
         var seen = Set<String>()
         var bundles: [Bundle] = []
 
@@ -145,11 +158,22 @@ public enum PromptConfigBundleResource {
 
         append(Bundle.main)
         registered.forEach(append)
-        append(Bundle.module)
+
+        guard includeTestBundles else { return bundles }
+
+        let mainBundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
+        append(Bundle(url: mainBundleParent.appendingPathComponent(testResourceBundleSuffix)))
+
+        var executableDirectory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        for _ in 0..<4 {
+            append(Bundle(url: executableDirectory.appendingPathComponent(testResourceBundleSuffix)))
+            executableDirectory.deleteLastPathComponent()
+        }
 
         for bundle in Bundle.allBundles {
-            append(bundle)
-
+            if bundle.bundleURL.lastPathComponent == testResourceBundleSuffix {
+                append(bundle)
+            }
             let base = bundle.bundleURL.deletingLastPathComponent()
             append(Bundle(url: base.appendingPathComponent(testResourceBundleSuffix)))
 
@@ -169,16 +193,33 @@ public enum PromptConfigBundleResource {
         return bundles
     }
 
+    private static func testBundleResourceURLs() -> [URL] {
+        var urls: [URL] = []
+        for argument in CommandLine.arguments {
+            var directory = URL(fileURLWithPath: argument).deletingLastPathComponent()
+            for _ in 0..<4 {
+                urls.append(
+                    directory
+                        .appendingPathComponent(testResourceBundleSuffix)
+                        .appendingPathComponent(resourceName)
+                        .appendingPathExtension(resourceExtension)
+                )
+                directory.deleteLastPathComponent()
+            }
+        }
+        return urls
+    }
+
     private static func setOverride(_ value: Override) {
         lock.lock()
         defer { lock.unlock() }
         override = value
     }
 
-    private static func snapshot() -> (Override?, [Bundle]) {
+    private static func snapshot() -> (Override?, [Bundle], Bool) {
         lock.lock()
         defer { lock.unlock() }
-        return (override, registeredBundles)
+        return (override, registeredBundles, testBundleFallbackEnabled)
     }
 
     private static func snapshotOverride() -> Override? {

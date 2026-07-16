@@ -37,7 +37,7 @@ public actor ModelManager {
         self.logger = logger
         self.registryTopicHub = registryTopicHub
         self.observedPerformanceProvider = observedPerformanceProvider
-        self.providerPreference = providerPreference ?? ModelPoolProviderPreferenceConfiguration.loadFromPromptConfigBundle(logger: logger)
+        self.providerPreference = providerPreference ?? ModelPoolProviderPreferenceConfiguration.specDefaults
         self.authProfileStore = authProfileStore
     }
 

@@ -5,7 +5,7 @@ public enum MemoryCLI {
         guard arguments.count >= 2, arguments[1] == "memory" else { return nil }
         let sub = arguments.count >= 3 ? arguments[2] : "list"
         let cwd = ProcessInfo.processInfo.environment["PWD"] ?? FileManager.default.currentDirectoryPath
-        let config = MemoryConfigurationLoader.loadFromPromptConfigBundle()
+        let config = MemoryConfiguration.default
         let service = DefaultMemoryService(config: config)
         do {
             let context = try service.makeSessionContext(conversationID: UUID(), cwd: cwd)

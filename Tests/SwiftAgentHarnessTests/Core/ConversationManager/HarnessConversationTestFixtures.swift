@@ -58,6 +58,12 @@ enum HarnessConversationTestFixtures {
 
     private static let sharedHarnessRegistry = SharedInMemoryHarnessRegistry()
 
+    static func promptConfigFixture() throws -> HarnessConfigurationSet {
+        let url = try #require(Bundle.module.url(forResource: "PromptConfig", withExtension: "json"))
+        let document = try PromptConfigDocument.parse(data: Data(contentsOf: url))
+        return HarnessConfigurationSet.load(from: document)
+    }
+
     /// Stable in-memory catalog/transcript for tests that recreate ``ConversationManager`` / ``HarnessRuntimeSession`` with the same container.
     static func sharedInMemoryHarness(for container: ModelContainer) -> InMemoryHarnessSessionPersistence {
         sharedHarnessRegistry.shared(for: container)
@@ -308,6 +314,7 @@ enum HarnessConversationTestFixtures {
         let (host, services) = HarnessRuntimeSession.makeProduction(
             persistenceDomain: domain,
             logger: logger,
+            configuration: try promptConfigFixture(),
             toolPolicy: .unrestricted,
             trustPolicyConfiguration: .disabled,
             agentHarness: .default,
@@ -350,6 +357,7 @@ enum HarnessConversationTestFixtures {
         let host = HarnessRuntimeSession(
             persistenceDomain: domain,
             logger: logger,
+            configuration: try promptConfigFixture(),
             toolPolicy: .unrestricted,
             agentHarness: .default,
             conversationTransformConfiguration: .default,

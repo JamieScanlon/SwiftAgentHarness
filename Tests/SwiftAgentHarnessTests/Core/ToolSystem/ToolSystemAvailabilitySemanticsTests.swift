@@ -27,7 +27,8 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(ToolAvailabilityBlockReason.recursionDepthExceeded.rawValue == "recursionDepthExceeded")
         #expect(ToolAvailabilityBlockReason.hostingRoutingPolicyDenied.rawValue == "hostingRoutingPolicyDenied")
         #expect(ToolAvailabilityBlockReason.routingToolWhitelist.rawValue == "routingToolWhitelist")
-        #expect(ToolAvailabilityBlockReason.allCases.count == 10)
+        #expect(ToolAvailabilityBlockReason.hostVisibilityGrantMiss.rawValue == "hostVisibilityGrantMiss")
+        #expect(ToolAvailabilityBlockReason.allCases.count == 11)
     }
 
     @Test("registry entries classify local mcp a2a and unknown sources deterministically")
@@ -621,7 +622,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let basePolicy = ToolPolicyConfiguration.unrestricted
 
         let localDecision = gateway.evaluateAvailability(
@@ -665,7 +666,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let basePolicy = ToolPolicyConfiguration.unrestricted
         let decision = gateway.evaluateAvailability(
             entry: a2aDelegate,
@@ -700,8 +701,11 @@ struct ToolSystemAvailabilitySemanticsTests {
             definition: ToolDefinition(name: "Coding Agent", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
-        let policy = ToolPolicyConfiguration.loadFromPromptConfigBundle()
+        let configuration = try! HarnessConversationTestFixtures.promptConfigFixture()
+        let classifier = DefaultSubAgentPool(
+            hostingPolicyConfiguration: configuration.subAgentHostingPolicy
+        )
+        let policy = configuration.toolPolicy
         let decision = gateway.evaluateAvailability(
             entry: delegate,
             conversation: conversation,
@@ -729,7 +733,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let policy = ToolPolicyConfiguration.unrestricted
         let decision = gateway.evaluateAvailability(
             entry: delegate,

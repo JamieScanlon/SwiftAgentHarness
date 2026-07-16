@@ -12,6 +12,7 @@ enum ToolPolicyAvailabilityScope: String, Sendable, CaseIterable, Equatable {
     case escalation
     case approval
     case modeAllow
+    case hostVisibilityGrant
     case routingToolPolicy
 
     var displayLabel: String {
@@ -26,6 +27,7 @@ enum ToolPolicyAvailabilityScope: String, Sendable, CaseIterable, Equatable {
         case .escalation: return "Escalation required"
         case .approval: return "Approval / elevated gate"
         case .modeAllow: return "Mode tools.allow"
+        case .hostVisibilityGrant: return "Host visibility grant"
         case .routingToolPolicy: return "Conversation routing tool policy"
         }
     }
@@ -52,6 +54,8 @@ enum ToolPolicyAvailabilityScope: String, Sendable, CaseIterable, Equatable {
             return "PromptConfig.toolPolicy.requireApproval, approve tool, or durable grant"
         case .modeAllow:
             return "modeProfiles.\(profileID).tools.allow"
+        case .hostVisibilityGrant:
+            return "setMCPManager(visibilityGrant:) / installAdditionalToolProviders(visibilityGrant:) or modeProfiles.\(profileID).allowsHostGrants / tools.allow"
         case .routingToolPolicy:
             return "conversation.routingPrefs.explicitToolPolicy"
         }
@@ -79,6 +83,8 @@ enum ToolPolicyAvailabilityScope: String, Sendable, CaseIterable, Equatable {
             self = .subAgentHosting
         case .routingToolWhitelist:
             self = .routingToolPolicy
+        case .hostVisibilityGrantMiss:
+            self = .hostVisibilityGrant
         }
     }
 }

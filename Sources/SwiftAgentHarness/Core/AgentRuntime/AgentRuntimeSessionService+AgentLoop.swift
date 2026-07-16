@@ -346,7 +346,7 @@ extension AgentRuntimeSessionService {
                     snapshot: snapshot,
                     configuration: configuration,
                     conversation: conversation,
-                    gateway: DefaultToolSystemGateway(),
+                    gateway: self.toolSystemGateway,
                     parentLookup: { [deps = self.deps] id in
                         await deps.persistenceDomain.modelConversation(id: id)
                     },
@@ -469,7 +469,7 @@ extension AgentRuntimeSessionService {
                         snapshot: refreshedSnapshot,
                         configuration: approvalConfig,
                         conversation: conversation,
-                        gateway: DefaultToolSystemGateway(),
+                        gateway: self.toolSystemGateway,
                         parentLookup: { [deps = self.deps] id in
                             await deps.persistenceDomain.modelConversation(id: id)
                         },
@@ -501,7 +501,7 @@ extension AgentRuntimeSessionService {
                     snapshot: snapshot,
                     configuration: configuration,
                     conversation: conversation,
-                    gateway: DefaultToolSystemGateway(),
+                    gateway: self.toolSystemGateway,
                     parentLookup: { [deps = self.deps] id in
                         await deps.persistenceDomain.modelConversation(id: id)
                     },

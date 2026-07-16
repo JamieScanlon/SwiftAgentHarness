@@ -14,7 +14,7 @@ actor SlashCommandDispatchService {
     let orchestratorRuntime: OrchestratorRuntimeService
     let agentRuntime: any AgentRuntimeOrchestratorBinding
     let subAgentPool: any SubAgentPooling
-    let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    let toolSystemGateway: any ToolSystemGatewaying
     nonisolated(unsafe) var subAgentSpawnService: SubAgentSpawnService?
     private var pendingSlashCommandsByConversationID: [UUID: [String]] = [:]
     private var isDrainingPendingSlashCommands = false
@@ -45,6 +45,7 @@ actor SlashCommandDispatchService {
         self.orchestratorRuntime = orchestratorRuntime
         self.agentRuntime = agentRuntime
         self.subAgentPool = subAgentPool
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installSubAgentSpawnService(_ spawnService: SubAgentSpawnService) {
@@ -114,7 +115,7 @@ actor SlashCommandDispatchService {
         switch parsedInput {
         case let .skill(skillName, args):
             guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-                  SystemPrompt.loadIncludeAgentSkillsFromConfig()
+                  PromptAssemblyConfiguration.default.includeAgentSkills
             else { return nil }
             if !skipQueue, await isSlashDispatchBlocked(conversationID: conversationID) {
                 enqueuePendingSlashCommand(conversationID: conversationID, rawText: text)
@@ -227,7 +228,7 @@ actor SlashCommandDispatchService {
         let excluded = Set(deps.conversationTransformConfiguration.slashCommands.staticSkillNamesExcludedFromSkillColon)
         let baseRegistry: SlashCommandRegistry
         guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-              SystemPrompt.loadIncludeAgentSkillsFromConfig(),
+              PromptAssemblyConfiguration.default.includeAgentSkills,
               let skills = try? await skillActivation.listAvailableSkillsForSlash(conversationID: conversationID)
         else {
             baseRegistry = SlashCommandRegistry.builtins(compactEnabled: slashCommandRuntimeConfiguration.compactEnabled)

@@ -21,10 +21,10 @@ public struct DefaultCompactionReinjectionSkillProvider: CompactionReinjectionSk
     }
 
     public func reinjectableSkillContent(activatedSkillNames: [String]) async -> [ReinjectableSkill] {
-        guard !activatedSkillNames.isEmpty, SystemPrompt.loadIncludeAgentSkillsFromConfig() else {
+        guard !activatedSkillNames.isEmpty, PromptAssemblyConfiguration.default.includeAgentSkills else {
             return []
         }
-        guard let skillsPath = try? SystemPrompt.loadSkillsFolderPathFromConfig() else {
+        guard let skillsPath = PromptAssemblyConfiguration.default.skillsFolderPath else {
             return []
         }
         let loader = SkillLoader(skillsDirectoryURL: URL(fileURLWithPath: skillsPath), logger: logger)

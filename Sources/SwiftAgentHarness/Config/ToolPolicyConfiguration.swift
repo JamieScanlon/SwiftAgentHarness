@@ -490,14 +490,16 @@ public struct ToolPolicyConfiguration: Sendable {
         )
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ToolPolicyConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; tool policy unrestricted")
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ToolPolicyConfiguration {
+        guard let json = document.foundationRoot() else {
             return .unrestricted
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .unrestricted
-        }
+        return load(fromPromptConfigRoot: json, logger: logger)
+    }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
+
+    static func load(fromPromptConfigRoot json: [String: Any], logger: Logger? = nil) -> ToolPolicyConfiguration {
         guard let toolPolicy = json["toolPolicy"] as? [String: Any] else {
             return .unrestricted
         }
@@ -698,18 +700,18 @@ public struct ToolPolicyConfiguration: Sendable {
     }
 }
 
-struct SubAgentHostingPolicyConfiguration: Sendable {
+public struct SubAgentHostingPolicyConfiguration: Sendable {
     private let defaultPolicy: SubAgentHostingPolicy
     private let policiesByDelegateToolName: [String: SubAgentHostingPolicy]
     private let policiesByHostPersonaID: [String: SubAgentHostingPolicy]
 
-    static let empty = SubAgentHostingPolicyConfiguration(
+    public static let empty = SubAgentHostingPolicyConfiguration(
         defaultPolicy: SubAgentHostingPolicy(),
         policiesByDelegateToolName: [:],
         policiesByHostPersonaID: [:]
     )
 
-    init(
+    public init(
         defaultPolicy: SubAgentHostingPolicy,
         policiesByDelegateToolName: [String: SubAgentHostingPolicy],
         policiesByHostPersonaID: [String: SubAgentHostingPolicy]
@@ -719,11 +721,11 @@ struct SubAgentHostingPolicyConfiguration: Sendable {
         self.policiesByHostPersonaID = policiesByHostPersonaID
     }
 
-    func policy(forDelegateToolName name: String) -> SubAgentHostingPolicy {
+    public func policy(forDelegateToolName name: String) -> SubAgentHostingPolicy {
         policiesByDelegateToolName[name] ?? defaultPolicy
     }
 
-    func policy(forHostPersonaID hostPersonaID: String) -> SubAgentHostingPolicy? {
+    public func policy(forHostPersonaID hostPersonaID: String) -> SubAgentHostingPolicy? {
         policiesByHostPersonaID[hostPersonaID]
     }
 
@@ -736,12 +738,8 @@ struct SubAgentHostingPolicyConfiguration: Sendable {
         return chunks.joined(separator: "|")
     }
 
-    static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SubAgentHostingPolicyConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; sub-agent hosting policy disabled")
-            return .empty
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> SubAgentHostingPolicyConfiguration {
+        guard let json = document.foundationRoot() else {
             return .empty
         }
         return fromPromptConfigRoot(json)

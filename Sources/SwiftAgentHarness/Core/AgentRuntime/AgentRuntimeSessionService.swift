@@ -30,6 +30,7 @@ public actor AgentRuntimeSessionService {
     nonisolated(unsafe) private var controlPlane: (any ConversationControlPlaneServicing)?
     nonisolated(unsafe) private var channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator?
     nonisolated(unsafe) private var channelRegistryForLifecycle: ChannelListenerRegistry?
+    let toolSystemGateway: any ToolSystemGatewaying
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -47,6 +48,7 @@ public actor AgentRuntimeSessionService {
         self.selection = selection
         self.outbound = outbound
         self.orchestrationCore = orchestrationCore
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installSubAgentSpawnService(_ spawnService: SubAgentSpawnService) {

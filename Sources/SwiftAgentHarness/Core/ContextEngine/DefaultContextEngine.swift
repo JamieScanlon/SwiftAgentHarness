@@ -365,7 +365,12 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             ContextCompactionCheckpointSupport.partitionForCompaction(policyAdjustedMessages)
         let projectionArtifact = projected.artifact
         let promptCheckpoint = projectionArtifact.systemPromptAssembly.map {
-            let checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+            let checkpointConfig: (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int)
+            if let snapshot = $0.replaySpec?.promptConfigSnapshot {
+                checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load(from: snapshot)
+            } else {
+                checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+            }
             let sectionJSON = $0.sectionProvenance.flatMap { map -> String? in
                 let sectionMap = Dictionary(
                     uniqueKeysWithValues: map.compactMap { key, value -> (SystemPromptSectionName, String)? in
@@ -1337,7 +1342,8 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                 assemblyFingerprint: fingerprint,
                 assembleReferenceDateISO: assembleReferenceDateISO,
                 audit: $0,
-                contributions: bundle.contributions
+                contributions: bundle.contributions,
+                policy: policy
             )
         }
         let replaySpecDigest = replaySpec?.replaySpecDigest

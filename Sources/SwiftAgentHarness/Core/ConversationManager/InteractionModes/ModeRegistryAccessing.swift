@@ -105,9 +105,13 @@ enum ModeRegistryTestSupport {
         projectConfigSource: ModeProfileProjectConfigSource? = nil,
         additionalProfiles: [ResolvedModeProfile] = []
     ) -> ModeRegistryService {
-        ModeRegistryService(
+        let resolvedModeProfileConfiguration = modeProfileConfiguration ?? {
+            PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+            return HarnessConfigurationSet.resolveFromAmbient().modeProfiles
+        }()
+        return ModeRegistryService(
             seedingBuiltIns: seedingBuiltIns,
-            modeProfileConfiguration: modeProfileConfiguration,
+            modeProfileConfiguration: resolvedModeProfileConfiguration,
             projectConfigDirectory: projectConfigDirectory,
             projectConfigSource: projectConfigSource,
             additionalProfiles: additionalProfiles
@@ -121,10 +125,14 @@ enum ModeRegistryTestSupport {
         projectConfigSource: ModeProfileProjectConfigSource? = nil,
         additionalProfiles: [ResolvedModeProfile] = []
     ) -> ModeRegistryPortAdapter {
-        ModeRegistryPortAdapter(
+        let resolvedModeProfileConfiguration = modeProfileConfiguration ?? {
+            PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+            return HarnessConfigurationSet.resolveFromAmbient().modeProfiles
+        }()
+        return ModeRegistryPortAdapter(
             service: makeService(
                 seedingBuiltIns: seedingBuiltIns,
-                modeProfileConfiguration: modeProfileConfiguration,
+                modeProfileConfiguration: resolvedModeProfileConfiguration,
                 projectConfigDirectory: projectConfigDirectory,
                 projectConfigSource: projectConfigSource,
                 additionalProfiles: additionalProfiles

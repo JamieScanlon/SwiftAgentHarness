@@ -10,7 +10,7 @@ extension SlashCommandDispatchService {
             .lowercased()
 
         let control = DreamingControlStore()
-        let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle()
+        let memoryConfig = MemoryConfiguration.default
 
         switch sub {
         case nil, "", "status":

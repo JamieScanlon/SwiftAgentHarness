@@ -189,7 +189,7 @@ actor SkillActivationService {
         if let testingIncludeAgentSkillsOverride {
             return testingIncludeAgentSkillsOverride
         }
-        return SystemPrompt.loadIncludeAgentSkillsFromConfig()
+        return PromptAssemblyConfiguration.default.includeAgentSkills
     }
 
     private func makeSkillLoader() -> SkillLoader? {
@@ -200,7 +200,7 @@ actor SkillActivationService {
             )
         }
         do {
-            if let skillsPath = try SystemPrompt.loadSkillsFolderPathFromConfig() {
+            if let skillsPath = PromptAssemblyConfiguration.default.skillsFolderPath {
                 return SkillLoader(
                     skillsDirectoryURL: URL(fileURLWithPath: skillsPath),
                     logger: deps.logger

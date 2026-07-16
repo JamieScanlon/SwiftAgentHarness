@@ -18,9 +18,10 @@ enum SystemPromptAssemblyReplayer {
         let referenceDate = SystemPrompt.referenceDate(fromAssembleReferenceDateISO: replaySpec.assembleReferenceDateISO)
             ?? Date()
         let userSystemPrompt = replaySpec.userSystemPrompt
+        let strictPrompts = replaySpec.promptConfigSnapshot.strictAgentHarnessPrompts
         let modeMemoryInjection = ContextSystemPromptModeSwitches.build(
             conversation: conversation,
-            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
+            strictAgentHarnessPrompts: strictPrompts,
             resolvedProfile: policy.resolvedModeProfile,
             referenceDate: referenceDate
         ).memoryInjectionMode
@@ -76,15 +77,39 @@ enum SystemPromptAssemblyReplayer {
         assemblyFingerprint: String,
         assembleReferenceDateISO: String,
         audit: SystemPromptAssemblyRenderAudit,
-        contributions: [SystemPromptContribution]
+        contributions: [SystemPromptContribution],
+        policy: ContextEngineSystemPromptAssemblyPolicyInput? = nil,
+        promptConfigSnapshot: PromptAssemblyConfigSnapshot? = nil
     ) -> SystemPromptAssemblyReplaySpec {
-        SystemPromptAssemblyReplaySpec.build(
+        let snapshot = promptConfigSnapshot
+            ?? snapshot(from: policy)
+            ?? PromptAssemblyConfigSnapshot(from: .default, strictAgentHarnessPrompts: true)
+        return SystemPromptAssemblyReplaySpec.build(
             assemblyFingerprint: assemblyFingerprint,
             assembleReferenceDateISO: assembleReferenceDateISO,
             userSystemPrompt: audit.effectiveUserSystemPrompt,
             skillSnapshot: audit.product.skillSnapshot,
             providerStablePrefix: audit.providerStablePrefix,
-            contributions: contributions
+            contributions: contributions,
+            promptConfigSnapshot: snapshot
+        )
+    }
+
+    /// Builds a capture-time snapshot from assembly policy.
+    static func snapshot(
+        from policy: ContextEngineSystemPromptAssemblyPolicyInput?
+    ) -> PromptAssemblyConfigSnapshot? {
+        guard let policy else { return nil }
+        return PromptAssemblyConfigSnapshot(
+            from: PromptAssemblyConfiguration(
+                includeCurrentDateTime: policy.includeDateTime,
+                includeAgentSkills: policy.includeAgentSkills,
+                skillsFolderPath: PromptAssemblyConfiguration.default.skillsFolderPath,
+                subAgentContextTemplate: PromptAssemblyConfiguration.default.subAgentContextTemplate,
+                assemblyCheckpointMode: PromptAssemblyConfiguration.default.assemblyCheckpointMode,
+                assemblyCheckpointMaxFullTextBytes: PromptAssemblyConfiguration.default.assemblyCheckpointMaxFullTextBytes
+            ),
+            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts
         )
     }
 }

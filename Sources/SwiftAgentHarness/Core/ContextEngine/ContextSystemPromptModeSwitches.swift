@@ -84,7 +84,7 @@ enum ContextSystemPromptModeSwitches {
     }
 
     private static func subAgentContextPrompt(scope: ConversationScope) -> String {
-        let template = SystemPrompt.loadSubAgentContextTemplateFromConfig()
+        let template = PromptAssemblyConfiguration.default.subAgentContextTemplate
         let parent = scope.parentID?.uuidString.lowercased() ?? "none"
         return template
             .replacingOccurrences(of: "{{subAgentDepth}}", with: String(scope.depth))

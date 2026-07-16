@@ -10,7 +10,7 @@ enum MemoryDreamingCronInstaller {
     @discardableResult
     static func ensureInstalled(
         store: ScheduledTaskStore,
-        config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
+        config: MemoryConfiguration = MemoryConfiguration.default,
         logger: Logger? = nil
     ) throws -> ScheduledTask? {
         guard config.dreamingEnabled else {
@@ -38,7 +38,7 @@ enum MemoryDreamingCronInstaller {
     @discardableResult
     static func ensureInstalled(
         scheduler: TriggerSchedulerService,
-        config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
+        config: MemoryConfiguration = MemoryConfiguration.default,
         logger: Logger? = nil
     ) async throws -> ScheduledTask? {
         guard config.dreamingEnabled else {

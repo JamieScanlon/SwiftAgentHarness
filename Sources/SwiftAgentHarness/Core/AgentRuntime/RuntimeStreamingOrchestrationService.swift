@@ -41,7 +41,7 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         originSurface: String? = nil,
         originSenderID: String? = nil
     ) async throws -> ChatStreamResponse {
-        let harness = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        let harness = AgentHarnessConfiguration.default
         let runLaneOrigin = RunLaneResolver.runLaneOrigin(originSurface: originSurface)
         let base = AgentRuntimeTurnConfiguration(
             enableTools: enableTools,

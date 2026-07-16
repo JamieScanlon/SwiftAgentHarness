@@ -11,7 +11,7 @@ extension SlashCommandDispatchService {
         let sub = tokens.first(where: { $0 != "--global" })
 
         let control = ActiveMemoryControlStore()
-        let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle()
+        let memoryConfig = MemoryConfiguration.default
 
         switch sub {
         case nil, "", "status":

@@ -302,6 +302,18 @@ public struct ModeProfileTransitionHooksSlice: Sendable, Equatable {
 
 // MARK: - Resolved profile
 
+/// Provenance for ``ResolvedModeProfile/allowsHostGrants``.
+public enum AllowsHostGrantsSource: String, Sendable, Equatable {
+    /// Machine sub-agent profile; host grants never apply.
+    case machinePinned
+    /// Explicit `allowsHostGrants` on this profile row (overrides empty-allow derivation).
+    case explicit
+    /// Derived `false` because merged `tools.allow` is an authored empty list.
+    case derivedEmptyAllow
+    /// Derived `true` for user-facing profiles with a non-empty / open allow list.
+    case derivedUserFacing
+}
+
 /// Fully resolved mode profile (flattened ``extends`` chain).
 public struct ResolvedModeProfile: Sendable, Equatable {
     public static let builtInSeedVersion = 1
@@ -312,6 +324,11 @@ public struct ResolvedModeProfile: Sendable, Equatable {
     /// When false, proactive context-compaction triggers are suppressed for **initial** phase assembly (chat stays light).
     public var allowsProactiveCompactionTriggers: Bool
     public var appliesAgentBuildOrchestratorHarness: Bool
+    /// When false, registration-time ``ToolVisibilityGrant`` never widens tool visibility for this profile.
+    /// Machine sub-agent profiles force `false` (non-overridable).
+    public var allowsHostGrants: Bool
+    /// Why ``allowsHostGrants`` resolved the way it did (explain / coherence diagnostics).
+    public var allowsHostGrantsSource: AllowsHostGrantsSource
     public var builtInSeedVersion: Int
     /// Optional harness-facing tags for layered mode profiles (`modes.md` forward-compat); empty when omitted from config.
     public var semanticLayerTags: [String]
@@ -339,6 +356,8 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         assemblyKind: SystemPromptAssemblyKind,
         allowsProactiveCompactionTriggers: Bool,
         appliesAgentBuildOrchestratorHarness: Bool,
+        allowsHostGrants: Bool? = nil,
+        allowsHostGrantsSource: AllowsHostGrantsSource? = nil,
         builtInSeedVersion: Int,
         semanticLayerTags: [String],
         label: String? = nil,
@@ -357,11 +376,6 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         self.assemblyKind = assemblyKind
         self.allowsProactiveCompactionTriggers = allowsProactiveCompactionTriggers
         self.appliesAgentBuildOrchestratorHarness = appliesAgentBuildOrchestratorHarness
-        self.builtInSeedVersion = builtInSeedVersion
-        self.semanticLayerTags = semanticLayerTags
-        self.label = label
-        self.profileDescription = profileDescription
-        self.symbol = symbol
         self.tools = tools
         self.skills = skills
         self.context = context
@@ -369,5 +383,54 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         self.model = model
         self.subAgents = subAgents
         self.hooks = hooks
+        if let allowsHostGrantsSource, let allowsHostGrants {
+            self.allowsHostGrants = allowsHostGrants
+            self.allowsHostGrantsSource = allowsHostGrantsSource
+        } else {
+            let resolved = Self.resolveAllowsHostGrants(
+                id: id,
+                tools: tools,
+                explicitOnThisRow: allowsHostGrants,
+                inherited: nil
+            )
+            self.allowsHostGrants = resolved.value
+            self.allowsHostGrantsSource = allowsHostGrantsSource ?? resolved.source
+        }
+        if ConversationLineageInference.machineSubAgentModeProfileIDs.contains(id) {
+            self.allowsHostGrants = false
+            self.allowsHostGrantsSource = .machinePinned
+        }
+        self.builtInSeedVersion = builtInSeedVersion
+        self.semanticLayerTags = semanticLayerTags
+        self.label = label
+        self.profileDescription = profileDescription
+        self.symbol = symbol
+    }
+
+    /// Resolves ``allowsHostGrants`` / ``allowsHostGrantsSource`` after the tools slice is final.
+    static func resolveAllowsHostGrants(
+        id: String,
+        tools: ModeProfileToolsSlice,
+        explicitOnThisRow: Bool?,
+        inherited: (value: Bool, source: AllowsHostGrantsSource)?
+    ) -> (value: Bool, source: AllowsHostGrantsSource) {
+        if ConversationLineageInference.machineSubAgentModeProfileIDs.contains(id) {
+            return (false, .machinePinned)
+        }
+        if let explicitOnThisRow {
+            return (explicitOnThisRow, .explicit)
+        }
+        if let allow = tools.allow, allow.isEmpty {
+            return (false, .derivedEmptyAllow)
+        }
+        if let inherited {
+            switch inherited.source {
+            case .explicit, .machinePinned:
+                return inherited
+            case .derivedEmptyAllow, .derivedUserFacing:
+                return (true, .derivedUserFacing)
+            }
+        }
+        return (true, .derivedUserFacing)
     }
 }

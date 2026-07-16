@@ -34,17 +34,14 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
         self.denyWhenUnknownProjectedCost = denyWhenUnknownProjectedCost
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; model pool budget safe defaults")
-            return .safeDefaults
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = root["settings"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
+        guard let settings = document.foundationObject(forKey: "settings") else {
             return .safeDefaults
         }
         return configuration(fromSettingsJSON: settings)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromSettingsJSON settings: [String: Any]) -> ModelPoolBudgetConfiguration {
         guard let raw = settings["modelPoolBudget"] as? [String: Any] else {

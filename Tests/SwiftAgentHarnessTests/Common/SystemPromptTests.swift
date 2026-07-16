@@ -71,16 +71,20 @@ struct SystemPromptConfigLoadingTests {
         #expect(prompt.includeAgentSkills == true || prompt.includeAgentSkills == false)
     }
 
-    @Test("loadSkillsFolderPathFromConfig returns path from PromptConfig")
-    func loadsSkillsFolderPathFromConfig() async throws {
-        let path = try SystemPrompt.loadSkillsFolderPathFromConfig()
+    @Test("configuration set loads skills folder path from PromptConfig")
+    func loadsSkillsFolderPathFromConfigurationSet() {
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath
         #expect(path != nil)
         #expect(path?.isEmpty == false)
     }
 
-    @Test("loadSkillsFolderPathFromConfig returns valid path string")
-    func skillsFolderPathValidFormat() async throws {
-        let path = try SystemPrompt.loadSkillsFolderPathFromConfig() ?? ""
+    @Test("configuration set returns valid skills folder path")
+    func skillsFolderPathValidFormat() {
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath ?? ""
         #expect(path.hasPrefix("/") || path.contains("skills"))
     }
 }

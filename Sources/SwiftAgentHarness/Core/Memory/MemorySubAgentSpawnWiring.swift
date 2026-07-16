@@ -12,7 +12,7 @@ enum MemorySubAgentSpawnWiring {
               let memoryService = defaultEngine.memoryService else {
             return
         }
-        let config = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: deps.logger)
+        let config = deps.configurationSet.memory
         let ranked = deps.rankedRegistryEntriesProvider
         let port = MemorySubAgentSpawnAdapter.makePort(
             spawnSubAgent: { parentID, request, model in

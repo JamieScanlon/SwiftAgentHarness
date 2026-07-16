@@ -20,7 +20,7 @@ struct SubAgentExecutionCoordinatorTests {
         )
     }
 
-    private func makeCoordinator(pool: any SubAgentPooling = DefaultSubAgentPool()) -> SubAgentExecutionCoordinator {
+    private func makeCoordinator(pool: any SubAgentPooling = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)) -> SubAgentExecutionCoordinator {
         SubAgentExecutionCoordinator(subAgentPool: pool)
     }
 
@@ -187,7 +187,10 @@ private struct UncappedTransportAdapter: SubAgentTransportAdapting {
 
 private struct UncappedTransportSubAgentPool: SubAgentPooling {
     let completionHandoffOwner: any SubAgentCompletionHandoffOwning = SubAgentCompletionHandoffOwner()
-    private let backingPool = DefaultSubAgentPool(adapters: [UncappedTransportAdapter()])
+    private let backingPool = DefaultSubAgentPool(
+        adapters: [UncappedTransportAdapter()],
+        hostingPolicyConfiguration: .empty
+    )
 
     func delegateToolNames(from entries: [ToolRegistryEntry]) async -> Set<String> {
         await backingPool.delegateToolNames(from: entries)

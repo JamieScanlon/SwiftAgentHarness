@@ -34,6 +34,10 @@ actor ToolPolicyCoherenceDiagnostics {
                 logger.warning(
                     "Tool policy coherence: empty group '\(issue.ruleToken)' in \(issue.scope.displayLabel) (\(fixIt)); \(issue.detail)"
                 )
+            case .grantSuppressedByEmptyAllow:
+                logger.info(
+                    "Tool policy coherence: grant '\(issue.ruleToken)' suppressed by empty allow in \(issue.scope.displayLabel) (\(fixIt)); \(issue.detail)"
+                )
             }
         }
     }

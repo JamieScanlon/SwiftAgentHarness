@@ -69,8 +69,11 @@ public actor HarnessRuntimeSession {
     internal var runtimeLifecyclePublicationService: RuntimeLifecyclePublicationService { services.runtimeLifecyclePublicationService }
     public var conversationStartupService: ConversationStartupService { services.conversationStartupService }
 
-    public func setMCPManager(_ mcpManager: MCPManager) async {
-        await conversationStartupService.setMCPManager(mcpManager)
+    public func setMCPManager(
+        _ mcpManager: MCPManager,
+        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+    ) async {
+        await conversationStartupService.setMCPManager(mcpManager, visibilityGrant: visibilityGrant)
     }
 
     public func setResourceManager(_ resourceManager: ResourceManager) async {
@@ -128,6 +131,7 @@ public actor HarnessRuntimeSession {
     
     init(
         logger: Logger? = nil,
+        configuration: HarnessConfigurationSet,
         dataStoreURL: URL? = nil,
         allowsSwiftDataSave: Bool = true,
         trustPolicyConfiguration: TrustPolicyConfiguration? = nil,
@@ -159,9 +163,8 @@ public actor HarnessRuntimeSession {
             delegateCostTracker: delegateCostTracker,
             logger: logger
         )
-        let transformConfig = ConversationTransformConfiguration.loadFromPromptConfigBundle(logger: logger)
-        let resolvedTrustPolicy = trustPolicyConfiguration
-            ?? TrustPolicyConfiguration.loadFromPromptConfigBundle(logger: logger)
+        let transformConfig = configuration.conversationTransforms
+        let resolvedTrustPolicy = trustPolicyConfiguration ?? configuration.trustPolicy
         let persistenceDomain = ConversationPersistenceDomain.makeProduction(
             logger: logger,
             dataStoreURL: dataStoreURL,
@@ -183,10 +186,11 @@ public actor HarnessRuntimeSession {
         self.init(
             persistenceDomain: persistenceDomain,
             logger: logger,
-            toolPolicy: ToolPolicyConfiguration.loadFromPromptConfigBundle(logger: logger),
+            configuration: configuration,
+            toolPolicy: configuration.toolPolicy,
             trustPolicyConfiguration: resolvedTrustPolicy,
-            agentHarness: AgentHarnessConfiguration.loadFromPromptConfigBundle(logger: logger),
-            thinkingPolicyConfiguration: ThinkingPolicyConfiguration.loadFromPromptConfigBundle(logger: logger),
+            agentHarness: configuration.agentHarness,
+            thinkingPolicyConfiguration: configuration.thinkingPolicy,
             conversationTransformConfiguration: transformConfig,
             conversationTransformer: ContextCompactionTransformer.makeProduction(
                 config: transformConfig.contextCompaction,
@@ -203,11 +207,59 @@ public actor HarnessRuntimeSession {
             invocationCoordinator: resolvedCoordinator,
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
-            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
+            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(
+                workspacePolicy: workspacePolicy,
+                modeProfileConfiguration: configuration.modeProfiles
+            ),
             runtimeLaneConfiguration: runtimeLaneConfiguration.applyingStrictTenancyDefaults(
                 tenancyPolicy: tenancyPolicy
             ),
             runtimeExecutorFactory: runtimeExecutorFactory,
+            tenancyPolicy: tenancyPolicy,
+            workspacePolicy: workspacePolicy
+        )
+    }
+
+    /// Preferred composition-root entry: a single ``HarnessConfigurationSet`` snapshot threads every PromptConfig section.
+    public static func makeProduction(
+        persistenceDomain: ConversationPersistenceDomain,
+        logger: Logger?,
+        configuration: HarnessConfigurationSet,
+        conversationTransformer: any ConversationTransforming,
+        llmFactory: any ModelLLMFactoring,
+        registryEntryProvider: (@Sendable (UUID) async -> ModelRegistryEntry?)?,
+        rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?,
+        delegateCostTracker: (any DelegateCostTracking)?,
+        callScheduler: any ModelCallScheduling,
+        invocationCoordinator: any ModelInvocationLifecycleTracking,
+        compactionCoordinator: CompactionConcurrencyCoordinator,
+        contextEngine: any ContextEngine,
+        modeRegistry: any ModeRegistryAccessing,
+        runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        workspacePolicy: HarnessWorkspacePolicy = .default
+    ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
+        makeProduction(
+            persistenceDomain: persistenceDomain,
+            logger: logger,
+            configuration: configuration,
+            toolPolicy: configuration.toolPolicy,
+            trustPolicyConfiguration: configuration.trustPolicy,
+            agentHarness: configuration.agentHarness,
+            thinkingPolicyConfiguration: configuration.thinkingPolicy,
+            conversationTransformConfiguration: configuration.conversationTransforms,
+            conversationTransformer: conversationTransformer,
+            llmFactory: llmFactory,
+            registryEntryProvider: registryEntryProvider,
+            rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
+            delegateCostTracker: delegateCostTracker,
+            callScheduler: callScheduler,
+            invocationCoordinator: invocationCoordinator,
+            compactionCoordinator: compactionCoordinator,
+            contextEngine: contextEngine,
+            modeRegistry: modeRegistry,
+            runtimeLaneConfiguration: runtimeLaneConfiguration,
+            runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             tenancyPolicy: tenancyPolicy,
             workspacePolicy: workspacePolicy
         )
@@ -238,6 +290,13 @@ public actor HarnessRuntimeSession {
         makeProduction(
             persistenceDomain: persistenceDomain,
             logger: logger,
+            configuration: .assembling(
+                agentHarness: agentHarness,
+                toolPolicy: toolPolicy,
+                trustPolicy: trustPolicyConfiguration,
+                thinkingPolicy: thinkingPolicyConfiguration,
+                conversationTransforms: conversationTransformConfiguration
+            ),
             toolPolicy: toolPolicy,
             trustPolicyConfiguration: trustPolicyConfiguration,
             agentHarness: agentHarness,
@@ -263,6 +322,62 @@ public actor HarnessRuntimeSession {
     static func makeProduction(
         persistenceDomain: ConversationPersistenceDomain,
         logger: Logger?,
+        toolPolicy: ToolPolicyConfiguration,
+        trustPolicyConfiguration: TrustPolicyConfiguration,
+        agentHarness: AgentHarnessConfiguration,
+        thinkingPolicyConfiguration: ThinkingPolicyConfiguration,
+        conversationTransformConfiguration: ConversationTransformConfiguration,
+        conversationTransformer: any ConversationTransforming,
+        llmFactory: any ModelLLMFactoring,
+        registryEntryProvider: (@Sendable (UUID) async -> ModelRegistryEntry?)?,
+        rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?,
+        delegateCostTracker: (any DelegateCostTracking)?,
+        callScheduler: any ModelCallScheduling,
+        invocationCoordinator: any ModelInvocationLifecycleTracking,
+        compactionCoordinator: CompactionConcurrencyCoordinator,
+        contextEngine: any ContextEngine,
+        modeRegistry: any ModeRegistryAccessing,
+        runtimeLaneConfiguration: RuntimeLaneConfiguration,
+        runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        workspacePolicy: HarnessWorkspacePolicy = .default
+    ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
+        makeProduction(
+            persistenceDomain: persistenceDomain,
+            logger: logger,
+            configuration: .assembling(
+                agentHarness: agentHarness,
+                toolPolicy: toolPolicy,
+                trustPolicy: trustPolicyConfiguration,
+                thinkingPolicy: thinkingPolicyConfiguration,
+                conversationTransforms: conversationTransformConfiguration
+            ),
+            toolPolicy: toolPolicy,
+            trustPolicyConfiguration: trustPolicyConfiguration,
+            agentHarness: agentHarness,
+            thinkingPolicyConfiguration: thinkingPolicyConfiguration,
+            conversationTransformConfiguration: conversationTransformConfiguration,
+            conversationTransformer: conversationTransformer,
+            llmFactory: llmFactory,
+            registryEntryProvider: registryEntryProvider,
+            rankedRegistryEntriesProvider: rankedRegistryEntriesProvider,
+            delegateCostTracker: delegateCostTracker,
+            callScheduler: callScheduler,
+            invocationCoordinator: invocationCoordinator,
+            compactionCoordinator: compactionCoordinator,
+            contextEngine: contextEngine,
+            modeRegistry: modeRegistry,
+            runtimeLaneConfiguration: runtimeLaneConfiguration,
+            runtimeExecutorFactory: runtimeExecutorFactory,
+            tenancyPolicy: tenancyPolicy,
+            workspacePolicy: workspacePolicy
+        )
+    }
+
+    static func makeProduction(
+        persistenceDomain: ConversationPersistenceDomain,
+        logger: Logger?,
+        configuration: HarnessConfigurationSet,
         toolPolicy: ToolPolicyConfiguration,
         trustPolicyConfiguration: TrustPolicyConfiguration,
         agentHarness: AgentHarnessConfiguration,
@@ -312,6 +427,7 @@ public actor HarnessRuntimeSession {
             callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,
+            configurationSet: configuration,
             toolPolicy: toolPolicy,
             trustPolicyConfiguration: trustPolicyConfiguration,
             agentHarness: agentHarness,
@@ -354,6 +470,7 @@ public actor HarnessRuntimeSession {
     init(
         persistenceDomain: ConversationPersistenceDomain,
         logger: Logger?,
+        configuration: HarnessConfigurationSet,
         toolPolicy: ToolPolicyConfiguration,
         trustPolicyConfiguration: TrustPolicyConfiguration = .disabled,
         agentHarness: AgentHarnessConfiguration,
@@ -393,7 +510,7 @@ public actor HarnessRuntimeSession {
             callScheduler,
             tenancyPolicy: tenancyPolicy
         )
-        let memoryConfig = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: logger)
+        let memoryConfig = configuration.memory
         let memoryRecallSelector = ModelPoolMemoryLLMRecallSelector(
             scheduler: alignedScheduler,
             modelName: memoryConfig.recallSelectorModel,
@@ -424,11 +541,15 @@ public actor HarnessRuntimeSession {
             compactionCoordinator: compactionCoordinator,
             contextEngine: resolvedContextEngine,
             contextAssemblyRuntime: contextAssemblyRuntime,
-            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
+            modeRegistry: modeRegistry ?? Self.defaultModeRegistry(
+                workspacePolicy: workspacePolicy,
+                modeProfileConfiguration: configuration.modeProfiles
+            ),
             llmFactory: alignedFactory,
             callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,
+            configurationSet: configuration,
             toolPolicy: toolPolicy,
             trustPolicyConfiguration: trustPolicyConfiguration,
             agentHarness: agentHarness,
@@ -515,14 +636,25 @@ public actor HarnessRuntimeSession {
         self.delegateCostTracker = delegateCostTracker
         self.runtimeDependencies = runtimeDependencies
         self.services = services
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: runtimeDependencies.visibilityGrants)
     }
 
-    private static func defaultModeRegistry(workspacePolicy: HarnessWorkspacePolicy) -> ModeRegistryPortAdapter {
+    private static func defaultModeRegistry(
+        workspacePolicy: HarnessWorkspacePolicy,
+        modeProfileConfiguration: ModeProfileConfiguration? = nil
+    ) -> ModeRegistryPortAdapter {
         if workspacePolicy.allowAmbientWorkspaceFallback,
            let cwd = HarnessWorkspaceResolver.ambientIfKnown() {
-            return ModeRegistryPortAdapter(service: ModeRegistryService.makeForHost(cwd: cwd))
+            return ModeRegistryPortAdapter(
+                service: ModeRegistryService.makeForHost(
+                    cwd: cwd,
+                    modeProfileConfiguration: modeProfileConfiguration
+                )
+            )
         }
-        return ModeRegistryPortAdapter(service: ModeRegistryService())
+        return ModeRegistryPortAdapter(
+            service: ModeRegistryService(modeProfileConfiguration: modeProfileConfiguration)
+        )
     }
 
     /// Initializer for testing with an in-memory container.
@@ -561,9 +693,17 @@ public actor HarnessRuntimeSession {
             harnessSessionPersistenceOverride: harnessSessionPersistenceOverride
         )
         let domain = ConversationPersistenceDomain(stack: stack)
+        let configuration = HarnessConfigurationSet.assembling(
+            agentHarness: agentHarness,
+            toolPolicy: toolPolicy,
+            trustPolicy: trustPolicyConfiguration,
+            thinkingPolicy: thinkingPolicyConfiguration,
+            conversationTransforms: conversationTransformConfiguration
+        )
         self.init(
             persistenceDomain: domain,
             logger: logger,
+            configuration: configuration,
             toolPolicy: toolPolicy,
             trustPolicyConfiguration: trustPolicyConfiguration,
             agentHarness: agentHarness,
@@ -1108,7 +1248,7 @@ public actor HarnessRuntimeSession {
         return ModelInvocationCoordinator()
     }
 
-    let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    let toolSystemGateway: any ToolSystemGatewaying
     private var delegateCostTracker: (any DelegateCostTracking)?
     let runtimeExecutorFactory: AgentRuntimeExecutorFactory
     /// TODO: Replace this temporary hardcoded flag with robust debug settings exposed in UI.

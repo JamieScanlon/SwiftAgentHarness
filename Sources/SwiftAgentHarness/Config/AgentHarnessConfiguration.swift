@@ -87,18 +87,14 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         maxConsecutiveChattyAssistantTurns
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> AgentHarnessConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; agent harness defaults")
-            return .default
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let harness = json["agentHarness"] as? [String: Any]
-        else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> AgentHarnessConfiguration {
+        guard let harness = document.foundationObject(forKey: "agentHarness") else {
             return .default
         }
         return configuration(fromAgentHarnessJSON: harness)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     /// Parses the `agentHarness` object from **PromptConfig.json** (used by tests with synthetic dictionaries).
     internal static func configuration(fromAgentHarnessJSON harness: [String: Any]) -> AgentHarnessConfiguration {

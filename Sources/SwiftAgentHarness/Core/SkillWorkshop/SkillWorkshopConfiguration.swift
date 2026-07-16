@@ -1,21 +1,24 @@
 import Foundation
 import Logging
 
-struct SkillWorkshopConfiguration: Sendable, Equatable {
-    var enabled: Bool
-    var maxProposalsPerWorkspace: Int
+public struct SkillWorkshopConfiguration: Sendable, Equatable {
+    public var enabled: Bool
+    public var maxProposalsPerWorkspace: Int
 
-    static let `default` = SkillWorkshopConfiguration(
+    public static let `default` = SkillWorkshopConfiguration(
         enabled: false,
         maxProposalsPerWorkspace: 50
     )
+
+    public init(enabled: Bool, maxProposalsPerWorkspace: Int) {
+        self.enabled = enabled
+        self.maxProposalsPerWorkspace = maxProposalsPerWorkspace
+    }
 }
 
 enum SkillWorkshopConfigurationLoader {
-    static func loadFromPromptConfigBundle(logger: Logger? = nil) -> SkillWorkshopConfiguration {
-        guard let data = PromptConfigBundleResource.data(),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let object = json["skillWorkshop"] as? [String: Any] else {
+    static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> SkillWorkshopConfiguration {
+        guard let object = document.foundationObject(forKey: "skillWorkshop") else {
             return .default
         }
         return load(fromSkillWorkshopObject: object)

@@ -671,9 +671,12 @@ public actor APILayer {
         startupService = startup
     }
 
-    public func setMCPManager(_ mcpManager: MCPManager) async {
+    public func setMCPManager(
+        _ mcpManager: MCPManager,
+        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+    ) async {
         guard let startupService else { return }
-        await startupService.setMCPManager(mcpManager)
+        await startupService.setMCPManager(mcpManager, visibilityGrant: visibilityGrant)
     }
 
     public func setACPManager(_ acpManager: ACPManager, delegateBoxes: [String: SubAgentACPClientDelegateBox]) async {

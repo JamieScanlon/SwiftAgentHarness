@@ -96,7 +96,8 @@ enum SystemPromptAssemblyProjector {
             assemblyFingerprint: fingerprint,
             assembleReferenceDateISO: iso,
             audit: audit,
-            contributions: bundle.contributions
+            contributions: bundle.contributions,
+            policy: policy
         )
         let sectionMap = SystemPromptSectionProvenanceFormatter.stringSectionProvenanceMap(from: audit.product)
         return (audit.text, replaySpec.replaySpecDigest, sectionMap)

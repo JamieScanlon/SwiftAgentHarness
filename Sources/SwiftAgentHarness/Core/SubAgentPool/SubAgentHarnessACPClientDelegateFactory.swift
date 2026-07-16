@@ -55,7 +55,7 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
             approvalDelivery: approvalDelivery,
             logger: deps.logger
         )
-        let skillsDirectory = (try? SystemPrompt.loadSkillsFolderPathFromConfig())
+        let skillsDirectory = (PromptAssemblyConfiguration.default.skillsFolderPath)
             .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
         let runtimeContext = ExecRuntimeContext(
             sessionKey: sessionKey,

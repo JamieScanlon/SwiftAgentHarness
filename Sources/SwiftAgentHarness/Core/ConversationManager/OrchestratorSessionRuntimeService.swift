@@ -26,7 +26,7 @@ public actor OrchestratorSessionRuntimeService {
     private let subAgentPool: any SubAgentPooling
     private let slashCommand: SlashCommandDispatchService
     private let toolData: ConversationToolDataService
-    private let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    private let toolSystemGateway: any ToolSystemGatewaying
     private var triggerDelegatedCompletionHandoff: TriggerDelegatedCompletionHandoff?
 
     init(
@@ -59,6 +59,7 @@ public actor OrchestratorSessionRuntimeService {
         self.subAgentPool = subAgentPool
         self.slashCommand = slashCommand
         self.toolData = toolData
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     private var logger: Logger? { deps.logger }
@@ -250,8 +251,8 @@ public actor OrchestratorSessionRuntimeService {
         let policy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolved,
             strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            includeAgentSkills: resolved.context.includeSkills ?? SystemPrompt.loadIncludeAgentSkillsFromConfig(),
-            includeDateTime: SystemPrompt.loadIncludeCurrentDateTimeFromConfig(),
+            includeAgentSkills: resolved.context.includeSkills ?? PromptAssemblyConfiguration.default.includeAgentSkills,
+            includeDateTime: PromptAssemblyConfiguration.default.includeCurrentDateTime,
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
             routingPolicySkills: routingNames.skills,

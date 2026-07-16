@@ -6,7 +6,7 @@ enum MessageOutputTurnConfiguration {
         base: AgentRuntimeTurnConfiguration,
         originSurface: String,
         originSenderID: String? = nil,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         var configuration = base
         configuration.originSurface = originSurface
@@ -50,7 +50,7 @@ enum MessageOutputTurnConfiguration {
         resolvedInputTrustClass: TrustPolicyClass?,
         originSurface: String? = nil,
         originSenderID: String? = nil,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         let surface = originSurface?.isEmpty == false ? originSurface! : InteractiveSurfaceID.rest
         return forInteractiveSend(
@@ -71,7 +71,7 @@ enum MessageOutputTurnConfiguration {
     static func forTUISend(
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
         originSenderID: String? = nil,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         applyingDirectUserEntryTrustWhenEligible(to: forInteractiveSend(
             base: base,
@@ -85,7 +85,7 @@ enum MessageOutputTurnConfiguration {
     static func forCLISend(
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
         originSenderID: String? = nil,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         applyingDirectUserEntryTrustWhenEligible(to: forInteractiveSend(
             base: base,
@@ -99,7 +99,7 @@ enum MessageOutputTurnConfiguration {
     static func applyingInteractiveDefaultsWhenMissing(
         to configuration: AgentRuntimeTurnConfiguration,
         defaultSurface: String = InteractiveSurfaceID.cli,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         guard configuration.originSurface == nil || configuration.originSurface?.isEmpty == true else {
             return configuration
@@ -116,7 +116,7 @@ enum MessageOutputTurnConfiguration {
     static func applyingInteractiveSendDefaults(
         to configuration: AgentRuntimeTurnConfiguration,
         defaultSurface: String = InteractiveSurfaceID.cli,
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         applyingDirectUserEntryTrustWhenEligible(to: applyingInteractiveDefaultsWhenMissing(
             to: configuration,
@@ -141,7 +141,7 @@ extension ComposerSubmission {
     /// Builds a runtime turn configuration with TUI provenance and optional message-tool output guidance.
     public func runtimeTurnConfiguration(
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         var baseWithProvenance = base
         baseWithProvenance.inputTrustRaw = MessageInputTrustCodec.sanitizedInputTrustRaw(provenance.inputTrustRaw)

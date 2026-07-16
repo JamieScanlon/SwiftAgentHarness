@@ -89,7 +89,7 @@ struct HarnessACPClientDelegateTests {
                 : .disabled,
             modePolicyContext: ModePolicyContext(conversation: conversation, resolvedProfile: resolved),
             runtimeConfiguration: runtimeConfiguration,
-            subAgentPool: DefaultSubAgentPool(),
+            subAgentPool: DefaultSubAgentPool(hostingPolicyConfiguration: .empty),
             toolEntries: denyBash ? [bashEntry] : [processEntry, writeEntry],
             permissionPolicy: .askUser,
             permissionAlreadyGranted: false,

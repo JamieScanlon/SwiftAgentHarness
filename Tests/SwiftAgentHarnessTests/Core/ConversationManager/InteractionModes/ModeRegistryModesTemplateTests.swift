@@ -138,7 +138,7 @@ struct ModeRegistryModesTemplateTests {
     func bundledPromptConfigAllowsNativeWorkspaceTools() async throws {
         let registry = ModeRegistryTestSupport.makeService(
             seedingBuiltIns: true,
-            modeProfileConfiguration: ModeProfileConfiguration.loadFromPromptConfigBundle()
+            modeProfileConfiguration: try HarnessConversationTestFixtures.promptConfigFixture().modeProfiles
         )
         let plan = try await registry.resolve(modeId: InteractionMode.plan.rawValue)
         let agent = try await registry.resolve(modeId: InteractionMode.agent.rawValue)
@@ -162,7 +162,7 @@ struct ModeRegistryModesTemplateTests {
     func bundledPromptConfigAgentRecoveryMaxAttempts() async throws {
         let registry = ModeRegistryTestSupport.makeService(
             seedingBuiltIns: true,
-            modeProfileConfiguration: ModeProfileConfiguration.loadFromPromptConfigBundle()
+            modeProfileConfiguration: try HarnessConversationTestFixtures.promptConfigFixture().modeProfiles
         )
         let agent = try await registry.resolve(modeId: InteractionMode.agent.rawValue)
         #expect(agent.runtime.maxIterations == nil)

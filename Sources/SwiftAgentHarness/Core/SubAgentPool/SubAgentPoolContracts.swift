@@ -788,7 +788,7 @@ struct DefaultSubAgentPool: SubAgentPooling, SubAgentTransportAdapterResolving {
 
     init(
         adapters: [any SubAgentTransportAdapting] = SubAgentDefaultAdapters.make(),
-        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.loadFromPromptConfigBundle()
+        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration
     ) {
         var registry: [SubAgentTransportKind: any SubAgentTransportAdapting] = [:]
         for adapter in adapters {

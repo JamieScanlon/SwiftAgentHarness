@@ -12,11 +12,20 @@ protocol StartupServicing: Sendable {
     func setTraceTopicPublisher(_ publisher: (any TraceTopicPublishing)?) async
     func setSubAgentLifecyclePublisher(_ publisher: (any SubAgentPoolResourceTopicPublishing)?) async
     func setResourceManager(_ resourceManager: ResourceManager) async
-    func setMCPManager(_ mcpManager: MCPManager) async
+    func setMCPManager(
+        _ mcpManager: MCPManager,
+        visibilityGrant: ToolVisibilityGrant
+    ) async
     func setA2AManager(_ a2aManager: A2AManager) async
     func conversationWireCurrentRunID(conversationID: UUID) async -> UUID
     func purgeSoftDeletedPastRetention(retentionDays: Int, now: Date) async throws -> Int
     func runDerivedArtifactRetentionSweep(policy: DerivedArtifactRetentionPolicy) async throws -> DerivedArtifactRetentionSweepResult
+}
+
+extension StartupServicing {
+    func setMCPManager(_ mcpManager: MCPManager) async {
+        await setMCPManager(mcpManager, visibilityGrant: .grant(modes: .allUserFacing))
+    }
 }
 
 /// Server startup, retention sweeps, and composition-root publisher wiring (Slice 6 migration).
@@ -144,8 +153,18 @@ public actor ConversationStartupService: StartupServicing {
         self.resourceManager = resourceManager
     }
 
-    public func setMCPManager(_ mcpManager: MCPManager) async {
+    public func setMCPManager(
+        _ mcpManager: MCPManager,
+        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+    ) async {
         self.mcpManager = mcpManager
+        deps.visibilityGrants.register(
+            ToolVisibilityGrantRecord(
+                id: ToolVisibilityGrantStore.mcpRegistrationID,
+                grant: visibilityGrant,
+                match: .registrySource(.mcp)
+            )
+        )
     }
 
     nonisolated func installSubAgentA2AManagerProvider(_ provider: SubAgentPoolA2AManagerProvider) {

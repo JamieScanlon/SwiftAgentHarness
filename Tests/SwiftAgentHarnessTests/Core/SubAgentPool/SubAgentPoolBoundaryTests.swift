@@ -8,7 +8,7 @@ import Testing
 struct SubAgentPoolBoundaryTests {
     @Test("listSubAgents maps delegate tools to v2 rows")
     func listSubAgentsMapsDelegateRows() async {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "delegate_research", description: "research", parameters: [], type: .a2aAgent),
@@ -78,7 +78,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("refreshSubAgentCatalog returns fetched entries")
     func refreshSubAgentCatalogReturnsFetchedEntries() async {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let expected = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_refresh_probe", description: "refresh", parameters: [], type: .a2aAgent),
             source: .a2a,
@@ -93,7 +93,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("normalizeLaunchRequest maps spawn request fields")
     func normalizeLaunchRequestMapsSpawnRequestFields() {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let userMessageID = UUID()
         let request = SubAgentSpawnRequest(
             context: .fork,
@@ -112,7 +112,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("normalizeLaunchRequest strips reserved permission metadata keys")
     func normalizeLaunchRequestStripsReservedPermissionMetadata() {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let request = SubAgentSpawnRequest(
             context: .isolated,
             taskDescription: "task",
@@ -139,7 +139,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("transport gate ignores client permissionAlreadyGranted metadata")
     func transportGateIgnoresClientPermissionMetadata() throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let agentID = "delegate_test_\(UUID().uuidString.lowercased())"
         let spawnRequest = SubAgentSpawnRequest(
             context: .isolated,
@@ -177,7 +177,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("transport gate honors internal permissionAlreadyGranted field")
     func transportGateHonorsInternalPermissionField() throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let agentID = "delegate_test_\(UUID().uuidString.lowercased())"
         let launchPlan = try pool.planLaunch(
             SubAgentLaunchRequest(
@@ -215,7 +215,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("planLaunch uses fork path for fork context")
     func planLaunchForkPath() throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let userMessageID = UUID()
         let request = SubAgentLaunchRequest(context: .fork, userMessageID: userMessageID)
         let plan = try pool.planLaunch(request, parentConversationID: UUID())
@@ -224,7 +224,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("planLaunch keeps stable background handle when agent id provided")
     func planLaunchBackgroundHandleFromAgentID() throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let request = SubAgentLaunchRequest(context: .isolated, runInBackground: true, agentID: "agent-handle-1")
         let plan = try pool.planLaunch(request, parentConversationID: UUID())
         #expect(plan.asyncHandleID == "agent-handle-1")
@@ -232,7 +232,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("resolveSubAgent selects best agent from query constraints")
     func resolveSubAgentByQuery() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "delegate_remote_research", description: "remote research", parameters: [], type: .a2aAgent),
@@ -255,7 +255,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("resolveSubAgent keeps explicit id over query")
     func resolveSubAgentExplicitIDPrecedence() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "delegate_remote_research", description: "remote research", parameters: [], type: .a2aAgent),
@@ -274,7 +274,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("adapter resolution falls back to in-process")
     func adapterResolutionFallback() async {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let request = SubAgentLaunchRequest(context: .isolated)
         let adapter = await pool.selectTransportAdapter(for: request, entries: [], conversationID: nil)
         #expect(adapter?.transportKind == .inProcess)
@@ -282,7 +282,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("delegate transport mapping uses explicit environment metadata")
     func delegateTransportMappingUsesEnvironmentMetadata() async {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "delegate_http_proxy", description: "proxy", parameters: [], type: .a2aAgent),
@@ -302,7 +302,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("resolveSubAgent projects matched entry transport kind onto request")
     func resolveSubAgentProjectsMatchedTransportKind() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "delegate_http_proxy", description: "proxy", parameters: [], type: .a2aAgent),
@@ -386,7 +386,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("invokeSubAgent delegates in-process execution to host")
     func invokeSubAgentInProcessDelegatesToHost() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let toolEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_local_worker", description: "local worker", parameters: [], type: .a2aAgent),
             source: .local,
@@ -424,7 +424,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("invokeSubAgent returns remote handle for A2A")
     func invokeSubAgentA2AStartsRemote() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let agentID = "delegate_remote_worker_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: agentID, description: "remote worker", parameters: [], type: .a2aAgent),
@@ -470,7 +470,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("invokeSubAgent fails closed when ACP manager unavailable")
     func invokeSubAgentACPStdioFailsClosedWhenManagerMissing() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let toolEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_acp_worker", description: "acp worker", parameters: [], type: .acpAgent),
             source: .unknown,
@@ -533,7 +533,8 @@ struct SubAgentPoolBoundaryTests {
             adapters: SubAgentDefaultAdapters.make(
                 customEndpointConfiguration: configuration,
                 customEndpointExecutor: MockCustomEndpointExecutor()
-            )
+            ),
+            hostingPolicyConfiguration: .empty
         )
         let toolEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_custom_worker", description: "custom worker", parameters: [], type: .a2aAgent),
@@ -580,7 +581,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("cancelTransport routes request to adapter")
     func cancelTransportRoutesToAdapter() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let agentID = "delegate_remote_worker_\(UUID().uuidString.lowercased())"
         let launchPlan = try pool.planLaunch(
             SubAgentLaunchRequest(
@@ -630,7 +631,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("recoverTransport returns adapter recovery result")
     func recoverTransportReturnsResult() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let parentConversationID = UUID()
         let agentID = "delegate_remote_worker_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(
@@ -680,7 +681,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("streamDelegateEvents returns empty stream for default adapters")
     func streamDelegateEventsDefaultIsEmpty() async {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let correlation = SubAgentTransportInvocationCorrelation(
             lifecycleID: "lifecycle-1",
             transportKind: .a2a,
@@ -699,7 +700,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("resolveTransportPermission transitions awaiting approval to running")
     func resolveTransportPermissionTransitionsToRunning() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let parentConversationID = UUID()
         let agentID = "delegate_remote_worker_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(
@@ -753,7 +754,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("askParent invoke starts awaiting approval")
     func askParentInvokeAwaitingApproval() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let parentConversationID = UUID()
         let agentID = "delegate_ask_parent_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(
@@ -792,7 +793,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("cancelTransport failed event omits completion usage")
     func cancelTransportOmitsCompletionUsage() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let parentConversationID = UUID()
         let agentID = "delegate_cancel_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(
@@ -842,7 +843,7 @@ struct SubAgentPoolBoundaryTests {
 
     @Test("recoverTransport cancelled disposition omits completion usage")
     func recoverTransportOmitsCompletionUsage() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let parentConversationID = UUID()
         let agentID = "delegate_recover_cancel_\(UUID().uuidString.lowercased())"
         let toolEntry = ToolRegistryEntry(

@@ -14,7 +14,7 @@ struct MemoryDreamingBridge: Sendable {
     let now: @Sendable () -> Date
 
     init(
-        config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
+        config: MemoryConfiguration = MemoryConfiguration.default,
         controlStore: DreamingControlStore = DreamingControlStore(),
         projectsRoot: URL? = nil,
         ownersRoot: URL? = nil,

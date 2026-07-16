@@ -26,7 +26,7 @@ struct SubAgentTransportPermissionGateTests {
             permissionPolicy: permissionPolicy,
             availableToolInfo: toolEntry.availableToolInfo
         )
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let launchPlan = try pool.planLaunch(
             SubAgentLaunchRequest(
                 context: .isolated,

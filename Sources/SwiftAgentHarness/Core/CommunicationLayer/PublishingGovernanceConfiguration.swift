@@ -24,11 +24,8 @@ public struct PublishingGovernanceConfiguration: Sendable {
         mode == .strict
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> PublishingGovernanceConfiguration {
-        guard let data = PromptConfigBundleResource.data(),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let block = json["publishingGovernance"] as? [String: Any]
-        else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> PublishingGovernanceConfiguration {
+        guard let block = document.foundationObject(forKey: "publishingGovernance") else {
             return .defaultStrict
         }
 
@@ -46,6 +43,8 @@ public struct PublishingGovernanceConfiguration: Sendable {
             diagnosticsEnabled: diagnosticsEnabled
         )
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     public func applyingOverrides(
         modeRawOverride: String?,

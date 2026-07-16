@@ -32,7 +32,7 @@ public actor DefaultMemoryService: MemoryServicing {
     }
 
     init(
-        config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
+        config: MemoryConfiguration = MemoryConfiguration.default,
         logger: Logger? = nil,
         userConfigDir: URL? = nil,
         llmRecallSelector: MemoryLLMRecallSelecting? = nil,

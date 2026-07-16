@@ -154,6 +154,7 @@ struct HarnessRuntimeSessionReplayProcessingIntegrationTests {
         return HarnessRuntimeSession(
             persistenceDomain: fixture.domain,
             logger: nil,
+            configuration: .lockedDownBaseline,
             toolPolicy: .unrestricted,
             agentHarness: .default,
             conversationTransformConfiguration: replayTransformConfig(),

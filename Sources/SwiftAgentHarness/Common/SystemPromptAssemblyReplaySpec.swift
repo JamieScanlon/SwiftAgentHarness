@@ -26,6 +26,54 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
     let skillsIndexDigest: String?
     let providerStablePrefix: String?
     let contributionSourcesDigest: String
+    /// PromptConfig-derived values captured at assemble time so replays never re-read ambient config.
+    let promptConfigSnapshot: PromptAssemblyConfigSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case assemblyFingerprint
+        case assembleReferenceDateISO
+        case userSystemPrompt
+        case activatedSkillNames
+        case skillsIndexDigest
+        case providerStablePrefix
+        case contributionSourcesDigest
+        case promptConfigSnapshot
+    }
+
+    init(
+        assemblyFingerprint: String,
+        assembleReferenceDateISO: String,
+        userSystemPrompt: String,
+        activatedSkillNames: [String],
+        skillsIndexDigest: String?,
+        providerStablePrefix: String?,
+        contributionSourcesDigest: String,
+        promptConfigSnapshot: PromptAssemblyConfigSnapshot
+    ) {
+        self.assemblyFingerprint = assemblyFingerprint
+        self.assembleReferenceDateISO = assembleReferenceDateISO
+        self.userSystemPrompt = userSystemPrompt
+        self.activatedSkillNames = activatedSkillNames
+        self.skillsIndexDigest = skillsIndexDigest
+        self.providerStablePrefix = providerStablePrefix
+        self.contributionSourcesDigest = contributionSourcesDigest
+        self.promptConfigSnapshot = promptConfigSnapshot
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assemblyFingerprint = try container.decode(String.self, forKey: .assemblyFingerprint)
+        assembleReferenceDateISO = try container.decode(String.self, forKey: .assembleReferenceDateISO)
+        userSystemPrompt = try container.decode(String.self, forKey: .userSystemPrompt)
+        activatedSkillNames = try container.decode([String].self, forKey: .activatedSkillNames)
+        skillsIndexDigest = try container.decodeIfPresent(String.self, forKey: .skillsIndexDigest)
+        providerStablePrefix = try container.decodeIfPresent(String.self, forKey: .providerStablePrefix)
+        contributionSourcesDigest = try container.decode(String.self, forKey: .contributionSourcesDigest)
+        promptConfigSnapshot = try container.decodeIfPresent(
+            PromptAssemblyConfigSnapshot.self,
+            forKey: .promptConfigSnapshot
+        ) ?? PromptAssemblyConfigSnapshot(from: .default, strictAgentHarnessPrompts: true)
+    }
 
     static func contributionSourcesDigest(contributions: [SystemPromptContribution]) -> String {
         let canonical = contributions
@@ -72,7 +120,8 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
         userSystemPrompt: String,
         skillSnapshot: SystemPromptSkillRenderSnapshot,
         providerStablePrefix: String?,
-        contributions: [SystemPromptContribution]
+        contributions: [SystemPromptContribution],
+        promptConfigSnapshot: PromptAssemblyConfigSnapshot
     ) -> SystemPromptAssemblyReplaySpec {
         SystemPromptAssemblyReplaySpec(
             assemblyFingerprint: assemblyFingerprint,
@@ -81,7 +130,8 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
             activatedSkillNames: skillSnapshot.activatedSkillNames,
             skillsIndexDigest: skillSnapshot.skillsIndexDigest,
             providerStablePrefix: providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            contributionSourcesDigest: contributionSourcesDigest(contributions: contributions)
+            contributionSourcesDigest: contributionSourcesDigest(contributions: contributions),
+            promptConfigSnapshot: promptConfigSnapshot
         )
     }
 
@@ -92,7 +142,8 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
             userSystemPrompt: userSystemPrompt,
             skillsIndexDigest: skillsIndexDigest,
             providerStablePrefix: providerStablePrefix,
-            contributionSourcesDigest: contributionSourcesDigest
+            contributionSourcesDigest: contributionSourcesDigest,
+            promptConfigSnapshot: promptConfigSnapshot
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -110,6 +161,10 @@ struct SystemPromptAssemblyReplaySpec: Sendable, Equatable, Codable {
         skillsIndexDigest=\(skillsIndexDigest ?? "-")
         providerStablePrefix=\(providerStablePrefix ?? "-")
         contributionSourcesDigest=\(contributionSourcesDigest)
+        promptConfigSnapshot.includeAgentSkills=\(promptConfigSnapshot.includeAgentSkills)
+        promptConfigSnapshot.includeCurrentDateTime=\(promptConfigSnapshot.includeCurrentDateTime)
+        promptConfigSnapshot.strictAgentHarnessPrompts=\(promptConfigSnapshot.strictAgentHarnessPrompts)
+        promptConfigSnapshot.assemblyCheckpointMode=\(promptConfigSnapshot.assemblyCheckpointMode.rawValue)
         """
     }
 }
@@ -121,6 +176,7 @@ private struct SystemPromptAssemblyReplaySpecDigestPayload: Sendable, Equatable,
     let skillsIndexDigest: String?
     let providerStablePrefix: String?
     let contributionSourcesDigest: String
+    let promptConfigSnapshot: PromptAssemblyConfigSnapshot
 }
 
 struct SystemPromptAssemblyRenderProduct: Sendable, Equatable {
@@ -130,7 +186,7 @@ struct SystemPromptAssemblyRenderProduct: Sendable, Equatable {
     let frozenSkillsIndexXML: String?
 }
 
-enum SystemPromptAssemblyCheckpointMode: String, Sendable, Codable, Equatable {
+public enum SystemPromptAssemblyCheckpointMode: String, Sendable, Codable, Equatable {
     case off
     case digestOnly
     case fullText
@@ -144,20 +200,21 @@ enum SystemPromptAssemblyCheckpointConfiguration {
     }
 
     static func load() -> (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int) {
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let optionsObject = jsonResult["options"] as? [String: Any],
-              let checkpointObject = optionsObject["systemPromptAssemblyCheckpoint"] as? [String: Any] else {
-            return (.digestOnly, defaultMaxFullTextBytes)
-        }
-        let modeRaw = (checkpointObject["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let mode: SystemPromptAssemblyCheckpointMode = switch modeRaw {
-        case "off": .off
-        case "fulltext", "full_text", "full": .fullText
-        default: .digestOnly
-        }
-        let maxBytes = checkpointObject["maxFullTextBytes"] as? Int ?? defaultMaxFullTextBytes
-        return (mode, max(1_024, maxBytes))
+        let assembly = PromptAssemblyConfiguration.default
+        return (assembly.assemblyCheckpointMode, assembly.assemblyCheckpointMaxFullTextBytes)
+    }
+
+    static func load(from document: PromptConfigDocument) -> (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int) {
+        let assembly = PromptAssemblyConfiguration.load(from: document)
+        return (assembly.assemblyCheckpointMode, assembly.assemblyCheckpointMaxFullTextBytes)
+    }
+
+    static func load(from assembly: PromptAssemblyConfiguration) -> (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int) {
+        (assembly.assemblyCheckpointMode, assembly.assemblyCheckpointMaxFullTextBytes)
+    }
+
+    static func load(from snapshot: PromptAssemblyConfigSnapshot) -> (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int) {
+        (snapshot.assemblyCheckpointMode, snapshot.assemblyCheckpointMaxFullTextBytes)
     }
 }
 

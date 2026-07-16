@@ -379,4 +379,81 @@ struct SystemPromptAssemblyReplayTests {
         ]
         #expect(SuiteCheckpointSupport.latestValidSystemPromptAssembly(events: events, frontierEventID: 1) != nil)
     }
+
+    @Test("Replay spec captures prompt config snapshot; ambient mutation does not change digest")
+    func replaySpecCapturesPromptConfigSnapshot() async throws {
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let captureJSON = """
+        {
+          "options": {
+            "includeAgentSkills": false,
+            "includeCurrentDateTime": false,
+            "systemPromptAssemblyCheckpoint": { "mode": "fullText", "maxFullTextBytes": 4096 }
+          },
+          "agentHarness": { "strictAgentHarnessPrompts": false }
+        }
+        """
+        let captureData = Data(captureJSON.utf8)
+
+        let conv = sampleConversation()
+        let frozen = Date(timeIntervalSince1970: 1_700_000_000)
+        let policy = ContextEngineSystemPromptAssemblyPolicyInput(
+            resolvedModeProfile: neutralProfile(),
+            strictAgentHarnessPrompts: false,
+            includeAgentSkills: false,
+            includeDateTime: false,
+            toolPolicySignature: "sig",
+            routingPolicyTools: [],
+            routingPolicySkills: []
+        )
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: "Canonical system",
+            memoryBlocks: nil,
+            memorySnapshotGeneration: nil,
+            modeMemoryInjection: "on",
+            referenceDate: frozen
+        )
+        let renderer = DefaultSystemPromptAssemblyRenderer(skillLoaderProvider: { _ in nil }, logger: nil)
+        let audit = try await renderer.renderWithAudit(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: "Canonical system",
+            assemblyContext: bundle.assemblyContext,
+            contributions: bundle.contributions,
+            referenceDate: frozen,
+            fullOverrideText: bundle.fullOverrideText
+        )
+        let snapshot = HarnessConfigurationSet.load(
+            from: try PromptConfigDocument.parse(data: captureData)
+        ).promptAssemblyConfigSnapshot
+        let spec = SystemPromptAssemblyReplayer.buildReplaySpec(
+            assemblyFingerprint: "fp",
+            assembleReferenceDateISO: SystemPrompt.assembleReferenceDateISOString(from: frozen),
+            audit: audit,
+            contributions: bundle.contributions,
+            policy: policy,
+            promptConfigSnapshot: snapshot
+        )
+        #expect(spec.promptConfigSnapshot.includeAgentSkills == false)
+        #expect(spec.promptConfigSnapshot.assemblyCheckpointMode == .fullText)
+        #expect(spec.promptConfigSnapshot.assemblyCheckpointMaxFullTextBytes == 4096)
+        let digestBefore = spec.replaySpecDigest
+
+        let mutateJSON = """
+        {
+          "options": {
+            "includeAgentSkills": true,
+            "includeCurrentDateTime": true,
+            "systemPromptAssemblyCheckpoint": { "mode": "off" }
+          },
+          "agentHarness": { "strictAgentHarnessPrompts": true }
+        }
+        """
+        PromptConfigBundleResource.configure(data: Data(mutateJSON.utf8))
+        #expect(spec.replaySpecDigest == digestBefore)
+        #expect(spec.promptConfigSnapshot.includeAgentSkills == false)
+        #expect(SystemPromptAssemblyCheckpointConfiguration.load(from: spec.promptConfigSnapshot).mode == .fullText)
+    }
 }
