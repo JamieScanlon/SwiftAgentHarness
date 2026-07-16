@@ -11,7 +11,7 @@ enum ToolPolicyAvailabilityExplainer {
         toolPolicy: ToolPolicyConfiguration,
         trustPolicy: TrustPolicyConfiguration,
         subAgentToolClassifier: (any SubAgentToolClassifying)?,
-        gateway: any ToolSystemGatewaying = DefaultToolSystemGateway(),
+        gateway: any ToolSystemGatewaying,
         filterToolName: String? = nil,
         gatingArgumentPreview: String? = nil
     ) -> ToolPolicyExplainReport {

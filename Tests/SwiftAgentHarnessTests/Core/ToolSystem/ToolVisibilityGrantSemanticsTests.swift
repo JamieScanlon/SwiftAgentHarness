@@ -278,7 +278,7 @@ struct ToolVisibilityGrantSemanticsTests {
 
     @Test("empty allow without matching grant remains promptConfigAllowlist")
     func emptyAllowWithoutGrantIsAllowlist() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let profile = profile(
             tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: nil)
         )
@@ -441,5 +441,45 @@ struct ToolVisibilityGrantSemanticsTests {
         )
         #expect(childResolved.value == false)
         #expect(childResolved.source == .derivedEmptyAllow)
+    }
+
+    @Test("merge path keeps parent explicit allowsHostGrants false across child overlay")
+    func mergePathKeepsExplicitFalseSticky() async throws {
+        let configuration = ModeProfileConfiguration(
+            profiles: [
+                ModeProfileConfiguration.RawProfile(
+                    id: "grants-off",
+                    interactionMode: .agent,
+                    assemblyKind: .agentBuild,
+                    allowsProactiveCompactionTriggers: true,
+                    appliesAgentBuildOrchestratorHarness: true,
+                    semanticLayerTags: [],
+                    allowsHostGrants: false,
+                    tools: .object([
+                        "allow": .array([.string("bash")]),
+                    ])
+                ),
+                ModeProfileConfiguration.RawProfile(
+                    id: "grants-off-child",
+                    extends: "grants-off",
+                    tools: .object([
+                        "allow": .array([.string("bash"), .string("read_file")]),
+                    ])
+                ),
+            ],
+            diagnostics: []
+        )
+        let registry = ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            modeProfileConfiguration: configuration
+        )
+        let parent = try await registry.resolve(modeId: "grants-off")
+        #expect(parent.allowsHostGrants == false)
+        #expect(parent.allowsHostGrantsSource == .explicit)
+
+        let child = try await registry.resolve(modeId: "grants-off-child")
+        #expect(child.tools.allow == ["bash", "read_file"])
+        #expect(child.allowsHostGrants == false)
+        #expect(child.allowsHostGrantsSource == .explicit)
     }
 }

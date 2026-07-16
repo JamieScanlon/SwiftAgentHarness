@@ -82,7 +82,7 @@ struct HarnessACPClientDelegateTests {
                 memoryDirectory: memory.path,
                 skillsDirectory: skills?.path
             ),
-            gateway: DefaultToolSystemGateway(),
+            gateway: DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()),
             toolPolicy: ToolPolicyConfiguration(),
             trustPolicy: trustGatesExecution
                 ? TrustPolicyConfiguration(mode: .gateExecution, safeDefaultClass: .lowTrust)

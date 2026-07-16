@@ -279,7 +279,7 @@ extension ToolSystemGatewaying {
 struct DefaultToolSystemGateway: ToolSystemGatewaying {
     let visibilityGrants: ToolVisibilityGrantStore
 
-    init(visibilityGrants: ToolVisibilityGrantStore = ToolVisibilityGrantStore()) {
+    init(visibilityGrants: ToolVisibilityGrantStore) {
         self.visibilityGrants = visibilityGrants
     }
 

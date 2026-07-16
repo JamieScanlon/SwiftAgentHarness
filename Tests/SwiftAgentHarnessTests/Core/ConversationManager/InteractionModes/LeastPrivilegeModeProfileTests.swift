@@ -52,7 +52,7 @@ struct LeastPrivilegeModeProfileTests {
         conversation: ModelConversation,
         candidates: [String] = privilegedCandidateTools
     ) -> Set<String> {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entries = candidates.map {
             ToolRegistryEntry(
                 definition: ToolDefinition(name: $0, description: "", parameters: [], type: .function),

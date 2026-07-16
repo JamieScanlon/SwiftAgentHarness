@@ -264,10 +264,28 @@ public actor ModeRegistryService {
         let seedVersion = base.builtInSeedVersion == ResolvedModeProfile.builtInSeedVersion && raw.extends == nil && raw.id == base.id
             ? ResolvedModeProfile.builtInSeedVersion
             : 0
-        if raw.allowsHostGrants == true,
-           ConversationLineageInference.machineSubAgentModeProfileIDs.contains(raw.id) {
-            diagnostics.append("modeProfiles[\(raw.id)] allowsHostGrants=true ignored for machine profile")
+
+        let tools = Self.mergeToolsSlice(
+            parent: base.tools,
+            overlay: raw.tools,
+            profileID: raw.id,
+            diagnostics: &diagnostics
+        )
+        let isMachine = ConversationLineageInference.machineSubAgentModeProfileIDs.contains(raw.id)
+            || ConversationLineageInference.machineSubAgentModeProfileIDs.contains(base.id)
+        if isMachine, raw.allowsHostGrants == true {
+            diagnostics.append(
+                "modeProfiles[\(raw.id)] allowsHostGrants=true ignored: machine profiles cannot accept host visibility grants"
+            )
         }
+        let hostGrants = ResolvedModeProfile.resolveAllowsHostGrants(
+            id: raw.id,
+            tools: tools,
+            explicitOnThisRow: isMachine ? nil : raw.allowsHostGrants,
+            inherited: isMachine ? nil : (base.allowsHostGrants, base.allowsHostGrantsSource)
+        )
+        let resolvedHostGrants: (value: Bool, source: AllowsHostGrantsSource) =
+            isMachine ? (false, .machinePinned) : hostGrants
 
         return ResolvedModeProfile(
             id: raw.id,
@@ -275,18 +293,14 @@ public actor ModeRegistryService {
             assemblyKind: assemblyKind,
             allowsProactiveCompactionTriggers: allowsCompaction,
             appliesAgentBuildOrchestratorHarness: appliesHarness,
-            allowsHostGrants: raw.allowsHostGrants,
+            allowsHostGrants: resolvedHostGrants.value,
+            allowsHostGrantsSource: resolvedHostGrants.source,
             builtInSeedVersion: seedVersion,
             semanticLayerTags: tags,
             label: label,
             profileDescription: profileDescription,
             symbol: symbol,
-            tools: Self.mergeToolsSlice(
-                parent: base.tools,
-                overlay: raw.tools,
-                profileID: raw.id,
-                diagnostics: &diagnostics
-            ),
+            tools: tools,
             skills: Self.mergeSkillsSlice(
                 parent: base.skills,
                 overlay: raw.skills,

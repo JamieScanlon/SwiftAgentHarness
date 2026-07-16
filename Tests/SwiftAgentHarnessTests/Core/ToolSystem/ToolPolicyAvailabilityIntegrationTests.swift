@@ -5,7 +5,7 @@ import Testing
 
 @Suite("ToolPolicyAvailabilityIntegration")
 struct ToolPolicyAvailabilityIntegrationTests {
-    private let gateway = DefaultToolSystemGateway()
+    private let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
 
     private func makeModel() -> Model {
         Model(

@@ -157,7 +157,8 @@ struct ToolPolicyCoherenceDiagnosticsTests {
             configuration: .init(enableTools: true, enableAgents: true),
             toolPolicy: .unrestricted,
             trustPolicy: .disabled,
-            subAgentToolClassifier: nil
+            subAgentToolClassifier: nil,
+            gateway: DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         )
         let coherenceReport = ToolPolicyCoherenceAnalyzer.analyze(
             entries: entries,

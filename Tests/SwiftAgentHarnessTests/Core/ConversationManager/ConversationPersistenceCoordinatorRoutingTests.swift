@@ -599,7 +599,7 @@ struct ConversationPersistenceCoordinatorRoutingTests {
 
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
         let profile = try await registry.resolve(modeId: "memory-active-recall")
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let candidates = ["memory_search", "memory_get", "write_file", "bash", "read_file"]
         let entries = candidates.map {
             ToolRegistryEntry(

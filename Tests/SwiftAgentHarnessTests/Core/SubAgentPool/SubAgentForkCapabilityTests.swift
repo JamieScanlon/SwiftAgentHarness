@@ -72,7 +72,7 @@ struct SubAgentForkCapabilityTests {
 
         let childConversation = try #require(await fixture.host.modelConversation(id: childID))
         let modeCtx = ModePolicyContext(conversation: childConversation, resolvedProfile: profile)
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let candidateTools = [
             "read_file", "write_file", "get_plan", "spawn_sub_agent",
             ConversationsToolProvider.listConversationsToolName, "schedule_create",

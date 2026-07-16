@@ -29,7 +29,7 @@ struct ToolDispatchPlannerNormalizationTests {
 
     @Test("dispatch contract remaps allParallel planner mode")
     func dispatchContractRemapsAllParallel() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let readOnlyEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local,
@@ -48,7 +48,7 @@ struct ToolDispatchPlannerNormalizationTests {
 
     @Test("dispatch contract with allParallel never yields Kit allParallel planner mode")
     func effectiveContractNeverEmitsKitAllParallel() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let readOnlyEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local,

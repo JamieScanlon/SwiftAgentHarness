@@ -66,7 +66,7 @@ struct AgentLoopToolBatchDispatchTests {
 
     @Test("effective dispatch contract path never emits Kit allParallel")
     func effectiveContractPathNeverEmitsKitAllParallel() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let readOnlyEntry = makeEntry(name: "read_a")
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true,
