@@ -75,8 +75,8 @@ enum ContextEngineProjectionPolicyBuilder {
         let promptPolicy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolvedProfile,
             strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            includeAgentSkills: resolvedProfile.context.includeSkills ?? PromptAssemblyConfiguration.default.includeAgentSkills,
-            includeDateTime: PromptAssemblyConfiguration.default.includeCurrentDateTime,
+            includeAgentSkills: resolvedProfile.context.includeSkills ?? deps.configurationSet.promptAssembly.includeAgentSkills,
+            includeDateTime: deps.configurationSet.promptAssembly.includeCurrentDateTime,
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
             routingPolicySkills: routingNames.skills,

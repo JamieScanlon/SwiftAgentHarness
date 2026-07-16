@@ -115,7 +115,7 @@ actor SlashCommandDispatchService {
         switch parsedInput {
         case let .skill(skillName, args):
             guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-                  PromptAssemblyConfiguration.default.includeAgentSkills
+                  deps.configurationSet.promptAssembly.includeAgentSkills
             else { return nil }
             if !skipQueue, await isSlashDispatchBlocked(conversationID: conversationID) {
                 enqueuePendingSlashCommand(conversationID: conversationID, rawText: text)
@@ -228,7 +228,7 @@ actor SlashCommandDispatchService {
         let excluded = Set(deps.conversationTransformConfiguration.slashCommands.staticSkillNamesExcludedFromSkillColon)
         let baseRegistry: SlashCommandRegistry
         guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-              PromptAssemblyConfiguration.default.includeAgentSkills,
+              deps.configurationSet.promptAssembly.includeAgentSkills,
               let skills = try? await skillActivation.listAvailableSkillsForSlash(conversationID: conversationID)
         else {
             baseRegistry = SlashCommandRegistry.builtins(compactEnabled: slashCommandRuntimeConfiguration.compactEnabled)

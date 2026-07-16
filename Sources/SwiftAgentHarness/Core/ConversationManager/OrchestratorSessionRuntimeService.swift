@@ -251,8 +251,8 @@ public actor OrchestratorSessionRuntimeService {
         let policy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolved,
             strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            includeAgentSkills: resolved.context.includeSkills ?? PromptAssemblyConfiguration.default.includeAgentSkills,
-            includeDateTime: PromptAssemblyConfiguration.default.includeCurrentDateTime,
+            includeAgentSkills: resolved.context.includeSkills ?? deps.configurationSet.promptAssembly.includeAgentSkills,
+            includeDateTime: deps.configurationSet.promptAssembly.includeCurrentDateTime,
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
             routingPolicySkills: routingNames.skills,

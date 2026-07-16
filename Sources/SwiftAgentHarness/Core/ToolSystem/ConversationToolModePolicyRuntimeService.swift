@@ -140,7 +140,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
         guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID) else {
             throw ConversationServiceError.conversationNotFound
         }
-        guard PromptAssemblyConfiguration.default.includeAgentSkills else { return [] }
+        guard deps.configurationSet.promptAssembly.includeAgentSkills else { return [] }
         guard let skillLoader = await skillActivation.skillLoader(for: conversationID) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await modePolicyContext(for: conversation)
@@ -155,7 +155,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
     }
 
     func listAvailableSkillsForAPI() async throws -> [AvailableSkillInfo] {
-        guard PromptAssemblyConfiguration.default.includeAgentSkills else { return [] }
+        guard deps.configurationSet.promptAssembly.includeAgentSkills else { return [] }
         guard let skillLoader = await skillActivation.skillLoader(for: nil) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await defaultSessionModePolicyContext()

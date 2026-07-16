@@ -534,6 +534,11 @@ public actor HarnessRuntimeSession {
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
             systemPromptAssemblyRenderer: systemPromptAssemblyRenderer,
+            reinjectionSkillProvider: DefaultCompactionReinjectionSkillProvider(
+                includeAgentSkills: configuration.promptAssembly.includeAgentSkills,
+                skillsFolderPath: configuration.promptAssembly.skillsFolderPath,
+                logger: logger
+            ),
             logger: logger
         )
         let runtimeDependencies = ConversationRuntimeDependencies(

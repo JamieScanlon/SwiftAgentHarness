@@ -14,17 +14,25 @@ public protocol CompactionReinjectionSkillProviding: Sendable {
 
 /// Default provider backed by the configured skills folder and `SkillLoader.loadSkill(named:)`.
 public struct DefaultCompactionReinjectionSkillProvider: CompactionReinjectionSkillProviding {
+    private let includeAgentSkills: Bool
+    private let skillsFolderPath: String?
     private let logger: Logger?
 
-    public init(logger: Logger? = nil) {
+    public init(
+        includeAgentSkills: Bool = PromptAssemblyConfiguration.default.includeAgentSkills,
+        skillsFolderPath: String? = PromptAssemblyConfiguration.default.skillsFolderPath,
+        logger: Logger? = nil
+    ) {
+        self.includeAgentSkills = includeAgentSkills
+        self.skillsFolderPath = skillsFolderPath
         self.logger = logger
     }
 
     public func reinjectableSkillContent(activatedSkillNames: [String]) async -> [ReinjectableSkill] {
-        guard !activatedSkillNames.isEmpty, PromptAssemblyConfiguration.default.includeAgentSkills else {
+        guard !activatedSkillNames.isEmpty, includeAgentSkills else {
             return []
         }
-        guard let skillsPath = PromptAssemblyConfiguration.default.skillsFolderPath else {
+        guard let skillsPath = skillsFolderPath else {
             return []
         }
         let loader = SkillLoader(skillsDirectoryURL: URL(fileURLWithPath: skillsPath), logger: logger)

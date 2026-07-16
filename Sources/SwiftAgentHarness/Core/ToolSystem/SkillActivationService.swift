@@ -189,7 +189,7 @@ actor SkillActivationService {
         if let testingIncludeAgentSkillsOverride {
             return testingIncludeAgentSkillsOverride
         }
-        return PromptAssemblyConfiguration.default.includeAgentSkills
+        return deps.configurationSet.promptAssembly.includeAgentSkills
     }
 
     private func makeSkillLoader() -> SkillLoader? {
@@ -199,17 +199,16 @@ actor SkillActivationService {
                 logger: deps.logger
             )
         }
-        do {
-            if let skillsPath = PromptAssemblyConfiguration.default.skillsFolderPath {
-                return SkillLoader(
-                    skillsDirectoryURL: URL(fileURLWithPath: skillsPath),
-                    logger: deps.logger
-                )
-            }
-        } catch {
-            deps.logger?.error("[SkillActivationService] Failed to load skills config: \(error)")
+        guard let skillsPath = deps.configurationSet.promptAssembly.skillsFolderPath else {
+            deps.logger?.debug(
+                "[SkillActivationService] skillsFolderPath unset; skill catalog unavailable"
+            )
+            return nil
         }
-        return nil
+        return SkillLoader(
+            skillsDirectoryURL: URL(fileURLWithPath: skillsPath),
+            logger: deps.logger
+        )
     }
 
     private func modePolicyContext(for conversation: ModelConversation) async -> ModePolicyContext {

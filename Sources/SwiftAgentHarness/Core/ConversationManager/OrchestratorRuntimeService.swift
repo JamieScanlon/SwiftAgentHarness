@@ -698,7 +698,7 @@ public actor OrchestratorRuntimeService {
                 approvalDelivery: approvalDelivery,
                 logger: logger
             )
-            let skillsDirectory = (PromptAssemblyConfiguration.default.skillsFolderPath)
+            let skillsDirectory = (deps.configurationSet.promptAssembly.skillsFolderPath)
                 .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
             let runtimeContext = ExecRuntimeContext(
                 sessionKey: sessionKey,
