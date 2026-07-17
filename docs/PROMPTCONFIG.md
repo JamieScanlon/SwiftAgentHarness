@@ -212,7 +212,7 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 | `assemblyKind` | String | same as above | `"chat"`, `"planCollaboration"`, or `"agentBuild"`. Must pair with the mode: chat↔chat, plan↔planCollaboration, agent↔agentBuild. |
 | `allowsProactiveCompactionTriggers` | Bool | no | Inherited; built-ins: `false` for chat, `true` for plan/agent. |
 | `appliesAgentBuildOrchestratorHarness` | Bool | no | Inherited; built-ins: `true` only for agent. |
-| `allowsHostGrants` | Bool | no | Whether registration-time tool visibility grants may contribute entries into this profile's effective mode-allow list. **Default `false`** (never derived from allow-list shape). Explicit value on the row wins; inherited from an ancestor's explicit value when omitted; **always forced `false` for machine profiles** (a `true` here is ignored with a diagnostic). Operator project-directory overlays cannot set this field (stripped with a diagnostic). |
+| `allowsHostGrants` | Bool | no | Author consent for host co-authorship of this mode's `tools.allow` list. When `true` **and** the host registers `.grant(...)`, matching tools are **unioned into** this profile's mode-allow list (the host may widen a closed enumeration). This is **not** a separate intersecting policy scope — grants do not sit beside mode-allow in the availability pipeline; they rewrite that one scope's membership before evaluation. **Default `false`** (never derived from allow-list shape). Explicit value on the row wins; inherited from an ancestor's explicit value when omitted; **always forced `false` for machine profiles** (a `true` here is ignored with a diagnostic). Operator project-directory overlays cannot set this field (stripped with a diagnostic). |
 | `semanticLayerTags` | [String] | no | Forward-compat layered-mode tags. Default `[]`. |
 | `label`, `description`, `symbol` | String | no | Picker/UI metadata. `label` defaults to the id. |
 
@@ -222,7 +222,7 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 |---|---|---|
 | `allow` | [String] | **Replaces** the inherited allow list. `null`/omitted = inherit. `["*"]` = all tools. `[]` = none (closed world). Entries accept globs and group aliases (e.g. `"mcp__github__*"`, `group:mcp`). |
 | `allow+` | [String] | **Appends** to the (possibly just-replaced) allow list. No-op when the effective list is open (`null` or contains `"*"`) — it never closes an open world. With `allow` on the same row, semantics are replace-then-append. |
-| `deny` | [String] | Appends to the inherited deny list (append-only; a child can never remove a parent's denies). Deny always beats allow *and* grant-contributed allow entries. |
+| `deny` | [String] | Appends to the inherited deny list (append-only; a child can never remove a parent's denies). Deny always beats allow *and* host-co-authored grant entries in mode-allow. |
 | `deny+` | [String] | Alias of `deny` (also append-only). |
 | `approvalPolicy` | String | `"never"`, `"side-effects"`, or `"all"` — mode-level approval posture. |
 
@@ -288,7 +288,7 @@ When `policy` is `"terminal-tool"` and no recovery is configured, a default reco
 1. Built-ins seed the registry; config rows merge over them in topological `extends` order.
 2. Slices merge key-by-key: an omitted slice or key inherits the parent value.
 3. `allow` replaces; `allow+` appends (open-world no-op); `deny`/`deny+` only ever append.
-4. `allowsHostGrants` resolves after the tools slice is final: machine pin → explicit on row → inherited explicit/machine → default `false`. Never derived from allow-list shape.
+4. `allowsHostGrants` resolves after the tools slice is final: machine pin → explicit on row → inherited explicit/machine → default `false`. Never derived from allow-list shape. A `true` value is author consent for host co-authorship of `tools.allow` when paired with `.grant(...)` — not a separate intersecting scope.
 5. An operator project config directory (per-workspace `*.json` mode profile files) merges last, with security-sensitive fields (`allowsHostGrants`, among others) stripped.
 
 ## `memory`
@@ -518,10 +518,10 @@ Mode `tools.allow` lists are closed-world: a profile that enumerates tools will 
 
 - **Glob entries** in `allow`/`allow+`, e.g. `"mcp__github__*"` or `"group:mcp"`.
 
-Registration-time visibility grants are an optional convenience for the same outcome:
+Registration-time visibility grants are an optional convenience for the **same** outcome (widening mode-allow membership), not a parallel permission channel:
 
 - `setMCPManager(_:visibilityGrant:)` and `installAdditionalToolProviders(_:visibilityGrant:)` both default to `.inheritModeLists` — mode allow lists govern; closed worlds stay closed.
-- Pass `.grant(modes:)` **and** set `allowsHostGrants: true` on the profiles that should receive those tools. The grant contributes matching tool names into the effective mode-allow list before resolution (intersection-shaped; not a post-fail bypass). Mode `deny` still wins; machine profiles never receive grants.
+- Dual opt-in — profile `allowsHostGrants: true` **plus** host `.grant(modes: .allOptedIn)` (or `.explicit([...])`) — means **the host may co-author that mode's allow list**: matching tool names are unioned into `tools.allow` before availability/gating run. It does **not** mean “grants are another intersecting scope” that can rescue a tool after mode-allow fails. After co-authorship, the usual cross-scope intersection still applies (`deny`, routing, …). `.allOptedIn` means every profile that opted into host grants — not every user-facing profile (default `allowsHostGrants` is `false`). Machine profiles never receive grants.
 
 ```json
 {
@@ -534,6 +534,8 @@ Registration-time visibility grants are an optional convenience for the same out
   ]
 }
 ```
+
+With the JSON above and `setMCPManager(..., visibilityGrant: .grant(modes: .allOptedIn))`, newly registered MCP tools are treated as if they had been listed on `agent.tools.allow` — because the host was invited to co-author that list — not because a separate grant scope overrode a miss.
 
 ## Minimal example
 

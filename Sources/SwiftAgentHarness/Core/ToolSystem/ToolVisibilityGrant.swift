@@ -2,9 +2,11 @@ import Foundation
 
 /// Registration-time visibility policy for a tool provider or MCP server.
 ///
-/// - ``inheritModeLists``: tools must appear on the mode `tools.allow` list (no registration-time authorship).
-/// - ``grant(modes:)``: when a profile sets ``ResolvedModeProfile/allowsHostGrants``, contribute matching
-///   tool names into that profile's effective mode-allow list before resolution. Mode `tools.deny` still wins.
+/// - ``inheritModeLists``: tools must appear on the authored mode `tools.allow` list (no registration-time widening).
+/// - ``grant(modes:)``: requires dual opt-in with ``ResolvedModeProfile/allowsHostGrants``. Together they mean
+///   **the host may co-author that mode's allow list** — matching names are unioned into mode-allow before
+///   evaluation. Grants are **not** a separate intersecting policy scope and do not rescue a tool after a
+///   mode-allow miss. After co-authorship, deny / routing / other scopes still intersect as usual.
 public enum ToolVisibilityGrant: Sendable, Equatable {
     case inheritModeLists
     case grant(modes: ToolVisibilityGrantModes)
@@ -12,9 +14,13 @@ public enum ToolVisibilityGrant: Sendable, Equatable {
 
 /// Which mode profiles a ``ToolVisibilityGrant/grant(modes:)`` applies to.
 public enum ToolVisibilityGrantModes: Sendable, Equatable {
-    /// Every profile with ``ResolvedModeProfile/allowsHostGrants`` equal to `true`.
-    case allUserFacing
-    /// Explicit mode profile IDs (e.g. `["plan", "agent"]`).
+    /// Every profile that opted into host grants (``ResolvedModeProfile/allowsHostGrants`` == `true`).
+    ///
+    /// Not “every user-facing profile”: with the default `allowsHostGrants = false`, only authored
+    /// opt-ins (and inherited explicit opt-ins) receive the grant. Machine profiles never opt in.
+    case allOptedIn
+    /// Explicit mode profile IDs (e.g. `["plan", "agent"]`). Still requires each listed profile's
+    /// ``ResolvedModeProfile/allowsHostGrants`` to be `true` for co-authorship to apply.
     case explicit([String])
 }
 
@@ -50,7 +56,7 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
         self.records = records
     }
 
-    /// True when a matching `.grant` should contribute this entry's name into the effective mode-allow list.
+    /// True when a matching `.grant` should co-author this entry's name into the mode-allow list.
     func contributesAllowEntry(entry: ToolRegistryEntry, profile: ResolvedModeProfile) -> Bool {
         guard profile.allowsHostGrants else { return false }
         for record in records {
@@ -71,10 +77,13 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
         }
     }
 
-    /// Unions grant-contributed bare names into an authored allow list.
+    /// Unions grant-contributed bare names into an authored allow list (mode-allow co-authorship).
     ///
-    /// Open world (`nil`) is unchanged — grants are a no-op when the profile already admits everything.
-    /// Closed worlds (`[]` or non-empty) receive the entry name when ``contributesAllowEntry(entry:profile:)`` is true.
+    /// Dual opt-in (``.grant`` + ``allowsHostGrants``) invites the host to widen this mode's allow membership —
+    /// the same moral act as writing a glob into config. It is **not** a cross-scope union or a second
+    /// intersecting availability scope. Open world (`nil`) is unchanged. Closed worlds (`[]` or non-empty)
+    /// receive the entry name when ``contributesAllowEntry(entry:profile:)`` is true. Afterward, deny and
+    /// other scopes still intersect.
     func effectiveAllowList(
         authored: [String]?,
         entry: ToolRegistryEntry,
@@ -103,7 +112,7 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
 
     private func modesCover(_ modes: ToolVisibilityGrantModes, profileID: String) -> Bool {
         switch modes {
-        case .allUserFacing:
+        case .allOptedIn:
             return true
         case .explicit(let ids):
             return ids.contains(profileID)

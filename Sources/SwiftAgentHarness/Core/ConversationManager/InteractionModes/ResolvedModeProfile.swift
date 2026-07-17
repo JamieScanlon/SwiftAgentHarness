@@ -322,8 +322,9 @@ public struct ResolvedModeProfile: Sendable, Equatable {
     /// When false, proactive context-compaction triggers are suppressed for **initial** phase assembly (chat stays light).
     public var allowsProactiveCompactionTriggers: Bool
     public var appliesAgentBuildOrchestratorHarness: Bool
-    /// When false, registration-time ``ToolVisibilityGrant`` does not contribute allow-list entries for this profile.
-    /// Machine sub-agent profiles force `false` (non-overridable). Default is `false`; must be authored `true` to opt in.
+    /// When `true` together with a registration-time ``ToolVisibilityGrant/grant(modes:)``, the host may
+    /// **co-author this mode's `tools.allow` list** (union matching tool names into mode-allow before evaluation).
+    /// This is not a separate intersecting policy scope. Default `false`; machine profiles force `false`.
     public var allowsHostGrants: Bool
     /// Why ``allowsHostGrants`` resolved the way it did (explain / coherence diagnostics).
     public var allowsHostGrantsSource: AllowsHostGrantsSource

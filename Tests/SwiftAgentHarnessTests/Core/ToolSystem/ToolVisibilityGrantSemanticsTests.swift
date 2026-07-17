@@ -75,7 +75,7 @@ struct ToolVisibilityGrantSemanticsTests {
     }
 
     private func gatewayWithMCPGrant(
-        modes: ToolVisibilityGrantModes = .allUserFacing
+        modes: ToolVisibilityGrantModes = .allOptedIn
     ) -> DefaultToolSystemGateway {
         let store = ToolVisibilityGrantStore()
         store.register(
@@ -342,7 +342,7 @@ struct ToolVisibilityGrantSemanticsTests {
         store.register(
             ToolVisibilityGrantRecord(
                 id: ToolVisibilityGrantStore.mcpRegistrationID,
-                grant: .grant(modes: .allUserFacing),
+                grant: .grant(modes: .allOptedIn),
                 match: .registrySource(.mcp)
             )
         )

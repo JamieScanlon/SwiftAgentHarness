@@ -675,7 +675,10 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         )
     }
 
-    /// Builds a policy context whose mode-allow list includes grant-contributed names (intersection-shaped).
+    /// Builds a policy context whose mode-allow list includes host-co-authored grant names.
+    ///
+    /// Dual opt-in (``.grant`` + ``allowsHostGrants``) unions into the mode-allow list itself — host co-authorship,
+    /// not a separate intersecting scope. Deny and other scopes still intersect afterward.
     func modePolicyContextWithEffectiveAllow(
         _ context: ModePolicyContext,
         entry: ToolRegistryEntry
