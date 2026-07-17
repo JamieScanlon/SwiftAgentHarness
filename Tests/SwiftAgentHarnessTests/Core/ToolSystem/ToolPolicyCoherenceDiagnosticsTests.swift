@@ -258,6 +258,149 @@ struct ToolPolicyCoherenceDiagnosticsTests {
             $0.ruleToken == "missing_sensitive_tool" && $0.scope == .promptConfigSensitive
         })
     }
+
+    @Test("grant covering profile without allowsHostGrants emits grantInactiveWithoutOptIn info")
+    func grantInactiveWithoutOptIn() {
+        let conversation = makeConversation()
+        let modeCtx = modeContext(
+            conversation: conversation,
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        )
+        #expect(modeCtx.resolvedProfile.allowsHostGrants == false)
+        let table = ToolVisibilityGrantTable(records: [
+            ToolVisibilityGrantRecord(
+                id: "mcp",
+                grant: .grant(modes: .allOptedIn),
+                match: .registrySource(.mcp)
+            )
+        ])
+        let report = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: [mcpEntry("mcp_search"), mcpEntry("mcp_other"), localEntry("bash")],
+            modePolicyContext: modeCtx,
+            toolPolicy: .unrestricted,
+            conversation: conversation,
+            grantTable: table
+        )
+        #expect(report.grantsInactiveWithoutOptIn.count == 1)
+        #expect(report.grantsInactiveWithoutOptIn.first?.ruleToken == "mcp")
+        #expect(report.grantsInactiveWithoutOptIn.first?.detail.contains("2 tool") == true)
+        #expect(report.grantsInactiveWithoutOptIn.first?.scope == .hostVisibilityGrant)
+        #expect(
+            report.grantsInactiveWithoutOptIn.first?.fixItConfigKey(profileID: "agent")
+                .contains("allowsHostGrants") == true
+        )
+
+        let section = ToolPolicyExplainFormatter.formatCoherenceSection(report)
+        #expect(section.contains("Grants inactive without opt-in"))
+        #expect(section.contains("allowsHostGrants"))
+    }
+
+    @Test("grant inactive diagnostic skips when profile opted in")
+    func grantInactiveSkippedWhenOptedIn() {
+        let conversation = makeConversation()
+        var resolved = ResolvedModeProfile.builtIn(for: .agent)
+        resolved.tools = ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        resolved.allowsHostGrants = true
+        resolved.allowsHostGrantsSource = .explicit
+        let modeCtx = ModePolicyContext(conversation: conversation, resolvedProfile: resolved)
+        let table = ToolVisibilityGrantTable(records: [
+            ToolVisibilityGrantRecord(
+                id: "mcp",
+                grant: .grant(modes: .allOptedIn),
+                match: .registrySource(.mcp)
+            )
+        ])
+        let report = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: [mcpEntry("mcp_search")],
+            modePolicyContext: modeCtx,
+            toolPolicy: .unrestricted,
+            conversation: conversation,
+            grantTable: table
+        )
+        #expect(report.grantsInactiveWithoutOptIn.isEmpty)
+    }
+
+    @Test("grant inactive diagnostic skips machine-pinned profiles")
+    func grantInactiveSkippedForMachinePin() {
+        let conversation = makeConversation()
+        let profile = ResolvedModeProfile(
+            id: "subagent-minimal",
+            interactionMode: .agent,
+            assemblyKind: .agentBuild,
+            allowsProactiveCompactionTriggers: false,
+            appliesAgentBuildOrchestratorHarness: false,
+            allowsHostGrants: true,
+            builtInSeedVersion: 0,
+            semanticLayerTags: [],
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        )
+        #expect(profile.allowsHostGrantsSource == .machinePinned)
+        let modeCtx = ModePolicyContext(conversation: conversation, resolvedProfile: profile)
+        let table = ToolVisibilityGrantTable(records: [
+            ToolVisibilityGrantRecord(
+                id: "mcp",
+                grant: .grant(modes: .allOptedIn),
+                match: .registrySource(.mcp)
+            )
+        ])
+        let report = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: [mcpEntry("mcp_search")],
+            modePolicyContext: modeCtx,
+            toolPolicy: .unrestricted,
+            conversation: conversation,
+            grantTable: table
+        )
+        #expect(report.grantsInactiveWithoutOptIn.isEmpty)
+    }
+
+    @Test("inheritModeLists registration does not emit grant inactive diagnostic")
+    func inheritDoesNotEmitInactive() {
+        let conversation = makeConversation()
+        let modeCtx = modeContext(
+            conversation: conversation,
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        )
+        let table = ToolVisibilityGrantTable(records: [
+            ToolVisibilityGrantRecord(
+                id: "mcp",
+                grant: .inheritModeLists,
+                match: .registrySource(.mcp)
+            )
+        ])
+        let report = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: [mcpEntry("mcp_search")],
+            modePolicyContext: modeCtx,
+            toolPolicy: .unrestricted,
+            conversation: conversation,
+            grantTable: table
+        )
+        #expect(report.grantsInactiveWithoutOptIn.isEmpty)
+    }
+
+    @Test("explicit grant modes exclude non-listed profiles from inactive diagnostic")
+    func explicitModesExcludeOtherProfiles() {
+        let conversation = makeConversation()
+        let modeCtx = modeContext(
+            conversation: conversation,
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        )
+        #expect(modeCtx.resolvedProfile.id == "agent")
+        let table = ToolVisibilityGrantTable(records: [
+            ToolVisibilityGrantRecord(
+                id: "mcp",
+                grant: .grant(modes: .explicit(["plan"])),
+                match: .registrySource(.mcp)
+            )
+        ])
+        let report = ToolPolicyCoherenceAnalyzer.analyze(
+            entries: [mcpEntry("mcp_search")],
+            modePolicyContext: modeCtx,
+            toolPolicy: .unrestricted,
+            conversation: conversation,
+            grantTable: table
+        )
+        #expect(report.grantsInactiveWithoutOptIn.isEmpty)
+    }
 }
 
 private final class CoherenceLogCaptureBox: @unchecked Sendable {

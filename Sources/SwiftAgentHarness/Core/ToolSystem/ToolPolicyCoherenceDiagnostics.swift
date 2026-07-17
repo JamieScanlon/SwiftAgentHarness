@@ -34,6 +34,10 @@ actor ToolPolicyCoherenceDiagnostics {
                 logger.warning(
                     "Tool policy coherence: empty group '\(issue.ruleToken)' in \(issue.scope.displayLabel) (\(fixIt)); \(issue.detail)"
                 )
+            case .grantInactiveWithoutOptIn:
+                logger.info(
+                    "Tool policy coherence: grant '\(issue.ruleToken)' inactive without opt-in in \(issue.scope.displayLabel) (\(fixIt)); \(issue.detail)"
+                )
             }
         }
     }

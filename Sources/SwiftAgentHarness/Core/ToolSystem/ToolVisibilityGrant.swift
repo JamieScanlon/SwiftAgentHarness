@@ -69,12 +69,24 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
         return false
     }
 
-    /// Non-inherit grants whose match covers the entry (regardless of mode / allowsHostGrants).
-    func matchingGrantRecords(for entry: ToolRegistryEntry) -> [ToolVisibilityGrantRecord] {
-        records.filter { record in
-            guard case .grant = record.grant else { return false }
-            return matches(record.match, entry: entry)
+    /// `.grant` records that match catalog tools and cover this profile, but cannot co-author because the
+    /// profile did not opt in (`allowsHostGrants == false`). Machine-pinned profiles are omitted (opt-in
+    /// is impossible there by design).
+    func grantsInactiveWithoutOptIn(
+        profile: ResolvedModeProfile,
+        entries: [ToolRegistryEntry]
+    ) -> [(record: ToolVisibilityGrantRecord, matchedToolCount: Int)] {
+        guard !profile.allowsHostGrants else { return [] }
+        guard profile.allowsHostGrantsSource != .machinePinned else { return [] }
+        var result: [(ToolVisibilityGrantRecord, Int)] = []
+        for record in records {
+            guard case .grant(let modes) = record.grant else { continue }
+            guard modesCover(modes, profileID: profile.id) else { continue }
+            let matchedCount = entries.filter { matches(record.match, entry: $0) }.count
+            guard matchedCount > 0 else { continue }
+            result.append((record, matchedCount))
         }
+        return result
     }
 
     /// Unions grant-contributed bare names into an authored allow list (mode-allow co-authorship).

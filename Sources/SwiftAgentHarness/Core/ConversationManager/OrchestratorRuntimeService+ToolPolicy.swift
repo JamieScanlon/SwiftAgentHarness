@@ -307,7 +307,8 @@ extension OrchestratorRuntimeService {
             entries: allEntries,
             modePolicyContext: modeCtx,
             toolPolicy: deps.toolPolicy,
-            conversation: conversation
+            conversation: conversation,
+            grantTable: deps.visibilityGrants.snapshot()
         )
         await ToolPolicyCoherenceDiagnostics.shared.log(
             report: coherenceReport,
