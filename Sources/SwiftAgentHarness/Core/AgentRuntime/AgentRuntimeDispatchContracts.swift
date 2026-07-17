@@ -9,11 +9,23 @@ struct AgentRuntimeToolDispatchContract: Sendable, Equatable {
     var dispatchPlannerMode: ToolPolicyConfiguration.DispatchPlannerMode?
     /// Optional timeout for pending tool handles accepted by the orchestrator.
     var pendingToolTimeoutSeconds: TimeInterval?
+    /// Wall-clock bound for each tool dispatch (seconds).
+    var toolCallTimeoutSeconds: TimeInterval
+    /// Heartbeat interval for in-flight tool watchdog logs (seconds).
+    var toolCallWatchdogIntervalSeconds: TimeInterval
+    /// Recovery policy after a tool execution timeout.
+    var onToolTimeout: ToolPolicyConfiguration.OnToolTimeoutPolicy
+    /// When true, attempt a single MCP client reconnect after tool timeout (requires Kit K9).
+    var mcpReconnectOnToolTimeout: Bool
 
     static let conservativeDefault = AgentRuntimeToolDispatchContract(
         parallelDispatchEnabled: false,
         dispatchPlannerMode: nil,
-        pendingToolTimeoutSeconds: nil
+        pendingToolTimeoutSeconds: nil,
+        toolCallTimeoutSeconds: 300,
+        toolCallWatchdogIntervalSeconds: 20,
+        onToolTimeout: .continue,
+        mcpReconnectOnToolTimeout: false
     )
 }
 

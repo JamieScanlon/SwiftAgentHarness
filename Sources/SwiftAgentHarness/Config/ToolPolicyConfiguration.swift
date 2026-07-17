@@ -36,6 +36,14 @@ public struct ToolPolicyConfiguration: Sendable {
         case privilegedDispatch
     }
 
+    /// Policy when a tool dispatch hits the execution wall-clock timeout.
+    public enum OnToolTimeoutPolicy: String, Sendable, Codable, Equatable {
+        /// Append an error tool result and continue the agent loop (default).
+        case `continue` = "continue"
+        /// Fail the run after publishing the failed tool lifecycle event.
+        case failRun
+    }
+
     public enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable, CaseIterable {
         case local
         case docker
@@ -116,6 +124,14 @@ public struct ToolPolicyConfiguration: Sendable {
     public let parallelDispatchEnabled: Bool
     public let dispatchPlannerMode: DispatchPlannerMode?
     public let pendingToolTimeoutSeconds: TimeInterval?
+    /// Wall-clock bound for each tool dispatch (seconds). Default 300.
+    public let toolCallTimeoutSeconds: TimeInterval
+    /// Heartbeat interval for in-flight tool watchdog logs (seconds). Default 20.
+    public let toolCallWatchdogIntervalSeconds: TimeInterval
+    /// Recovery policy after a tool execution timeout.
+    public let onToolTimeout: OnToolTimeoutPolicy
+    /// When true, attempt a single MCP client reconnect after tool timeout via Kit `MCPManager.reconnectClient(named:)`.
+    public let mcpReconnectOnToolTimeout: Bool
 
     init(
         sensitiveToolNames: Set<String> = [],
@@ -134,7 +150,11 @@ public struct ToolPolicyConfiguration: Sendable {
         executionEnvironmentPolicy: ExecutionEnvironmentPolicy = .unrestricted,
         parallelDispatchEnabled: Bool = false,
         dispatchPlannerMode: DispatchPlannerMode? = nil,
-        pendingToolTimeoutSeconds: TimeInterval? = nil
+        pendingToolTimeoutSeconds: TimeInterval? = nil,
+        toolCallTimeoutSeconds: TimeInterval = 300,
+        toolCallWatchdogIntervalSeconds: TimeInterval = 20,
+        onToolTimeout: OnToolTimeoutPolicy = .continue,
+        mcpReconnectOnToolTimeout: Bool = false
     ) {
         self.sensitiveToolNames = sensitiveToolNames
         self.escalationRequiredToolNames = escalationRequiredToolNames
@@ -162,6 +182,10 @@ public struct ToolPolicyConfiguration: Sendable {
         self.parallelDispatchEnabled = parallelDispatchEnabled
         self.dispatchPlannerMode = dispatchPlannerMode
         self.pendingToolTimeoutSeconds = pendingToolTimeoutSeconds
+        self.toolCallTimeoutSeconds = toolCallTimeoutSeconds > 0 ? toolCallTimeoutSeconds : 300
+        self.toolCallWatchdogIntervalSeconds = toolCallWatchdogIntervalSeconds > 0 ? toolCallWatchdogIntervalSeconds : 20
+        self.onToolTimeout = onToolTimeout
+        self.mcpReconnectOnToolTimeout = mcpReconnectOnToolTimeout
     }
 
     /// Unrestricted policy (used when `toolPolicy` is missing from JSON).
@@ -182,7 +206,11 @@ public struct ToolPolicyConfiguration: Sendable {
         executionEnvironmentPolicy: .unrestricted,
         parallelDispatchEnabled: false,
         dispatchPlannerMode: nil,
-        pendingToolTimeoutSeconds: nil
+        pendingToolTimeoutSeconds: nil,
+        toolCallTimeoutSeconds: 300,
+        toolCallWatchdogIntervalSeconds: 20,
+        onToolTimeout: .continue,
+        mcpReconnectOnToolTimeout: false
     )
 
     /// Stable digest for system-prompt assembly fingerprinting (allowlist shape only).
@@ -204,7 +232,11 @@ public struct ToolPolicyConfiguration: Sendable {
             executionEnvironmentPolicy: executionEnvironmentPolicy,
             parallelDispatchEnabled: parallelDispatchEnabled,
             dispatchPlannerMode: dispatchPlannerMode,
-            pendingToolTimeoutSeconds: pendingToolTimeoutSeconds
+            pendingToolTimeoutSeconds: pendingToolTimeoutSeconds,
+            toolCallTimeoutSeconds: toolCallTimeoutSeconds,
+            toolCallWatchdogIntervalSeconds: toolCallWatchdogIntervalSeconds,
+            onToolTimeout: onToolTimeout,
+            mcpReconnectOnToolTimeout: mcpReconnectOnToolTimeout
         )
     }
 
@@ -225,7 +257,11 @@ public struct ToolPolicyConfiguration: Sendable {
         executionEnvironmentPolicy: ExecutionEnvironmentPolicy,
         parallelDispatchEnabled: Bool,
         dispatchPlannerMode: DispatchPlannerMode?,
-        pendingToolTimeoutSeconds: TimeInterval?
+        pendingToolTimeoutSeconds: TimeInterval?,
+        toolCallTimeoutSeconds: TimeInterval,
+        toolCallWatchdogIntervalSeconds: TimeInterval,
+        onToolTimeout: OnToolTimeoutPolicy,
+        mcpReconnectOnToolTimeout: Bool
     ) -> String {
         let sensitiveSlice = "sensitive:\(sensitiveToolNames.sorted().joined(separator: ","))"
         let escalationSlice = "escalationRequired:\(escalationRequiredToolNames.sorted().joined(separator: ","))"
@@ -248,6 +284,10 @@ public struct ToolPolicyConfiguration: Sendable {
         let parallel = "parallel:\(parallelDispatchEnabled ? "enabled" : "disabled")"
         let planner = "planner:\(dispatchPlannerMode?.rawValue ?? "nil")"
         let timeout = "pendingTimeout:\(pendingToolTimeoutSeconds.map { String(format: "%.3f", $0) } ?? "nil")"
+        let toolCallTimeout = "toolCallTimeout:\(String(format: "%.3f", toolCallTimeoutSeconds))"
+        let watchdog = "toolCallWatchdog:\(String(format: "%.3f", toolCallWatchdogIntervalSeconds))"
+        let onTimeout = "onToolTimeout:\(onToolTimeout.rawValue)"
+        let mcpReconnect = "mcpReconnectOnToolTimeout:\(mcpReconnectOnToolTimeout ? "true" : "false")"
         return [
             sensitiveSlice,
             escalationSlice,
@@ -266,6 +306,10 @@ public struct ToolPolicyConfiguration: Sendable {
             parallel,
             planner,
             timeout,
+            toolCallTimeout,
+            watchdog,
+            onTimeout,
+            mcpReconnect,
         ]
             .joined(separator: "|")
     }
@@ -617,7 +661,11 @@ public struct ToolPolicyConfiguration: Sendable {
             executionEnvironmentPolicy: executionEnvironmentPolicy,
             parallelDispatchEnabled: dispatchPolicy.parallelDispatchEnabled,
             dispatchPlannerMode: dispatchPolicy.dispatchPlannerMode,
-            pendingToolTimeoutSeconds: dispatchPolicy.pendingToolTimeoutSeconds
+            pendingToolTimeoutSeconds: dispatchPolicy.pendingToolTimeoutSeconds,
+            toolCallTimeoutSeconds: dispatchPolicy.toolCallTimeoutSeconds,
+            toolCallWatchdogIntervalSeconds: dispatchPolicy.toolCallWatchdogIntervalSeconds,
+            onToolTimeout: dispatchPolicy.onToolTimeout,
+            mcpReconnectOnToolTimeout: dispatchPolicy.mcpReconnectOnToolTimeout
         )
     }
 
@@ -664,7 +712,11 @@ public struct ToolPolicyConfiguration: Sendable {
     ) -> (
         parallelDispatchEnabled: Bool,
         dispatchPlannerMode: DispatchPlannerMode?,
-        pendingToolTimeoutSeconds: TimeInterval?
+        pendingToolTimeoutSeconds: TimeInterval?,
+        toolCallTimeoutSeconds: TimeInterval,
+        toolCallWatchdogIntervalSeconds: TimeInterval,
+        onToolTimeout: OnToolTimeoutPolicy,
+        mcpReconnectOnToolTimeout: Bool
     ) {
         let parallelDispatchEnabled = dispatch?["parallelEnabled"] as? Bool ?? false
         let dispatchPlannerMode: DispatchPlannerMode? = {
@@ -692,11 +744,41 @@ public struct ToolPolicyConfiguration: Sendable {
         } else {
             pendingToolTimeoutSeconds = nil
         }
+        let toolCallTimeoutSeconds = Self.positiveTimeInterval(
+            dispatch?["toolCallTimeoutSeconds"],
+            default: 300
+        )
+        let toolCallWatchdogIntervalSeconds = Self.positiveTimeInterval(
+            dispatch?["toolCallWatchdogIntervalSeconds"],
+            default: 20
+        )
+        let onToolTimeout: OnToolTimeoutPolicy = {
+            guard let raw = dispatch?["onToolTimeout"] as? String else {
+                return .continue
+            }
+            return OnToolTimeoutPolicy(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                ?? .continue
+        }()
+        let mcpReconnectOnToolTimeout = dispatch?["mcpReconnectOnToolTimeout"] as? Bool ?? false
         return (
             parallelDispatchEnabled: parallelDispatchEnabled,
             dispatchPlannerMode: dispatchPlannerMode,
-            pendingToolTimeoutSeconds: pendingToolTimeoutSeconds
+            pendingToolTimeoutSeconds: pendingToolTimeoutSeconds,
+            toolCallTimeoutSeconds: toolCallTimeoutSeconds,
+            toolCallWatchdogIntervalSeconds: toolCallWatchdogIntervalSeconds,
+            onToolTimeout: onToolTimeout,
+            mcpReconnectOnToolTimeout: mcpReconnectOnToolTimeout
         )
+    }
+
+    private static func positiveTimeInterval(_ raw: Any?, default defaultValue: TimeInterval) -> TimeInterval {
+        if let value = raw as? Double, value > 0 {
+            return value
+        }
+        if let value = raw as? Int, value > 0 {
+            return TimeInterval(value)
+        }
+        return defaultValue
     }
 }
 

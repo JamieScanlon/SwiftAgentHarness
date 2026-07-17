@@ -402,7 +402,11 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         return AgentRuntimeToolDispatchContract(
             parallelDispatchEnabled: parallelDispatchEnabled,
             dispatchPlannerMode: normalizedPlanner.mode,
-            pendingToolTimeoutSeconds: toolPolicy.pendingToolTimeoutSeconds
+            pendingToolTimeoutSeconds: toolPolicy.pendingToolTimeoutSeconds,
+            toolCallTimeoutSeconds: toolPolicy.toolCallTimeoutSeconds,
+            toolCallWatchdogIntervalSeconds: toolPolicy.toolCallWatchdogIntervalSeconds,
+            onToolTimeout: toolPolicy.onToolTimeout,
+            mcpReconnectOnToolTimeout: toolPolicy.mcpReconnectOnToolTimeout
         )
     }
 

@@ -178,6 +178,10 @@ Environment-kind values: `"local"`, `"docker"`, `"ssh"`, `"mcp"`, `"a2a"`, `"unk
 | `parallelEnabled` | Bool | `false` | Enable parallel tool dispatch. |
 | `plannerMode` | String | `nil` | `"serial"`, `"mixedDeterministic"`, or legacy `"allParallel"` (parsed but remapped to `mixedDeterministic` with a warning). |
 | `pendingToolTimeoutSeconds` | Double | `nil` (none) | Timeout for pending tool calls; `<= 0` → none. |
+| `toolCallTimeoutSeconds` | Double | `300` | Wall-clock bound per tool dispatch (MCP and local). `<= 0` → `300`. |
+| `toolCallWatchdogIntervalSeconds` | Double | `20` | In-flight tool watchdog heartbeat interval. `<= 0` → `20`. |
+| `onToolTimeout` | String | `"continue"` | `"continue"` appends an error tool result and keeps the loop; `"failRun"` ends the turn after the failed tool lifecycle event. |
+| `mcpReconnectOnToolTimeout` | Bool | `false` | When true, attempt a single MCP client reconnect via Kit `MCPManager.reconnectClient(named:)` after a tool timeout (does not retry the hung call). |
 
 ## `subAgentHostingPolicy`
 

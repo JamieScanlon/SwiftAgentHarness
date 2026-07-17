@@ -84,6 +84,7 @@ actor RuntimeLifecyclePublicationService {
         let correlation = normalizedRuntimeToolCorrelation(from: payload)
         guard payload.name == .toolCallStarted
             || payload.name == .toolCallCompleted
+            || payload.name == .toolCallFailed
             || payload.name == .toolCompletionAnnounced
             || payload.name == .toolApprovalRequired
             || payload.name == .toolApprovalResolved
@@ -187,7 +188,7 @@ actor RuntimeLifecyclePublicationService {
             projectionSnapshot.agenticPhase = .executingTools
             projectionSnapshot.llmRequestPhase = .active
             didMutate = true
-        case .toolCallCompleted, .toolCompletionAnnounced, .loopIterationCompleted:
+        case .toolCallCompleted, .toolCallFailed, .toolCompletionAnnounced, .loopIterationCompleted:
             projectionSnapshot.state = .generating
             projectionSnapshot.agenticPhase = .betweenIterations
             projectionSnapshot.llmRequestPhase = .queued

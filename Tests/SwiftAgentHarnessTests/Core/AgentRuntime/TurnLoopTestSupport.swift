@@ -59,13 +59,23 @@ actor TurnLoopCompactionRecorder {
 
 actor TurnLoopLifecycleRecorder {
     private var events: [RuntimeLifecycleEventName] = []
+    private var payloads: [RuntimeLifecycleEventPayload] = []
 
     func record(name: RuntimeLifecycleEventName) {
         events.append(name)
     }
 
+    func record(payload: RuntimeLifecycleEventPayload) {
+        payloads.append(payload)
+        events.append(payload.name)
+    }
+
     func completedToolCallCount() -> Int {
         events.filter { $0 == .toolCallCompleted }.count
+    }
+
+    func failedToolCallCount() -> Int {
+        events.filter { $0 == .toolCallFailed }.count
     }
 
     func startedToolCallCount() -> Int {
@@ -74,6 +84,26 @@ actor TurnLoopLifecycleRecorder {
 
     func eventOrder() -> [RuntimeLifecycleEventName] {
         events
+    }
+
+    func recordedPayloads() -> [RuntimeLifecycleEventPayload] {
+        payloads
+    }
+
+    func everyStartedHasTerminalPair() -> Bool {
+        var openStarts = 0
+        for name in events {
+            switch name {
+            case .toolCallStarted:
+                openStarts += 1
+            case .toolCallCompleted, .toolCallFailed:
+                guard openStarts > 0 else { return false }
+                openStarts -= 1
+            default:
+                break
+            }
+        }
+        return openStarts == 0
     }
 
     func startedBeforeCompleted() -> Bool {
@@ -193,7 +223,10 @@ enum TurnLoopTestPorts {
         effectiveToolEntries: [ToolRegistryEntry] = [],
         temperatureRecorder: TurnLoopTemperatureRecorder? = nil,
         agentHarness: AgentHarnessConfiguration = .default,
-        stopRequestedFn: (@Sendable (UUID) async -> Bool)? = nil
+        stopRequestedFn: (@Sendable (UUID) async -> Bool)? = nil,
+        dispatchContract: AgentRuntimeToolDispatchContract = .conservativeDefault,
+        hangDispatchSeconds: TimeInterval? = nil,
+        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil
     ) -> AgentLoopPorts {
         let emptySnapshot = RuntimeToolTurnPolicySnapshot(
             availabilitySnapshots: effectiveToolEntries.map {
@@ -214,9 +247,10 @@ enum TurnLoopTestPorts {
                 )
             },
             effectiveEntries: effectiveToolEntries,
-            dispatchContract: .conservativeDefault
+            dispatchContract: dispatchContract
         )
         let dispatchQueue = DispatchOutcomeQueue(outcomes: dispatchOutcomes)
+        let toolCallStreamGate = OneShotGate(armed: !assistantToolCalls.isEmpty)
         let conversationPort = SessionRuntimeConversationPort(
             conversationFn: { _ in await state.snapshot() },
             appendFn: { message, _, _ in
@@ -255,9 +289,14 @@ enum TurnLoopTestPorts {
             if assistantToolCalls.isEmpty {
                 return await streamFactory()
             }
+            let emitTools = await toolCallStreamGate.consume()
             return AsyncThrowingStream { continuation in
-                let response = LLMResponse(content: "working", toolCalls: assistantToolCalls)
-                continuation.yield(.complete(response))
+                if emitTools {
+                    let response = LLMResponse(content: "working", toolCalls: assistantToolCalls)
+                    continuation.yield(.complete(response))
+                } else {
+                    continuation.yield(.complete(LLMResponse(content: "done", toolCalls: [])))
+                }
                 continuation.finish()
             }
         }
@@ -274,14 +313,19 @@ enum TurnLoopTestPorts {
             consumeApprovalTimeoutsFn: { _, _, _, _, _ in },
             effectiveToolsFn: { _, _, _, _ in emptySnapshot },
             dispatchFn: { _, _, _, _, _, _, _, _, _, _ in
-                if let slowDispatchGate {
+                if let hangDispatchSeconds {
+                    // Sleep past the harness timeout; cancellation ends the wait cooperatively.
+                    try? await Task.sleep(for: .seconds(hangDispatchSeconds))
+                } else if let slowDispatchGate {
                     await slowDispatchGate.markDispatchEntered()
                     await slowDispatchGate.waitForRelease()
                 }
                 return dispatchQueue.next()
             },
             dispatchBatchFn: { calls, _, _, _, _, _, _, _, _, _ in
-                if let slowDispatchGate, !calls.isEmpty {
+                if let hangDispatchSeconds, !calls.isEmpty {
+                    try? await Task.sleep(for: .seconds(hangDispatchSeconds))
+                } else if let slowDispatchGate, !calls.isEmpty {
                     await slowDispatchGate.markDispatchEntered()
                     await slowDispatchGate.waitForRelease()
                 }
@@ -314,7 +358,22 @@ enum TurnLoopTestPorts {
             agentHarness: agentHarness,
             contextCompaction: contextCompaction,
             modeRegistry: modeRegistry ?? ModeRegistryTestSupport.makePort(seedingBuiltIns: true),
-            logger: nil
+            logger: nil,
+            reconnectMCPClient: reconnectMCPClient
         )
+    }
+}
+
+actor OneShotGate {
+    private var armed: Bool
+
+    init(armed: Bool) {
+        self.armed = armed
+    }
+
+    func consume() -> Bool {
+        guard armed else { return false }
+        armed = false
+        return true
     }
 }

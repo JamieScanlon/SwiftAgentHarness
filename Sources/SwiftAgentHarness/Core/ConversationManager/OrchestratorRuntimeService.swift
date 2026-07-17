@@ -1246,7 +1246,7 @@ public actor OrchestratorRuntimeService {
             a2aIntegration: a2aManager != nil ? .registrationOnly : .disabled,
             acpIntegration: acpManager != nil ? .registrationOnly : .disabled,
             mcpConnectionTimeout: 30.0,
-            toolCallTimeout: 5 * 60,
+            toolCallTimeout: deps.toolPolicy.toolCallTimeoutSeconds,
             maxTokens: effectivePrimaryModel.maxContextLength,
             temperature: nil,
             topP: nil,

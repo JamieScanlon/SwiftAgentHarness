@@ -1522,6 +1522,7 @@ public enum RuntimeLifecycleEventName: String, Codable, Sendable, Equatable {
     case modelCallCompleted = "model.callCompleted"
     case toolCallStarted = "tool.callStarted"
     case toolCallCompleted = "tool.callCompleted"
+    case toolCallFailed = "tool.callFailed"
     case toolCompletionAnnounced = "tool.completionAnnounced"
     case toolUsageSummary = "tool.usageSummary"
     case toolApprovalRequired = "tool.approvalRequired"
@@ -1583,6 +1584,12 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
     public var toolCount: Int?
     public var toolNames: [String]?
     public var summaryText: String?
+    /// Stable failure class for ``toolCallFailed`` (`timeout`, `cancelled`, `mcp_error`, `dispatch_error`, …).
+    public var errorClass: String?
+    /// Wall-clock elapsed milliseconds for the tool call when known (primarily ``toolCallFailed``).
+    public var elapsedMs: Int?
+    /// MCP server name when the tool was dispatched via MCP (best-effort).
+    public var mcpServerName: String?
     public var terminalReason: ConversationRunTerminalReason?
     public var source: String?
     public var updatedAt: Date
@@ -1627,6 +1634,9 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
         toolCount: Int? = nil,
         toolNames: [String]? = nil,
         summaryText: String? = nil,
+        errorClass: String? = nil,
+        elapsedMs: Int? = nil,
+        mcpServerName: String? = nil,
         terminalReason: ConversationRunTerminalReason? = nil,
         source: String? = nil,
         updatedAt: Date = Date()
@@ -1670,6 +1680,9 @@ public struct RuntimeLifecycleEventPayload: Codable, Sendable, Equatable {
         self.toolCount = toolCount
         self.toolNames = toolNames
         self.summaryText = summaryText
+        self.errorClass = errorClass
+        self.elapsedMs = elapsedMs
+        self.mcpServerName = mcpServerName
         self.terminalReason = terminalReason
         self.source = source
         self.updatedAt = updatedAt

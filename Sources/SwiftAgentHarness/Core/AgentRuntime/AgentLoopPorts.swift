@@ -38,6 +38,32 @@ struct AgentLoopPorts: Sendable {
     let contextCompaction: ContextCompactionConfiguration
     let modeRegistry: any ModeRegistryAccessing
     let logger: Logger?
+    /// Optional reconnect hook (tests). Production falls back to `orchestrator.mcpManager.reconnectClient(named:)`.
+    let reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)?
+
+    init(
+        model: any RuntimeModelPort,
+        context: any RuntimeContextPort,
+        tools: any RuntimeToolPort,
+        conversation: any RuntimeConversationPort,
+        memory: (any RuntimeMemoryPort)?,
+        agentHarness: AgentHarnessConfiguration,
+        contextCompaction: ContextCompactionConfiguration,
+        modeRegistry: any ModeRegistryAccessing,
+        logger: Logger?,
+        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil
+    ) {
+        self.model = model
+        self.context = context
+        self.tools = tools
+        self.conversation = conversation
+        self.memory = memory
+        self.agentHarness = agentHarness
+        self.contextCompaction = contextCompaction
+        self.modeRegistry = modeRegistry
+        self.logger = logger
+        self.reconnectMCPClient = reconnectMCPClient
+    }
 }
 
 protocol RuntimeModelPort: Sendable {
