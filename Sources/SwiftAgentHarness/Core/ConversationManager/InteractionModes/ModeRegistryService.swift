@@ -280,7 +280,6 @@ public actor ModeRegistryService {
         }
         let hostGrants = ResolvedModeProfile.resolveAllowsHostGrants(
             id: raw.id,
-            tools: tools,
             explicitOnThisRow: isMachine ? nil : raw.allowsHostGrants,
             inherited: isMachine ? nil : (base.allowsHostGrants, base.allowsHostGrantsSource)
         )

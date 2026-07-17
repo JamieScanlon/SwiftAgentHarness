@@ -306,12 +306,10 @@ public struct ModeProfileTransitionHooksSlice: Sendable, Equatable {
 public enum AllowsHostGrantsSource: String, Sendable, Equatable {
     /// Machine sub-agent profile; host grants never apply.
     case machinePinned
-    /// Explicit `allowsHostGrants` on this profile row (overrides empty-allow derivation).
+    /// Explicit `allowsHostGrants` on this profile row (or inherited from an explicit ancestor).
     case explicit
-    /// Derived `false` because merged `tools.allow` is an authored empty list.
-    case derivedEmptyAllow
-    /// Derived `true` for user-facing profiles with a non-empty / open allow list.
-    case derivedUserFacing
+    /// Default `false` when the profile did not author opt-in and no explicit/machine ancestor applies.
+    case defaultFalse
 }
 
 /// Fully resolved mode profile (flattened ``extends`` chain).
@@ -324,8 +322,8 @@ public struct ResolvedModeProfile: Sendable, Equatable {
     /// When false, proactive context-compaction triggers are suppressed for **initial** phase assembly (chat stays light).
     public var allowsProactiveCompactionTriggers: Bool
     public var appliesAgentBuildOrchestratorHarness: Bool
-    /// When false, registration-time ``ToolVisibilityGrant`` never widens tool visibility for this profile.
-    /// Machine sub-agent profiles force `false` (non-overridable).
+    /// When false, registration-time ``ToolVisibilityGrant`` does not contribute allow-list entries for this profile.
+    /// Machine sub-agent profiles force `false` (non-overridable). Default is `false`; must be authored `true` to opt in.
     public var allowsHostGrants: Bool
     /// Why ``allowsHostGrants`` resolved the way it did (explain / coherence diagnostics).
     public var allowsHostGrantsSource: AllowsHostGrantsSource
@@ -389,7 +387,6 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         } else {
             let resolved = Self.resolveAllowsHostGrants(
                 id: id,
-                tools: tools,
                 explicitOnThisRow: allowsHostGrants,
                 inherited: nil
             )
@@ -408,9 +405,11 @@ public struct ResolvedModeProfile: Sendable, Equatable {
     }
 
     /// Resolves ``allowsHostGrants`` / ``allowsHostGrantsSource`` after the tools slice is final.
+    ///
+    /// Opt-in is never derived from allow-list shape: only an explicit row value, an inherited
+    /// explicit/machine pin, or the machine-profile pin can set the flag. Otherwise default is `false`.
     static func resolveAllowsHostGrants(
         id: String,
-        tools: ModeProfileToolsSlice,
         explicitOnThisRow: Bool?,
         inherited: (value: Bool, source: AllowsHostGrantsSource)?
     ) -> (value: Bool, source: AllowsHostGrantsSource) {
@@ -420,17 +419,14 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         if let explicitOnThisRow {
             return (explicitOnThisRow, .explicit)
         }
-        if let allow = tools.allow, allow.isEmpty {
-            return (false, .derivedEmptyAllow)
-        }
         if let inherited {
             switch inherited.source {
             case .explicit, .machinePinned:
                 return inherited
-            case .derivedEmptyAllow, .derivedUserFacing:
-                return (true, .derivedUserFacing)
+            case .defaultFalse:
+                return (false, .defaultFalse)
             }
         }
-        return (true, .derivedUserFacing)
+        return (false, .defaultFalse)
     }
 }

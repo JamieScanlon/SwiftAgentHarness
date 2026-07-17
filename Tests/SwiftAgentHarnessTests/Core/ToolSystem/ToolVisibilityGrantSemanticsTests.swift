@@ -123,8 +123,8 @@ struct ToolVisibilityGrantSemanticsTests {
         )
     }
 
-    @Test("MCP allUserFacing grant widens closed allow on chat/plan/agent and auto-allows gating")
-    func mcpGrantWidensUserFacingModes() {
+    @Test("MCP grant without allowsHostGrants does not widen closed allow")
+    func mcpGrantRequiresExplicitOptIn() {
         let closed = ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
         let gateway = gatewayWithMCPGrant()
         let entry = mcpEntry()
@@ -136,6 +136,33 @@ struct ToolVisibilityGrantSemanticsTests {
                 mode: mode,
                 tools: closed
             )
+            #expect(profile.allowsHostGrants == false)
+            #expect(profile.allowsHostGrantsSource == .defaultFalse)
+            let decision = evaluate(
+                gateway: gateway,
+                entry: entry,
+                conversation: conversation,
+                profile: profile
+            )
+            #expect(decision.allowed == false)
+            #expect(decision.blockReason == .promptConfigAllowlist)
+        }
+    }
+
+    @Test("MCP grant with allowsHostGrants contributes to effective allow on chat/plan/agent")
+    func mcpGrantContributesWhenOptedIn() {
+        let closed = ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+        let gateway = gatewayWithMCPGrant()
+        let entry = mcpEntry()
+
+        for mode in [InteractionMode.chat, .plan, .agent] {
+            let conversation = conversation(mode: mode)
+            let profile = profile(
+                id: mode.rawValue,
+                mode: mode,
+                tools: closed,
+                allowsHostGrants: true
+            )
             #expect(profile.allowsHostGrants == true)
             let decision = evaluate(
                 gateway: gateway,
@@ -146,13 +173,14 @@ struct ToolVisibilityGrantSemanticsTests {
             #expect(decision.allowed == true)
             #expect(decision.blockReason == nil)
 
+            // Grant authorship puts the tool on mode-allow; gating stays ask-default (no durable auto-allow).
             let gating = evaluateGating(
                 gateway: gateway,
                 entry: entry,
                 conversation: conversation,
                 profile: profile
             )
-            #expect(gating.behavior == .allow)
+            #expect(gating.behavior == .ask)
         }
     }
 
@@ -160,7 +188,8 @@ struct ToolVisibilityGrantSemanticsTests {
     func modeDenyBeatsGrant() {
         let conversation = conversation()
         let profile = profile(
-            tools: ModeProfileToolsSlice(allow: ["bash"], deny: ["mcp_search"], approvalPolicy: nil)
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: ["mcp_search"], approvalPolicy: nil),
+            allowsHostGrants: true
         )
         let decision = evaluate(
             gateway: gatewayWithMCPGrant(),
@@ -172,7 +201,7 @@ struct ToolVisibilityGrantSemanticsTests {
         #expect(decision.blockReason == .promptConfigDenylist)
     }
 
-    @Test("machine profiles never widen via host grants")
+    @Test("machine profiles never receive grant contributions")
     func machineProfilesRejectGrants() {
         let gateway = gatewayWithMCPGrant()
         let entry = mcpEntry()
@@ -192,8 +221,7 @@ struct ToolVisibilityGrantSemanticsTests {
                 profile: profile
             )
             #expect(decision.allowed == false)
-            #expect(decision.blockReason == .hostVisibilityGrantMiss)
-            #expect(decision.grantRejectionCause == .flagDisabled)
+            #expect(decision.blockReason == .promptConfigAllowlist)
         }
     }
 
@@ -210,7 +238,8 @@ struct ToolVisibilityGrantSemanticsTests {
         let gateway = DefaultToolSystemGateway(visibilityGrants: store)
         let conversation = conversation()
         let profile = profile(
-            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
+            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil),
+            allowsHostGrants: true
         )
         let decision = evaluate(
             gateway: gateway,
@@ -220,7 +249,6 @@ struct ToolVisibilityGrantSemanticsTests {
         )
         #expect(decision.allowed == false)
         #expect(decision.blockReason == .promptConfigAllowlist)
-        #expect(decision.grantRejectionCause == nil)
     }
 
     @Test("explicit grant modes admit only listed profile IDs")
@@ -233,7 +261,7 @@ struct ToolVisibilityGrantSemanticsTests {
             gateway: gateway,
             entry: entry,
             conversation: conversation(mode: .plan),
-            profile: profile(id: "plan", mode: .plan, tools: closed)
+            profile: profile(id: "plan", mode: .plan, tools: closed, allowsHostGrants: true)
         )
         #expect(planDecision.allowed == true)
 
@@ -241,21 +269,20 @@ struct ToolVisibilityGrantSemanticsTests {
             gateway: gateway,
             entry: entry,
             conversation: conversation(mode: .agent),
-            profile: profile(id: "agent", mode: .agent, tools: closed)
+            profile: profile(id: "agent", mode: .agent, tools: closed, allowsHostGrants: true)
         )
         #expect(agentDecision.allowed == false)
-        #expect(agentDecision.blockReason == .hostVisibilityGrantMiss)
-        #expect(agentDecision.grantRejectionCause == .modesExcludeProfile)
+        #expect(agentDecision.blockReason == .promptConfigAllowlist)
     }
 
-    @Test("empty allow + matching grant is hostVisibilityGrantMiss with emptyAllowLockdown")
-    func emptyAllowSuppressesGrant() {
+    @Test("empty allow without opt-in stays closed even with matching grant")
+    func emptyAllowWithoutOptInStaysClosed() {
         let gateway = gatewayWithMCPGrant()
         let profile = profile(
             tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: nil)
         )
         #expect(profile.allowsHostGrants == false)
-        #expect(profile.allowsHostGrantsSource == .derivedEmptyAllow)
+        #expect(profile.allowsHostGrantsSource == .defaultFalse)
 
         let decision = evaluate(
             gateway: gateway,
@@ -264,8 +291,7 @@ struct ToolVisibilityGrantSemanticsTests {
             profile: profile
         )
         #expect(decision.allowed == false)
-        #expect(decision.blockReason == .hostVisibilityGrantMiss)
-        #expect(decision.grantRejectionCause == .emptyAllowLockdown)
+        #expect(decision.blockReason == .promptConfigAllowlist)
 
         let gating = evaluateGating(
             gateway: gateway,
@@ -289,11 +315,10 @@ struct ToolVisibilityGrantSemanticsTests {
             profile: profile
         )
         #expect(decision.blockReason == .promptConfigAllowlist)
-        #expect(decision.grantRejectionCause == nil)
     }
 
-    @Test("explicit allowsHostGrants true escapes empty-allow lockdown")
-    func explicitTrueEscapesEmptyAllow() {
+    @Test("explicit allowsHostGrants true lets grants author into empty allow")
+    func explicitTrueOpensEmptyAllowViaGrant() {
         let gateway = gatewayWithMCPGrant()
         let profile = profile(
             tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: nil),
@@ -311,8 +336,8 @@ struct ToolVisibilityGrantSemanticsTests {
         #expect(decision.allowed == true)
     }
 
-    @Test("explain maps grant miss distinctly from mode allowlist")
-    func explainGrantMissDistinctFromAllowlist() throws {
+    @Test("explain maps grant miss as mode allowlist")
+    func explainGrantMissIsAllowlist() throws {
         let store = ToolVisibilityGrantStore()
         store.register(
             ToolVisibilityGrantRecord(
@@ -326,7 +351,6 @@ struct ToolVisibilityGrantSemanticsTests {
         let profile = profile(
             tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
         )
-        // Machine pin
         let machine = self.profile(
             id: "subagent-minimal",
             tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil),
@@ -343,10 +367,9 @@ struct ToolVisibilityGrantSemanticsTests {
             gateway: gateway
         )
         let row = try #require(report.rows.first)
-        #expect(row.gatewayBlockReason == .hostVisibilityGrantMiss)
-        #expect(row.primaryScope == .hostVisibilityGrant)
-        #expect(row.fixItConfigKey?.contains("allowsHostGrants") == true)
-        #expect(row.fixItConfigKey?.contains("modeProfiles.agent.tools.allow") != true)
+        #expect(row.gatewayBlockReason == .promptConfigAllowlist)
+        #expect(row.primaryScope == .modeAllow)
+        #expect(row.fixItConfigKey?.contains("tools.allow") == true)
 
         let allowlistReport = ToolPolicyAvailabilityExplainer.explain(
             entries: [localEntry()],
@@ -361,43 +384,6 @@ struct ToolVisibilityGrantSemanticsTests {
         let allowlistRow = try #require(allowlistReport.rows.first)
         #expect(allowlistRow.gatewayBlockReason == .promptConfigAllowlist)
         #expect(allowlistRow.primaryScope == .modeAllow)
-    }
-
-    @Test("coherence emits grantSuppressedByEmptyAllow once per grant record")
-    func coherenceGrantSuppressedNote() {
-        let table = ToolVisibilityGrantTable(records: [
-            ToolVisibilityGrantRecord(
-                id: "mcp",
-                grant: .grant(modes: .allUserFacing),
-                match: .registrySource(.mcp)
-            )
-        ])
-        let profile = profile(
-            tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: nil)
-        )
-        let conversation = conversation()
-        let report = ToolPolicyCoherenceAnalyzer.analyze(
-            entries: [mcpEntry("a"), mcpEntry("b"), localEntry()],
-            modePolicyContext: modeContext(for: conversation, profile: profile),
-            toolPolicy: .unrestricted,
-            conversation: conversation,
-            grantTable: table
-        )
-        #expect(report.grantSuppressedByEmptyAllow.count == 1)
-        #expect(report.grantSuppressedByEmptyAllow.first?.ruleToken == "mcp")
-        #expect(report.grantSuppressedByEmptyAllow.first?.detail.contains("2 tool") == true)
-
-        let openProfile = self.profile(
-            tools: ModeProfileToolsSlice(allow: ["bash"], deny: [], approvalPolicy: nil)
-        )
-        let openReport = ToolPolicyCoherenceAnalyzer.analyze(
-            entries: [mcpEntry()],
-            modePolicyContext: modeContext(for: conversation, profile: openProfile),
-            toolPolicy: .unrestricted,
-            conversation: conversation,
-            grantTable: table
-        )
-        #expect(openReport.grantSuppressedByEmptyAllow.isEmpty)
     }
 
     @Test("PromptConfig overlay cannot enable allowsHostGrants on machine profiles")
@@ -424,8 +410,8 @@ struct ToolVisibilityGrantSemanticsTests {
         #expect(diagnostics.contains(where: { $0.contains("allowsHostGrants=true ignored") }))
     }
 
-    @Test("child empty allow derives lockdown even when parent explicitly allows host grants")
-    func childEmptyAllowBeatsInheritedExplicit() {
+    @Test("child without explicit flag inherits parent explicit allowsHostGrants")
+    func childInheritsParentExplicit() {
         let parent = profile(
             id: "parent-open",
             tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil),
@@ -435,12 +421,11 @@ struct ToolVisibilityGrantSemanticsTests {
 
         let childResolved = ResolvedModeProfile.resolveAllowsHostGrants(
             id: "child-lockdown",
-            tools: ModeProfileToolsSlice(allow: [], deny: []),
             explicitOnThisRow: nil,
             inherited: (parent.allowsHostGrants, parent.allowsHostGrantsSource)
         )
-        #expect(childResolved.value == false)
-        #expect(childResolved.source == .derivedEmptyAllow)
+        #expect(childResolved.value == true)
+        #expect(childResolved.source == .explicit)
     }
 
     @Test("merge path keeps parent explicit allowsHostGrants false across child overlay")

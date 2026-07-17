@@ -11,6 +11,7 @@ enum ToolPolicyCoherenceAnalyzer {
         conversation: ModelConversation?,
         grantTable: ToolVisibilityGrantTable = .empty
     ) -> ToolPolicyCoherenceReport {
+        _ = grantTable
         let groupIndex = ToolPolicyGroupIndex.build(from: entries)
         let registryNames = Set(entries.map { ToolNamePolicyNormalization.registryName($0) })
         let profileID = modePolicyContext.resolvedProfile.id
@@ -43,11 +44,6 @@ enum ToolPolicyCoherenceAnalyzer {
             allowScope: .modeToolsAllow,
             entries: entries,
             groupIndex: groupIndex
-        ))
-        issues.append(contentsOf: grantSuppressedByEmptyAllowIssues(
-            entries: entries,
-            profile: modePolicyContext.resolvedProfile,
-            grantTable: grantTable
         ))
 
         if let routingPrefs = conversation?.routingPrefs,
@@ -105,33 +101,6 @@ enum ToolPolicyCoherenceAnalyzer {
             result.append(issue)
         }
         return result
-    }
-
-    private static func grantSuppressedByEmptyAllowIssues(
-        entries: [ToolRegistryEntry],
-        profile: ResolvedModeProfile,
-        grantTable: ToolVisibilityGrantTable
-    ) -> [ToolPolicyCoherenceIssue] {
-        guard profile.allowsHostGrantsSource == .derivedEmptyAllow else { return [] }
-        var issues: [ToolPolicyCoherenceIssue] = []
-        for record in grantTable.records {
-            guard case .grant = record.grant else { continue }
-            let matchedCount = entries.filter { entry in
-                grantTable.matchingGrantRecords(for: entry).contains(where: { $0.id == record.id })
-            }.count
-            guard matchedCount > 0 else { continue }
-            issues.append(
-                ToolPolicyCoherenceIssue(
-                    kind: .grantSuppressedByEmptyAllow,
-                    scope: .hostVisibilityGrant,
-                    ruleToken: record.id,
-                    detail: HostVisibilityGrantRejectionCause.emptyAllowLockdown.explainDetail
-                        + " Grant '\(record.id)' matched \(matchedCount) tool(s).",
-                    shadowedBy: []
-                )
-            )
-        }
-        return issues
     }
 
     private static func unknownIssues(

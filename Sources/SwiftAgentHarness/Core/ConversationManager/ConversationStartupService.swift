@@ -24,7 +24,7 @@ protocol StartupServicing: Sendable {
 
 extension StartupServicing {
     func setMCPManager(_ mcpManager: MCPManager) async {
-        await setMCPManager(mcpManager, visibilityGrant: .grant(modes: .allUserFacing))
+        await setMCPManager(mcpManager, visibilityGrant: .inheritModeLists)
     }
 }
 
@@ -155,7 +155,7 @@ public actor ConversationStartupService: StartupServicing {
 
     public func setMCPManager(
         _ mcpManager: MCPManager,
-        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+        visibilityGrant: ToolVisibilityGrant = .inheritModeLists
     ) async {
         self.mcpManager = mcpManager
         deps.visibilityGrants.register(

@@ -212,7 +212,7 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 | `assemblyKind` | String | same as above | `"chat"`, `"planCollaboration"`, or `"agentBuild"`. Must pair with the mode: chat↔chat, plan↔planCollaboration, agent↔agentBuild. |
 | `allowsProactiveCompactionTriggers` | Bool | no | Inherited; built-ins: `false` for chat, `true` for plan/agent. |
 | `appliesAgentBuildOrchestratorHarness` | Bool | no | Inherited; built-ins: `true` only for agent. |
-| `allowsHostGrants` | Bool | no | Whether registration-time tool visibility grants (MCP servers etc.) can widen this profile. **Default derived**: `false` when the final merged `tools.allow` is an explicit `[]` (authored lockdown), otherwise `true`. Explicit value on the row wins over derivation and over inherited values; **always forced `false` for machine profiles** (a `true` here is ignored with a diagnostic). Operator project-directory overlays cannot set this field (stripped with a diagnostic). |
+| `allowsHostGrants` | Bool | no | Whether registration-time tool visibility grants may contribute entries into this profile's effective mode-allow list. **Default `false`** (never derived from allow-list shape). Explicit value on the row wins; inherited from an ancestor's explicit value when omitted; **always forced `false` for machine profiles** (a `true` here is ignored with a diagnostic). Operator project-directory overlays cannot set this field (stripped with a diagnostic). |
 | `semanticLayerTags` | [String] | no | Forward-compat layered-mode tags. Default `[]`. |
 | `label`, `description`, `symbol` | String | no | Picker/UI metadata. `label` defaults to the id. |
 
@@ -220,9 +220,9 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 
 | Key | Type | Description |
 |---|---|---|
-| `allow` | [String] | **Replaces** the inherited allow list. `null`/omitted = inherit. `["*"]` = all tools. `[]` = none — an *authored lockdown* that also suppresses host visibility grants (see `allowsHostGrants`). Entries accept globs and group aliases. |
+| `allow` | [String] | **Replaces** the inherited allow list. `null`/omitted = inherit. `["*"]` = all tools. `[]` = none (closed world). Entries accept globs and group aliases (e.g. `"mcp__github__*"`, `group:mcp`). |
 | `allow+` | [String] | **Appends** to the (possibly just-replaced) allow list. No-op when the effective list is open (`null` or contains `"*"`) — it never closes an open world. With `allow` on the same row, semantics are replace-then-append. |
-| `deny` | [String] | Appends to the inherited deny list (append-only; a child can never remove a parent's denies). Deny always beats allow *and* host grants. |
+| `deny` | [String] | Appends to the inherited deny list (append-only; a child can never remove a parent's denies). Deny always beats allow *and* grant-contributed allow entries. |
 | `deny+` | [String] | Alias of `deny` (also append-only). |
 | `approvalPolicy` | String | `"never"`, `"side-effects"`, or `"all"` — mode-level approval posture. |
 
@@ -288,7 +288,7 @@ When `policy` is `"terminal-tool"` and no recovery is configured, a default reco
 1. Built-ins seed the registry; config rows merge over them in topological `extends` order.
 2. Slices merge key-by-key: an omitted slice or key inherits the parent value.
 3. `allow` replaces; `allow+` appends (open-world no-op); `deny`/`deny+` only ever append.
-4. `allowsHostGrants` resolves after the tools slice is final: machine pin → explicit on row → derived `false` from empty allow → inherited explicit → `true`.
+4. `allowsHostGrants` resolves after the tools slice is final: machine pin → explicit on row → inherited explicit/machine → default `false`. Never derived from allow-list shape.
 5. An operator project config directory (per-workspace `*.json` mode profile files) merges last, with security-sensitive fields (`allowsHostGrants`, among others) stripped.
 
 ## `memory`
@@ -514,10 +514,26 @@ Map of delegate tool name → HTTP endpoint binding. Entries with an invalid `ur
 
 ## Interaction with host-registered tools (MCP)
 
-Mode `tools.allow` lists are closed-world: a profile that enumerates tools will not see newly registered ones. Two mechanisms avoid hand-editing every profile when adding an MCP server:
+Mode `tools.allow` lists are closed-world: a profile that enumerates tools will not see newly registered ones unless the author opens the family. Preferred, config-authored openness:
 
-- **Glob entries** in `allow`/`allow+`, e.g. `"mcp__github__*"`.
-- **Registration-time visibility grants**: `setMCPManager(_:visibilityGrant:)` defaults to `.grant(modes: .allUserFacing)`, making the server's tools visible in every profile with `allowsHostGrants == true` — no config edits. Mode `deny` still wins; machine profiles never receive grants; a profile with `tools.allow: []` is an authored lockdown that suppresses grants unless it sets `allowsHostGrants: true` explicitly. Host tool providers default to `.inheritModeLists` (config lists govern).
+- **Glob entries** in `allow`/`allow+`, e.g. `"mcp__github__*"` or `"group:mcp"`.
+
+Registration-time visibility grants are an optional convenience for the same outcome:
+
+- `setMCPManager(_:visibilityGrant:)` and `installAdditionalToolProviders(_:visibilityGrant:)` both default to `.inheritModeLists` — mode allow lists govern; closed worlds stay closed.
+- Pass `.grant(modes:)` **and** set `allowsHostGrants: true` on the profiles that should receive those tools. The grant contributes matching tool names into the effective mode-allow list before resolution (intersection-shaped; not a post-fail bypass). Mode `deny` still wins; machine profiles never receive grants.
+
+```json
+{
+  "modeProfiles": [
+    {
+      "id": "agent",
+      "allowsHostGrants": true,
+      "tools": { "allow": ["bash", "read_file"] }
+    }
+  ]
+}
+```
 
 ## Minimal example
 

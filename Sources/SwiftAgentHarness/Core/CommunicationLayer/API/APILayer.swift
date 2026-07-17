@@ -673,7 +673,7 @@ public actor APILayer {
 
     public func setMCPManager(
         _ mcpManager: MCPManager,
-        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+        visibilityGrant: ToolVisibilityGrant = .inheritModeLists
     ) async {
         guard let startupService else { return }
         await startupService.setMCPManager(mcpManager, visibilityGrant: visibilityGrant)

@@ -13,7 +13,6 @@ struct AvailabilityFacts: Sendable, Equatable {
     let approvalRoute: ToolApprovalRoute?
     let delegationPermissionPolicy: SubAgentPermissionPolicy?
     let delegationTrustLevel: SubAgentTrustLevel?
-    let grantRejectionCause: HostVisibilityGrantRejectionCause?
 
     init(
         isSensitive: Bool,
@@ -23,8 +22,7 @@ struct AvailabilityFacts: Sendable, Equatable {
         approvalGranted: Bool,
         approvalRoute: ToolApprovalRoute?,
         delegationPermissionPolicy: SubAgentPermissionPolicy?,
-        delegationTrustLevel: SubAgentTrustLevel?,
-        grantRejectionCause: HostVisibilityGrantRejectionCause? = nil
+        delegationTrustLevel: SubAgentTrustLevel?
     ) {
         self.isSensitive = isSensitive
         self.requiresEscalation = requiresEscalation
@@ -34,7 +32,6 @@ struct AvailabilityFacts: Sendable, Equatable {
         self.approvalRoute = approvalRoute
         self.delegationPermissionPolicy = delegationPermissionPolicy
         self.delegationTrustLevel = delegationTrustLevel
-        self.grantRejectionCause = grantRejectionCause
     }
 }
 
@@ -49,7 +46,6 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
     let approvalRoute: ToolApprovalRoute?
     let delegationPermissionPolicy: SubAgentPermissionPolicy?
     let delegationTrustLevel: SubAgentTrustLevel?
-    let grantRejectionCause: HostVisibilityGrantRejectionCause?
 
     init(
         allowed: Bool,
@@ -61,8 +57,7 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
         approvalGranted: Bool,
         approvalRoute: ToolApprovalRoute?,
         delegationPermissionPolicy: SubAgentPermissionPolicy?,
-        delegationTrustLevel: SubAgentTrustLevel?,
-        grantRejectionCause: HostVisibilityGrantRejectionCause? = nil
+        delegationTrustLevel: SubAgentTrustLevel?
     ) {
         self.allowed = allowed
         self.blockReason = blockReason
@@ -74,7 +69,6 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
         self.approvalRoute = approvalRoute
         self.delegationPermissionPolicy = delegationPermissionPolicy
         self.delegationTrustLevel = delegationTrustLevel
-        self.grantRejectionCause = grantRejectionCause
     }
 
     static let allowedDefault = ToolAvailabilityDecision(
@@ -87,8 +81,7 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
         approvalGranted: false,
         approvalRoute: nil,
         delegationPermissionPolicy: nil,
-        delegationTrustLevel: nil,
-        grantRejectionCause: nil
+        delegationTrustLevel: nil
     )
 
     var isAdvertisedToModel: Bool {
@@ -106,8 +99,7 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
             approvalGranted: reason == .approvalRequired ? false : facts.approvalGranted,
             approvalRoute: facts.approvalRoute,
             delegationPermissionPolicy: facts.delegationPermissionPolicy,
-            delegationTrustLevel: facts.delegationTrustLevel,
-            grantRejectionCause: facts.grantRejectionCause
+            delegationTrustLevel: facts.delegationTrustLevel
         )
     }
 
@@ -122,8 +114,7 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
             approvalGranted: facts.approvalGranted,
             approvalRoute: facts.approvalRoute,
             delegationPermissionPolicy: facts.delegationPermissionPolicy,
-            delegationTrustLevel: facts.delegationTrustLevel,
-            grantRejectionCause: nil
+            delegationTrustLevel: facts.delegationTrustLevel
         )
     }
 }
@@ -631,32 +622,14 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         if approvalRequiredFinal, !approvalGranted {
             return .blocked(.approvalRequired, facts: facts)
         }
+        let allowContext = modePolicyContextWithEffectiveAllow(modePolicyContext, entry: entry)
         if !toolPolicy.isToolAllowed(
             name: entry.name,
-            context: modePolicyContext,
+            context: allowContext,
             groupIndex: groupIndex,
             entry: entry
         ) {
-            let grants = visibilityGrants.snapshot()
-            let profile = modePolicyContext.resolvedProfile
-            if grants.admits(entry: entry, profile: profile) {
-                // Host visibility grant widens past mode allow — continue to routing checks.
-            } else if let cause = grants.rejectionCause(for: entry, profile: profile) {
-                let missFacts = AvailabilityFacts(
-                    isSensitive: facts.isSensitive,
-                    requiresEscalation: facts.requiresEscalation,
-                    requiresApproval: facts.requiresApproval,
-                    isElevated: facts.isElevated,
-                    approvalGranted: facts.approvalGranted,
-                    approvalRoute: facts.approvalRoute,
-                    delegationPermissionPolicy: facts.delegationPermissionPolicy,
-                    delegationTrustLevel: facts.delegationTrustLevel,
-                    grantRejectionCause: cause
-                )
-                return .blocked(.hostVisibilityGrantMiss, facts: missFacts)
-            } else {
-                return .blocked(.promptConfigAllowlist, facts: facts)
-            }
+            return .blocked(.promptConfigAllowlist, facts: facts)
         }
         if !isAllowedByRoutingToolPolicy(
             toolName: entry.name,
@@ -683,18 +656,14 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             call: call,
             configuration: configuration
         )
+        let allowContext = modePolicyContextWithEffectiveAllow(modePolicyContext, entry: entry)
         let modeDeny = ToolPolicyRulesCache.parseList(modePolicyContext.resolvedProfile.tools.deny)
-        let modeAllow = modePolicyContext.resolvedProfile.tools.allow.flatMap {
+        let modeAllow = allowContext.resolvedProfile.tools.allow.flatMap {
             ToolPolicyRulesCache.parseList($0)
         }
-        let hostGrantRules = visibilityGrants.snapshot().autoAllowRules(
-            for: entry,
-            profile: modePolicyContext.resolvedProfile
-        )
         let scopes = [
             ToolPolicyGatingScope(name: "durable", autoAllowRules: durableRules),
             ToolPolicyGatingScope(name: "mode-deny", denyRules: modeDeny),
-            ToolPolicyGatingScope(name: "host-grant", autoAllowRules: hostGrantRules),
             ToolPolicyGatingScope(name: "mode-allow", allowRules: modeAllow),
         ]
         return ToolPolicyGatingEvaluator.evaluate(
@@ -703,6 +672,30 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             groupIndex: groupIndex,
             scopes: scopes,
             bindingPreApproved: bindingPreApproved
+        )
+    }
+
+    /// Builds a policy context whose mode-allow list includes grant-contributed names (intersection-shaped).
+    func modePolicyContextWithEffectiveAllow(
+        _ context: ModePolicyContext,
+        entry: ToolRegistryEntry
+    ) -> ModePolicyContext {
+        let profile = context.resolvedProfile
+        let effectiveAllow = visibilityGrants.snapshot().effectiveAllowList(
+            authored: profile.tools.allow,
+            entry: entry,
+            profile: profile
+        )
+        guard effectiveAllow != profile.tools.allow else { return context }
+        var effectiveProfile = profile
+        effectiveProfile.tools = ModeProfileToolsSlice(
+            allow: effectiveAllow,
+            deny: profile.tools.deny,
+            approvalPolicy: profile.tools.approvalPolicy
+        )
+        return ModePolicyContext(
+            interactionMode: context.interactionMode,
+            resolvedProfile: effectiveProfile
         )
     }
 

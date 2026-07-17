@@ -24,7 +24,4 @@ public enum ToolAvailabilityBlockReason: String, Sendable, CaseIterable, Equatab
     case hostingRoutingPolicyDenied
     /// Conversation-level `routing.toolWhitelist` intersection rejects this tool.
     case routingToolWhitelist
-    /// A host visibility grant matches the tool, but this mode profile rejects the grant
-    /// (`allowsHostGrants == false`, grant modes exclude the profile, or empty-allow lockdown).
-    case hostVisibilityGrantMiss
 }

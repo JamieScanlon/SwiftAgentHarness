@@ -74,7 +74,7 @@ struct ModeProfileAdditiveMergeTests {
         #expect(profile.tools.allow == ["bash", "mcp_search", "read_file"])
     }
 
-    @Test("allow empty plus allow+ empty keeps lockdown and derivedEmptyAllow")
+    @Test("allow empty plus allow+ empty keeps lockdown and defaultFalse host grants")
     func emptyAllowPlusEmptyKeepsLockdown() async throws {
         let config = ModeProfileConfiguration(
             profiles: [
@@ -93,7 +93,7 @@ struct ModeProfileAdditiveMergeTests {
         let profile = try await registry.resolve(modeId: "locked")
         #expect(profile.tools.allow == [])
         #expect(profile.allowsHostGrants == false)
-        #expect(profile.allowsHostGrantsSource == .derivedEmptyAllow)
+        #expect(profile.allowsHostGrantsSource == .defaultFalse)
     }
 
     @Test("allow empty plus allow+ entries opens hatch from lockdown")
@@ -114,8 +114,8 @@ struct ModeProfileAdditiveMergeTests {
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
         let profile = try await registry.resolve(modeId: "hatch")
         #expect(profile.tools.allow == ["foo"])
-        #expect(profile.allowsHostGrants == true)
-        #expect(profile.allowsHostGrantsSource == .derivedUserFacing)
+        #expect(profile.allowsHostGrants == false)
+        #expect(profile.allowsHostGrantsSource == .defaultFalse)
     }
 
     @Test("deny and deny+ are append-only aliases and cannot strip parent deny")

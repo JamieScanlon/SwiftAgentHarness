@@ -2,9 +2,9 @@ import Foundation
 
 /// Registration-time visibility policy for a tool provider or MCP server.
 ///
-/// - ``inheritModeLists``: today's behavior — tools must appear on the mode `tools.allow` list.
-/// - ``grant(modes:)``: widen visibility into modes that allow host grants (``ResolvedModeProfile/allowsHostGrants``),
-///   without editing per-mode allow lists. Mode `tools.deny` still wins.
+/// - ``inheritModeLists``: tools must appear on the mode `tools.allow` list (no registration-time authorship).
+/// - ``grant(modes:)``: when a profile sets ``ResolvedModeProfile/allowsHostGrants``, contribute matching
+///   tool names into that profile's effective mode-allow list before resolution. Mode `tools.deny` still wins.
 public enum ToolVisibilityGrant: Sendable, Equatable {
     case inheritModeLists
     case grant(modes: ToolVisibilityGrantModes)
@@ -25,36 +25,6 @@ public enum ToolVisibilityGrantMatch: Sendable, Equatable {
     case namePrefix(String)
     /// Matches tools whose registry `groupPolicyTags` contain this tag (e.g. `"plugins"`).
     case groupPolicyTag(String)
-}
-
-/// Why a matching host visibility grant did not admit a tool for the current profile.
-public enum HostVisibilityGrantRejectionCause: String, Sendable, Equatable {
-    /// ``ResolvedModeProfile/allowsHostGrants`` is false (explicit opt-out or machine pin).
-    case flagDisabled
-    /// Grant modes do not cover this profile ID.
-    case modesExcludeProfile
-    /// Profile's merged `tools.allow` is an authored empty list (derived lockdown).
-    case emptyAllowLockdown
-
-    public var explainDetail: String {
-        switch self {
-        case .flagDisabled:
-            return "Profile opts out of host visibility grants (`allowsHostGrants=false`)."
-        case .modesExcludeProfile:
-            return "A host visibility grant matches this tool, but grant modes exclude this profile."
-        case .emptyAllowLockdown:
-            return "Profile is an authored lockdown (`tools.allow: []`); host grants are suppressed. Add allow entries or set allowsHostGrants: true to receive them."
-        }
-    }
-
-    public func fixItConfigKey(profileID: String) -> String {
-        switch self {
-        case .flagDisabled, .emptyAllowLockdown:
-            return "modeProfiles.\(profileID).allowsHostGrants / modeProfiles.\(profileID).tools.allow"
-        case .modesExcludeProfile:
-            return "setMCPManager(visibilityGrant:) / installAdditionalToolProviders(visibilityGrant:)"
-        }
-    }
 }
 
 /// One grant registration (MCP manager, host tool provider install, etc.).
@@ -80,8 +50,8 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
         self.records = records
     }
 
-    /// True when a non-inherit grant admits this entry for the given profile.
-    func admits(entry: ToolRegistryEntry, profile: ResolvedModeProfile) -> Bool {
+    /// True when a matching `.grant` should contribute this entry's name into the effective mode-allow list.
+    func contributesAllowEntry(entry: ToolRegistryEntry, profile: ResolvedModeProfile) -> Bool {
         guard profile.allowsHostGrants else { return false }
         for record in records {
             guard matches(record.match, entry: entry) else { continue }
@@ -101,29 +71,19 @@ public struct ToolVisibilityGrantTable: Sendable, Equatable {
         }
     }
 
-    /// Sub-cause when a matching grant exists but ``admits(entry:profile:)`` is false.
-    func rejectionCause(
-        for entry: ToolRegistryEntry,
+    /// Unions grant-contributed bare names into an authored allow list.
+    ///
+    /// Open world (`nil`) is unchanged — grants are a no-op when the profile already admits everything.
+    /// Closed worlds (`[]` or non-empty) receive the entry name when ``contributesAllowEntry(entry:profile:)`` is true.
+    func effectiveAllowList(
+        authored: [String]?,
+        entry: ToolRegistryEntry,
         profile: ResolvedModeProfile
-    ) -> HostVisibilityGrantRejectionCause? {
-        guard !matchingGrantRecords(for: entry).isEmpty else { return nil }
-        guard !admits(entry: entry, profile: profile) else { return nil }
-        if profile.allowsHostGrantsSource == .derivedEmptyAllow {
-            return .emptyAllowLockdown
-        }
-        if !profile.allowsHostGrants {
-            return .flagDisabled
-        }
-        return .modesExcludeProfile
-    }
-
-    /// Auto-allow rules for the ``host-grant`` gating scope (empty when not admitted).
-    func autoAllowRules(
-        for entry: ToolRegistryEntry,
-        profile: ResolvedModeProfile
-    ) -> [ToolPolicyRule] {
-        guard admits(entry: entry, profile: profile) else { return [] }
-        return [.bareName(entry.name)]
+    ) -> [String]? {
+        guard let authored else { return nil }
+        guard contributesAllowEntry(entry: entry, profile: profile) else { return authored }
+        if authored.contains(entry.name) { return authored }
+        return authored + [entry.name]
     }
 
     private func matches(_ match: ToolVisibilityGrantMatch, entry: ToolRegistryEntry) -> Bool {

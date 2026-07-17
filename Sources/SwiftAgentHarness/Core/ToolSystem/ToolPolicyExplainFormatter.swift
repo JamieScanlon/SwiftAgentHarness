@@ -94,7 +94,6 @@ enum ToolPolicyExplainFormatter {
         appendGroup(title: "Unknown entries", issues: report.unknownEntries)
         appendGroup(title: "Shadowed allows", issues: report.shadowedAllows)
         appendGroup(title: "Empty groups", issues: report.emptyGroups)
-        appendGroup(title: "Grants suppressed by empty allow", issues: report.grantSuppressedByEmptyAllow)
         return lines.joined(separator: "\n")
     }
 

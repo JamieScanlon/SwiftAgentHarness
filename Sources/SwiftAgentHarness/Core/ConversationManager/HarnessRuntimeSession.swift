@@ -71,7 +71,7 @@ public actor HarnessRuntimeSession {
 
     public func setMCPManager(
         _ mcpManager: MCPManager,
-        visibilityGrant: ToolVisibilityGrant = .grant(modes: .allUserFacing)
+        visibilityGrant: ToolVisibilityGrant = .inheritModeLists
     ) async {
         await conversationStartupService.setMCPManager(mcpManager, visibilityGrant: visibilityGrant)
     }

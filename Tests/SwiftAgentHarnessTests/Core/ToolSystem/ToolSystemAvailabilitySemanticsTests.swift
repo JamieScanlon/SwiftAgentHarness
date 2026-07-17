@@ -27,8 +27,7 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(ToolAvailabilityBlockReason.recursionDepthExceeded.rawValue == "recursionDepthExceeded")
         #expect(ToolAvailabilityBlockReason.hostingRoutingPolicyDenied.rawValue == "hostingRoutingPolicyDenied")
         #expect(ToolAvailabilityBlockReason.routingToolWhitelist.rawValue == "routingToolWhitelist")
-        #expect(ToolAvailabilityBlockReason.hostVisibilityGrantMiss.rawValue == "hostVisibilityGrantMiss")
-        #expect(ToolAvailabilityBlockReason.allCases.count == 11)
+        #expect(ToolAvailabilityBlockReason.allCases.count == 10)
     }
 
     @Test("registry entries classify local mcp a2a and unknown sources deterministically")

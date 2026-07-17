@@ -238,22 +238,31 @@ enum ToolPolicyAvailabilityExplainer {
             let grants = (gateway as? DefaultToolSystemGateway)?.visibilityGrants.snapshot()
                 ?? ToolVisibilityGrantTable.empty
             let profile = modePolicyContext.resolvedProfile
-            if grants.admits(entry: entry, profile: profile) {
+            let effectiveAllow = grants.effectiveAllowList(
+                authored: profile.tools.allow,
+                entry: entry,
+                profile: profile
+            )
+            let effectiveSlice = ModeProfileToolsSlice(
+                allow: effectiveAllow,
+                deny: profile.tools.deny,
+                approvalPolicy: profile.tools.approvalPolicy
+            )
+            var effectiveProfile = profile
+            effectiveProfile.tools = effectiveSlice
+            let effectiveContext = ModePolicyContext(
+                interactionMode: modePolicyContext.interactionMode,
+                resolvedProfile: effectiveProfile
+            )
+            if toolPolicy.isToolAllowed(
+                name: entry.name,
+                context: effectiveContext,
+                groupIndex: groupIndex,
+                entry: entry
+            ) {
                 record(.modeAllow, .pass)
-                record(.hostVisibilityGrant, .pass)
-            } else if let cause = grants.rejectionCause(for: entry, profile: profile) {
-                record(.modeAllow, .fail(
-                    scope: .modeAllow,
-                    detail: "Not matched by mode allow list.",
-                    matchedRule: nil
-                ))
-                record(.hostVisibilityGrant, .fail(
-                    scope: .hostVisibilityGrant,
-                    detail: cause.explainDetail,
-                    matchedRule: cause.rawValue
-                ))
             } else {
-                let allowList = modePolicyContext.resolvedProfile.tools.allow ?? []
+                let allowList = effectiveAllow ?? []
                 record(.modeAllow, .fail(
                     scope: .modeAllow,
                     detail: allowList.isEmpty
@@ -261,11 +270,9 @@ enum ToolPolicyAvailabilityExplainer {
                         : "Not matched by mode allow list.",
                     matchedRule: allowList.isEmpty ? nil : allowList.joined(separator: ", ")
                 ))
-                record(.hostVisibilityGrant, .pass)
             }
         } else {
             record(.modeAllow, .pass)
-            record(.hostVisibilityGrant, .pass)
         }
 
         if !routingToolPolicyPermits(
@@ -340,18 +347,9 @@ enum ToolPolicyAvailabilityExplainer {
         }
 
         let fixIt: String?
-        if let cause = gatewayDecision.grantRejectionCause {
-            fixIt = cause.fixItConfigKey(profileID: context.profileID)
-        } else {
-            fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
-        }
+        fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
 
-        let resolvedPrimaryDetail: String?
-        if let cause = gatewayDecision.grantRejectionCause {
-            resolvedPrimaryDetail = cause.explainDetail
-        } else {
-            resolvedPrimaryDetail = primaryDetail
-        }
+        let resolvedPrimaryDetail: String? = primaryDetail
 
         var gatingAppendix: ToolPolicyGatingExplainAppendix?
         if let gatingArgumentPreview {

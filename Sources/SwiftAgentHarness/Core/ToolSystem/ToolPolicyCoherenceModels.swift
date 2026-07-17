@@ -4,7 +4,6 @@ enum ToolPolicyCoherenceIssueKind: String, Sendable, Equatable {
     case unknownEntry
     case shadowedAllow
     case emptyGroup
-    case grantSuppressedByEmptyAllow
 }
 
 enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
@@ -16,7 +15,6 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
     case promptConfigRequireApproval
     case promptConfigEscalationRequired
     case promptConfigElevated
-    case hostVisibilityGrant
 
     var displayLabel: String {
         switch self {
@@ -28,7 +26,6 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
         case .promptConfigRequireApproval: return "PromptConfig.toolPolicy.requireApproval"
         case .promptConfigEscalationRequired: return "PromptConfig.toolPolicy.escalationRequired"
         case .promptConfigElevated: return "PromptConfig.toolPolicy.elevated"
-        case .hostVisibilityGrant: return "Host visibility grant"
         }
     }
 
@@ -48,8 +45,6 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
             return "PromptConfig.toolPolicy.escalationRequired"
         case .promptConfigElevated:
             return "PromptConfig.toolPolicy.elevated"
-        case .hostVisibilityGrant:
-            return "modeProfiles.\(profileID).allowsHostGrants / modeProfiles.\(profileID).tools.allow"
         }
     }
 }
@@ -90,10 +85,6 @@ struct ToolPolicyCoherenceReport: Sendable {
 
     var emptyGroups: [ToolPolicyCoherenceIssue] {
         issues.filter { $0.kind == .emptyGroup }
-    }
-
-    var grantSuppressedByEmptyAllow: [ToolPolicyCoherenceIssue] {
-        issues.filter { $0.kind == .grantSuppressedByEmptyAllow }
     }
 
     var isClean: Bool {
