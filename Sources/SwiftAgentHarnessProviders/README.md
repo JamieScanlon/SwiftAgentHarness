@@ -8,7 +8,20 @@ Foundational **code plugins** for the provider backend. Link this target alongsi
 import SwiftAgentHarness
 import SwiftAgentHarnessProviders
 
-SwiftAgentHarnessProviders.registerDefaults()
+SwiftAgentHarnessProviders.registerDefaults(
+    options: .init(
+        inferenceRuntimes: [
+            // Host-chosen id + adapter kind + endpoint + catalog overlays
+            InferenceRuntimeConfig(
+                providerID: "home-lab",
+                label: "Home lab",
+                adapterKind: .ollama,
+                serverURL: URL(string: "http://127.0.0.1:11434")!,
+                modelIDMap: [:]
+            ),
+        ]
+    )
+)
 
 // Optional: load user configuration plugins from an app-chosen directory
 try ConfigPluginLoader.loadAll(from: providerConfigDirectoryURL)

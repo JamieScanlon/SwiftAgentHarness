@@ -17,11 +17,24 @@ Link both products to your target:
 import SwiftAgentHarness
 import SwiftAgentHarnessProviders
 
-// Registers OpenAI, Anthropic, Ollama, LM Studio, and OpenRouter plugins.
-SwiftAgentHarnessProviders.bootstrap()
+// Registers OpenAI, Anthropic, and OpenRouter. API-server providers are host-opt-in:
+SwiftAgentHarnessProviders.bootstrap(
+    options: .init(
+        inferenceRuntimes: [
+            InferenceRuntimeConfig(
+                providerID: "home-lab",
+                label: "Home lab",
+                adapterKind: .ollama,
+                serverURL: URL(string: "http://gpu.example:11434")!,
+                modelIDMap: myModels
+            ),
+            // Add/remove entries freely; another entry might use .lmStudio or a future adapter kind.
+        ]
+    )
+)
 ```
 
-Credentials come from auth profiles. `AuthProfileStore.production()` reads the process environment, so exporting `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (or running a local Ollama with no key) is enough to start. Local OpenAI-compat endpoints can be added by dropping a `*.providerconfig.json` file into a directory and calling `ConfigPluginLoader.loadAll(from:)` — see `Sources/SwiftAgentHarnessProviders/README.md`.
+Credentials come from auth profiles. `AuthProfileStore.production()` reads the process environment, so exporting `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is enough to start for frontier providers. For each `InferenceRuntimeConfig`, seed a matching `AuthProfile(authType: .local, baseURL:)` with the same `serverURL`. Local OpenAI-compat endpoints can also be added by dropping a `*.providerconfig.json` file into a directory and calling `ConfigPluginLoader.loadAll(from:)` — see `Sources/SwiftAgentHarnessProviders/README.md`.
 
 ## 3. Build the composition root
 

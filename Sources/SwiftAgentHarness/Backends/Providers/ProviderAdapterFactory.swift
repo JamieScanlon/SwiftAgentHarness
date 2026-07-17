@@ -21,6 +21,10 @@ public enum ProviderAdapterFactoryRegistry {
         return factories[adapterKind]
     }
 
+    public static func factory(for adapterKind: ProviderAdapterKind) -> (any ProviderAdapterFactory)? {
+        factory(for: adapterKind.rawValue)
+    }
+
     public static func resetForTesting() {
         lock.lock()
         defer { lock.unlock() }

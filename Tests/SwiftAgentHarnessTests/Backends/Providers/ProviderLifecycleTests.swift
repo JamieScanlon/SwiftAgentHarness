@@ -40,7 +40,7 @@ struct ProviderLifecycleTests {
                     id: "local",
                     providerID: "ollama",
                     authType: .local,
-                    baseURL: Constants.ollamaServerURL
+                    baseURL: InferenceRuntimeCatalogFixtures.ollamaServerURL
                 ),
             ]
         )
@@ -90,7 +90,7 @@ struct ModelManagerLifecycleGateTests {
 struct ConfigPluginLoaderTests {
     @Test("Decodes and registers openai-compat config plugin")
     func loadsConfigPlugin() throws {
-        try ProviderTestSupport.withRegistryIsolation {
+        try ProviderTestManifestSupport.withRegistryIsolation {
             ProviderRegistry.resetForTesting()
             ProviderAdapterFactoryRegistry.resetForTesting()
             DefaultProviderAdapterFactories.installAll()
@@ -152,7 +152,7 @@ struct ConfigPluginLoaderTests {
 
     @Test("Rejects unknown adapter kind")
     func rejectsUnknownAdapterKind() throws {
-        try ProviderTestSupport.withRegistryIsolation {
+        try ProviderTestManifestSupport.withRegistryIsolation {
             ProviderTestManifestSupport.prepareRegistry()
             ProviderAdapterFactoryRegistry.resetForTesting()
             let dir = FileManager.default.temporaryDirectory

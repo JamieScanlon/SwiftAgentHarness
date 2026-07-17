@@ -108,13 +108,15 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
 public struct OllamaTextInferenceProvider: TextInferenceProviding {
     public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .ollama
+    public let runtime: InferenceRuntimeConfig
 
-    public init(manifest: ProviderManifest) {
+    public init(manifest: ProviderManifest, runtime: InferenceRuntimeConfig) {
         self.manifest = manifest
+        self.runtime = runtime
     }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
-        Constants.ollamaModelIDMap.map { name, config in
+        runtime.modelIDMap.map { name, config in
             ProviderCatalogEntry(
                 registryID: config.uuid,
                 endpointModelId: name,
@@ -125,7 +127,8 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
     }
 
     public func discoverEntries(logger: Logger?) async -> [ModelRegistryEntry] {
-        let ollama = OllamaKit(baseURL: Constants.ollamaServerURL)
+        let serverURL = runtime.serverURL
+        let ollama = OllamaKit(baseURL: serverURL)
         let response: OKModelResponse
         do {
             response = try await ollama.models()
@@ -138,7 +141,7 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
             let catalogEntry = await resolveDynamicModel(
                 ProviderDynamicModelContext(
                     endpointModelId: model.name,
-                    serverURL: Constants.ollamaServerURL
+                    serverURL: serverURL
                 )
             ) ?? staticCatalogEntries().first(where: { $0.endpointModelId == model.name })
             guard let catalogEntry else {
@@ -148,11 +151,12 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
             do {
                 let detail = try await ProviderLLMBridge.fetchOllamaModelDetail(
                     modelName: model.name,
+                    serverURL: serverURL,
                     config: catalogEntry.modelConfig
                 )
                 var entry = catalogEntry.toRegistryEntry(
                     providerID: manifest.id,
-                    serverURL: Constants.ollamaServerURL
+                    serverURL: serverURL
                 )
                 entry.capabilities = detail.capabilities
                 entry.maxContextLength = detail.maxContextLength
@@ -165,7 +169,7 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
     }
 
     public func resolveDynamicModel(_ context: ProviderDynamicModelContext) async -> ProviderCatalogEntry? {
-        guard let config = Constants.ollamaModelIDMap[context.endpointModelId] else { return nil }
+        guard let config = runtime.modelIDMap[context.endpointModelId] else { return nil }
         return ProviderCatalogEntry(
             registryID: config.uuid,
             endpointModelId: context.endpointModelId,
@@ -179,6 +183,7 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
         do {
             let detail = try await ProviderLLMBridge.fetchOllamaModelDetail(
                 modelName: context.binding.endpointModelId,
+                serverURL: runtime.serverURL,
                 config: entry.modelConfig
             )
             entry.capabilities = detail.capabilities
@@ -197,13 +202,15 @@ public struct OllamaTextInferenceProvider: TextInferenceProviding {
 public struct LMStudioTextInferenceProvider: TextInferenceProviding {
     public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .lmStudio
+    public let runtime: InferenceRuntimeConfig
 
-    public init(manifest: ProviderManifest) {
+    public init(manifest: ProviderManifest, runtime: InferenceRuntimeConfig) {
         self.manifest = manifest
+        self.runtime = runtime
     }
 
     public func staticCatalogEntries() -> [ProviderCatalogEntry] {
-        Constants.lmStudioModelIDMap.map { name, config in
+        runtime.modelIDMap.map { name, config in
             ProviderCatalogEntry(
                 registryID: config.uuid,
                 endpointModelId: name,
@@ -214,8 +221,9 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
     }
 
     public func discoverEntries(logger: Logger?) async -> [ModelRegistryEntry] {
+        let serverURL = runtime.serverURL
         let apiManager = RestAPIManager(
-            baseURL: Constants.lmStudioServerURL,
+            baseURL: serverURL,
             sseTimeoutInterval: 31536000.0,
             logger: logger
         )
@@ -224,7 +232,7 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
             response = try await apiManager.decodableRequest("api/v0/models")
         } catch {
             logger?.warning(
-                "LM Studio: failed to decode GET api/v0/models (is the local server running on \(Constants.lmStudioServerURL.absoluteString)?): \(error)"
+                "LM Studio: failed to decode GET api/v0/models (is the server running on \(serverURL.absoluteString)?): \(error)"
             )
             return []
         }
@@ -235,7 +243,7 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
                 catalogEntry = await resolveDynamicModel(
                     ProviderDynamicModelContext(
                         endpointModelId: model.id,
-                        serverURL: Constants.lmStudioServerURL
+                        serverURL: serverURL
                     )
                 )
             }
@@ -247,7 +255,7 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
             ModelManager.normalizeReasoningCapabilities(&capabilities)
             var entry = catalogEntry.toRegistryEntry(
                 providerID: manifest.id,
-                serverURL: Constants.lmStudioServerURL
+                serverURL: serverURL
             )
             entry.capabilities = capabilities
             entry.maxContextLength = model.max_context_length
@@ -257,7 +265,7 @@ public struct LMStudioTextInferenceProvider: TextInferenceProviding {
     }
 
     public func resolveDynamicModel(_ context: ProviderDynamicModelContext) async -> ProviderCatalogEntry? {
-        guard let config = Constants.lmStudioModelIDMap[context.endpointModelId] else { return nil }
+        guard let config = runtime.modelIDMap[context.endpointModelId] else { return nil }
         return ProviderCatalogEntry(
             registryID: config.uuid,
             endpointModelId: context.endpointModelId,

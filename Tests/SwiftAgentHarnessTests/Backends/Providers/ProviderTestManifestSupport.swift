@@ -20,6 +20,16 @@ enum ProviderTestManifestSupport {
 
     static func prepareRegistry() {
         activateProviderResources()
-        ProviderTestSupport.registerDefaultsForTesting()
+        ProviderTestSupport.registerDefaultsForTesting(
+            inferenceRuntimes: InferenceRuntimeCatalogFixtures.defaultTestInferenceRuntimes
+        )
+    }
+
+    /// Registry isolation that restores the standard fixture API-server runtimes afterward.
+    static func withRegistryIsolation<R>(_ body: () throws -> R) rethrows -> R {
+        try ProviderTestSupport.withRegistryIsolation(
+            inferenceRuntimes: InferenceRuntimeCatalogFixtures.defaultTestInferenceRuntimes,
+            body
+        )
     }
 }

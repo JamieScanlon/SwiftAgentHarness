@@ -13,7 +13,7 @@ Optional catalog fields for cross-provider binding merge:
 | `canonicalModelKey` | Stable logical identity (e.g. `claude-sonnet-4-6`). Rows with the same key merge into one registry entry with multiple bindings. |
 | `modelFamily` | Coarse family for `ModelQuery.preferredFamily` ranking (e.g. `claude-sonnet`). Distinct from `canonicalModelKey`. |
 
-Local Ollama/LM Studio maps in `Constants` support the same fields on `ModelConfig`.
+Local API-server maps on `InferenceRuntimeConfig.modelIDMap` support the same fields on `ModelConfig`.
 
 ## Regeneration
 

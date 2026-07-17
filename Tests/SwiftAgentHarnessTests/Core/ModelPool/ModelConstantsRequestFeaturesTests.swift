@@ -3,13 +3,13 @@ import Foundation
 import SwiftAgentKit
 import Testing
 
-/// Validates ``Constants.ModelConfig`` overlays for the capability vs request-features split.
-@Suite("Constants — model pool overlays")
+/// Validates model-config overlays for the capability vs request-features split.
+@Suite("Inference runtime catalog — model pool overlays")
 struct ModelConstantsRequestFeaturesTests {
 
     @Test("deepseek-r1:70b uses reasoningRequired (not optional thinking) and documents minimal request features")
     func deepseekR170b() {
-        let cfg = Constants.ollamaModelIDMap["deepseek-r1:70b"]!
+        let cfg = InferenceRuntimeCatalogFixtures.ollamaModelIDMap["deepseek-r1:70b"]!
         #expect(cfg.hardcodedCapabilities.contains(.reasoningRequired))
         #expect(!cfg.hardcodedCapabilities.contains(.thinking))
         let rf = cfg.hardcodedRequestFeatures!
@@ -20,7 +20,7 @@ struct ModelConstantsRequestFeaturesTests {
     @Test("LM Studio MiniMax models advertise reasoning effort levels")
     func minimaxReasoningEfforts() {
         for key in ["minimax/minimax-m2", "minimax/minimax-m2.5"] {
-            let cfg = Constants.lmStudioModelIDMap[key]!
+            let cfg = InferenceRuntimeCatalogFixtures.lmStudioModelIDMap[key]!
             let rf = cfg.hardcodedRequestFeatures!
             #expect(rf.reasoningEfforts.contains(.low))
             #expect(rf.reasoningEfforts.contains(.high))
@@ -29,7 +29,7 @@ struct ModelConstantsRequestFeaturesTests {
 
     @Test("gpt-oss OpenAI-compat preset exposes structured output + parallel tools")
     func gptOssPreset() {
-        let cfg = Constants.lmStudioModelIDMap["openai/gpt-oss-20b"]!
+        let cfg = InferenceRuntimeCatalogFixtures.lmStudioModelIDMap["openai/gpt-oss-20b"]!
         let rf = cfg.hardcodedRequestFeatures!
         #expect(rf.responseFormats.contains(.jsonSchema))
         #expect(rf.parallelToolCalls == .uncapped)
@@ -37,7 +37,8 @@ struct ModelConstantsRequestFeaturesTests {
 
     @Test("all model catalog entries define complete hardcoded cost budgets")
     func allCatalogEntriesHaveCost() {
-        let combined = Array(Constants.ollamaModelIDMap.values) + Array(Constants.lmStudioModelIDMap.values)
+        let combined = Array(InferenceRuntimeCatalogFixtures.ollamaModelIDMap.values)
+            + Array(InferenceRuntimeCatalogFixtures.lmStudioModelIDMap.values)
         #expect(!combined.isEmpty)
         for config in combined {
             let cost = config.hardcodedCost

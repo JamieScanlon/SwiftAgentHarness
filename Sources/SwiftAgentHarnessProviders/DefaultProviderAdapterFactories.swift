@@ -12,7 +12,7 @@ public enum DefaultProviderAdapterFactories {
 }
 
 private struct OpenAICompatAdapterFactory: ProviderAdapterFactory {
-    let adapterKind = "openai-compat"
+    let adapterKind = ProviderAdapterKind.openAICompat.rawValue
 
     func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
         let merged = try config.mergedManifest(base: manifest)
@@ -24,7 +24,7 @@ private struct OpenAICompatAdapterFactory: ProviderAdapterFactory {
 }
 
 private struct AnthropicAdapterFactory: ProviderAdapterFactory {
-    let adapterKind = "anthropic"
+    let adapterKind = ProviderAdapterKind.anthropic.rawValue
 
     func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
         let merged = try config.mergedManifest(base: manifest)
@@ -36,37 +36,60 @@ private struct AnthropicAdapterFactory: ProviderAdapterFactory {
 }
 
 private struct OllamaAdapterFactory: ProviderAdapterFactory {
-    let adapterKind = "ollama"
+    let adapterKind = ProviderAdapterKind.ollama.rawValue
 
     func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
         let merged = try config.mergedManifest(base: manifest)
+        let runtime = InferenceRuntimeConfig.from(instanceConfig: config, mergedManifest: merged)
         return ProviderRegistration(
             manifest: merged,
-            textInference: OllamaTextInferenceProvider(manifest: merged)
+            textInference: OllamaTextInferenceProvider(manifest: merged, runtime: runtime)
         )
     }
 }
 
 private struct LMStudioAdapterFactory: ProviderAdapterFactory {
-    let adapterKind = "lmstudio"
+    let adapterKind = ProviderAdapterKind.lmStudio.rawValue
 
     func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
         let merged = try config.mergedManifest(base: manifest)
+        let runtime = InferenceRuntimeConfig.from(instanceConfig: config, mergedManifest: merged)
         return ProviderRegistration(
             manifest: merged,
-            textInference: LMStudioTextInferenceProvider(manifest: merged)
+            textInference: LMStudioTextInferenceProvider(manifest: merged, runtime: runtime)
         )
     }
 }
 
 private struct OpenRouterAdapterFactory: ProviderAdapterFactory {
-    let adapterKind = "openrouter"
+    let adapterKind = ProviderAdapterKind.openRouter.rawValue
 
     func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
         let merged = try config.mergedManifest(base: manifest)
         return ProviderRegistration(
             manifest: merged,
             textInference: OpenRouterTextInferenceProvider(manifest: merged)
+        )
+    }
+}
+
+extension InferenceRuntimeConfig {
+    /// Builds a runtime config from a configuration-plugin instance + merged manifest.
+    static func from(instanceConfig: ProviderInstanceConfig, mergedManifest: ProviderManifest) -> InferenceRuntimeConfig {
+        let serverURL = mergedManifest.providerEndpoints.first?.baseURL
+            ?? URL(string: "http://127.0.0.1")!
+        var modelIDMap: [String: ModelConfig] = [:]
+        if let entries = instanceConfig.resolvedCatalogEntries() {
+            for entry in entries {
+                modelIDMap[entry.endpointModelId] = entry.modelConfig
+            }
+        }
+        return InferenceRuntimeConfig(
+            providerID: mergedManifest.id,
+            label: mergedManifest.label,
+            adapterKind: ProviderAdapterKind(rawValue: instanceConfig.adapterKind),
+            serverURL: serverURL,
+            modelIDMap: modelIDMap
         )
     }
 }
