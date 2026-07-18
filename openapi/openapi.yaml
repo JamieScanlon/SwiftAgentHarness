@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SwiftAgentHarness HTTP API
-  version: 1.35.0
+  version: 1.36.0
   description: |
     Control plane for SwiftAgentHarness (Vapor `/api` group). Does not include WebSocket `/ws` —
     see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
@@ -47,7 +47,7 @@ info:
 
     **v1.16.0:** **`GET/PUT/DELETE /conversations/{id}/engine-artifacts`** (+ keyed paths): raw-byte upload/download (**`application/octet-stream`**), JSON key listing, **`413`** when over configured max body size, **`501`** when harness artifact storage is unavailable. Strict tenancy: validated **`Authorization: Bearer`** JWT when **`requireAuthenticatedTenantOnAPI`** is enabled — see **`Documentation/CRUD_QUERY_API_INVENTORY.md`**.
 
-    **v1.17.0:** **`ConversationRunInfo`** parity with spec **`terminalReason`**, **`markerKind`**, optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
+    **v1.17.0:** **`ConversationRunInfo`** optional transcript-derived **`projectionDetail`** (assistant/tool rollups), and authoritative persisted usage rollups (**`tokenRollup`**, **`costRollup`**). **`GET /conversations/{id}/runs/{runId}?detail=1`** requests **`projectionDetail`**; list **`GET …/runs`** omits `projectionDetail` for a lightweight payload while still including authoritative usage rollups when available. Terminal-reason schema components were introduced here; durable projection onto **`ConversationRunInfo`** landed in **v1.36.0**. **`Documentation/RUNS_SPEC_ALIGNMENT.md`** maps harness **runs.md** / **appendInput** to REST/WebSocket.
 
     **v1.19.0:** **`POST /conversations/{id}/branch`** HTTP strict preconditions: optional **`If-Match`** against parent transcript tail (**`msg-*`**, **`msg-none`** when empty); **`428`**/**`412`** when **`ServerConfig.httpPreconditionsStrictMode`** is enabled (same ETag family as send). (Collection read auto-scoping moved to **v1.36.0**.)
 
@@ -96,7 +96,7 @@ info:
 
     **v1.35.0:** Strict authenticated tenancy now requires validated **`Authorization: Bearer`** harness access JWTs (HS256; `sub` = owner UUID via `ServerConfig.apiAccessTokenHS256Secret`). Legacy **`X-SAH-Authenticated-Owner`** is ignored. `APILayer.start()` fails closed when `requireAuthenticatedTenantOnAPI` is enabled without a configured secret.
 
-    **v1.36.0:** Strict tenancy collection reads: **`GET /conversations`** and **`GET /search`** auto-scope to the Bearer JWT `sub` claim ( **`401`** without a valid token, **`403`** when **`owner=`** mismatches the authenticated principal). Model-tool **`list_conversations`** applies the same owner scope when strict tenancy is enabled.
+    **v1.36.0:** Strict tenancy collection reads: **`GET /conversations`** and **`GET /search`** auto-scope to the Bearer JWT `sub` claim ( **`401`** without a valid token, **`403`** when **`owner=`** mismatches the authenticated principal). Model-tool **`list_conversations`** applies the same owner scope when strict tenancy is enabled. Durable run projection adds optional **`ConversationRunInfo.terminalReason`** (boundary-authoritative enrichment from lifecycle markers; legacy-marker fallbacks; natural assistant completion may omit). **`markerKind`** is not part of the public run shape.
 
 servers:
   - url: "{origin}/api"
@@ -2800,7 +2800,10 @@ components:
         and per-run iteration/tool counts. **`tokenRollup`** / **`costRollup`** remain authoritative sums
         over persisted run usage rows and may be present on both list/get surfaces. **`projectionDetail`** is included
         only when **`GET /conversations/{id}/runs/{runId}?detail=1`** requests transcript-derived rollups
-        (omitted on list **`GET …/runs`**).
+        (omitted on list **`GET …/runs`**). Optional **`terminalReason`** is derived enrichment from the same
+        closing boundary as **`outcome`** (marker kind is authoritative for category; structured marker fields
+        enrich only). It may be omitted for natural assistant completion until that mapping is specified.
+        Persistence marker kinds are not exposed on this resource.
       required: [id, conversationID, outcome, iterationCount, toolCallCount, firstMessageId]
       properties:
         id:
@@ -2838,6 +2841,8 @@ components:
           description: Present for cancelled outcomes.
         errorDetails:
           $ref: "#/components/schemas/ConversationRunErrorDetails"
+        terminalReason:
+          $ref: "#/components/schemas/ConversationRunTerminalReason"
         tokenRollup:
           $ref: "#/components/schemas/ConversationRunTokenRollup"
         costRollup:

@@ -36,6 +36,7 @@ private actor MutableRunsStore {
                 lastMessageId: run.lastMessageId,
                 cancellationReason: run.cancellationReason,
                 errorDetails: run.errorDetails,
+                terminalReason: run.terminalReason,
                 tokenRollup: run.tokenRollup,
                 costRollup: run.costRollup,
                 projectionDetail: nil
@@ -157,6 +158,7 @@ private enum RunsRouteETagTestSupport {
             lastMessageId: run.lastMessageId,
             cancellationReason: run.cancellationReason,
             errorDetails: run.errorDetails,
+            terminalReason: run.terminalReason,
             tokenRollup: run.tokenRollup,
             costRollup: run.costRollup,
             projectionDetail: ConversationRunProjectionDetail(
@@ -483,6 +485,141 @@ struct APILayerRunsRouteTests {
                 afterResponse: { res async throws in
                     #expect(res.status == .ok)
                     #expect(res.headers.first(name: .eTag) == detail)
+                }
+            )
+        }
+    }
+
+    @Test("GET /runs and /runs/:runId ETags change when only terminalReason changes")
+    func listAndGetRunETagInvalidateOnTerminalReasonOnly() async throws {
+        let conversationID = UUID()
+        let runID = UUID()
+        let base = ConversationRunInfo(
+            id: runID,
+            conversationID: conversationID,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_700_000_010),
+            outcome: .bounded,
+            iterationCount: 3,
+            toolCallCount: 1,
+            firstMessageId: "msg-first",
+            lastMessageId: "msg-last"
+        )
+        let store = MutableRunsStore(runs: [base])
+        let runtime = MutableRunsRuntimeStub(store: store)
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let api = APILayer(port: 0)
+        let modelProvider = APILayerRESTStubModelProvider(models: [RunsRouteETagTestSupport.makeModel()])
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: modelProvider
+            )
+
+            var listETag: String?
+            var getETag: String?
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1"
+            ) { res async throws in
+                #expect(res.status == .ok)
+                listETag = res.headers.first(name: .eTag)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                let runs = body?["runs"] as? [[String: Any]]
+                #expect(runs?.first?["terminalReason"] == nil)
+                #expect(runs?.first?["markerKind"] == nil)
+            }
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs/\(runID.uuidString)"
+            ) { res async throws in
+                #expect(res.status == .ok)
+                getETag = res.headers.first(name: .eTag)
+            }
+            let previousList = try #require(listETag)
+            let previousGet = try #require(getETag)
+
+            await store.setRun(
+                ConversationRunInfo(
+                    id: runID,
+                    conversationID: conversationID,
+                    startedAt: base.startedAt,
+                    endedAt: base.endedAt,
+                    outcome: .bounded,
+                    iterationCount: base.iterationCount,
+                    toolCallCount: base.toolCallCount,
+                    firstMessageId: base.firstMessageId,
+                    lastMessageId: base.lastMessageId,
+                    terminalReason: ConversationRunTerminalReason(
+                        category: .boundedStop,
+                        boundedReason: .maxAgentIterations
+                    )
+                )
+            )
+
+            var nextListETag: String?
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: previousList)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    nextListETag = res.headers.first(name: .eTag)
+                    let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    let runs = body?["runs"] as? [[String: Any]]
+                    let reason = runs?.first?["terminalReason"] as? [String: Any]
+                    #expect(reason?["category"] as? String == ConversationRunTerminalCategory.boundedStop.rawValue)
+                    #expect(reason?["boundedReason"] as? String == ConversationRunBoundedReason.maxAgentIterations.rawValue)
+                    #expect(runs?.first?["markerKind"] == nil)
+                }
+            )
+            let currentList = try #require(nextListETag)
+            #expect(currentList != previousList)
+
+            var nextGetETag: String?
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs/\(runID.uuidString)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: previousGet)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    nextGetETag = res.headers.first(name: .eTag)
+                    let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    let reason = body?["terminalReason"] as? [String: Any]
+                    #expect(reason?["category"] as? String == ConversationRunTerminalCategory.boundedStop.rawValue)
+                    #expect(body?["markerKind"] == nil)
+                }
+            )
+            let currentGet = try #require(nextGetETag)
+            #expect(currentGet != previousGet)
+
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: currentList)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notModified)
+                    #expect(res.headers.first(name: .eTag) == currentList)
+                }
+            )
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs/\(runID.uuidString)",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: currentGet)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notModified)
+                    #expect(res.headers.first(name: .eTag) == currentGet)
                 }
             )
         }

@@ -53,10 +53,46 @@ type Run = {
   lastMessageId: string | null   // boundary anchor — the terminal entry.id; null if open
   cancellationReason?: string    // populated when outcome === "cancelled"
   errorDetails?: { class: string; message: string }   // when outcome === "errored"
+  terminalReason?: {             // derived enrichment — see § Terminal reason (derived enrichment)
+    category: "externalCancellation" | "naturalStop" | "boundedStop" | "failure"
+    boundedReason?: string       // implementation-defined registry of guardrail names
+    detail?: string              // human-readable sub-detail
+  }
 }
 ```
 
 The fields are computed by walking the segment between `firstMessageId` and `lastMessageId`. For frequently-listed conversations, the catalog can cache a `runs_index` materialized from message metadata; the canonical answer is always the derivation.
+
+### Terminal reason (derived enrichment)
+
+`outcome` remains the canonical disposition used for segmentation and filtering; `terminalReason` enriches that disposition and must not independently change run boundaries. It is computed from the same transcript segment and terminal boundary as `outcome` — no separate storage, no second authority.
+
+**Category is determined solely by the kind of the closing boundary:**
+
+| Closing boundary | `terminalReason.category` |
+|---|---|
+| `run_cancelled` marker | `externalCancellation` |
+| `run_bounded` marker | `boundedStop` |
+| `run_errored` marker | `failure` |
+| `run_orphaned` marker | `failure` |
+| Terminal `AssistantMessage` | `naturalStop` |
+
+Marker metadata (`reason`, structured terminal-reason fields) enriches the value but never re-categorizes it. A `run_cancelled` marker with `reason: "budget"` derives `externalCancellation`, not `boundedStop` — the marker kind, not the reason string, is authoritative. This keeps category derivation a pure function of the boundary kind, same as `outcome`.
+
+**Coverage:** `terminalReason` MAY be absent on `outcome: "completed"` runs until natural-stop mapping is specified — in particular, whether a `finish_reason: max_tokens` closure is `naturalStop` or `boundedStop` is deliberately unresolved. Complete coverage of all terminal runs is the intended direction; implementations should not make the field's presence depend on the storage mechanism that closed the run beyond this documented carve-out.
+
+**Legacy-marker fallbacks.** Markers written before the structured fields existed carry only `customType` and `reason`. Derivation maps them deterministically:
+
+| Marker | Fallback |
+|---|---|
+| `run_cancelled` | `externalCancellation`; `detail` from `reason` when present |
+| `run_bounded` | `boundedStop`; `reason` becomes `boundedReason` when it matches the implementation's registry, otherwise preserved as `detail` |
+| `run_errored` | `failure`; `detail` from `reason`, else `"run_errored"` |
+| `run_orphaned` | `failure`; `detail` from `reason`, else `"run_orphaned"` |
+
+Structured terminal-reason decoding is best-effort enrichment: unknown or malformed fields never affect boundary or outcome derivation, and never make a run underivable.
+
+**No `markerKind` on the public shape.** Marker kinds are persistence encoding, not public run state. The only information a `markerKind` field would add beyond `outcome` + `terminalReason.category` is the errored-vs-orphaned distinction, and that is already carried by `errorDetails.class` (see [§ Resumption after restart](#resumption-after-restart)). Exposing marker kinds would couple API clients to persistence event names and create ambiguity for terminal assistant closures, which have no marker.
 
 ### Run id assignment
 
@@ -91,12 +127,17 @@ Cancellation crosses three layers — Conversation Manager → Agent Runtime →
     "runId": "<runId>",
     "iteration": <int>,
     "reason": "<user-cancel | parent-cancel | deadline | budget>",
-    "cancelledAt": <ts>
+    "cancelledAt": <ts>,
+    "terminalReasonCategory": "externalCancellation",
+    "terminalReasonBounded": null,
+    "terminalReasonDetail": null
   }
 }
 ```
 
 This marker is what makes the run derivable as `outcome: "cancelled"`. Without it, derivation can't tell a cancelled run apart from an open one whose runtime crashed.
+
+The three flat `terminalReason*` fields are the standardized marker-side encoding of the structured terminal reason (see [§ Terminal reason (derived enrichment)](#terminal-reason-derived-enrichment)) and apply equally to `run_errored`, `run_bounded`, and `run_orphaned` markers. All three fields are **optional**: transcripts written before this revision omit them and remain valid — derivation falls back to the legacy mapping. The marker-side encoding is deliberately flat (matching deployed persistence); the nested representation exists only on the derived `Run` resource.
 
 **4. Runtime emits `turn.cancelled` on the Comm Layer event topic, then returns.**
 
@@ -119,7 +160,7 @@ The Manager doesn't directly resume runs across process restarts — that's an [
 
 1. Load each conversation's header from the catalog.
 2. For any conversation with `state.runStatus ∈ {running, awaiting-approval, cancelling}` and no live runtime: this run was orphaned by the previous process death.
-3. Append a `custom` entry of type `run_orphaned` to `rawEvents` with metadata `{runId, lastSeenAt, recoveredAt}`. This closes the run for derivation purposes.
+3. Append a `custom` entry of type `run_orphaned` to `rawEvents` with metadata `{runId, lastSeenAt, recoveredAt}`. This closes the run for derivation purposes: the run derives as `outcome: "errored"` with `errorDetails.class: "run_orphaned"` (and `terminalReason.category: "failure"`). The outcome enum deliberately has no `orphaned` value — adding one would break existing outcome filters; the errored-vs-orphaned distinction is carried by `errorDetails.class`.
 4. Set `state.runStatus = "idle"`, clear `state.currentRunId`.
 5. The conversation is now reachable in its prior state (history intact) but no run is in flight; the user (or trigger) decides whether to re-input.
 
@@ -260,7 +301,7 @@ Returns the derived `Run` record for a single run. The record shape is defined i
 
 **Response — 200 OK:** a `Run` object.
 
-**Cache semantics:** `If-None-Match` / `304` supported, per [§ Cache validators for derived run resources](#cache-validators-for-derived-run-resources). The ETag is a strong validator hashed from the deterministically-encoded response body — never `"run-<runId>"`, which is an identity, not a revision. Distinct projections of the same run (e.g., a detail-level query parameter) hash to distinct validators because their bodies differ. While the run is open, any field change — outcome, rollups, counts, `lastMessageId`, error or cancellation details — produces a new validator and a `200`. Once the run reaches a terminal outcome the record is immutable and its hash is stable indefinitely, so clients polling for completion still get cheap `304`s without re-parsing unchanged bodies.
+**Cache semantics:** `If-None-Match` / `304` supported, per [§ Cache validators for derived run resources](#cache-validators-for-derived-run-resources). The ETag is a strong validator hashed from the deterministically-encoded response body — never `"run-<runId>"`, which is an identity, not a revision. Distinct projections of the same run (e.g., a detail-level query parameter) hash to distinct validators because their bodies differ. While the run is open, any field change — outcome, rollups, counts, `lastMessageId`, error or cancellation details — produces a new validator and a `200`. Once the run reaches a terminal outcome the record is immutable and its hash is stable indefinitely, so clients polling for completion still get cheap `304`s without re-parsing unchanged bodies. Terminal-reason fields participate in the hashed representation like any other field: a change in terminal metadata alone produces a new validator, on both this endpoint and `listRuns`.
 
 **Prefer the data plane for live progress.** `turn.started`, token deltas, `tool.callStarted`, and `turn.completed` all arrive on `conversation/{id}/events` with lower latency than polling this endpoint. Use `getRun` for reconnect scenarios — a client that drops its WebSocket mid-run and needs to recover the current run state without replaying all events — and for fetching completed run metadata after the fact.
 

@@ -379,10 +379,21 @@ class ToolApprovalResolutionStatus(Enum):
 class ToolApprovalResolutionRequest(BaseModel):
     runID: Optional[UUID] = None
     toolName: str
+    toolCallID: Optional[str] = Field(
+        None, description='Optional correlation id for the pending tool call (UI only).'
+    )
     route: Optional[ToolApprovalRoute] = None
     status: ToolApprovalResolutionStatus
     source: Optional[str] = None
     reason: Optional[str] = None
+    durable: Optional[bool] = Field(
+        None,
+        description='When true and status is `approved`, persists an allow-always tool rule so future runs auto-approve this tool.',
+    )
+    arguments: Optional[Dict[str, Any]] = Field(
+        None,
+        description='Tool call arguments used to identify the pending approval binding. Required when multiple pending approvals exist for the same tool name.',
+    )
 
 
 class ConversationCheckpointInvalidateRequest(BaseModel):
@@ -663,6 +674,7 @@ class ConversationRunInfo(BaseModel):
         None, description='Present for cancelled outcomes.'
     )
     errorDetails: Optional[ConversationRunErrorDetails] = None
+    terminalReason: Optional[ConversationRunTerminalReason] = None
     tokenRollup: Optional[ConversationRunTokenRollup] = None
     costRollup: Optional[ConversationRunCostRollup] = None
     projectionDetail: Optional[ConversationRunProjectionDetail] = None
@@ -797,6 +809,41 @@ class Type1(Enum):
 class ErrorEnvelope(BaseModel):
     type: Optional[Type1] = None
     message: Optional[str] = None
+
+
+class ExecApprovalGrantsResponse(BaseModel):
+    commandNames: List[str] = Field(
+        ..., description='Command names with durable grants, sorted ascending.'
+    )
+
+
+class ExecApprovalResolutionRequest(BaseModel):
+    approved: bool
+    durable: Optional[bool] = Field(
+        None,
+        description='When true and approved, persists a durable grant by command name.',
+    )
+    reason: Optional[str] = Field(None, description='Optional denial reason.')
+
+
+class ApprovalDecision(Enum):
+    allowOnce = 'allowOnce'
+    allowAlways = 'allowAlways'
+    deny = 'deny'
+    timeout = 'timeout'
+    cancelled = 'cancelled'
+
+
+class UnifiedApprovalResolutionRequest(BaseModel):
+    decision: Optional[ApprovalDecision] = None
+    approved: Optional[bool] = Field(
+        None,
+        description='Legacy flag; `true` maps to `allowOnce` (or `allowAlways` when `durable` is true), `false` maps to `deny`.',
+    )
+    durable: Optional[bool] = Field(
+        None, description='When true with `approved`, resolves as `allowAlways`.'
+    )
+    reason: Optional[str] = Field(None, description='Optional denial reason.')
 
 
 class SimpleTypeResponse(BaseModel):
@@ -940,6 +987,10 @@ class SubAgentSpawnRequest(BaseModel):
     description: Optional[str] = None
     metadata: Optional[WireJSONObject] = None
     interactionMode: Optional[str] = None
+    toolsAllow: Optional[List[str]] = Field(
+        None,
+        description='Optional closed-world tool allowlist applied to the child conversation as routingPrefs.explicitToolPolicy. Omit to leave routing policy unset (mode profile alone). An empty array denies all tools.\n',
+    )
 
 
 class ConversationPatch(BaseModel):

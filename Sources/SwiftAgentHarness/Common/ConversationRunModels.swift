@@ -122,6 +122,9 @@ public struct ConversationRunInfo: Codable, Sendable, Equatable {
     public let lastMessageId: String?
     public let cancellationReason: String?
     public let errorDetails: ConversationRunErrorDetails?
+    /// Derived enrichment from the closing transcript boundary; never re-categorizes `outcome`.
+    /// Absent while `open`, and may be absent for natural assistant completion until that mapping is specified.
+    public let terminalReason: ConversationRunTerminalReason?
     /// Authoritative per-run token totals from persisted completion usage; `nil` when no authoritative usage exists for the run.
     public let tokenRollup: ConversationRunTokenRollup?
     /// Authoritative per-run USD totals from persisted completion usage; `nil` when no authoritative usage exists for the run.
@@ -141,6 +144,7 @@ public struct ConversationRunInfo: Codable, Sendable, Equatable {
         lastMessageId: String? = nil,
         cancellationReason: String? = nil,
         errorDetails: ConversationRunErrorDetails? = nil,
+        terminalReason: ConversationRunTerminalReason? = nil,
         tokenRollup: ConversationRunTokenRollup? = nil,
         costRollup: ConversationRunCostRollup? = nil,
         projectionDetail: ConversationRunProjectionDetail? = nil
@@ -156,6 +160,7 @@ public struct ConversationRunInfo: Codable, Sendable, Equatable {
         self.lastMessageId = lastMessageId
         self.cancellationReason = cancellationReason
         self.errorDetails = errorDetails
+        self.terminalReason = terminalReason
         self.tokenRollup = tokenRollup
         self.costRollup = costRollup
         self.projectionDetail = projectionDetail

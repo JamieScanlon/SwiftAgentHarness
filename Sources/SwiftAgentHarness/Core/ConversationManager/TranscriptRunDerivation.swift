@@ -207,6 +207,7 @@ enum TranscriptRunDerivation {
             lastMessageId: String?,
             cancellationReason: String?,
             errorDetails: ConversationRunErrorDetails?,
+            terminalReason: ConversationRunTerminalReason?,
             rollupSnapshot: RunRollupAccumulator
         ) {
             let rollups = authoritativeUsageRollupsByRunID[id]
@@ -223,6 +224,7 @@ enum TranscriptRunDerivation {
                     lastMessageId: lastMessageId,
                     cancellationReason: cancellationReason,
                     errorDetails: errorDetails,
+                    terminalReason: terminalReason,
                     tokenRollup: rollups?.tokens,
                     costRollup: rollups?.cost,
                     projectionDetail: rollupSnapshot.projectionDetailIfNeeded(includeProjectionDetail)
@@ -245,6 +247,10 @@ enum TranscriptRunDerivation {
                     class: RunLifecycleTranscriptMarkerKind.run_orphaned.rawValue,
                     message: "stale_running_reconciled"
                 ),
+                terminalReason: ConversationRunTerminalReason(
+                    category: .failure,
+                    detail: "stale_running_reconciled"
+                ),
                 rollupSnapshot: snap
             )
             active = nil
@@ -256,6 +262,7 @@ enum TranscriptRunDerivation {
                let marker = try? RunLifecycleTranscriptMarkerPayload.decode(from: entry.payloadJSON),
                let kind = RunLifecycleTranscriptMarkerKind(rawValue: marker.customType),
                marker.runId == active?.id {
+                let projectedTerminal = marker.projectedTerminalReason(for: kind)
                 switch kind {
                 case .run_cancelled:
                     if let a = active {
@@ -267,8 +274,9 @@ enum TranscriptRunDerivation {
                             outcome: .cancelled,
                             firstMessageId: a.firstMessageId,
                             lastMessageId: entry.entryId.rawValue,
-                            cancellationReason: marker.reason ?? marker.resolvedTerminalReason()?.detail,
+                            cancellationReason: marker.reason ?? projectedTerminal.detail,
                             errorDetails: nil,
+                            terminalReason: projectedTerminal,
                             rollupSnapshot: snap
                         )
                         active = nil
@@ -282,7 +290,7 @@ enum TranscriptRunDerivation {
                             guard outcome == .errored else { return nil }
                             return ConversationRunErrorDetails(
                                 class: marker.customType,
-                                message: marker.reason ?? marker.resolvedTerminalReason()?.detail ?? marker.customType
+                                message: marker.reason ?? projectedTerminal.detail ?? marker.customType
                             )
                         }()
                         appendFinished(
@@ -294,6 +302,7 @@ enum TranscriptRunDerivation {
                             lastMessageId: entry.entryId.rawValue,
                             cancellationReason: nil,
                             errorDetails: errorDetails,
+                            terminalReason: projectedTerminal,
                             rollupSnapshot: snap
                         )
                         active = nil
@@ -338,6 +347,7 @@ enum TranscriptRunDerivation {
                         lastMessageId: entry.entryId.rawValue,
                         cancellationReason: nil,
                         errorDetails: nil,
+                        terminalReason: nil,
                         rollupSnapshot: snap
                     )
                     active = nil
@@ -359,6 +369,7 @@ enum TranscriptRunDerivation {
                     lastMessageId: nil,
                     cancellationReason: nil,
                     errorDetails: nil,
+                    terminalReason: nil,
                     rollupSnapshot: snap
                 )
             } else {
@@ -373,6 +384,10 @@ enum TranscriptRunDerivation {
                     errorDetails: ConversationRunErrorDetails(
                         class: RunLifecycleTranscriptMarkerKind.run_orphaned.rawValue,
                         message: "stale_running_reconciled"
+                    ),
+                    terminalReason: ConversationRunTerminalReason(
+                        category: .failure,
+                        detail: "stale_running_reconciled"
                     ),
                     rollupSnapshot: snap
                 )
