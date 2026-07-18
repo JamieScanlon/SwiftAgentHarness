@@ -96,7 +96,7 @@ The agent can register its own routes — A webhook-subscriptions skill runs a `
 - Every self-registered route inherits the **global rate limit and budget cap** automatically; the agent cannot raise its own limits.
 - The agent **cannot set `system` trust** on a route. System-level routes, like system-level cron, are installer-only. A self-registered route is `known-party` at most.
 
-This keeps self-registration on the same validation rails as user registration — there is no privileged path that skips signature, rate, or trust rules.
+This keeps self-registration on the same validation rails as user registration — there is no privileged path that skips signature, rate, or trust rules. The full contract for agent-registered triggers of any kind is in [self-modification.md](./self-modification.md).
 
 ### Health endpoint
 

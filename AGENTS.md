@@ -6,6 +6,10 @@
 - Prefer modern Swift best practices, including structured concurrency and `async`/`await`.
 - Avoid legacy callback-based APIs in new code unless required by an external dependency.
 
+## Harness Template
+
+- The `harness-template` folder contains a thoroughly researched spec that should be considered locked and read-only. The goal of this project it to produce a faithfully spec-aligned implementation of the contents of the Harness Template. Should and spec related inconsistancies, issues, or bugs be found, you are to summarize them in a document for further review.
+
 ## Testing Requirements
 
 - All new code must include tests.

@@ -443,6 +443,8 @@ enum TranscriptRunDerivation {
         return ConversationRunListResponse(
             runs: page,
             cursor: nextCursor,
+            // Exact filtered count — deterministic when present. Spec allows omitting
+            // advisory `total` when it cannot be computed without churning the ETag.
             total: total
         )
     }
@@ -494,7 +496,10 @@ enum TranscriptRunDerivation {
     }
 
     private static func encodeCursor(_ key: ConversationRunCursorKey) -> String? {
-        guard let data = try? JSONEncoder().encode(key) else { return nil }
+        let encoder = JSONEncoder()
+        // Deterministic bytes so identical pages yield identical cursor strings (run-list ETag stability).
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(key) else { return nil }
         return data.base64EncodedString()
     }
 

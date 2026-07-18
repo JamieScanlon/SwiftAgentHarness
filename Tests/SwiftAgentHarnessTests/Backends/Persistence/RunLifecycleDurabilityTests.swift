@@ -431,6 +431,7 @@ struct RunLifecycleDurabilityTests {
             var etag: String?
             try await app.testing().test(.GET, "/api/conversations/\(conversationID.uuidString)/runs?limit=1") { res async throws in
                 #expect(res.status == .ok)
+                #expect(res.headers.first(name: .cacheControl) == "no-cache")
                 etag = res.headers.first(name: .eTag)
                 let payload = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
                 let runs = payload?["runs"] as? [[String: Any]]
@@ -439,7 +440,20 @@ struct RunLifecycleDurabilityTests {
                 #expect(payload?["total"] as? Int == 2)
             }
 
-            _ = try #require(etag)
+            let listETag = try #require(etag)
+            #expect(listETag.hasPrefix("\"reg-"))
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: listETag)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notModified)
+                    #expect(res.headers.first(name: .eTag) == listETag)
+                    #expect(res.headers.first(name: .cacheControl) == "no-cache")
+                }
+            )
 
             var cursor: String?
             try await app.testing().test(.GET, "/api/conversations/\(conversationID.uuidString)/runs?limit=1") { res async throws in

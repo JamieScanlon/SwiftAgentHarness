@@ -111,8 +111,10 @@ The server makes no state modification on a 412; the client can safely fetch fre
 | Conversation header | `"conv-v<state-version>"` | every `PATCH` / lifecycle transition |
 | Message log | `"msg-<lastMessageId>"` | every append to `rawEvents` |
 | Checkpoint log (per kind) | `"ckpt-<kind>-<lastCheckpointId>"` | every append to `derivedEvents` of that kind |
-| Run | `"run-<runId>"` | (immutable once assigned; runs are derived) |
+| Run (single and list) | `"run-<sha-of-serialized-representation>"` | any change to any representation input: log append, `state.runStatus` / `state.currentRunId` transition, orphan reconciliation |
 | Registry (tools, skills, sub-agents, models) | `"reg-<sha-of-serialized-contents>"` | every register / unregister / capability update |
+
+Runs are *derived* resources whose representation depends on more than the log — see [conversation-manager/runs.md § Cache validators for derived run resources](../conversation-manager/runs.md#cache-validators-for-derived-run-resources) for the invariant and the two validator schemes that get this wrong (identity tags, log-position proxies). The identity form `"run-<runId>"` survives in exactly one place: as the synthetic `If-Match` precondition token on cancel. It is never a cache validator, and the two token families are not interchangeable.
 
 The prefix (`conv-`, `msg-`, `ckpt-`, `reg-`) is informational — lets you tell at a glance which kind of resource a stray validator belongs to — but the comparison is on the full string. Pick a prefix scheme and don't change it.
 
@@ -124,7 +126,7 @@ The prefix (`conv-`, `msg-`, `ckpt-`, `reg-`) is informational — lets you tell
 
 Single-client local CLIs don't need any of this. Multi-client gateways and any deployment with concurrent editors should turn strict mode on at least for the third (the message-log tail is the most damaging place to lose a write race).
 
-**Cheap version reads are load-bearing.** `If-None-Match` only saves bandwidth if checking the current ETag is fast — typically a column read on the catalog row or an in-memory registry hash, not a re-serialization of the resource. The version field needs to live in catalog metadata that's cheap to query (per [persistence](../../backends/persistence/) — the catalog already carries `state-version`, `lastMessageId`, etc.). If the server has to recompute the resource to know whether to return 304, the bandwidth saving is offset by CPU; spec the version source explicitly per resource.
+**Cheap version reads are load-bearing.** `If-None-Match` only saves bandwidth if checking the current ETag is fast — typically a column read on the catalog row or an in-memory registry hash, not a re-serialization of the resource. The version field needs to live in catalog metadata that's cheap to query (per [persistence](../../backends/persistence/) — the catalog already carries `state-version`, `lastMessageId`, etc.). If the server has to recompute the resource to know whether to return 304, the bandwidth saving is offset by CPU; spec the version source explicitly per resource. The exception is derived resources with no single cheap anchor — run records are the canonical case, since no catalog column captures every representation input. There, correctness outranks cheapness: hash the representation, and if poll volume warrants, recover the fast path with a server-side validator cache keyed on the complete input tuple (per [conversation-manager/runs.md](../conversation-manager/runs.md#cache-validators-for-derived-run-resources)).
 
 **OpenAPI surfaces it end-to-end.** The schema (per [§ Schema-defined and code-generated](#schema-defined-and-code-generated) below) treats `If-Match` as a typed parameter on every guarded endpoint; the `412` and `428` responses are typed errors in generated SDKs; `If-None-Match` and `304` are typed on the read side. Clients that ignore preconditions get caught by the type system at compile time, not by silent overwrites at runtime.
 

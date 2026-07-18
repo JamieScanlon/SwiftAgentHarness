@@ -607,6 +607,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
         return Date(timeIntervalSince1970: millis / 1000.0)
     }
 
+    /// `304` for run GET validators, with `Cache-Control: no-cache` so clients revalidate.
+    private static func runResourceNotModifiedResponse(etag: String) -> Response {
+        var response = APILayer.notModifiedResponse(etag: etag)
+        response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
+        return response
+    }
+
     private static func conversationListQuery(from req: Request) throws -> ConversationListQuery {
         let limit = req.query[Int.self, at: "limit"] ?? 50
         let offset = req.query[Int.self, at: "offset"] ?? 0
@@ -1434,17 +1441,19 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             }
             let payload = await dependencies.runtime.apiListConversationRuns(conversationID: uuid, filter: filter)
             do {
-                let currentMessages = (try? await dependencies.conversation.apiListMessagesThrowing(conversationID: uuid)) ?? []
-                let etag = APILayer.messageTailETag(lastMessageID: currentMessages.last?.id)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = try encoder.encode(payload)
+                let etag = APILayer.registryETag(payloadData: data)
                 if APILayer.ifNoneMatchSatisfied(
                     currentETag: etag,
                     headerValue: APILayer.ifNoneMatchHeader(from: req.headers)
                 ) {
-                    return APILayer.notModifiedResponse(etag: etag)
+                    return Self.runResourceNotModifiedResponse(etag: etag)
                 }
-                let data = try JSONEncoder().encode(payload)
                 var headers = HTTPHeaders()
                 headers.add(name: .contentType, value: "application/json")
+                headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
@@ -1479,16 +1488,19 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return Response(status: .notFound)
             }
             do {
-                let etag = APILayer.runETag(runID: runID)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = try encoder.encode(run)
+                let etag = APILayer.registryETag(payloadData: data)
                 if APILayer.ifNoneMatchSatisfied(
                     currentETag: etag,
                     headerValue: APILayer.ifNoneMatchHeader(from: req.headers)
                 ) {
-                    return APILayer.notModifiedResponse(etag: etag)
+                    return Self.runResourceNotModifiedResponse(etag: etag)
                 }
-                let data = try JSONEncoder().encode(run)
                 var headers = HTTPHeaders()
                 headers.add(name: .contentType, value: "application/json")
+                headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {

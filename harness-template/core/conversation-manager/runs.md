@@ -221,11 +221,36 @@ Signals cancellation to the in-flight run. Initiates the three-layer cascade def
 
 **Idempotency:** double-cancel is a no-op; the second call returns 200 with the same already-cancelled outcome. Cancel of a run that reached a terminal outcome returns 409 `RunAlreadyEnded` (not an error from the caller's perspective — the desired outcome exists).
 
-**Preconditions:** `If-Match: "run-<runId>"` is recommended but not required (the body `runId` provides sufficient scoping). Including it makes the call atomic with respect to a specific run — useful when racing against natural run completion.
+**Preconditions:** `If-Match: "run-<runId>"` is recommended but not required (the body `runId` provides sufficient scoping). Including it makes the call atomic with respect to a specific run — useful when racing against natural run completion. This is a **synthetic identity token** the client constructs from the `runId` it already holds; it is *not* an ETag obtained from any `GET` response. `getRun` returns representation validators (see [§ Cache validators for derived run resources](#cache-validators-for-derived-run-resources)), which are never valid cancel preconditions — a client that replays a `getRun` ETag into cancel `If-Match` must receive `412`, and client documentation should say so. The server evaluates cancel `If-Match` against the `"run-<currentRunId>"` identity form only.
 
 **Error responses:**
 - `409 RunNotInFlight` — `runId` does not match `state.currentRunId`; no run is in flight with that id
 - `409 RunAlreadyEnded` — run reached a terminal outcome before the cancel signal arrived; body includes `{ outcome: "completed" | "errored" | "bounded" }`
+
+---
+
+### Cache validators for derived run resources
+
+`getRun` and `listRuns` support conditional `GET` (`If-None-Match` / `304`). One invariant governs the validator, and it is easy to get wrong:
+
+**The ETag must change whenever *any* input to the representation changes — not merely when the resource's identity or log position changes.**
+
+A derived `Run` record is *not* a pure function of `rawEvents`. Whether the head derives as `open` is gated on `state.runStatus` (see [§ Runs as a derived view](#runs-as-a-derived-view)), and orphan reconciliation can flip a run from `open` to `errored` before — or in a race with — the durable `run_orphaned` marker landing in the log (see [§ Resumption after restart](#resumption-after-restart)). The representation is a function of `(rawEvents, state.runStatus, state.currentRunId)`. A validator computed from a subset of those inputs will return `304` for a representation that has changed — a violation of HTTP validator semantics (RFC 9110 §8.8.3) that pins clients to stale state indefinitely.
+
+Two validator schemes lead implementers into exactly that bug:
+
+- **Identity tags** — `"run-<runId>"`. Constant for the life of the run, including across the `open → terminal` transition and every per-iteration mutation of the open record (rollups, counts, `lastMessageId`). A client that caches while the run is open receives `304` forever afterward: it polls a run the server knows is finished and never observes the terminal outcome.
+- **Log-position proxies** — `"msg-<lastMessageId>"`. Sound only if every representation change appends to the log. It doesn't: `state.runStatus` leaving the in-flight set (crash reconciliation, orphan repair) changes the derived outcome of the head run with no log append.
+
+**Recommended scheme: hash the representation.** Encode the response deterministically (stable key order, stable number and date encoding), hash the exact bytes to be served, and use that hash as a strong ETag. Return `304` only when the presented validator equals the current hash, and always serve the same bytes that were hashed. This is correct by construction — it cannot desynchronize from the representation, whatever inputs the derivation consults. Terminal runs are immutable, so their hashes are naturally stable: the cheap poll-for-completion pattern (`304` on every conditional `GET` after termination) is fully preserved.
+
+The cost is that computing the validator requires deriving and encoding the record on every conditional `GET` — the O(1) "answer `304` without deriving" fast path is gone. If polling volume makes that matter, layer a server-side validator cache keyed on the complete input tuple (log head, `state.runStatus`, `state.currentRunId`), invalidated when any component changes. That recovers the fast path without weakening the validator, because the tuple covers every representation input — which is the invariant restated. A change-token scheme hashed from that same complete tuple is an acceptable alternative to full representation hashing; a token hashed from anything less is not.
+
+Serve these endpoints with `Cache-Control: no-cache` so clients and intermediaries revalidate rather than trusting heuristic freshness — `no-cache` still permits `304` round-trips, which is the point.
+
+This matches surveyed practice: where the OSS corpus does conditional polling of control-plane resources, the validator is a checksum of the payload and `304` means checksum match; live run state is otherwise served `no-cache`/`no-store` with progress delivered over the push data plane. No surveyed implementation validates a mutable resource with an identity tag.
+
+Identity tokens still have a role — as *mutation preconditions*, where "am I still talking about the same run?" is exactly the question. Cancel's `If-Match: "run-<runId>"` (see [§ cancelRun](#post-conversationsidcancel--cancelrun)) is that case. Resource identity and representation revision are different concepts; a server must never accept one token family where the other is meant, or clients get permanent `412`s (representation hash sent as identity) or permanent `304`s (identity tag used as cache validator).
 
 ---
 
@@ -235,7 +260,7 @@ Returns the derived `Run` record for a single run. The record shape is defined i
 
 **Response — 200 OK:** a `Run` object.
 
-**Cache semantics:** `If-None-Match` / `304` supported. The ETag is `"run-<runId>"` while the run is open (its fields can change as iterations accumulate). Once the run reaches a terminal outcome the record is immutable and the ETag remains stable indefinitely — clients polling for completion can issue conditional `GET`s cheaply without re-parsing unchanged bodies.
+**Cache semantics:** `If-None-Match` / `304` supported, per [§ Cache validators for derived run resources](#cache-validators-for-derived-run-resources). The ETag is a strong validator hashed from the deterministically-encoded response body — never `"run-<runId>"`, which is an identity, not a revision. Distinct projections of the same run (e.g., a detail-level query parameter) hash to distinct validators because their bodies differ. While the run is open, any field change — outcome, rollups, counts, `lastMessageId`, error or cancellation details — produces a new validator and a `200`. Once the run reaches a terminal outcome the record is immutable and its hash is stable indefinitely, so clients polling for completion still get cheap `304`s without re-parsing unchanged bodies.
 
 **Prefer the data plane for live progress.** `turn.started`, token deltas, `tool.callStarted`, and `turn.completed` all arrive on `conversation/{id}/events` with lower latency than polling this endpoint. Use `getRun` for reconnect scenarios — a client that drops its WebSocket mid-run and needs to recover the current run state without replaying all events — and for fetching completed run metadata after the fact.
 
@@ -268,7 +293,7 @@ Returns a paged list of derived `Run` records for the conversation, newest-first
 }
 ```
 
-**Cache semantics:** `If-None-Match` / `304` supported. ETag is tied to the message-log ETag (`"msg-<lastMessageId>"`); any new run opening or closing invalidates it.
+**Cache semantics:** `If-None-Match` / `304` supported, per [§ Cache validators for derived run resources](#cache-validators-for-derived-run-resources). The ETag is hashed from the deterministically-encoded response for *this exact request* — filters, `cursor`, and `limit` included — not from the message-log position. The message-tail proxy (`"msg-<lastMessageId>"`) is unsound here: a listed run can change outcome with no log append (orphan reconciliation), and distinct filter/page bodies must not share a validator by accident. Determinism requirement: the serving path must produce identical bytes for identical inputs — if the advisory `total` cannot be computed deterministically, omit it from the response rather than letting it churn the validator.
 
 **Performance:** if the catalog's optional `runs_index` materialization (see [§ Listing and pagination](#listing-and-pagination)) is present and current, it serves this endpoint directly. If absent or stale, derivation over `rawEvents` is the fallback. The response is identical either way; callers need not know which path was taken.
 
@@ -325,5 +350,7 @@ Every `appendInput` creates a new conversation; the "session" is the chain of co
 - **Dropping a partially-streamed assistant message on cancel mid-stream.** Half-streamed messages should not be appended to `rawEvents` (per [agent-runtime § Cancellation hygiene](../agent-runtime/#cancellation-hygiene)). But: an assistant message that *fully streamed* before the cancel signal should be kept — the model said it, the rawEvents log records what happened, and discarding it makes the next replay non-deterministic.
 - **`getRun` / `listRuns` reading from in-memory runtime state.** The runtime is stateless across invocations; in-memory state doesn't survive restart. Always derive from `rawEvents`. The runtime's in-memory accumulator is for the current iteration, not for run history.
 - **Letting a `runs_index` cache become authoritative.** Treat it as rebuildable from `rawEvents` at all times. If the cache diverges (schema migration, partial write failure), trust the log and rebuild.
+- **Identity ETags on mutable derived resources.** `"run-<runId>"` as a `getRun` cache validator is constant across the `open → terminal` transition; every client that cached the run while open gets `304` forever and never observes completion — it keeps polling a run the server knows is finished. Validators track representations, not identities; identity tokens belong only in mutation preconditions like cancel `If-Match`.
+- **Log-position proxies as cache validators for state that isn't purely log-derived.** `"msg-<lastMessageId>"` for `listRuns` assumes every representation change appends to the log. Orphan reconciliation and `state.runStatus` leaving the in-flight set break that assumption with no append. Hash the representation, or a change token covering *all* of its inputs — never a subset.
 
 ---

@@ -33,18 +33,8 @@ type ModeProfile = {
   // Tool System reads this
   tools?: {
     allow?: string[] | "*"
-    "allow+"?: string[] | "*"           // stage-wise: after `allow` replace, union onto result
-    deny?: string[]                     // append-only (never replaces parent)
-    "deny+"?: string[]                  // explicit alias of deny — also append-only
-    approvalPolicy?: "never" | "side-effects" | "all"
-  }
-
-  // Agent skills (same allow/deny / allow+/deny+ composition as tools)
-  skills?: {
-    allow?: string[] | "*"
-    "allow+"?: string[] | "*"
     deny?: string[]
-    "deny+"?: string[]
+    approvalPolicy?: "never" | "side-effects" | "all"
   }
 
   // Context Engine reads this
@@ -149,7 +139,7 @@ A profile id is global; conflicts at registration time error rather than silentl
 
 Every consuming layer queries `registry.resolve(conv.state.mode)` at the start of its work and reads only the slice it owns.
 
-**Tool System** queries the `.tools` slice when assembling the tool list each turn. The mode's `allow` / `deny` composes with the conversation-level `routing.toolWhitelist` (intersection — both must permit). Overlay merge is stage-wise: `allow` **replaces** the inherited list when present; `allow+` then **unions** onto that result. Appending onto an open world (`allow` omitted/`nil`, or `["*"]`) is a **no-op** — never silently close the world. `deny` and `deny+` are append-only (a child cannot strip a parent's denies). The `approvalPolicy` field feeds the permission gate. This filtered view is also what `GET /conversations/{id}/tools` returns — the global registry narrowed by conversation whitelist ∩ active mode. Per-run whitelists (passed via `appendInput` options) may narrow the set further at runtime but are not reflected in the endpoint response. See [../tool-system/](../tool-system/) and [../communication-layer/](../communication-layer/).
+**Tool System** queries the `.tools` slice when assembling the tool list each turn. The mode's `allow` / `deny` composes with the conversation-level `routing.toolWhitelist` (intersection — both must permit). The `approvalPolicy` field feeds the permission gate. This filtered view is also what `GET /conversations/{id}/tools` returns — the global registry narrowed by conversation whitelist ∩ active mode. Per-run whitelists (passed via `appendInput` options) may narrow the set further at runtime but are not reflected in the endpoint response. See [../tool-system/](../tool-system/) and [../communication-layer/](../communication-layer/).
 
 **Context Engine** reads `.context` during the `assemble` phase to decide compaction policy, fill the Mode directive section of the system prompt, and decide which sections to emit at all. See "System-prompt assembly under modes" below for detail. See [../context-engine/](../context-engine/).
 
