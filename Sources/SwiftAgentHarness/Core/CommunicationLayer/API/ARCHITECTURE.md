@@ -220,15 +220,16 @@ Orchestration/state snapshots are consumed via WebSocket topic `conversation/{id
 
 ### REST chunked revert stream
 
-`POST /api/conversations/:id/revert` is the remaining chunked REST assistant stream route.
+`POST /api/conversations/:id/revert` is the remaining chunked REST assistant stream route. It is the only caller of `APILayer.streamingChatResponse`.
 
 - **Success (`200`)**: Chunked assistant stream; chunks are **raw UTF-8 substrings** of the assistant reply (same stream as `partialContent` internally). There is **no** JSON framing per chunk; the client concatenates chunks to build the final text.
+- **Early flush**: The response head (and an ignorable whitespace keepalive chunk, typically a leading `\n`) is committed to the wire **before** awaiting the first LLM partial, so clients that wait on HTTP headers / first byte (e.g. `URLSession.bytes(for:)`) are not blocked by provider TTFT or model cold-start. Leading flush bytes are not assistant text and may be ignored when concatenating the body.
 - **Send conflicts (`409`)**: Structured JSON body before stream commit:
   - `transcript_tail_mismatch` → `TranscriptTailConflictBody`
   - `run_in_progress` → `ConversationRunConflictBody`
 - **Non-conflict failures (`500`/`400`)**: Route-level error response (not in-stream plain text).
 
-Send (`POST .../messages`) returns anchors immediately; the server drains the runtime stream internally and publishes deltas on websocket topics. There is **no** chunked REST body for send.
+Send (`POST .../messages`) returns anchors immediately; the server drains the runtime stream internally and publishes deltas on websocket topics. There is **no** chunked REST body for send (and therefore no shared early-flush risk on that path).
 
 There is **no** `turn_state` or structured message list on the revert REST stream (unlike historical websocket `type` responses).
 

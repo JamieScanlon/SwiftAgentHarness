@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SwiftAgentHarness HTTP API
-  version: 1.36.0
+  version: 1.37.0
   description: |
     Control plane for SwiftAgentHarness (Vapor `/api` group). Does not include WebSocket `/ws` —
     see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
@@ -97,6 +97,8 @@ info:
     **v1.35.0:** Strict authenticated tenancy now requires validated **`Authorization: Bearer`** harness access JWTs (HS256; `sub` = owner UUID via `ServerConfig.apiAccessTokenHS256Secret`). Legacy **`X-SAH-Authenticated-Owner`** is ignored. `APILayer.start()` fails closed when `requireAuthenticatedTenantOnAPI` is enabled without a configured secret.
 
     **v1.36.0:** Strict tenancy collection reads: **`GET /conversations`** and **`GET /search`** auto-scope to the Bearer JWT `sub` claim ( **`401`** without a valid token, **`403`** when **`owner=`** mismatches the authenticated principal). Model-tool **`list_conversations`** applies the same owner scope when strict tenancy is enabled. Durable run projection adds optional **`ConversationRunInfo.terminalReason`** (boundary-authoritative enrichment from lifecycle markers; legacy-marker fallbacks; natural assistant completion may omit). **`markerKind`** is not part of the public run shape.
+
+    **v1.37.0:** **`POST /conversations/{id}/revert`** commits HTTP **200** to the wire before the first assistant token (early chunked-body flush, typically a leading `\n` keepalive) so clients that wait on response headers / first byte are not blocked by provider TTFT or model cold-start. The success body remains raw UTF-8 assistant text chunks; leading flush bytes are ignorable whitespace only (not JSON error framing).
 
 servers:
   - url: "{origin}/api"
@@ -728,7 +730,15 @@ paths:
               $ref: "#/components/schemas/ConversationRevertRequest"
       responses:
         "200":
-          description: Chunked assistant stream after successful in-place revert.
+          description: |
+            Chunked assistant stream after successful in-place revert.
+
+            The **200** status (and an ignorable early flush chunk, typically a leading `\n`) is
+            written to the connection before the first LLM token so clients are not blocked on
+            provider TTFT / model load. Body bytes are raw UTF-8 substrings of the assistant reply
+            (no per-chunk JSON framing). Leading flush bytes are whitespace-only and may be ignored
+            when concatenating the HTTP body into assistant text. Failures after headers are not
+            encoded as JSON in this stream; observe WebSocket lifecycle / turn terminal events instead.
           content:
             application/octet-stream:
               schema:
