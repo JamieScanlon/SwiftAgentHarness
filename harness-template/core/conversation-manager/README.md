@@ -290,7 +290,7 @@ The Manager publishes a `branched` event on both the parent's and the new conver
 
 A first-class field on the conversation rather than a per-turn flag because switching mid-conversation is user-meaningful, history should reflect it, multi-client UIs need to render it, and sub-agents/branches need something to inherit. Per-turn settings belong in `runOptions`.
 
-The recommended treatment is **mode as an id into a `ModeRegistry` of `ModeProfile` records** rather than a hard-coded enum, so adding a mode is registering a profile (not editing every consuming layer). For the full design — profile shape, per-layer slices, system-prompt assembly under modes, transition hooks, sub-agent inheritance, and the cross-cutting anti-patterns — see [modes.md](./modes.md).
+The recommended treatment is **mode as an id into a `ModeRegistry` of `ModeProfile` records** rather than a hard-coded enum, so adding a mode is registering a profile (not editing every consuming layer). For the full design — profile shape, per-layer slices, system-prompt assembly under modes, transition hooks, sub-agent inheritance, and the cross-cutting anti-patterns — see [modes.md](./modes.md). Planning specifically decomposes into three independently-adoptable concerns (constraint regime, plan artifact, progress tracking) layered on the mode machinery — see [planning.md](./planning.md).
 
 ### Attached resources
 

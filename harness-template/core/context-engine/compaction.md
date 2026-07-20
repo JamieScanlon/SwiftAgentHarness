@@ -128,7 +128,7 @@ Without this framing, models will sometimes re-execute work the summary describe
 - Invoked-skill bodies, total budget ~25k tokens (5k per skill).
 - Named H2/H3 sections from the nearest project `AGENTS.md` / `CLAUDE.md` (default: `Session Startup`, `Red Lines`; legacy fallback `Every Session`, `Safety`), total budget ~3k characters. Configurable via `reinjectionInstructionSectionNames`; set `reinjectionInstructionSectionsEnabled: false` to disable.
 - Any async-agent task statuses.
-- A plan-mode flag if you have one.
+- A plan-mode flag if you have one — and if a plan artifact exists, a plan reference attachment (path + content or digest) so the plan itself survives the boundary, not just the fact of being in plan mode (see [planning.md](../conversation-manager/planning.md)).
 - Recently-discovered tools / MCP delta announcements.
 
 The principle: structured task state belongs in dedicated messages where the model is forced to attend to it, not buried in a summary that may compress it lossily.

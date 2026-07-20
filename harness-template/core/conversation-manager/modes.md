@@ -229,7 +229,7 @@ The assembled prompt lands as a `SystemPromptAssembly` checkpoint in `derivedEve
 
 ### Mode-transition hooks
 
-Some modes need to do work on enter or exit beyond what the per-turn slices express. Plan mode, for example, can run a `prepareContextForPlanMode` function on enter (sets up the plan file, attaches a plan-mode system message reminding the agent of the plan-file path) and a transition hook on exit (clears the plan-mode flag, archives the plan).
+Some modes need to do work on enter or exit beyond what the per-turn slices express. Plan mode, for example, can run a `prepareContextForPlanMode` function on enter (sets up the plan file, attaches a plan-mode system message reminding the agent of the plan-file path) and a transition hook on exit (clears the plan-mode flag, archives the plan). The plan artifact these hooks provision has its own lifecycle contract — identity, fork/resume semantics, compaction survival, tiered recovery — specified in [planning.md](./planning.md).
 
 The profile's `hooks.onEnter` and `hooks.onExit` are async functions the Conversation Manager runs synchronously around the mode change:
 
