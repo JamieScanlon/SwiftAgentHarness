@@ -7,6 +7,7 @@ enum ConversationCheckpoint: Sendable, Equatable {
     case toolResultTrim(ToolResultTrimCheckpointWire)
     case systemPromptAssembly(SystemPromptAssemblyCheckpointWire)
     case attachmentProjection(AttachmentProjectionCheckpointWire)
+    case attachmentDigest(AttachmentDigestCheckpointWire)
 
     /// Maps persisted conversation events to checkpoint values (unknown kinds skipped).
     static func load(from events: [CachedConversationEvent]) -> [ConversationCheckpoint] {
@@ -42,6 +43,12 @@ enum ConversationCheckpoint: Sendable, Equatable {
                     from: event.payloadJSON
                 ) else { return nil }
                 return .attachmentProjection(w)
+            case ConversationEventKind.attachmentDigestCheckpoint.rawValue:
+                guard let w = ConversationEventCodec.decode(
+                    AttachmentDigestCheckpointWire.self,
+                    from: event.payloadJSON
+                ) else { return nil }
+                return .attachmentDigest(w)
             default:
                 return nil
             }

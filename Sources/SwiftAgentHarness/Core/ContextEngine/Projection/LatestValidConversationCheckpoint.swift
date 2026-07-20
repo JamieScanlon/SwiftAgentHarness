@@ -8,6 +8,7 @@ enum ConversationHarnessCheckpointKind: String, Sendable, CaseIterable {
     case toolResultTrim = "tool_result_trim"
     case systemPromptAssembly = "system_prompt_assembly"
     case attachmentProjection = "attachment_projection"
+    case attachmentDigest = "attachment_digest"
 }
 
 /// Validity-selected checkpoint for one harness kind.
@@ -17,6 +18,7 @@ enum LatestCheckpointSelection: Sendable, Equatable {
     case toolResultTrim(wire: ToolResultTrimCheckpointWire, eventID: Int)
     case systemPromptAssembly(wire: SystemPromptAssemblyCheckpointWire, eventID: Int)
     case attachmentProjection(wire: AttachmentProjectionCheckpointWire, eventID: Int)
+    case attachmentDigest(wire: AttachmentDigestCheckpointWire, eventID: Int)
 }
 
 extension LatestCheckpointSelection {
@@ -51,6 +53,12 @@ extension LatestCheckpointSelection {
                 kind: HarnessCheckpointWireKind.attachmentProjection.rawValue,
                 eventID: eventID,
                 checkpoint: .attachmentProjection(wire)
+            )
+        case .attachmentDigest(let wire, let eventID):
+            LatestCheckpointResponse(
+                kind: HarnessCheckpointWireKind.attachmentDigest.rawValue,
+                eventID: eventID,
+                checkpoint: .attachmentDigest(wire)
             )
         }
     }
@@ -113,6 +121,8 @@ enum LatestValidConversationCheckpoint {
                 expectedProjectionFingerprint: expectedAttachmentProjectionFingerprint
             ) else { return nil }
             return .attachmentProjection(wire: pair.wire, eventID: pair.eventID)
+        case .attachmentDigest:
+            return nil
         }
     }
 

@@ -128,6 +128,26 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.reinjectFileContentEnabled == false)
     }
 
+    @Test("Instruction section re-injection fields decode and default")
+    func decodesInstructionSectionReinjection() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "reinjection_instruction_sections_enabled": false,
+                "reinjectionInstructionSectionNames": ["Custom Section"],
+                "reinjection_instruction_section_max_characters": 1_500,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        #expect(config.reinjectionInstructionSectionsEnabled == false)
+        #expect(config.reinjectionInstructionSectionNames == ["Custom Section"])
+        #expect(config.reinjectionInstructionSectionMaxCharacters == 1_500)
+
+        let defaults = ContextCompactionConfiguration.default
+        #expect(defaults.reinjectionInstructionSectionsEnabled == true)
+        #expect(defaults.reinjectionInstructionSectionNames == ["Session Startup", "Red Lines"])
+        #expect(defaults.reinjectionInstructionSectionMaxCharacters == 3_000)
+    }
+
     @Test("Absent re-injection budgets fall back to spec defaults")
     func reinjectionBudgetDefaults() {
         let config = ContextCompactionConfiguration.default
@@ -137,6 +157,70 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.reinjectionPerSkillTokenBudget == 5_000)
         #expect(config.reinjectionTotalSkillTokenBudget == 25_000)
         #expect(config.reinjectFileContentEnabled == true)
+    }
+
+    @Test("softThresholdTokens defaults to 8000 and CE flush defaults on")
+    func softThresholdAndFlushDefaults() {
+        let config = ContextCompactionConfiguration.default
+        #expect(config.softThresholdTokens == 8_000)
+        #expect(config.preCompactionMemoryFlushEnabled == true)
+    }
+
+    @Test("softThresholdTokens loader clamps to non-negative with upper bound")
+    func softThresholdLoaderClamps() {
+        let negative: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": -5],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: negative)
+                .contextCompaction.softThresholdTokens == 0
+        )
+        let huge: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": 999_999],
+        ]
+        let clamped = ConversationTransformConfiguration.configuration(fromJSON: huge).contextCompaction.softThresholdTokens
+        #expect(clamped <= 100_000)
+        #expect(clamped >= 0)
+        let explicit: [String: Any] = [
+            "contextCompaction": ["softThresholdTokens": 4_000],
+        ]
+        #expect(
+            ConversationTransformConfiguration.configuration(fromJSON: explicit)
+                .contextCompaction.softThresholdTokens == 4_000
+        )
+    }
+
+    @Test("softProactiveThresholdTokens is hard minus soft headroom")
+    func softProactiveThresholdMath() {
+        var config = ContextCompactionConfiguration.default
+        config.proactiveOutputReserveTokens = 0
+        config.proactiveSafetyBufferTokens = 20_000
+        config.softThresholdTokens = 8_000
+        let hard = ContextCompactionPolicy.proactiveThresholdTokens(
+            modelContextLimitTokens: 100_000,
+            config: config
+        )
+        let soft = ContextCompactionPolicy.softProactiveThresholdTokens(
+            modelContextLimitTokens: 100_000,
+            config: config
+        )
+        #expect(hard == 80_000)
+        #expect(soft == 72_000)
+        config.softThresholdTokens = 0
+        #expect(
+            ContextCompactionPolicy.softProactiveThresholdTokens(
+                modelContextLimitTokens: 100_000,
+                config: config
+            ) == hard
+        )
+        #expect(
+            ContextCompactionPolicy.softProactiveTriggerFires(
+                messages: [],
+                modelContextLimitTokens: 100_000,
+                lastActualPromptTokens: 75_000,
+                config: config
+            ) == false
+        )
     }
 
     @Test("Changing a re-injection budget changes configFingerprint")
@@ -266,6 +350,8 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.manualToolEnabled == true)
         #expect(config.defaultSummarizationStrategy == "default")
         #expect(config.cacheAwarePruningEnabled == false)
+        #expect(config.contextPruningKeepRecentToolResults == 5)
+        #expect(config.contextPruningTargetTools == nil)
         #expect(config.deterministicToolResultPruningEnabled == true)
         #expect(config.deterministicAttachmentDocumentHygieneEnabled == false)
         #expect(config.compactionSummarizerMaxOutputTokens == 20_000)
@@ -273,6 +359,49 @@ struct ConversationTransformConfigurationDecodeTests {
         #expect(config.compactionReinjectionEnabled == true)
         #expect(config.compactionCircuitBreakerMaxFailures == 3)
         #expect(config.useSessionTreeProjection == true)
+    }
+
+    @Test("contextPruning fields decode with backward-compatible cacheAwarePruningEnabled")
+    func parserPreservesContextPruningFields() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "cacheAwarePruningEnabled": true,
+                "contextPruningKeepRecentToolResults": 3,
+                "contextPruningTargetTools": ["read_file"],
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        let resolved = ContextPruningPolicyResolver.resolve(config: config)
+        #expect(config.cacheAwarePruningEnabled == true)
+        #expect(config.contextPruningKeepRecentToolResults == 3)
+        #expect(config.contextPruningTargetTools == ["read_file"])
+        #expect(resolved.mode == .off)
+    }
+
+    @Test("Explicit contextPruningMode with TTL decodes")
+    func parserPreservesExplicitContextPruningMode() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "contextPruningMode": "cacheTTL",
+                "cachePruningTTLSeconds": 90,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        let resolved = ContextPruningPolicyResolver.resolve(config: config)
+        #expect(config.contextPruningMode == "cacheTTL")
+        #expect(resolved.mode == .cacheTTL)
+        #expect(resolved.ttlSeconds == 90)
+    }
+
+    @Test("cacheExpiryInferenceThresholdSeconds decodes from contextCompaction JSON")
+    func parserPreservesCacheExpiryInferenceThreshold() {
+        let block: [String: Any] = [
+            "contextCompaction": [
+                "cacheExpiryInferenceThresholdSeconds": 12_000,
+            ],
+        ]
+        let config = ConversationTransformConfiguration.configuration(fromJSON: block).contextCompaction
+        #expect(config.cacheExpiryInferenceThresholdSeconds == 12_000)
     }
 
     @Test("Explicit contextCompaction JSON values are preserved")

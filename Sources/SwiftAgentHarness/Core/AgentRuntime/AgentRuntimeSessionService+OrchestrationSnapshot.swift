@@ -15,7 +15,7 @@ extension AgentRuntimeSessionService {
             isTerminalSnapshotAfterCompletion: isTerminal,
             forceStreamingPhases: forceStreaming
         ) else { return nil }
-        if let last = orchestrationOutOfBandWireSnapshot(),
+        if let last = lastTopicRefreshOrchestrationSnapshot(),
            last.currentRunID == snapshot.currentRunID {
             if let generation = last.orchestrationGeneration {
                 snapshot.orchestrationGeneration = generation
@@ -120,7 +120,7 @@ extension AgentRuntimeSessionService {
             forceStreamingPhases: forceStreamingPhases
         ) else { return }
         if await orchestrationEmissionConversationID() != streamConversationID {
-            setOrchestrationOutOfBandWireSnapshot(nil)
+            setLastTopicRefreshOrchestrationSnapshot(nil)
         }
         await setOrchestrationEmissionConversationID(streamConversationID)
         snapshot.orchestrationGeneration = swiftAgentKitGeneration
@@ -128,23 +128,23 @@ extension AgentRuntimeSessionService {
             "[AgentRuntimeSessionService] emit orchestration snapshot conversationID=\(streamConversationID.uuidString) generation=\(snapshot.orchestrationGeneration.map(String.init) ?? "nil") llm=\(snapshot.llmRuntimePhase.rawValue) request=\(snapshot.llmRequestPhase?.rawValue ?? "nil") agentic=\(snapshot.agenticPhase.rawValue) runID=\(snapshot.currentRunID?.uuidString ?? "nil")"
         )
         yieldOrchestrationSnapshot(snapshot)
-        if let oob = orchestrationOutOfBandPush() {
-            let shouldForwardOutOfBand: Bool
-            if let last = orchestrationOutOfBandWireSnapshot(),
+        if let refreshHandler = orchestrationStateTopicRefreshHandler() {
+            let shouldRefreshTopic: Bool
+            if let last = lastTopicRefreshOrchestrationSnapshot(),
                snapshot.hasSameWireOrchestrationPhases(as: last) {
-                shouldForwardOutOfBand = false
+                shouldRefreshTopic = false
             } else {
-                shouldForwardOutOfBand = true
-                setOrchestrationOutOfBandWireSnapshot(snapshot)
+                shouldRefreshTopic = true
+                setLastTopicRefreshOrchestrationSnapshot(snapshot)
             }
-            if shouldForwardOutOfBand {
+            if shouldRefreshTopic {
                 deps.logger?.debug(
-                    "[AgentRuntimeSessionService] forwarding orchestration snapshot via out-of-band push conversationID=\(streamConversationID.uuidString)"
+                    "[AgentRuntimeSessionService] refreshing conversation state topic conversationID=\(streamConversationID.uuidString)"
                 )
-                await oob.push(snapshot)
+                await refreshHandler(streamConversationID, snapshot)
             } else {
                 deps.logger?.debug(
-                    "[AgentRuntimeSessionService] skipping duplicate orchestration out-of-band push conversationID=\(streamConversationID.uuidString) generation=\(snapshot.orchestrationGeneration.map(String.init) ?? "nil")"
+                    "[AgentRuntimeSessionService] skipping duplicate orchestration topic refresh conversationID=\(streamConversationID.uuidString) generation=\(snapshot.orchestrationGeneration.map(String.init) ?? "nil")"
                 )
             }
         }

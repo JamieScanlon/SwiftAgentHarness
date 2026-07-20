@@ -112,6 +112,20 @@ struct BackgroundMemoryExtractorTests {
 
 @Suite("Pre-compaction memory flush")
 struct PreCompactionMemoryFlushTests {
+    private static func validTopicFile(named filename: String, in memoryDir: URL) throws -> String {
+        let body = """
+---
+name: Flush topic
+description: durable hook
+type: user
+---
+Promoted before compaction.
+"""
+        let url = memoryDir.appendingPathComponent(filename)
+        try body.write(to: url, atomically: true, encoding: .utf8)
+        return url.path
+    }
+
     @Test("Pre-compaction flush invokes spawn port with middle messages")
     func preCompactionFlushInvokesSpawnPort() async throws {
         let dir = FileManager.default.temporaryDirectory
@@ -129,11 +143,14 @@ struct PreCompactionMemoryFlushTests {
         _ = try await service.bootstrapSession(context: context)
         let gate = PreCompactionFlushGate()
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, middle, _ in
                 await gate.record(middleCount: middle.count)
-                await service.recordAuxiliaryMemoryWrite(path: memoryDir.appendingPathComponent("note.md").path, conversationID: conversationID)
+                guard let path = try? Self.validTopicFile(named: "note.md", in: memoryDir) else {
+                    return false
+                }
+                await service.recordAuxiliaryMemoryWrite(path: path, conversationID: conversationID)
                 return true
             }
         )
@@ -175,7 +192,7 @@ struct PreCompactionMemoryFlushTests {
         let mainPath = memoryDir.appendingPathComponent("main-note.md").path
         await service.recordMemoryWrite(path: mainPath, conversationID: conversationID)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in true }
         )
@@ -214,9 +231,9 @@ struct PreCompactionMemoryFlushTests {
         _ = try await service.bootstrapSession(context: context)
         let mainPath = memoryDir.appendingPathComponent("main-note.md").path
         await service.recordMemoryWrite(path: mainPath, conversationID: conversationID)
-        let flushPath = memoryDir.appendingPathComponent("flush-note.md").path
+        let flushPath = try Self.validTopicFile(named: "flush-note.md", in: memoryDir)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in nil },
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in
                 await service.recordAuxiliaryMemoryWrite(path: flushPath, conversationID: conversationID)
@@ -237,8 +254,83 @@ struct PreCompactionMemoryFlushTests {
         )
         #expect(result.succeeded)
         #expect(result.flushedMemoryEntryIDs.count == 1)
-        #expect(result.flushedMemoryEntryIDs.first == DefaultMemoryService.manifestEntryID(filename: "flush-note.md"))
+        #expect(result.flushedMemoryEntryIDs.first == FileStoreMemoryManifestEntryID.entryID(filename: "flush-note.md"))
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    @Test("Pre-compaction flush entry IDs exclude daily and MEMORY.md auxiliary writes")
+    func flushEntryIDsExcludeDailyAndIndex() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mem-flush-filter-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let memoryDir = dir.appendingPathComponent("memory", isDirectory: true)
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: dir.path,
+            canonicalGitRoot: dir.path,
+            memoryDirectory: memoryDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+        let curatedPath = try Self.validTopicFile(named: "curated.md", in: memoryDir)
+        let port = MemorySubAgentSpawnPort(
+            spawnBlockingRecall: { _, _, _, _, _, _ in nil },
+            spawnBackgroundExtraction: { _ in },
+            spawnBlockingPreCompactionFlush: { _, _, _ in
+                await service.recordAuxiliaryMemoryWrite(
+                    path: memoryDir.appendingPathComponent("2026-07-10.md").path,
+                    conversationID: conversationID
+                )
+                await service.recordAuxiliaryMemoryWrite(
+                    path: memoryDir.appendingPathComponent("MEMORY.md").path,
+                    conversationID: conversationID
+                )
+                await service.recordAuxiliaryMemoryWrite(path: curatedPath, conversationID: conversationID)
+                return true
+            }
+        )
+        await service.bindSpawnPort(port)
+        let middle = [Message(id: UUID(), role: .user, content: "msg", timestamp: Date(), toolCalls: [])]
+        let result = await service.runPreCompactionFlush(
+            context: PreCompactionMemoryFlushContext(
+                conversationID: conversationID,
+                middleMessages: middle,
+                maxFlushedMemoryEntries: 8,
+                timeoutMs: 1000
+            ),
+            spawnPort: port,
+            logger: nil
+        )
+        #expect(result.succeeded)
+        #expect(result.flushedMemoryEntryIDs.count == 1)
+        #expect(result.flushedMemoryEntryIDs.first == FileStoreMemoryManifestEntryID.entryID(filename: "curated.md"))
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    @Test("Pre-compaction flush write guard clears after run")
+    func flushWriteGuardClearsAfterRun() async {
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        await service.registerPreCompactionFlushWriteGuard(
+            conversationID: conversationID,
+            policy: PreCompactionFlushWriteGuard.Policy(manifestTopicFilenames: [])
+        )
+        let blocked = await service.validatePreCompactionFlushWrite(
+            conversationID: conversationID,
+            absolutePath: "/tmp/memory/2026-07-10.md",
+            priorContent: nil,
+            newContent: "daily"
+        )
+        #expect(blocked != nil)
+        await service.clearPreCompactionFlushWriteGuard(conversationID: conversationID)
+        let allowed = await service.validatePreCompactionFlushWrite(
+            conversationID: conversationID,
+            absolutePath: "/tmp/memory/2026-07-10.md",
+            priorContent: nil,
+            newContent: "daily"
+        )
+        #expect(allowed == nil)
     }
 
     @Test("Flush-only auxiliary writes do not mark main agent wrote memory")
@@ -362,7 +454,7 @@ struct MemorySubAgentSpawnAdapterTests {
     func recallSummaryCappedAndFenced() async {
         let longSummary = String(repeating: "x", count: 100)
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, maxChars in
+            spawnBlockingRecall: { _, _, _, _, maxChars, _ in
                 MemoryContextFencer.fence(String(longSummary.prefix(maxChars)))
             },
             spawnBackgroundExtraction: { _ in },
@@ -390,7 +482,7 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("Group chat skips active recall")
     func groupChatSkipsRecall() async {
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in "should-not-run" },
+            spawnBlockingRecall: { _, _, _, _, _, _ in "should-not-run" },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in false }
         )
@@ -415,7 +507,7 @@ struct MemorySubAgentSpawnAdapterTests {
     @Test("Sub-agent scope skips active recall")
     func subAgentScopeSkipsRecall() async {
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in "should-not-run" },
+            spawnBlockingRecall: { _, _, _, _, _, _ in "should-not-run" },
             spawnBackgroundExtraction: { _ in },
             spawnBlockingPreCompactionFlush: { _, _, _ in false }
         )
@@ -454,8 +546,8 @@ struct MemorySubAgentSpawnAdapterTests {
         #expect(fenced.contains("[user] remember grafana"))
     }
 
-    @Test("Background extraction uses isolated spawn and fenced transcript")
-    func backgroundExtractionUsesIsolatedSpawn() async throws {
+    @Test("Background extraction uses fork spawn with directive in user message")
+    func backgroundExtractionUsesForkSpawn() async throws {
         let capture = ExtractionSpawnCapture()
         let session = MemorySessionContext(
             conversationID: UUID(),
@@ -474,6 +566,18 @@ struct MemorySubAgentSpawnAdapterTests {
             cancelChildRun: { _ in },
             lastAssistantText: { _ in nil },
             manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
+            },
             config: .default,
             logger: nil
         )
@@ -491,19 +595,136 @@ struct MemorySubAgentSpawnAdapterTests {
         let spawnRequest = await capture.spawnRequest
         let runPayload = await capture.waitForRun()
         let spawn = try #require(spawnRequest)
-        #expect(spawn.context == .isolated)
-        #expect(spawn.userMessageID == nil)
+        #expect(spawn.context == .fork)
+        #expect(spawn.userMessageID == request.recentMessages.last(where: { $0.role == .user })?.id)
         #expect(spawn.interactionMode == "memory-extraction")
+        #expect(spawn.toolsAllow == nil)
+        #expect(spawn.userSystemPrompt == nil)
+        #expect(spawn.prompt?.contains("<fork-boilerplate>") == true)
         #expect(spawn.prompt?.contains("<extraction-input>") == true)
+        #expect(runPayload?.contains("<fork-boilerplate>") == true)
         #expect(runPayload?.contains("<extraction-input>") == true)
+    }
+
+    @Test("Active recall spawn sets toolsAllow to memory_search and memory_get")
+    func activeRecallSpawnSetsToolsAllow() async throws {
+        let capture = ExtractionSpawnCapture()
+        let session = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: "/tmp",
+            canonicalGitRoot: nil,
+            memoryDirectory: URL(fileURLWithPath: "/tmp/memory")
+        )
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, request, _ in
+                await capture.recordSpawn(request)
+                return UUID()
+            },
+            sendMessageAndRun: { _, _ in },
+            cancelChildRun: { _ in },
+            lastAssistantText: { _ in "NONE" },
+            manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
+            },
+            config: .default,
+            logger: nil
+        )
+        let summary = await port.spawnBlockingRecall(
+            session.conversationID,
+            "preferences?",
+            .standing,
+            5_000,
+            200,
+            []
+        )
+        #expect(summary == nil)
+        let spawn = try #require(await capture.spawnRequest)
+        #expect(spawn.context == .isolated)
+        #expect(spawn.interactionMode == "memory-active-recall")
+        #expect(spawn.toolsAllow == MemorySubAgentSpawnAdapter.activeMemoryToolsAllow)
+        #expect(spawn.toolsAllow == [
+            MemorySearchToolProvider.searchToolName,
+            MemorySearchToolProvider.getToolName,
+        ])
+    }
+
+    @Test("Situational recall spawn strips injected memory-context from contaminated userQuery")
+    func situationalRecallSpawnStripsInjectedContextFromQuery() async throws {
+        let capture = ExtractionSpawnCapture()
+        let session = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: "/tmp",
+            canonicalGitRoot: nil,
+            memoryDirectory: URL(fileURLWithPath: "/tmp/memory")
+        )
+        let prior = MemoryContextFencer.fence("User prefers Grafana dashboards.")
+        let contaminated = """
+        \(HarnessInjectedMessagePrefixes.activeMemoryRecall)
+        \(prior)
+
+        latency review tips?
+        """
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, request, _ in
+                await capture.recordSpawn(request)
+                return UUID()
+            },
+            sendMessageAndRun: { _, _ in },
+            cancelChildRun: { _ in },
+            lastAssistantText: { _ in "NONE" },
+            manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: .default, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
+            },
+            config: .default,
+            logger: nil
+        )
+        _ = await port.spawnBlockingRecall(
+            UUID(),
+            contaminated,
+            .situational,
+            5_000,
+            200,
+            []
+        )
+        let spawn = try #require(await capture.spawnRequest)
+        let prompt = try #require(spawn.prompt)
+        #expect(!prompt.contains("<memory-context>"))
+        #expect(!prompt.contains("</memory-context>"))
+        #expect(!prompt.contains(HarnessInjectedMessagePrefixes.activeMemoryRecall))
+        #expect(!prompt.contains("User prefers Grafana dashboards."))
+        #expect(prompt.contains("latency review tips?"))
+        #expect(spawn.userSystemPrompt?.contains("Ignore any <memory-context>") == true)
     }
 
     @Test("extraction prompt scopes file tools to memory directory and cold start")
     func extractionPromptGuidesMemoryScopedPaths() {
         let prompt = MemoryExtractionPrompts.systemPrompt(manifestLines: [])
-        #expect(prompt.contains("File tools are scoped to the memory directory"))
-        #expect(prompt.contains("write_file rather than reading first"))
-        #expect(prompt.contains("they are not accessible"))
+        #expect(prompt.contains("File tools are scoped to project and user memory directories"))
+        #expect(prompt.contains("## Memory vs skills (routing)"))
+        #expect(prompt.contains("Do **not** save procedures as memory"))
+        #expect(prompt.contains("skill_workshop"))
+        #expect(prompt.contains("## User vs project tier (write routing)"))
+        #expect(prompt.contains("user/MEMORY.md"))
     }
 }
 

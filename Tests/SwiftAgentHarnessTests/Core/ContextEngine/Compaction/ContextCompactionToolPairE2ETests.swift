@@ -216,7 +216,7 @@ struct ContextCompactionToolPairE2ETests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: gating
         )
         guard case .transform(let input) = build else {
@@ -253,7 +253,7 @@ struct ContextCompactionToolPairE2ETests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: gating
         )
         guard case .transform(let input) = build else {
@@ -297,7 +297,7 @@ struct ContextCompactionToolPairE2ETests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: gating
         )
         guard case .transform(let input) = build else {

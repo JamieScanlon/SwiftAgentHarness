@@ -8,9 +8,9 @@ public enum ToolAvailabilityBlockReason: String, Sendable, CaseIterable, Equatab
     case toolsDisabledForSend
     /// A2A-registered tool and `enableAgents` is false.
     case agentsDisabledForRemoteAgentTool
-    /// `ToolPolicyConfiguration` allowlist rejects this mode/phase (PromptConfig).
+    /// Mode profile `tools.allow` rejects this tool (PromptConfig / mode overlay).
     case promptConfigAllowlist
-    /// `ToolPolicyConfiguration` denylist rejects this tool for mode/phase.
+    /// Mode profile `tools.deny` rejects this tool for the current mode.
     case promptConfigDenylist
     /// Tool is marked escalation-required and this invocation is not elevated.
     case escalationRequired

@@ -13,6 +13,26 @@ struct AvailabilityFacts: Sendable, Equatable {
     let approvalRoute: ToolApprovalRoute?
     let delegationPermissionPolicy: SubAgentPermissionPolicy?
     let delegationTrustLevel: SubAgentTrustLevel?
+
+    init(
+        isSensitive: Bool,
+        requiresEscalation: Bool,
+        requiresApproval: Bool,
+        isElevated: Bool,
+        approvalGranted: Bool,
+        approvalRoute: ToolApprovalRoute?,
+        delegationPermissionPolicy: SubAgentPermissionPolicy?,
+        delegationTrustLevel: SubAgentTrustLevel?
+    ) {
+        self.isSensitive = isSensitive
+        self.requiresEscalation = requiresEscalation
+        self.requiresApproval = requiresApproval
+        self.isElevated = isElevated
+        self.approvalGranted = approvalGranted
+        self.approvalRoute = approvalRoute
+        self.delegationPermissionPolicy = delegationPermissionPolicy
+        self.delegationTrustLevel = delegationTrustLevel
+    }
 }
 
 struct ToolAvailabilityDecision: Sendable, Equatable {
@@ -26,6 +46,30 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
     let approvalRoute: ToolApprovalRoute?
     let delegationPermissionPolicy: SubAgentPermissionPolicy?
     let delegationTrustLevel: SubAgentTrustLevel?
+
+    init(
+        allowed: Bool,
+        blockReason: ToolAvailabilityBlockReason?,
+        isSensitive: Bool,
+        requiresEscalation: Bool,
+        requiresApproval: Bool,
+        isElevated: Bool,
+        approvalGranted: Bool,
+        approvalRoute: ToolApprovalRoute?,
+        delegationPermissionPolicy: SubAgentPermissionPolicy?,
+        delegationTrustLevel: SubAgentTrustLevel?
+    ) {
+        self.allowed = allowed
+        self.blockReason = blockReason
+        self.isSensitive = isSensitive
+        self.requiresEscalation = requiresEscalation
+        self.requiresApproval = requiresApproval
+        self.isElevated = isElevated
+        self.approvalGranted = approvalGranted
+        self.approvalRoute = approvalRoute
+        self.delegationPermissionPolicy = delegationPermissionPolicy
+        self.delegationTrustLevel = delegationTrustLevel
+    }
 
     static let allowedDefault = ToolAvailabilityDecision(
         allowed: true,
@@ -224,6 +268,12 @@ extension ToolSystemGatewaying {
 }
 
 struct DefaultToolSystemGateway: ToolSystemGatewaying {
+    let visibilityGrants: ToolVisibilityGrantStore
+
+    init(visibilityGrants: ToolVisibilityGrantStore) {
+        self.visibilityGrants = visibilityGrants
+    }
+
     func allRegisteredToolsForTurn(
         orchestrator: SwiftAgentKitOrchestrator,
         dataProvider: ConversationsDataProviding,
@@ -352,7 +402,11 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         return AgentRuntimeToolDispatchContract(
             parallelDispatchEnabled: parallelDispatchEnabled,
             dispatchPlannerMode: normalizedPlanner.mode,
-            pendingToolTimeoutSeconds: toolPolicy.pendingToolTimeoutSeconds
+            pendingToolTimeoutSeconds: toolPolicy.pendingToolTimeoutSeconds,
+            toolCallTimeoutSeconds: toolPolicy.toolCallTimeoutSeconds,
+            toolCallWatchdogIntervalSeconds: toolPolicy.toolCallWatchdogIntervalSeconds,
+            onToolTimeout: toolPolicy.onToolTimeout,
+            mcpReconnectOnToolTimeout: toolPolicy.mcpReconnectOnToolTimeout
         )
     }
 
@@ -572,9 +626,10 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         if approvalRequiredFinal, !approvalGranted {
             return .blocked(.approvalRequired, facts: facts)
         }
+        let allowContext = modePolicyContextWithEffectiveAllow(modePolicyContext, entry: entry)
         if !toolPolicy.isToolAllowed(
             name: entry.name,
-            context: modePolicyContext,
+            context: allowContext,
             groupIndex: groupIndex,
             entry: entry
         ) {
@@ -605,8 +660,9 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             call: call,
             configuration: configuration
         )
+        let allowContext = modePolicyContextWithEffectiveAllow(modePolicyContext, entry: entry)
         let modeDeny = ToolPolicyRulesCache.parseList(modePolicyContext.resolvedProfile.tools.deny)
-        let modeAllow = modePolicyContext.resolvedProfile.tools.allow.flatMap {
+        let modeAllow = allowContext.resolvedProfile.tools.allow.flatMap {
             ToolPolicyRulesCache.parseList($0)
         }
         let scopes = [
@@ -620,6 +676,33 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             groupIndex: groupIndex,
             scopes: scopes,
             bindingPreApproved: bindingPreApproved
+        )
+    }
+
+    /// Builds a policy context whose mode-allow list includes host-co-authored grant names.
+    ///
+    /// Dual opt-in (``.grant`` + ``allowsHostGrants``) unions into the mode-allow list itself — host co-authorship,
+    /// not a separate intersecting scope. Deny and other scopes still intersect afterward.
+    func modePolicyContextWithEffectiveAllow(
+        _ context: ModePolicyContext,
+        entry: ToolRegistryEntry
+    ) -> ModePolicyContext {
+        let profile = context.resolvedProfile
+        let effectiveAllow = visibilityGrants.snapshot().effectiveAllowList(
+            authored: profile.tools.allow,
+            entry: entry,
+            profile: profile
+        )
+        guard effectiveAllow != profile.tools.allow else { return context }
+        var effectiveProfile = profile
+        effectiveProfile.tools = ModeProfileToolsSlice(
+            allow: effectiveAllow,
+            deny: profile.tools.deny,
+            approvalPolicy: profile.tools.approvalPolicy
+        )
+        return ModePolicyContext(
+            interactionMode: context.interactionMode,
+            resolvedProfile: effectiveProfile
         )
     }
 

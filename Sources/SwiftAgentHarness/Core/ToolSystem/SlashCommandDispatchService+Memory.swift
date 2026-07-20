@@ -15,7 +15,11 @@ extension SlashCommandDispatchService {
                 content: "No workspace directory is set for this conversation."
             )
         }
-        let context = try memoryService.makeSessionContext(conversationID: conversationID, cwd: cwd)
+        let context = try memoryService.makeSessionContext(
+            conversationID: conversationID,
+            cwd: cwd,
+            ownerAccountID: conv.ownerAccountID
+        )
         if await memoryService.currentSnapshotGeneration(conversationID: conversationID) == 0 {
             _ = try await memoryService.bootstrapSession(context: context)
         } else {

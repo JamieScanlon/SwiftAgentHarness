@@ -96,39 +96,3 @@ public final class ModeRegistryPortAdapter: ModeRegistryAccessing, Sendable {
         await service.configurationDiagnostics()
     }
 }
-
-enum ModeRegistryTestSupport {
-    static func makeService(
-        seedingBuiltIns: Bool = true,
-        modeProfileConfiguration: ModeProfileConfiguration? = nil,
-        projectConfigDirectory: URL? = nil,
-        projectConfigSource: ModeProfileProjectConfigSource? = nil,
-        additionalProfiles: [ResolvedModeProfile] = []
-    ) -> ModeRegistryService {
-        ModeRegistryService(
-            seedingBuiltIns: seedingBuiltIns,
-            modeProfileConfiguration: modeProfileConfiguration,
-            projectConfigDirectory: projectConfigDirectory,
-            projectConfigSource: projectConfigSource,
-            additionalProfiles: additionalProfiles
-        )
-    }
-
-    static func makePort(
-        seedingBuiltIns: Bool = true,
-        modeProfileConfiguration: ModeProfileConfiguration? = nil,
-        projectConfigDirectory: URL? = nil,
-        projectConfigSource: ModeProfileProjectConfigSource? = nil,
-        additionalProfiles: [ResolvedModeProfile] = []
-    ) -> ModeRegistryPortAdapter {
-        ModeRegistryPortAdapter(
-            service: makeService(
-                seedingBuiltIns: seedingBuiltIns,
-                modeProfileConfiguration: modeProfileConfiguration,
-                projectConfigDirectory: projectConfigDirectory,
-                projectConfigSource: projectConfigSource,
-                additionalProfiles: additionalProfiles
-            )
-        )
-    }
-}

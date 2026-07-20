@@ -286,7 +286,7 @@ The slash command is the highest-leverage; the file-system path is the most flex
 
 ### Layered scopes for agent memory
 
-The base case is single-tier per-project memory. Two extensions are worth supporting if your harness has the surface area:
+The base case is single-tier per-project memory. Two extensions are worth supporting if your harness has the surface area (and see [cross-project-transfer.md](./cross-project-transfer.md) for the user-tier design that moves insights *between* projects):
 
 **Team memory** — a `team/` subdirectory under the per-project dir, synced via git or a server. Each memory type gets `<scope>` guidance baked into its definition: `user` is `always private`, `feedback` defaults to private (save as team only when the guidance is project-wide convention, not personal style), `project` strongly biases toward team, `reference` is usually team. The combined-mode prompt explicitly tells the model "before saving a private feedback memory, check that it doesn't contradict a team feedback memory — if it does, either don't save it or note the override explicitly."
 
@@ -341,7 +341,7 @@ Tell the model this directly.
 
 Most memory systems are *reactive*: they only fire when the model decides to call `memory_search`, or when the user says "remember this" or "search memory". By that point, the moment where memory would have made the reply feel natural has passed.
 
-Add a **pre-reply blocking memory sub-agent** as an opt-in surface for conversational sessions: before the main reply runs, a separate bounded model call gets one chance to surface relevant memory. Constrain it tightly:
+Add a **pre-reply blocking memory sub-agent** as an opt-in surface for conversational sessions: before the main reply runs, a separate bounded model call gets one chance to surface relevant memory. Full treatment — output contract, budgets, query modes, injection fencing, eligibility gates, observability — in [pre-reply-recall.md](./pre-reply-recall.md). Constrain it tightly:
 
 - **Restricted tool surface.** Only `memory_search` and `memory_get`. No write, no edit, no other tools.
 - **Separate model.** A fast cheap recall model (Cerebras gpt-oss-120b, Gemini Flash, etc.) — latency matters more than quality on this path. Allow inheriting the session model when no override is set.
@@ -354,7 +354,7 @@ This pattern (the active-memory approach) generalizes — the principle is "guar
 
 ### Background consolidation (dreaming)
 
-For harnesses where memory accumulates over months, layer a **background consolidation pass** on top of the recall store. The recommended consolidation model (**dreaming**) works as follows:
+For harnesses where memory accumulates over months, layer a **background consolidation pass** on top of the recall store. Full treatment — recall-store substrate, threshold gates, write-time integrity, backfill, operator surface — in [consolidation.md](./consolidation.md). The recommended consolidation model (**dreaming**) in summary:
 
 - Phases run **sequentially in one sweep**, on a cron schedule (default `0 3 * * *`):
   - **light** — ingest recent daily memory signals + recall traces, dedupe, stage candidate lines. No durable write.
@@ -370,7 +370,7 @@ This is more elaborate than the type-tagged write-on-demand model in the main re
 
 ### Memory as a single-active plugin slot with parallel knowledge layers
 
-When the harness has multiple plausible memory backends (SQLite, LanceDB, Honcho, QMD, etc.), don't try to merge them — make memory **a single active plugin slot** with strict ownership of recall, promotion, and dreaming. Then offer a **separate parallel knowledge-vault layer** for provenance-rich knowledge that *adds to* the active backend without competing with it.
+When the harness has multiple plausible memory backends (SQLite, LanceDB, Honcho, QMD, etc.), don't try to merge them — make memory **a single active plugin slot** with strict ownership of recall, promotion, and dreaming. Then offer a **separate parallel knowledge-vault layer** for provenance-rich knowledge that *adds to* the active backend without competing with it. Full treatment — the four-slot capability record, supplement surfaces, public-artifacts seam, wiki-layer design — in [plugin-slot.md](./plugin-slot.md).
 
 The recommended layering: one active memory plugin owns the durable store; a wiki layer sits beside it as a compiled knowledge vault with claims, evidence links, contradiction tracking, freshness scoring, and dedicated tools (`wiki_search` / `wiki_get` / `wiki_apply` / `wiki_lint`). The wiki layer is for things the agent should treat as a maintained reference; the memory layer is for things the agent should treat as durable notes.
 

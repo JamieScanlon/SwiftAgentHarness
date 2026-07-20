@@ -312,10 +312,6 @@ struct ConversationResidualAPIServiceImpl: ConversationResidualAPIServicing {
         try await deps.persistenceDomain.readPlanMarkdown(for: conversationID)
     }
 
-    func orchestratorBoundConversationID() async -> UUID? {
-        await orchestrationCore.lastOrchestrationEmissionConversationID()
-    }
-
     func previewContextCompaction(
         conversationID: UUID,
         gating: ContextCompactionGatingOptions,
@@ -374,6 +370,7 @@ enum ConversationDomainServiceFactory {
         topics: ConversationTopicPublicationPort,
         messaging: ConversationMessagingPort,
         sessionProjection: SessionProjectionAccessing,
+        skillActivation: SkillActivationService? = nil,
         registryOwnerAccountScope: @escaping @Sendable () -> UUID? = { nil }
     ) -> (
         bundle: ConversationDomainServiceBundle,
@@ -384,6 +381,7 @@ enum ConversationDomainServiceFactory {
         let catalog = ConversationCatalogServiceImpl(
             deps: deps,
             selection: selection,
+            skillActivation: skillActivation,
             registryOwnerAccountScope: registryOwnerAccountScope
         )
         let controlPlane = ConversationControlPlaneServiceImpl(

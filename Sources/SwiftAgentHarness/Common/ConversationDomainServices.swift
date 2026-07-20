@@ -168,7 +168,6 @@ protocol ConversationResidualAPIServicing: Sendable {
     func snapshotOrchestrationState(conversationID: UUID) async -> ConversationOrchestrationState?
     func projectionContextBudget(conversationID: UUID) async -> ConversationContextBudget?
     func readPlanMarkdown(conversationID: UUID) async throws -> String
-    func orchestratorBoundConversationID() async -> UUID?
     func previewContextCompaction(
         conversationID: UUID,
         gating: ContextCompactionGatingOptions,

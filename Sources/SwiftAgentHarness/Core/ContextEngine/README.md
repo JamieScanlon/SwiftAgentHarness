@@ -45,6 +45,10 @@ Pre-compaction memory flush uses the existing `memory_injection_snapshot` checkp
 
 On the orchestrator path, memory injection + pre-flush rows persist only when **`assemble`** produced transform output (`result.transformOutput != nil` in **`ContextAssemblyPipeline`**).
 
+Plugin-visible compaction hooks (`before_compaction` / `after_compaction`) are not emitted by CE today; defer to the extensibility assessment (see harness-template `core/memory/memory-aware-compaction.md` § Observability (deferred)).
+
+Post-compaction re-injection includes named H2/H3 sections from the nearest project instruction file (default `Session Startup`, `Red Lines`; config: `reinjectionInstructionSectionsEnabled`, `reinjectionInstructionSectionNames`, `reinjectionInstructionSectionMaxCharacters`) alongside files and active skills.
+
 ## Pluggability seams
 
 - **Context engine slot:** production composition resolves `ServerConfig.contextEngineSlotID` and injects either:
@@ -57,7 +61,7 @@ On the orchestrator path, memory injection + pre-flush rows persist only when **
 - Compaction now resolves one typed deterministic hygiene policy at input-build time (`ContextCompactionPolicy.resolvedDeterministicHygienePolicy`).
 - Transformer execution runs one staged pre-summarizer path: strategy shaping -> cache-aware pruning -> attachment/document/image hygiene -> optional tool-result pruning.
 - Defaults preserve prior behavior (`tool-result pruning on`, attachment/document/image hygiene off), while config knobs make stage ownership explicit under Context Engine policy surfaces.
-- Optional pre-compaction memory flush policy is resolved via `ContextCompactionPolicy.resolvedPreCompactionMemoryFlushPolicy` and executed in CE lifecycle assembly before compaction transform invocation.
+- Pre-compaction memory flush is **default-on** (`preCompactionMemoryFlushEnabled: true`) and dual-gated with Memory’s `preCompactionFlushEnabled`. Soft threshold (`softThresholdTokens`, default 8k) runs a flush-only assemble before the hard proactive trigger; hard path still flushes then summarizes. Spec: harness-template `core/memory/memory-aware-compaction.md`.
 - Identifier-preservation policy is resolved via `ContextCompactionPolicy.resolvedIdentifierPreservationPolicy` and threaded into compaction prompt construction (`strict` / `custom` / `off`) to preserve opaque IDs in summaries.
 
 ## Prompt + Attachment policy projection
@@ -78,7 +82,7 @@ The harness requires that **tool_use** / **tool_result** pairs are not split whe
 
 - Tail never starts with an orphaned `.tool` message; multi-call tool batches stay intact (fail-closed when IDs are missing).
 - Head/middle boundary receives the same tool-pair protection.
-- Latest user is pinned into tail only when that user is within the natural tail window (`naturalTailStart - tailMinMessageCount`); users deep in the compressible middle are not pinned.
+- Latest user after head is always pinned into the tail (run-anchor guarantee); the cut is pushed earlier when needed so the active task is never compacted away.
 - Successful compactions that save fewer prompt tokens than `compactionMinPromptTokenSavingsFraction` skip checkpoint persistence; consecutive low-savings runs open the same proactive compaction circuit as transform failures (`compactionCircuitBreakerMaxFailures`). Circuits apply to proactive auto-compaction only and are bypassed when `forceRunCompactionLLM` is set (reactive overflow retry). Manual `.slashCommand` / `.rest` compactions do not increment the auto low-savings counter; `.modelTool` does. The savings fraction compares symmetric char-per-token estimates; proactive trigger firing still prefers actual `lastPromptTokens`.
 
 Unit coverage: `ContextEngineCompactionSplitTests`, `ContextCompactionOutputLayoutTests`.

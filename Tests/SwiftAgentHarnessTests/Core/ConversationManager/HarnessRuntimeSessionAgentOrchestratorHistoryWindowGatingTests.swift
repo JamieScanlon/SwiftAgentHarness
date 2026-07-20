@@ -48,7 +48,7 @@ struct HarnessRuntimeSessionAgentOrchestratorHistoryWindowGatingTests {
             interactionMode: .agent,
             modeProfileID: InteractionMode.agent.rawValue
         )
-        let harness = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        let harness = HarnessConfigurationSet.lockedDownBaseline.agentHarness
         let options = await runtimeSession.orchestratorRuntimeService.orchestratorInvocationOptions(
             for: conv,
             effectiveToolEntries: [

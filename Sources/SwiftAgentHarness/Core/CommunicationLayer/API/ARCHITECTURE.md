@@ -22,10 +22,10 @@ This document describes the **public wire contract** between a harness client an
 - **JSON:** REST bodies and WebSocket text frames use JSON.
 - **Dates (REST):** **`GET /api/conversations/:id`** and several other REST payloads encode `Date` fields with `JSONEncoder.dateEncodingStrategy = .iso8601` (ISO-8601 strings). **`GET /api/conversations`** (list) may still use Vapor defaults for some nested shapes—mirror a known-good client decoder or capture a response when in doubt.
 - **UUIDs:** Conversation and model IDs are UUID strings unless noted.
-- **Errors:** Many REST failure paths return a small JSON object `{"type":"error","message":"..."}` with a 4xx status. Some routes (notably compaction preview/compact auth failures) return plain text bodies instead. WebSocket control-plane errors use `{"kind":"error","message":"..."}`.
+- **Errors:** REST failure paths return a small JSON object `{"type":"error","message":"..."}` (`ErrorEnvelope` in OpenAPI) with an appropriate 4xx/5xx status and `Content-Type: application/json`. WebSocket control-plane errors use `{"kind":"error","message":"..."}`.
 - **HTTP preconditions:** Key reads emit `ETag` and honor `If-None-Match` (**304** on match). Guarded mutations accept optional `If-Match` (conversation control-plane revision); mismatches return **412**, and strict precondition mode returns **428** when a required `If-Match` is missing.
 - **Session semantics:** Conversation-scoped routes are explicit-id based; no REST/WS “select conversation” control-plane operation exists.
-- **Authentication (strict tenancy):** When `ServerConfig.requireAuthenticatedTenantOnAPI` is true, mutating routes and tenant-scoped WS subscribe checks require **`Authorization: Bearer <JWT>`** (HS256; `sub` = owner account UUID). Configure `ServerConfig.apiAccessTokenHS256Secret` (and optional `apiAccessTokenIssuer` / `apiAccessTokenAudience`). `APILayer.start()` refuses to boot strict tenancy without a configured secret. **`X-SAH-Authenticated-Owner` is not trusted.** Reverse proxies must strip client-supplied `Authorization` and inject a validated harness JWT.
+- **Authentication (strict tenancy):** When `ServerConfig.requireAuthenticatedTenantOnAPI` is true, mutating routes and tenant-scoped WS subscribe checks require **`Authorization: Bearer <JWT>`** (HS256; `sub` = owner account UUID). Configure `ServerConfig.apiAccessTokenHS256Secret` (and optional `apiAccessTokenIssuer` / `apiAccessTokenAudience`). `APILayer.start()` refuses to boot strict tenancy without a configured secret. **`X-SAH-Authenticated-Owner` is not trusted.** Reverse proxies must strip client-supplied `Authorization` and inject a validated harness JWT. Strict tenancy scopes API and topic access by owner; it does **not** isolate the process, tool execution environment, or on-disk persistence — see [COMMUNICATION_POLICY.md § Strict tenancy scope](../COMMUNICATION_POLICY.md#strict-tenancy-scope-authorization-not-isolation).
 
 ---
 
@@ -169,7 +169,7 @@ Unlike preview, this endpoint **mutates server state**: a successful run writes 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/conversations/:id/plan` | **200** `{"markdown":<String>}` when readable. Invalid `:id` → **400** (plain text body). Missing/unreadable plan → **404** + error JSON. |
+| GET | `/api/conversations/:id/plan` | **200** `{"markdown":<String>}` when readable. Invalid `:id` → **400** + error JSON. Missing/unreadable plan → **404** + error JSON. |
 | GET | `/api/conversations/:id/slash-commands` | **200** `[SlashCommandAutocompleteEntry]` for the conversation context. |
 
 ### Conversation control, runs, and artifacts
@@ -220,15 +220,16 @@ Orchestration/state snapshots are consumed via WebSocket topic `conversation/{id
 
 ### REST chunked revert stream
 
-`POST /api/conversations/:id/revert` is the remaining chunked REST assistant stream route.
+`POST /api/conversations/:id/revert` is the remaining chunked REST assistant stream route. It is the only caller of `APILayer.streamingChatResponse`.
 
 - **Success (`200`)**: Chunked assistant stream; chunks are **raw UTF-8 substrings** of the assistant reply (same stream as `partialContent` internally). There is **no** JSON framing per chunk; the client concatenates chunks to build the final text.
+- **Early flush**: The response head (and an ignorable whitespace keepalive chunk, typically a leading `\n`) is committed to the wire **before** awaiting the first LLM partial, so clients that wait on HTTP headers / first byte (e.g. `URLSession.bytes(for:)`) are not blocked by provider TTFT or model cold-start. Leading flush bytes are not assistant text and may be ignored when concatenating the body.
 - **Send conflicts (`409`)**: Structured JSON body before stream commit:
   - `transcript_tail_mismatch` → `TranscriptTailConflictBody`
   - `run_in_progress` → `ConversationRunConflictBody`
 - **Non-conflict failures (`500`/`400`)**: Route-level error response (not in-stream plain text).
 
-Send (`POST .../messages`) returns anchors immediately; the server drains the runtime stream internally and publishes deltas on websocket topics. There is **no** chunked REST body for send.
+Send (`POST .../messages`) returns anchors immediately; the server drains the runtime stream internally and publishes deltas on websocket topics. There is **no** chunked REST body for send (and therefore no shared early-flush risk on that path).
 
 There is **no** `turn_state` or structured message list on the revert REST stream (unlike historical websocket `type` responses).
 
@@ -238,7 +239,7 @@ There is **no** `turn_state` or structured message list on the revert REST strea
 
 - **URL:** `/ws` (same host/port as HTTP). Max frame size is set to `UInt32.max` in code.
 - **Encoding:** Text frames, UTF-8 JSON.
-- **Inbound:** Only harness control frames with **`kind`** are accepted (`subscribe` / `unsubscribe` / **`ack`** / **`dedupe_check_and_set`** — see [`comm-client-control.schema.json`](../../../../../../openapi/schemas/ws/comm-client-control.schema.json)). The server validates the object, then decodes **`CommClientControlMessage`** for multiplexed topics. **`ack`** carries cumulative **`upTo`** seq acknowledgements (see [COMMUNICATION_POLICY.md §6](../COMMUNICATION_POLICY.md)). **`dedupe_check_and_set`** returns `{"kind":"dedupe_result","firstSighting":...}` (see [COMMUNICATION_POLICY.md §1](../COMMUNICATION_POLICY.md)). Validation failures return `{"kind":"error","message":"..."}`. Legacy client **`type`** frames (for example `send_message`) are rejected during validation — typically **`Harness control message requires kind`** — and are not decoded. REST replacements: [SESSION_SCOPING.md](../../../../../../Documentation/SESSION_SCOPING.md).
+- **Inbound:** Only harness control frames with **`kind`** are accepted (`subscribe` / `unsubscribe` / **`ack`** / **`dedupe_check_and_set`** — see [`comm-client-control.schema.json`](../../../../../../openapi/schemas/ws/comm-client-control.schema.json)). The server validates the object, then decodes **`CommClientControlMessage`** for multiplexed topics. **`ack`** carries cumulative **`upTo`** seq acknowledgements (see [COMMUNICATION_POLICY.md §6](../COMMUNICATION_POLICY.md)). **`dedupe_check_and_set`** returns `{"kind":"dedupe_result","firstSighting":...}` (see [COMMUNICATION_POLICY.md §1](../COMMUNICATION_POLICY.md)). Validation failures return `{"kind":"error","message":"..."}`. Legacy client **`type`** frames are rejected during validation with an explicit migration error and are not decoded. REST replacements: [SESSION_SCOPING.md](../../../../../../Documentation/SESSION_SCOPING.md).
 - **Outbound flow control (optional):** When enabled via server configuration, harness **`event`** traffic can be credit-windowed using client **`ack`**; **`lagging`** with **`hint: "flow_pressure"`** may signal soft pressure; state-like topics may coalesce under load. Default deployment leaves this **off** (legacy throughput). Details: [COMMUNICATION_POLICY.md §6](../COMMUNICATION_POLICY.md).
 
 ### Connection lifecycle
@@ -266,51 +267,27 @@ For mode/profile control-plane mutations, REST remains canonical (`PATCH /api/co
 
 Sub-agent runtime layering mirrors Model Pool structure: registry/resolve at the pool boundary, admission via a pool scheduler seam (`SubAgentRunScheduling`), lifecycle coordination (`SubAgentInvocationLifecycleTracking`), actor-confined state store (`SubAgentLifecycleState` in `SubAgentSpawnService`), and resource publication (`SubAgentPoolResourceTopicPublishing`).
 
-### Removed client `type` payloads (historical reference)
+### Removed client `type` payloads (historical tombstone)
 
-The server no longer decodes inbound **`type`** frames. The field list below documents removed client payload shapes only.
+Inbound WebSocket **`type:`** mutation frames are **deleted**. The server rejects them at validation (no decode, no dispatch). Control-plane mutations use REST; observation uses harness **`kind`** subscribe. Orchestration transitions publish only on `conversation/{id}/state` (composition-root topic refresh), not via session-bound side channels.
 
-### Legacy WebSocket request fields (superset, removed)
+**Model catalog:** `GET /api/models` plus `{"kind":"subscribe","topic":"models/registry"}`. **Transcript:** `{"kind":"subscribe","topic":"conversation/<uuid>/events"}`; REST `GET /api/conversations/{id}` for explicit reads.
 
-| Field | Type | Used by |
-|-------|------|---------|
-| `type` | `String` | All requests (discriminator). |
-| `message` | `String?` | Legacy removed send frames and other legacy payloads. |
-| `list` | `[String]?` | Legacy removed send-frame image list payload. |
-| `id` | `String?` | Conversation UUID or message UUID (depends on legacy `type`). |
-| `sourceID` | `String?` | Legacy removed `copy_conversation` payload field. |
-| `modelID` | `String?` | Deprecated fallback for model-addressed legacy requests. |
-| `topic`, `description` | `String?` | Create metadata fields and removed spawn compatibility payload fields. |
-| `interactionMode` | `String?` | Optional mode field on supported routes. |
-| `includeTools`, `includeAgents` | `Bool?` | Removed `send_message` payload fields; default **true** if omitted in historical frames. |
-| `metadata` | `[String:String]?` | Legacy removed `send_trigger_message` metadata payload. |
-| `patch` | `ConversationPatch?` | Removed `patch_conversation` payload field. |
+| Removed `type` | REST / topic replacement |
+|----------------|--------------------------|
+| `select_conversation` | Subscribe to `conversation/{id}/events` and `conversation/{id}/state`. |
+| `create_conversation` | `POST /api/conversations`. |
+| `delete_conversation` | `DELETE /api/conversations/{id}`. |
+| `send_message` | `POST /api/conversations/{id}/messages`. |
+| `revert_to_message` | `POST /api/conversations/{id}/revert`. |
+| `split_conversation` | `POST /api/conversations/{id}/branch`. |
+| `patch_conversation` | `PATCH /api/conversations/{id}`. |
+| `stop_agent_build` | `POST /api/conversations/{id}/cancel`. |
+| `resolve_tool_approval` | `POST /api/conversations/{id}/tool-approvals`. |
+| `push_completion_announce` | `POST /api/conversations/{id}/completion-announcements`. |
+| `list_conversations` | `GET /api/conversations` (+ optional `conversations/registry` subscribe). |
 
-### WebSocket inbound `type` values (client → server, removed)
-
-Legacy **`type`** frames fail control validation before dispatch (typically **`Harness control message requires kind`**). Use the REST or topic replacement in the third column.
-
-**Model catalog:** use **`GET /api/models`** plus harness **`{"kind":"subscribe","topic":"models/registry"}`** (see multiplexed topics below) — **`type:list_models`** is removed.
-
-**Conversation transcript over websocket:** use harness **`{"kind":"subscribe","topic":"conversation/<uuid>/events"}`**. Subscribe snapshots (and **`event`** deltas) publish **`semanticKind: messagesRefresh`** with UTF-8 JSON rows matching **`Message.toJSON(includeImageData:false, includeThumbData:true)`** (same projection as historical **`type: messages`**). **`GET /api/conversations/{id}`** is the explicit REST read path; websocket-native clients must hydrate via topic subscribe rather than substituting REST for live timeline updates.
-
-| `type` | Required fields | REST / topic replacement |
-|--------|-----------------|--------------------------|
-| `select_conversation` | `id` = conversation UUID | Subscribe to `conversation/{id}/events` and `conversation/{id}/state`. |
-| `create_conversation` | — | `POST /api/conversations`. |
-| `copy_conversation` | — | Not on the canonical HTTP control-plane contract (internal host API only). |
-| `delete_conversation` | — | `DELETE /api/conversations/{id}`. |
-| `send_message` | — | `POST /api/conversations/{id}/messages`. |
-| `revert_to_message` | — | `POST /api/conversations/{id}/revert`. |
-| `split_conversation` | — | `POST /api/conversations/{id}/branch`. |
-| `send_trigger_message` | — | Trigger-gate ingress (non-API) plus topic subscriptions. |
-| `patch_conversation` | — | `PATCH /api/conversations/{id}`. |
-| `stop_agent_build` | — | `POST /api/conversations/{id}/cancel`. |
-| `spawn_sub_agent` | — | Not on the canonical HTTP control-plane contract (sub-agent lifecycle via REST cancel/list only). |
-| `resolve_tool_approval` | — | `POST /api/conversations/{id}/tool-approvals`. |
-| `push_completion_announce` | — | `POST /api/conversations/{id}/completion-announcements`. |
-
-`list_conversations` has been retired from the websocket request/response surface. Conversation roster hydration is canonical via REST `GET /api/conversations` (paged/filtered list mode), with optional harness live updates on `conversations/registry` (`kind: subscribe`).
+`copy_conversation`, `spawn_sub_agent`, and `send_trigger_message` are not on the canonical HTTP control-plane contract.
 
 ### WebSocket outbound (server → client)
 
@@ -413,7 +390,8 @@ sequenceDiagram
 1. Implement `APILayerRESTEndpointModule` (see `APILayerRESTModules.swift`).
 2. Register routes in `registerRoutes(on:dependencies:)`.
 3. Append the module in `APILayerModuleAssembly.restModules()`.
-4. Add tests.
+4. Add an entry to [`openapi/route-tenancy-inventory.json`](../../../../../../openapi/route-tenancy-inventory.json) (and pass `APILayerTenancyGuardInvariantTests`) for mutating or conversation-scoped handlers.
+5. Add tests.
 
 ### New harness topic or REST route
 

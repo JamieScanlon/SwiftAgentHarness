@@ -220,13 +220,13 @@ final class ModePatchConflictRuntimeStub: APILayerChatRuntimeManaging, Sendable 
 
     func apiCancelMessageStream() async {}
 
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
-        _ = (id, push)
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async {
+        _ = handler
     }
 
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {
-        _ = id
-    }
+    func apiClearOrchestrationStateTopicRefreshHandler() async {}
 
     func apiCancelRun(conversationID: UUID, runID: UUID) async throws {
         _ = (conversationID, runID)

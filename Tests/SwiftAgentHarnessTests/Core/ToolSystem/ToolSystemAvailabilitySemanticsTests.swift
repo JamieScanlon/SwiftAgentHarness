@@ -76,7 +76,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("gateway identifies halting tool calls from effective entries")
     func gatewayIdentifiesHaltingToolCalls() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let haltingNames = [
             AgentPlanToolProvider.declareAgentBuildCompleteToolName,
             ModeTransitionToolProvider.exitPlanModeToolName,
@@ -198,7 +198,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .denylist(tools: ["blocked_tool"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "allowed_local", description: "", parameters: [], type: .function),
@@ -250,7 +250,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .denylist(tools: ["blocked_tool"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "allowed_local", description: "", parameters: [], type: .function),
@@ -304,7 +304,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
                 definition: ToolDefinition(name: "allowed_local", description: "", parameters: [], type: .function),
@@ -337,7 +337,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let toolName = "gated_tool"
         let entries: [ToolRegistryEntry] = [
             ToolRegistryEntry(
@@ -371,7 +371,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "dangerous_tool", description: "", parameters: [], type: .function),
             source: .local
@@ -402,7 +402,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "filesystem_write", description: "", parameters: [], type: .function),
             source: .local
@@ -432,7 +432,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "filesystem_write", description: "", parameters: [], type: .function),
             source: .local
@@ -484,7 +484,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
             source: .local
@@ -516,7 +516,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "privileged_tool", description: "", parameters: [], type: .function),
             source: .local
@@ -547,7 +547,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let mcpEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "remote_search", description: "", parameters: [], type: .mcpTool),
             source: .mcp
@@ -577,7 +577,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "local_runner", description: "", parameters: [], type: .function),
             source: .local,
@@ -612,7 +612,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .agent
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let localTool = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_local", description: "", parameters: [], type: .function),
             source: .local
@@ -621,7 +621,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let basePolicy = ToolPolicyConfiguration.unrestricted
 
         let localDecision = gateway.evaluateAvailability(
@@ -660,12 +660,12 @@ struct ToolSystemAvailabilitySemanticsTests {
             metadata: .object(["subAgentDepth": .double(4)]),
             parentConversationID: UUID()
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let a2aDelegate = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let basePolicy = ToolPolicyConfiguration.unrestricted
         let decision = gateway.evaluateAvailability(
             entry: a2aDelegate,
@@ -695,13 +695,16 @@ struct ToolSystemAvailabilitySemanticsTests {
                 "subAgentTenantScope": .string("default"),
             ])
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let delegate = ToolRegistryEntry(
             definition: ToolDefinition(name: "Coding Agent", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
-        let policy = ToolPolicyConfiguration.loadFromPromptConfigBundle()
+        let configuration = try! HarnessConversationTestFixtures.promptConfigFixture()
+        let classifier = DefaultSubAgentPool(
+            hostingPolicyConfiguration: configuration.subAgentHostingPolicy
+        )
+        let policy = configuration.toolPolicy
         let decision = gateway.evaluateAvailability(
             entry: delegate,
             conversation: conversation,
@@ -724,12 +727,12 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .agent
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let delegate = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_remote", description: "", parameters: [], type: .a2aAgent),
             source: .a2a
         )
-        let classifier = DefaultSubAgentPool()
+        let classifier = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let policy = ToolPolicyConfiguration.unrestricted
         let decision = gateway.evaluateAvailability(
             entry: delegate,
@@ -753,7 +756,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("dispatch contract disables parallel only for unknown static metadata")
     func dispatchPlannerConservativeFallback() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true
         )
@@ -795,7 +798,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("dispatch contract planner keeps empty effective set conservative")
     func dispatchPlannerEmptySetConservative() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true
         )
@@ -805,7 +808,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("dispatch contract carries configured planner mode")
     func dispatchContractPlannerModePropagation() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true,
             dispatchPlannerMode: .mixedDeterministic
@@ -826,7 +829,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .allowlist(tools: ["read_file", "search"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "write_file", description: "", parameters: [], type: .function),
             source: .local
@@ -860,7 +863,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .allowlist(tools: ["read_file", "search"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local
@@ -893,7 +896,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .allowlist(tools: ["read"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local
@@ -922,7 +925,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "read_file", description: "", parameters: [], type: .function),
             source: .local
@@ -957,7 +960,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .denylist(tools: ["dangerous_cmd"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "dangerous_cmd", description: "", parameters: [], type: .function),
             source: .local
@@ -988,7 +991,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             systemPrompt: "sys",
             interactionMode: .agent
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "any_tool", description: "", parameters: [], type: .function),
             source: .local
@@ -1019,7 +1022,7 @@ struct ToolSystemAvailabilitySemanticsTests {
             interactionMode: .agent,
             routingPrefs: ConversationRoutingPrefs(explicitToolPolicy: nil)
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "any_tool", description: "", parameters: [], type: .function),
             source: .local
@@ -1052,7 +1055,7 @@ struct ToolSystemAvailabilitySemanticsTests {
                 explicitToolPolicy: .allowlist(tools: ["read_file"], skills: [])
             )
         )
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "write_file", description: "", parameters: [], type: .function),
             source: .local
@@ -1076,7 +1079,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("dispatch contract matrix enables parallel unless static metadata is unknown")
     func dispatchContractPureOnlyMatrix() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true
         )
@@ -1114,7 +1117,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("evaluateCallAvailability defers sideEffects approval for read-only bash")
     func evaluateCallAvailabilityReadOnlyBash() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
             source: .local,
@@ -1147,7 +1150,7 @@ struct ToolSystemAvailabilitySemanticsTests {
 
     @Test("evaluateCallAvailability requires approval for mutating bash under sideEffects")
     func evaluateCallAvailabilityMutatingBashRequiresApproval() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let entry = ToolRegistryEntry(
             definition: ToolDefinition(name: "bash", description: "", parameters: [], type: .function),
             source: .local,

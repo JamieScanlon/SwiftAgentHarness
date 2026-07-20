@@ -8,15 +8,17 @@ enum ToolPolicyCoherenceAnalyzer {
         entries: [ToolRegistryEntry],
         modePolicyContext: ModePolicyContext,
         toolPolicy: ToolPolicyConfiguration,
-        conversation: ModelConversation?
+        conversation: ModelConversation?,
+        grantTable: ToolVisibilityGrantTable = .empty
     ) -> ToolPolicyCoherenceReport {
         let groupIndex = ToolPolicyGroupIndex.build(from: entries)
         let registryNames = Set(entries.map { ToolNamePolicyNormalization.registryName($0) })
-        let profileID = modePolicyContext.resolvedProfile.id
+        let profile = modePolicyContext.resolvedProfile
+        let profileID = profile.id
         var issues: [ToolPolicyCoherenceIssue] = []
 
-        let modeAllow = modePolicyContext.resolvedProfile.tools.allow
-        let modeDeny = modePolicyContext.resolvedProfile.tools.deny
+        let modeAllow = profile.tools.allow
+        let modeDeny = profile.tools.deny
         let modeAllowRules = ToolPolicyRulesCache.parseOptionalList(modeAllow) ?? []
         let modeDenyRules = ToolPolicyRulesCache.parseList(modeDeny)
 
@@ -42,6 +44,11 @@ enum ToolPolicyCoherenceAnalyzer {
             allowScope: .modeToolsAllow,
             entries: entries,
             groupIndex: groupIndex
+        ))
+        issues.append(contentsOf: grantInactiveWithoutOptInIssues(
+            profile: profile,
+            entries: entries,
+            grantTable: grantTable
         ))
 
         if let routingPrefs = conversation?.routingPrefs,
@@ -99,6 +106,22 @@ enum ToolPolicyCoherenceAnalyzer {
             result.append(issue)
         }
         return result
+    }
+
+    private static func grantInactiveWithoutOptInIssues(
+        profile: ResolvedModeProfile,
+        entries: [ToolRegistryEntry],
+        grantTable: ToolVisibilityGrantTable
+    ) -> [ToolPolicyCoherenceIssue] {
+        grantTable.grantsInactiveWithoutOptIn(profile: profile, entries: entries).map { item in
+            ToolPolicyCoherenceIssue(
+                kind: .grantInactiveWithoutOptIn,
+                scope: .hostVisibilityGrant,
+                ruleToken: item.record.id,
+                detail: "Host registered visibility grant '\(item.record.id)' matching \(item.matchedToolCount) tool(s), but this profile did not opt into host co-authorship (`allowsHostGrants` is false). The grant is a no-op here — set allowsHostGrants: true to invite the host to co-author this mode's allow list, or list the tools via globs / group:mcp.",
+                shadowedBy: []
+            )
+        }
     }
 
     private static func unknownIssues(

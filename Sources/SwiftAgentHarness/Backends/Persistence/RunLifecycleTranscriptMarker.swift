@@ -79,4 +79,54 @@ struct RunLifecycleTranscriptMarkerPayload: Codable, Sendable, Equatable {
             detail: terminalReasonDetail
         )
     }
+
+    /// Boundary-authoritative terminal reason for derived run projections.
+    /// Category always comes from ``kind``; structured fields enrich only and never re-categorize.
+    func projectedTerminalReason(for kind: RunLifecycleTranscriptMarkerKind) -> ConversationRunTerminalReason {
+        let structuredDetail = terminalReasonDetail?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailOrNil: String? = {
+            guard let structuredDetail, !structuredDetail.isEmpty else { return nil }
+            return structuredDetail
+        }()
+        let reasonDetail = reason?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasonOrNil: String? = {
+            guard let reasonDetail, !reasonDetail.isEmpty else { return nil }
+            return reasonDetail
+        }()
+
+        switch kind {
+        case .run_cancelled:
+            return ConversationRunTerminalReason(
+                category: .externalCancellation,
+                detail: detailOrNil ?? reasonOrNil
+            )
+        case .run_bounded:
+            let structuredBounded = terminalReasonBounded.flatMap { ConversationRunBoundedReason(rawValue: $0) }
+            if let structuredBounded {
+                return ConversationRunTerminalReason(
+                    category: .boundedStop,
+                    boundedReason: structuredBounded,
+                    detail: detailOrNil
+                )
+            }
+            if let reasonOrNil, let bounded = ConversationRunBoundedReason(rawValue: reasonOrNil) {
+                return ConversationRunTerminalReason(
+                    category: .boundedStop,
+                    boundedReason: bounded,
+                    detail: detailOrNil
+                )
+            }
+            return ConversationRunTerminalReason(
+                category: .boundedStop,
+                detail: detailOrNil ?? reasonOrNil
+            )
+        case .run_errored, .run_orphaned:
+            return ConversationRunTerminalReason(
+                category: .failure,
+                detail: detailOrNil ?? reasonOrNil ?? kind.rawValue
+            )
+        }
+    }
 }

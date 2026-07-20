@@ -56,16 +56,43 @@ enum MemoryContentScanner {
         return .success(())
     }
 
+    static func isPathInsideSkillsDirectory(_ path: String, skillsDirectory: URL) -> Bool {
+        WorkspacePathPolicy.isPathInsideRoot(path, root: skillsDirectory.standardizedFileURL.path)
+    }
+
+    static func validateWriteIfSensitiveTarget(
+        path: String,
+        memoryDirectory: URL?,
+        userMemoryDirectory: URL? = nil,
+        skillsDirectory: URL?,
+        content: String
+    ) -> Result<Void, MemoryWriteScanError> {
+        if let memoryDirectory,
+           AgentMemoryPathResolver.isPathInsideAnyMemoryDirectory(
+               path,
+               projectMemoryDirectory: memoryDirectory,
+               userMemoryDirectory: userMemoryDirectory
+           ) {
+            return validateWrite(content)
+        }
+        if let skillsDirectory,
+           isPathInsideSkillsDirectory(path, skillsDirectory: skillsDirectory) {
+            return validateWrite(content)
+        }
+        return .success(())
+    }
+
     static func validateWriteIfMemoryTarget(
         path: String,
         memoryDirectory: URL?,
         content: String
     ) -> Result<Void, MemoryWriteScanError> {
-        guard let memoryDirectory,
-              AgentMemoryPathResolver.isPathInsideMemoryDirectory(path, memoryDirectory: memoryDirectory) else {
-            return .success(())
-        }
-        return validateWrite(content)
+        validateWriteIfSensitiveTarget(
+            path: path,
+            memoryDirectory: memoryDirectory,
+            skillsDirectory: nil,
+            content: content
+        )
     }
 }
 

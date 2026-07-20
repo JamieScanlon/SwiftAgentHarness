@@ -19,19 +19,22 @@ public struct RunLaneOriginContext: Sendable, Equatable {
     public let origin: RunLaneOriginKind
     public let parentRunID: UUID?
     public let parentConversationID: UUID?
+    public let ownerAccountID: UUID?
 
     public init(
         sessionKey: String,
         runID: UUID,
         origin: RunLaneOriginKind,
         parentRunID: UUID? = nil,
-        parentConversationID: UUID? = nil
+        parentConversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil
     ) {
         self.sessionKey = sessionKey
         self.runID = runID
         self.origin = origin
         self.parentRunID = parentRunID
         self.parentConversationID = parentConversationID
+        self.ownerAccountID = ownerAccountID
     }
 }
 
@@ -41,6 +44,7 @@ public struct RunLaneAdmissionContext: Sendable, Equatable {
     public let globalLane: RuntimeGlobalLaneKind
     public let parentRunID: UUID?
     public let parentConversationID: UUID?
+    public let ownerAccountID: UUID?
     public let originSurface: String?
 
     public init(
@@ -49,6 +53,7 @@ public struct RunLaneAdmissionContext: Sendable, Equatable {
         globalLane: RuntimeGlobalLaneKind,
         parentRunID: UUID? = nil,
         parentConversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil,
         originSurface: String? = nil
     ) {
         self.sessionKey = sessionKey
@@ -56,6 +61,7 @@ public struct RunLaneAdmissionContext: Sendable, Equatable {
         self.globalLane = globalLane
         self.parentRunID = parentRunID
         self.parentConversationID = parentConversationID
+        self.ownerAccountID = ownerAccountID
         self.originSurface = originSurface
     }
 }
@@ -69,6 +75,7 @@ enum RunLaneResolver {
             globalLane: globalLane,
             parentRunID: context.parentRunID,
             parentConversationID: context.parentConversationID,
+            ownerAccountID: context.ownerAccountID,
             originSurface: originSurfaceLabel(for: context.origin)
         )
     }

@@ -8,6 +8,7 @@ import SwiftAgentKit
 
 struct SessionCatalogResourcePayload: Codable, Equatable, Sendable {
     var extraInstructions: String?
+    var systemPromptFullOverride: Bool?
     var tags: [String]?
     var routingPrefs: ConversationRoutingPrefs?
     var budgetSnapshot: ConversationBudgetSnapshot?
@@ -33,6 +34,7 @@ enum SessionCatalogResourceCodec {
     static func payload(from conversation: ModelConversation) -> SessionCatalogResourcePayload {
         SessionCatalogResourcePayload(
             extraInstructions: conversation.extraInstructions,
+            systemPromptFullOverride: conversation.systemPromptFullOverride ? true : nil,
             tags: conversation.tags.isEmpty ? nil : conversation.tags,
             routingPrefs: conversation.routingPrefs,
             budgetSnapshot: conversation.budgetSnapshot,
@@ -60,6 +62,7 @@ enum SessionCatalogResourceCodec {
         }
         guard let payload = decode(record.resourceJSON) else { return }
         model.extraInstructions = payload.extraInstructions
+        model.systemPromptFullOverride = payload.systemPromptFullOverride ?? false
         if let tags = payload.tags { model.tags = tags }
         if let prefs = payload.routingPrefs { model.routingPrefs = prefs }
         if let budget = payload.budgetSnapshot { model.budgetSnapshot = budget }
@@ -100,6 +103,7 @@ enum SessionCatalogResourceCodec {
 private extension SessionCatalogResourcePayload {
     var isEmpty: Bool {
         extraInstructions == nil
+            && systemPromptFullOverride == nil
             && tags == nil
             && routingPrefs == nil
             && budgetSnapshot == nil

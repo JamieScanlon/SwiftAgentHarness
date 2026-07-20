@@ -77,7 +77,27 @@
           "glob",
           "grep",
           "process",
-          "process_send_keys"
+          "process_send_keys",
+          "XcodeLS",
+          "XcodeMV",
+          "XcodeRM",
+          "XcodeGrep",
+          "XcodeUpdate",
+          "RenderPreview",
+          "GetBuildLog",
+          "RunSomeTests",
+          "DocumentationSearch",
+          "BuildProject",
+          "XcodeMakeDir",
+          "XcodeWrite",
+          "XcodeGlob",
+          "XcodeListNavigatorIssues",
+          "ExecuteSnippet",
+          "XcodeRefreshCodeIssuesInFile",
+          "RunAllTests",
+          "XcodeRead",
+          "GetTestList"
+
         ]
       },
       "runtime": {
@@ -105,5 +125,10 @@
         "maxDepth": 1
       }
     }
-  ]
+  ],
+  "memory": {
+    "activeMemoryEnabled": true,
+    "activeMemoryStandingEnabled": true,
+    "activeMemorySituationalEnabled": true
+  }
 }

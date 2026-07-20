@@ -6,6 +6,10 @@
 - Prefer modern Swift best practices, including structured concurrency and `async`/`await`.
 - Avoid legacy callback-based APIs in new code unless required by an external dependency.
 
+## Harness Template
+
+- The `harness-template` folder contains a thoroughly researched spec that should be considered locked and read-only. The goal of this project it to produce a faithfully spec-aligned implementation of the contents of the Harness Template. Should and spec related inconsistancies, issues, or bugs be found, you are to summarize them in a document for further review.
+
 ## Testing Requirements
 
 - All new code must include tests.
@@ -22,7 +26,7 @@
 #### Hanging Tests
 We frequently encounter hanging tests due to the complexity of the project and the amount of shared state. Under normal conditions all tests should run in under a minute. If it's taking longer than a minute there is a good change that the tests have hung. Also if you encounter the message:
 ```
-Another instance of SwiftPM (PID: XXXXX) is already running using '/Users/marvinscanlon/Projects/sileniaAI/SileniaAIServer/.build', waiting until that process has finished execution...
+Another instance of SwiftPM (PID: XXXXX) is already running using '/Path/To/Project/.build', waiting until that process has finished execution...
 ```
 That is a good indication that a former test run wan hung and not killed correctly. If you encounter these conditions, kill all of the SwiftPM test instances before running. Try to identify and fix the hanging test.
 
@@ -40,7 +44,7 @@ In order to avoid flaky tests it is important that tests do not depend on shared
 - Follow Swift 6 strict concurrency
 - Use Swift @Observable over ObservableObject
 - Use code comments sparingly and only for non obvious implementations, gotchas, etc. (SwiftDoc-style documentation are the exception). Never referece plans or other non-code documents in code comments.
-- **Tool descriptions** — Treat `ToolDefinition.description` and model-facing parameter `description` fields as prompt text. Do not reword for style without stating behavioral intent. When changing descriptions, document affected tool names and rationale in the PR/commit message and follow [docs/process/tool-description-change-control.md](./docs/process/tool-description-change-control.md). Update [CHANGELOG.md](./CHANGELOG.md) for non-typo behavioral edits.
+- **Tool descriptions** — Treat `ToolDefinition.description` and model-facing parameter `description` fields as prompt text. Do not reword for style without stating behavioral intent. When changing descriptions, document affected tool names and rationale in the PR/commit message.
 
 ## Antipatterns
 

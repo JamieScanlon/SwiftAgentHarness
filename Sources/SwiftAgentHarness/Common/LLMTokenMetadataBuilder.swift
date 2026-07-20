@@ -10,6 +10,9 @@ import SwiftAgentKit
 /// ``LLMMetadata/completionTokens``.
 enum LLMMetadataKeys {
     static let remainingContextTokens = "remainingContextTokens"
+    static let cacheReadTokens = "cacheReadTokens"
+    static let cacheWriteTokens = "cacheWriteTokens"
+    static let usageIsProviderReported = "usageIsProviderReported"
 }
 
 enum LLMTokenMetadataBuilder {
@@ -32,6 +35,9 @@ enum LLMTokenMetadataBuilder {
         totalTokens: Int?,
         contextWindowTokens: Int? = nil,
         extraModelMetadata: JSON? = nil,
+        cacheReadTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
+        usageIsProviderReported: Bool = false,
         finishReason: String? = nil
     ) -> LLMMetadata {
         var merged: [String: JSON] = [:]
@@ -41,6 +47,15 @@ enum LLMTokenMetadataBuilder {
         if let remainingContextTokens {
             merged[LLMMetadataKeys.remainingContextTokens] = .integer(remainingContextTokens)
         }
+        if let cacheReadTokens, cacheReadTokens >= 0 {
+            merged[LLMMetadataKeys.cacheReadTokens] = .integer(cacheReadTokens)
+        }
+        if let cacheWriteTokens, cacheWriteTokens >= 0 {
+            merged[LLMMetadataKeys.cacheWriteTokens] = .integer(cacheWriteTokens)
+        }
+        if usageIsProviderReported {
+            merged[LLMMetadataKeys.usageIsProviderReported] = .boolean(true)
+        }
         let modelMeta: JSON? = merged.isEmpty ? nil : .object(merged)
         return LLMMetadata(
             promptTokens: inputTokens,
@@ -49,6 +64,38 @@ enum LLMTokenMetadataBuilder {
             contextWindowTokens: contextWindowTokens,
             modelMetadata: modelMeta,
             finishReason: finishReason
+        )
+    }
+
+    static func merging(
+        base: LLMMetadata?,
+        usage: NormalizedUsage?,
+        usageIsProviderReported: Bool = false
+    ) -> LLMMetadata? {
+        guard let usage else { return base }
+        let inputTokens = usage.inputTokens ?? base?.promptTokens
+        let outputTokens = usage.outputTokens ?? base?.completionTokens
+        let totalTokens: Int?
+        if let inputTokens, let outputTokens {
+            totalTokens = inputTokens + outputTokens
+        } else {
+            totalTokens = base?.totalTokens
+        }
+        let reported = usageIsProviderReported
+            || CanonicalUsageExtraction.valuesAreProviderReported(from: base)
+            || usage.cacheReadTokens != nil
+            || usage.cacheWriteTokens != nil
+        return build(
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            remainingContextTokens: effectiveRemainingContextTokens(from: base),
+            totalTokens: totalTokens,
+            contextWindowTokens: base?.contextWindowTokens,
+            extraModelMetadata: base?.modelMetadata,
+            cacheReadTokens: usage.cacheReadTokens ?? CanonicalUsageExtraction.cacheReadTokens(from: base),
+            cacheWriteTokens: usage.cacheWriteTokens ?? CanonicalUsageExtraction.cacheWriteTokens(from: base),
+            usageIsProviderReported: reported,
+            finishReason: base?.finishReason
         )
     }
 

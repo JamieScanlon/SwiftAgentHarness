@@ -38,6 +38,32 @@ struct AgentLoopPorts: Sendable {
     let contextCompaction: ContextCompactionConfiguration
     let modeRegistry: any ModeRegistryAccessing
     let logger: Logger?
+    /// Optional reconnect hook (tests). Production falls back to `orchestrator.mcpManager.reconnectClient(named:)`.
+    let reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)?
+
+    init(
+        model: any RuntimeModelPort,
+        context: any RuntimeContextPort,
+        tools: any RuntimeToolPort,
+        conversation: any RuntimeConversationPort,
+        memory: (any RuntimeMemoryPort)?,
+        agentHarness: AgentHarnessConfiguration,
+        contextCompaction: ContextCompactionConfiguration,
+        modeRegistry: any ModeRegistryAccessing,
+        logger: Logger?,
+        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil
+    ) {
+        self.model = model
+        self.context = context
+        self.tools = tools
+        self.conversation = conversation
+        self.memory = memory
+        self.agentHarness = agentHarness
+        self.contextCompaction = contextCompaction
+        self.modeRegistry = modeRegistry
+        self.logger = logger
+        self.reconnectMCPClient = reconnectMCPClient
+    }
 }
 
 protocol RuntimeModelPort: Sendable {
@@ -64,6 +90,7 @@ protocol RuntimeContextPort: Sendable {
         compaction: CompactionHint,
         configuration: AgentRuntimeTurnConfiguration
     ) async throws -> [Message]
+    func projectedMemorySelectionKeys(conversationID: UUID) async -> Set<String>
     func afterTurn(conversationID: UUID, runID: UUID?, terminal: ConversationRunTerminalReason?) async
 }
 
@@ -128,6 +155,17 @@ protocol RuntimeConversationPort: Sendable {
 }
 
 protocol RuntimeMemoryPort: Sendable {
-    func blockingRecallSummary(conversationID: UUID, userQuery: String) async -> String?
-    func prefetchRecall(conversationID: UUID, userQuery: String) async
+    func blockingRecallSummary(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String>
+    ) async -> ActiveMemoryRecallOutcome
+    func prefetchRecall(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
+    ) async
 }

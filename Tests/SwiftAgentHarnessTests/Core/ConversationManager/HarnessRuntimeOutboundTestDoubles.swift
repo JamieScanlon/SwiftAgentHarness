@@ -89,6 +89,11 @@ enum HarnessRuntimeOutboundTestDoubles {
             configuration: HarnessRuntimeSession.Configuration,
             gatingOverride: ContextCompactionGatingOptions?
         ) async -> [Message] { unimplemented() }
+
+        func cachedProjectedMemorySelectionKeys(conversationID: UUID) async -> Set<String> {
+            let _ = conversationID
+            return unimplemented()
+        }
     }
 
     private struct UnimplementedLifecycle: ConversationLifecycleServicing {

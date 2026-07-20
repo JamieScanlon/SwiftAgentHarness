@@ -64,11 +64,13 @@ public actor ConversationPersistenceDomain {
 
     func persistSystemPromptAssemblyCheckpointIfNeeded(
         conversationID: UUID,
-        fingerprint: String
+        fingerprint: String,
+        assembledPromptDigest: String? = nil
     ) throws {
         try ContextCheckpointWriter.persistSystemPromptAssemblyCheckpointIfNeeded(
             conversationID: conversationID,
             fingerprint: fingerprint,
+            assembledPromptDigest: assembledPromptDigest,
             persistence: stack
         )
     }
@@ -105,8 +107,10 @@ public actor ConversationPersistenceDomain {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
+        lastModelRequestAtByConversationID: [UUID: Date],
         lastContextCompactionLLMDateByConversationID: [UUID: Date],
-        conversationTransformConfiguration: ConversationTransformConfiguration
+        conversationTransformConfiguration: ConversationTransformConfiguration,
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) -> ContextEngineAssembleRequest {
         let (events, frontier) = stack.conversationManager.loadConversationEventsWithFrontier(conversationID: conversation.id)
         let derivedTailAtProjectionStart = events
@@ -129,13 +133,15 @@ public actor ConversationPersistenceDomain {
             lastPromptTokens: lastPromptTokens,
             events: events,
             eventLogFrontier: frontier,
-            lastLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
+            lastCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             persistCompactionCheckpoint: persistCompactionCheckpoint,
             allowProactiveCompactionTriggers: allowProactiveCompactionTriggers,
             compactionLockAlreadyHeldByCaller: compactionLockAlreadyHeldByCaller,
             derivedTailAtProjectionStart: derivedTailAtProjectionStart,
             projectionPolicy: projectionPolicy,
-            preCompactionMemoryFlushPolicy: preCompactionMemoryFlushPolicy
+            preCompactionMemoryFlushPolicy: preCompactionMemoryFlushPolicy,
+            workspacePolicy: workspacePolicy
         )
     }
 

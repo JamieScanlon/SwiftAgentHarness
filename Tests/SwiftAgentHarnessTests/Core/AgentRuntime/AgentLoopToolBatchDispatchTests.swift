@@ -51,7 +51,11 @@ struct AgentLoopToolBatchDispatchTests {
             dispatchContract: AgentRuntimeToolDispatchContract(
                 parallelDispatchEnabled: parallelEnabled,
                 dispatchPlannerMode: plannerMode,
-                pendingToolTimeoutSeconds: nil
+                pendingToolTimeoutSeconds: nil,
+                toolCallTimeoutSeconds: 300,
+                toolCallWatchdogIntervalSeconds: 20,
+                onToolTimeout: .continue,
+                mcpReconnectOnToolTimeout: false
             )
         )
     }
@@ -66,7 +70,7 @@ struct AgentLoopToolBatchDispatchTests {
 
     @Test("effective dispatch contract path never emits Kit allParallel")
     func effectiveContractPathNeverEmitsKitAllParallel() {
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let readOnlyEntry = makeEntry(name: "read_a")
         let policy = ToolPolicyConfiguration(
             parallelDispatchEnabled: true,
@@ -108,7 +112,11 @@ struct AgentLoopToolBatchDispatchTests {
             dispatchContract: AgentRuntimeToolDispatchContract(
                 parallelDispatchEnabled: true,
                 dispatchPlannerMode: .mixedDeterministic,
-                pendingToolTimeoutSeconds: nil
+                pendingToolTimeoutSeconds: nil,
+                toolCallTimeoutSeconds: 300,
+                toolCallWatchdogIntervalSeconds: 20,
+                onToolTimeout: .continue,
+                mcpReconnectOnToolTimeout: false
             )
         )
         let calls = [
@@ -148,7 +156,11 @@ struct AgentLoopToolBatchDispatchTests {
         let contract = AgentRuntimeToolDispatchContract(
             parallelDispatchEnabled: true,
             dispatchPlannerMode: .mixedDeterministic,
-            pendingToolTimeoutSeconds: 30
+            pendingToolTimeoutSeconds: 30,
+            toolCallTimeoutSeconds: 300,
+            toolCallWatchdogIntervalSeconds: 20,
+            onToolTimeout: .continue,
+            mcpReconnectOnToolTimeout: false
         )
         #expect(contract.parallelDispatchEnabled == true)
         #expect(AgentLoopToolDispatch.kitDispatchPlannerMode(contract.dispatchPlannerMode) == .mixedDeterministic)
@@ -184,7 +196,7 @@ struct TurnLoopBatchWiringTests {
         )
     }
 
-    @Test("multi tool-call turn commits results in call order via dispatchBatch")
+    @Test("multi tool-call turn commits results in call order with per-call lifecycle pairing")
     func multiToolCallCommitsInCallOrder() async throws {
         let model = makeModel()
         let conversation = ModelConversation(

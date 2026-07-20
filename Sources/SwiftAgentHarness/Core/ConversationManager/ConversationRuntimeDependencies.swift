@@ -13,6 +13,8 @@ struct ConversationRuntimeDependencies {
     let callScheduler: any ModelCallScheduling
     let invocationCoordinator: any ModelInvocationLifecycleTracking
     let runtimeLaneCoordinator: RuntimeLaneCoordinator
+    /// Full PromptConfig snapshot for the session (parsed once at composition root).
+    let configurationSet: HarnessConfigurationSet
     let toolPolicy: ToolPolicyConfiguration
     let trustPolicyConfiguration: TrustPolicyConfiguration
     let agentHarness: AgentHarnessConfiguration
@@ -23,6 +25,9 @@ struct ConversationRuntimeDependencies {
     let rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?
     let delegateCostTracker: (any DelegateCostTracking)?
     let runtimeExecutorFactory: AgentRuntimeExecutorFactory
+    let workspacePolicy: HarnessWorkspacePolicy
+    /// Session-scoped host visibility grants (MCP / additional tool providers).
+    let visibilityGrants: ToolVisibilityGrantStore
     let logger: Logger?
 
     init(
@@ -35,6 +40,7 @@ struct ConversationRuntimeDependencies {
         callScheduler: any ModelCallScheduling,
         invocationCoordinator: any ModelInvocationLifecycleTracking,
         runtimeLaneCoordinator: RuntimeLaneCoordinator,
+        configurationSet: HarnessConfigurationSet = .lockedDownBaseline,
         toolPolicy: ToolPolicyConfiguration,
         trustPolicyConfiguration: TrustPolicyConfiguration,
         agentHarness: AgentHarnessConfiguration,
@@ -45,6 +51,8 @@ struct ConversationRuntimeDependencies {
         rankedRegistryEntriesProvider: (@Sendable (ModelReference) async -> [ModelRegistryEntry])?,
         delegateCostTracker: (any DelegateCostTracking)?,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        visibilityGrants: ToolVisibilityGrantStore = ToolVisibilityGrantStore(),
         logger: Logger?
     ) {
         self.persistenceDomain = persistenceDomain
@@ -56,6 +64,7 @@ struct ConversationRuntimeDependencies {
         self.callScheduler = callScheduler
         self.invocationCoordinator = invocationCoordinator
         self.runtimeLaneCoordinator = runtimeLaneCoordinator
+        self.configurationSet = configurationSet
         self.toolPolicy = toolPolicy
         self.trustPolicyConfiguration = trustPolicyConfiguration
         self.agentHarness = agentHarness
@@ -66,6 +75,8 @@ struct ConversationRuntimeDependencies {
         self.rankedRegistryEntriesProvider = rankedRegistryEntriesProvider
         self.delegateCostTracker = delegateCostTracker
         self.runtimeExecutorFactory = runtimeExecutorFactory
+        self.workspacePolicy = workspacePolicy
+        self.visibilityGrants = visibilityGrants
         self.logger = logger
     }
 }

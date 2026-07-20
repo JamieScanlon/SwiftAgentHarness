@@ -57,6 +57,8 @@
         "promptCacheEstimatedCachedInputTokens": { "type": "integer", "minimum": 0 },
         "promptCacheEstimatedCacheWriteTokens": { "type": "integer", "minimum": 0 },
         "promptCacheEstimatedSavingsUSD": { "type": "number" },
+        "promptCacheValuesAreProviderReported": { "type": "boolean" },
+        "promptCacheUnexpectedCacheWrite": { "type": "boolean" },
         "errorClass": { "type": "string" },
         "errorCode": { "type": "string" },
         "latencyMs": { "type": "number" }

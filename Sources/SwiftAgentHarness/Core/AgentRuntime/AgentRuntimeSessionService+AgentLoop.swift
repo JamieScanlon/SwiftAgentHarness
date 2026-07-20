@@ -294,6 +294,9 @@ extension AgentRuntimeSessionService {
                     gatingOverride: gatingOverride
                 )
             },
+            projectedMemorySelectionKeysFn: { conversationID in
+                await contextProjection.cachedProjectedMemorySelectionKeys(conversationID: conversationID)
+            },
             afterTurnFn: { [self] conversationID, runID, terminal in
                 await self.afterTurnContextEngineLifecycle(
                     conversationID: conversationID,
@@ -343,7 +346,7 @@ extension AgentRuntimeSessionService {
                     snapshot: snapshot,
                     configuration: configuration,
                     conversation: conversation,
-                    gateway: DefaultToolSystemGateway(),
+                    gateway: self.toolSystemGateway,
                     parentLookup: { [deps = self.deps] id in
                         await deps.persistenceDomain.modelConversation(id: id)
                     },
@@ -466,7 +469,7 @@ extension AgentRuntimeSessionService {
                         snapshot: refreshedSnapshot,
                         configuration: approvalConfig,
                         conversation: conversation,
-                        gateway: DefaultToolSystemGateway(),
+                        gateway: self.toolSystemGateway,
                         parentLookup: { [deps = self.deps] id in
                             await deps.persistenceDomain.modelConversation(id: id)
                         },
@@ -498,7 +501,7 @@ extension AgentRuntimeSessionService {
                     snapshot: snapshot,
                     configuration: configuration,
                     conversation: conversation,
-                    gateway: DefaultToolSystemGateway(),
+                    gateway: self.toolSystemGateway,
                     parentLookup: { [deps = self.deps] id in
                         await deps.persistenceDomain.modelConversation(id: id)
                     },
@@ -607,19 +610,33 @@ extension AgentRuntimeSessionService {
             }
         )
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { [self] conversationID, userQuery in
+            recallFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled, excludedSelectionKeys in
                 guard let memoryService = (self.deps.contextEngine as? DefaultContextEngine)?.memoryService,
                       let session = await memoryService.sessionContext(for: conversationID) else {
-                    return nil
+                    return .skipped(
+                        reason: "no_session",
+                        queryMode: MemoryConfiguration.default.activeMemoryQueryMode
+                    )
                 }
-                return await memoryService.activeRecallSummary(session: session, userQuery: userQuery)
+                return await memoryService.activeRecallSummary(
+                    session: session,
+                    messages: messages,
+                    anchorUserMessageID: anchorUserMessageID,
+                    sessionEnabled: sessionEnabled,
+                    excludedSelectionKeys: excludedSelectionKeys
+                )
             },
-            prefetchFn: { [self] conversationID, userQuery in
+            prefetchFn: { [self] conversationID, messages, anchorUserMessageID, sessionEnabled in
                 guard let memoryService = (self.deps.contextEngine as? DefaultContextEngine)?.memoryService,
                       let session = await memoryService.sessionContext(for: conversationID) else {
                     return
                 }
-                await memoryService.prefetchSituationalRecall(session: session, userQuery: userQuery)
+                await memoryService.prefetchSituationalRecall(
+                    session: session,
+                    messages: messages,
+                    anchorUserMessageID: anchorUserMessageID,
+                    sessionEnabled: sessionEnabled
+                )
             }
         )
         return AgentLoopPorts(

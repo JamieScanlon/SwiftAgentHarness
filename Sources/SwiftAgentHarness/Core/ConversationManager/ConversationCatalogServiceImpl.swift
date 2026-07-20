@@ -4,15 +4,18 @@ import SwiftAgentKit
 struct ConversationCatalogServiceImpl: ConversationCatalogServicing {
     let deps: ConversationRuntimeDependencies
     let selection: ConversationSelectionAccessing
+    let skillActivation: SkillActivationService?
     let registryOwnerAccountScope: @Sendable () -> UUID?
 
     init(
         deps: ConversationRuntimeDependencies,
         selection: ConversationSelectionAccessing,
+        skillActivation: SkillActivationService? = nil,
         registryOwnerAccountScope: @escaping @Sendable () -> UUID? = { nil }
     ) {
         self.deps = deps
         self.selection = selection
+        self.skillActivation = skillActivation
         self.registryOwnerAccountScope = registryOwnerAccountScope
     }
 
@@ -46,10 +49,62 @@ struct ConversationCatalogServiceImpl: ConversationCatalogServicing {
     }
 
     func projectConversation(conversationID: UUID, request: ConversationProjectRequest) async throws -> ConversationProjectResponse {
-        guard await deps.persistenceDomain.modelConversation(id: conversationID) != nil else {
+        guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID) else {
             throw ConversationServiceError.conversationNotFound
         }
-        return try await deps.persistenceDomain.projectConversation(conversationID: conversationID, request: request)
+        var response = try await deps.persistenceDomain.projectConversation(conversationID: conversationID, request: request)
+        guard SystemPromptAssemblyProjector.includeAssembledSystemPrompt(in: request) else {
+            return response
+        }
+        let atEventID = SystemPromptAssemblyProjector.atEventID(
+            in: request,
+            defaultFrontier: response.metadata.frontierEventID
+        )
+        let baseMessages = await deps.persistenceDomain.transcriptBaseMessages(for: conversation)
+        let (events, _) = await deps.persistenceDomain.loadConversationEventsWithFrontier(conversationID: conversationID)
+        let frontierMessages = ConversationEventProjector.projectMessages(
+            baseMessages: baseMessages,
+            events: events,
+            frontierEventID: atEventID
+        )
+        let projectionPolicy = await ContextEngineProjectionPolicyBuilder.buildProjectionPolicy(
+            deps: deps,
+            conversation: conversation,
+            configuration: nil
+        )
+        guard let promptPolicy = projectionPolicy.systemPromptAssemblyPolicy else {
+            return response
+        }
+        let assembled = try await SystemPromptAssemblyProjector.projectAssembledSystemPrompt(
+            conversation: conversation,
+            messages: frontierMessages,
+            policy: promptPolicy,
+            skillLoaderProvider: { [skillActivation] conversationID in
+                guard let skillActivation else { return nil }
+                return await skillActivation.skillLoader(for: conversationID)
+            },
+            memoryBlocksProvider: { [deps] conversationID in
+                guard let defaultEngine = deps.contextEngine as? DefaultContextEngine,
+                      let memoryService = defaultEngine.memoryService else {
+                    return nil
+                }
+                return await memoryService.systemPromptBlocks(conversationID: conversationID)
+            },
+            memoryGenerationProvider: { [deps] conversationID in
+                guard let defaultEngine = deps.contextEngine as? DefaultContextEngine,
+                      let memoryService = defaultEngine.memoryService else {
+                    return nil
+                }
+                return await memoryService.currentSnapshotGeneration(conversationID: conversationID)
+            },
+            logger: deps.logger
+        )
+        if let assembled {
+            response.assembledSystemPrompt = assembled.text
+            response.systemPromptReplaySpecDigest = assembled.replaySpecDigest
+            response.sectionProvenance = assembled.sectionProvenance
+        }
+        return response
     }
 
     func listConversations(query: ConversationListQuery) async -> PagedConversationsResponse {

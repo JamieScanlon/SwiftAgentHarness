@@ -57,18 +57,24 @@ public enum ProviderLLMBridge {
 
     public static func fetchOllamaModelDetail(
         modelName: String,
+        serverURL: URL,
         config: ModelConfig
     ) async throws -> (capabilities: Set<LLMCapability>, maxContextLength: Int?) {
-        try await OllamaModelDetailSupport.fetchModelDetail(modelName: modelName, config: config)
+        try await OllamaModelDetailSupport.fetchModelDetail(
+            modelName: modelName,
+            serverURL: serverURL,
+            config: config
+        )
     }
 }
 
 enum OllamaModelDetailSupport {
     static func fetchModelDetail(
         modelName: String,
+        serverURL: URL,
         config: ModelConfig
     ) async throws -> (capabilities: Set<LLMCapability>, maxContextLength: Int?) {
-        let ollama = OllamaKit(baseURL: Constants.ollamaServerURL)
+        let ollama = OllamaKit(baseURL: serverURL)
         let data = OKModelInfoRequestData(name: modelName)
         let response = try await ollama.modelInfo(data: data)
         var caps = Set<LLMCapability>()

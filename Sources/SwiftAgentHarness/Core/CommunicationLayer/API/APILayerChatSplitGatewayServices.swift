@@ -254,10 +254,6 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
         try await mapConversationNotFound { try await backend.apiReadPlanMarkdown(conversationID: conversationID) }
     }
 
-    func apiOrchestratorBoundConversationID() async -> UUID? {
-        await backend.apiOrchestratorBoundConversationID()
-    }
-
     func apiPreviewContextCompaction(
         conversationID: UUID,
         gating: ContextCompactionGatingOptions,
@@ -398,12 +394,14 @@ final class ChatRuntimeService: APILayerChatRuntimeManaging, Sendable {
         await backend.apiCancelMessageStream()
     }
 
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async {
-        await backend.apiSetOrchestrationStateOutOfBandPush(id: id, push)
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async {
+        await backend.apiSetOrchestrationStateTopicRefreshHandler(handler)
     }
 
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async {
-        await backend.apiClearOrchestrationStateOutOfBandPush(id: id)
+    func apiClearOrchestrationStateTopicRefreshHandler() async {
+        await backend.apiClearOrchestrationStateTopicRefreshHandler()
     }
 
     func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws {

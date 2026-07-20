@@ -49,6 +49,9 @@ actor ContextProjectionService {
     private var consecutiveLowSavingsCompactionsByConversationID: [UUID: Int] = [:]
     private var lastContextCompactionLLMDateByConversationID: [UUID: Date] = [:]
     private var lastAttachmentProjectionByConversationID: [UUID: ContextEngineAttachmentProjectionArtifact] = [:]
+    private var pendingCacheBreakEventsByConversationID: [UUID: Set<CacheBreakEventReason>] = [:]
+    private var lastSystemPromptAssemblyByConversationID: [UUID: ContextEngineSystemPromptAssemblyArtifact] = [:]
+    private var lastProjectedMemorySelectionKeysByConversationID: [UUID: [String]] = [:]
     private var lastContextTransformSnapshotByConversationID: [UUID: ContextTransformSnapshot] = [:]
     private var pendingToolResultTransformRecordsByConversationID: [UUID: [String: PendingToolResultTransformRecord]] = [:]
     nonisolated let persistOriginalToolResultsDebugModeEnabled: Bool = true
@@ -82,16 +85,77 @@ actor ContextProjectionService {
         lastAttachmentProjectionByConversationID[conversationID]
     }
 
+    func recordCacheBreakEvent(conversationID: UUID, reason: CacheBreakEventReason) {
+        var events = pendingCacheBreakEventsByConversationID[conversationID] ?? []
+        events.insert(reason)
+        pendingCacheBreakEventsByConversationID[conversationID] = events
+    }
+
+    private func consumePendingCacheBreakEvents(conversationID: UUID) -> Set<CacheBreakEventReason> {
+        let events = pendingCacheBreakEventsByConversationID[conversationID] ?? []
+        pendingCacheBreakEventsByConversationID[conversationID] = nil
+        return events
+    }
+
+    func cachedSystemPromptAssembly(conversationID: UUID) -> ContextEngineSystemPromptAssemblyArtifact? {
+        lastSystemPromptAssemblyByConversationID[conversationID]
+    }
+
+    func lastLLMDate(for conversationID: UUID) async -> Date? {
+        await agentRuntime.lastModelRequestAt(for: conversationID)
+    }
+
+    private func lastModelRequestAtMap(for conversationID: UUID) async -> [UUID: Date] {
+        guard let at = await agentRuntime.lastModelRequestAt(for: conversationID) else { return [:] }
+        return [conversationID: at]
+    }
+
+    func seedSystemPromptAssembly(
+        conversationID: UUID,
+        artifact: ContextEngineSystemPromptAssemblyArtifact
+    ) {
+        lastSystemPromptAssemblyByConversationID[conversationID] = artifact
+    }
+
+    func projectedMemorySelectionKeysSnapshot(conversationID: UUID) -> Set<String> {
+        Set(lastProjectedMemorySelectionKeysByConversationID[conversationID] ?? [])
+    }
+
     func makeProjectionContext(
         conversation: ModelConversation,
         configuration: HarnessRuntimeSession.Configuration? = nil
     ) async -> ContextEngineProjectionContext {
         let tokens = await tokenSnapshots(for: conversation.id)
-        return await ContextEngineProjectionPolicyBuilder.makeProjectionContext(
+        let context = await ContextEngineProjectionPolicyBuilder.makeProjectionContext(
             deps: deps,
             conversation: conversation,
             configuration: configuration,
             tokenSnapshots: tokens
+        )
+        let prior = lastAttachmentProjectionByConversationID[conversation.id]
+        let breakEvents = consumePendingCacheBreakEvents(conversationID: conversation.id)
+        let enriched = ContextEngineProjectionPolicyInput(
+            requestInputTrustRaw: context.projectionPolicy.requestInputTrustRaw,
+            safeDefaultTrustClass: context.projectionPolicy.safeDefaultTrustClass,
+            downgradeLowTrustContext: context.projectionPolicy.downgradeLowTrustContext,
+            deterministicAttachmentHygiene: context.projectionPolicy.deterministicAttachmentHygiene,
+            attachmentCatalog: context.projectionPolicy.attachmentCatalog,
+            modelSupportsVision: context.projectionPolicy.modelSupportsVision,
+            systemPromptAssemblyPolicy: context.projectionPolicy.systemPromptAssemblyPolicy,
+            attachmentProjectionPolicy: context.projectionPolicy.attachmentProjectionPolicy,
+            attachmentBlobReader: context.projectionPolicy.attachmentBlobReader,
+            useSessionTreeProjection: context.projectionPolicy.useSessionTreeProjection,
+            sessionTranscriptEntries: context.projectionPolicy.sessionTranscriptEntries,
+            contextPruningPolicy: context.projectionPolicy.contextPruningPolicy,
+            priorAttachmentProjection: prior,
+            pendingCacheBreakEvents: breakEvents
+        )
+        return ContextEngineProjectionContext(
+            lastPromptTokens: context.lastPromptTokens,
+            lastContextLimitTokens: context.lastContextLimitTokens,
+            resolvedMode: context.resolvedMode,
+            enableContextTransform: context.enableContextTransform,
+            projectionPolicy: enriched
         )
     }
 
@@ -237,6 +301,7 @@ actor ContextProjectionService {
             persistCompactionCheckpoint: true,
             onLockHeld: messages
         ) { lockHeldByCaller in
+            let lastModelRequestAtByConversationID = await self.lastModelRequestAtMap(for: conversation.id)
             let pipelineOutput = await ContextAssemblyPipeline.ingestAndOrchestratorAssemble(
                 contextEngine: deps.contextEngine,
                 persistenceDomain: deps.persistenceDomain,
@@ -251,7 +316,9 @@ actor ContextProjectionService {
                 projectionPolicy: projectionContext.projectionPolicy,
                 lastContextLimitTokens: projectionContext.lastContextLimitTokens,
                 lastPromptTokens: projectionContext.lastPromptTokens,
+                lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+                workspacePolicy: deps.workspacePolicy,
                 logger: deps.logger,
                 performTransform: { input in
                     try await ContextAssemblyService.runTransformWithTimeout(
@@ -295,14 +362,46 @@ actor ContextProjectionService {
                 }
             }
             let persistenceEffects = pipelineOutput.persistenceEffects
+            if result.cacheExpiredHygieneWindow {
+                recordCacheBreakEvent(conversationID: conversation.id, reason: .cacheExpiry)
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .cacheExpiry
+                )
+            }
             if persistenceEffects.persistedCompactionCheckpoint, let spec = result.checkpointPersistence {
                 consecutiveLowSavingsCompactionsByConversationID[conversation.id] = 0
                 lastContextCompactionLLMDateByConversationID[conversation.id] = Date()
                 await topics.publishContextCompactionCheckpointTopic(spec: spec)
                 deps.logger?.debug("[ContextProjectionService] persisted compaction checkpoint for \(spec.conversationID)")
+                recordCacheBreakEvent(conversationID: conversation.id, reason: .compactionCommit)
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .compactionCommit
+                )
             }
             if let attachmentProjection = persistenceEffects.attachmentProjectionArtifactForCache {
                 lastAttachmentProjectionByConversationID[conversation.id] = attachmentProjection
+            }
+            if let systemPromptAssembly = persistenceEffects.systemPromptAssemblyArtifactForCache {
+                lastSystemPromptAssemblyByConversationID[conversation.id] = systemPromptAssembly
+                await persistFrozenSkillsIndexIfNeeded(
+                    conversationID: conversation.id,
+                    conversation: conversation,
+                    frozenSkillsIndexXML: systemPromptAssembly.frozenSkillsIndexXML
+                )
+                await persistFrozenMemoryTier1IfNeeded(
+                    conversationID: conversation.id,
+                    conversation: conversation,
+                    workspaceSectionContent: systemPromptAssembly.workspaceSectionContent,
+                    tier1MemorySectionContent: systemPromptAssembly.tier1MemorySectionContent,
+                    memorySnapshotGeneration: systemPromptAssembly.memorySnapshotGeneration
+                )
+            }
+            if let projectedKeys = persistenceEffects.projectedMemorySelectionKeysForCache {
+                lastProjectedMemorySelectionKeysByConversationID[conversation.id] = projectedKeys
+            } else {
+                lastProjectedMemorySelectionKeysByConversationID[conversation.id] = []
             }
             return result.messages
         }
@@ -326,6 +425,7 @@ actor ContextProjectionService {
                 transformFailed: false
             )
         }
+        let lastModelRequestAtByConversationID = await lastModelRequestAtMap(for: conversation.id)
         let pipelineOutput = await ContextAssemblyPipeline.ingestAndOrchestratorAssemblePreview(
             contextEngine: deps.contextEngine,
             persistenceDomain: deps.persistenceDomain,
@@ -339,7 +439,9 @@ actor ContextProjectionService {
             projectionPolicy: projectionContext.projectionPolicy,
             lastContextLimitTokens: projectionContext.lastContextLimitTokens,
             lastPromptTokens: projectionContext.lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            workspacePolicy: deps.workspacePolicy,
             performTransform: { input in
                 try await ContextAssemblyService.runTransformWithTimeout(
                     transformTimeoutSeconds: self.deps.conversationTransformConfiguration.transformTimeoutSeconds,
@@ -392,7 +494,7 @@ actor ContextProjectionService {
             lastPromptTokens: projectionContext.lastPromptTokens,
             events: events,
             eventLogFrontier: eventLogFrontier,
-            lastLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+            lastCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
             gating: gating,
             compactionSummarizerDebugOutputPath: summarizerDebugOutputPath,
             allowProactiveCompactionTriggers: true,
@@ -521,6 +623,7 @@ actor ContextProjectionService {
                 thresholdTokens: thresholdTokens
             )
         ) { lockHeldByCaller in
+            let lastModelRequestAtByConversationID = await self.lastModelRequestAtMap(for: conversation.id)
             let pipelineOutput = await ContextAssemblyPipeline.ingestAndManualCompact(
                 contextEngine: deps.contextEngine,
                 persistenceDomain: deps.persistenceDomain,
@@ -533,7 +636,9 @@ actor ContextProjectionService {
                 projectionPolicy: projectionContext.projectionPolicy,
                 lastContextLimitTokens: projectionContext.lastContextLimitTokens,
                 lastPromptTokens: projectionContext.lastPromptTokens,
+                lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
                 lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
+                workspacePolicy: deps.workspacePolicy,
                 logger: deps.logger,
                 performTransform: { input in
                     try await ContextAssemblyService.runTransformWithTimeout(
@@ -599,6 +704,10 @@ actor ContextProjectionService {
                 consecutiveLowSavingsCompactionsByConversationID[conversation.id] = 0
                 lastContextCompactionLLMDateByConversationID[conversation.id] = Date()
                 await topics.publishContextCompactionCheckpointTopic(spec: spec)
+                await clearFrozenMemoryTier1ForBreakEvent(
+                    conversationID: conversation.id,
+                    reason: .manualCompaction
+                )
             }
             deps.logger?.info(
                 "[ContextProjectionService] Manual compaction (\(trigger.rawValue)) for \(conversation.id) -> \(messages.count)→\(output.messages.count) messages, persisted=\(persisted)\(output.diagnostics.map { " diag=\($0)" } ?? "")"
@@ -776,5 +885,80 @@ actor ContextProjectionService {
         let result = await operation(true)
         await deps.compactionCoordinator.release(for: conversationID)
         return result
+    }
+
+    private func persistFrozenMemoryTier1IfNeeded(
+        conversationID: UUID,
+        conversation: ModelConversation,
+        workspaceSectionContent: String?,
+        tier1MemorySectionContent: String?,
+        memorySnapshotGeneration: Int?
+    ) async {
+        guard ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) == nil else {
+            return
+        }
+        guard let memorySnapshotGeneration else { return }
+        let workspace = workspaceSectionContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tier1 = tier1MemorySectionContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !workspace.isEmpty || !tier1.isEmpty else { return }
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        updated.metadata = ConversationMetadataFrozenMemoryTier1.mergingFrozenMemoryTier1(
+            workspaceInstructionSection: workspace,
+            tier1Content: tier1,
+            snapshotGeneration: memorySnapshotGeneration,
+            into: updated.metadata
+        )
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func clearFrozenMemoryTier1ForBreakEvent(
+        conversationID: UUID,
+        reason: CacheBreakEventReason
+    ) async {
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        guard ConversationMetadataFrozenMemoryTier1.frozenSlice(from: updated.metadata) != nil else { return }
+        updated.metadata = ConversationMetadataFrozenMemoryTier1.clearingFrozenMemoryTier1(from: updated.metadata)
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
+        deps.logger?.info(
+            "[ContextProjectionService] cache-breaking event \(reason.rawValue) cleared frozen memory tier1 for \(conversationID)"
+        )
+    }
+
+    private func persistFrozenSkillsIndexIfNeeded(
+        conversationID: UUID,
+        conversation: ModelConversation,
+        frozenSkillsIndexXML: String?
+    ) async {
+        guard let frozenSkillsIndexXML,
+              ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(from: conversation.metadata) == nil else {
+            return
+        }
+        guard var updated = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        updated.metadata = ConversationMetadataFrozenSkillsIndex.mergingFrozenSkillsIndex(
+            xml: frozenSkillsIndexXML,
+            into: updated.metadata
+        )
+        updated.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(updated)
+        if let metadata = updated.metadata {
+            try? await deps.persistenceDomain.persistConversationMetadataToCache(
+                conversationID: conversationID,
+                metadata: metadata
+            )
+        }
     }
 }

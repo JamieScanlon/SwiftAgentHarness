@@ -131,7 +131,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         
-        let openAIMessages = await openAIChatCompletionMessageParams(from: messages, config: config)
+        let openAIMessages = try await openAIChatCompletionMessageParams(from: messages, config: config)
         logPromptCacheNoOpIfNeeded(config: config)
         
         let query = makeChatQuery(openAIMessages: openAIMessages, config: config, stream: false, includeStreamUsage: false)
@@ -168,7 +168,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
                 )
                 do {
-                    let openAIMessages = await self.openAIChatCompletionMessageParams(from: messages, config: config)
+                    let openAIMessages = try await self.openAIChatCompletionMessageParams(from: messages, config: config)
                     self.logPromptCacheNoOpIfNeeded(config: config)
                     
                     let query = makeChatQuery(openAIMessages: openAIMessages, config: config, stream: true, includeStreamUsage: true)
@@ -233,10 +233,17 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     
                     if let usage {
                         emitter.yield(
-                            .usage(NormalizedUsage(
-                                inputTokens: usage.promptTokens,
-                                outputTokens: usage.completionTokens
-                            )),
+                            .usage(
+                                CanonicalUsageExtraction.openAICompatUsage(
+                                    promptTokens: usage.promptTokens,
+                                    completionTokens: usage.completionTokens,
+                                    totalTokens: usage.totalTokens,
+                                    cachedTokens: usage.promptTokensDetails?.cachedTokens
+                                ) ?? NormalizedUsage(
+                                    inputTokens: usage.promptTokens,
+                                    outputTokens: usage.completionTokens
+                                )
+                            ),
                             availableTools: config.availableTools
                         )
                     }
@@ -299,31 +306,33 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             remainingContextTokens: remaining,
             totalTokens: usage?.totalTokens,
             contextWindowTokens: config.maxTokens,
+            cacheReadTokens: usage?.promptTokensDetails?.cachedTokens,
+            usageIsProviderReported: usage != nil,
             finishReason: finishReason
         )
     }
     
-    private func openAIChatCompletionMessageParams(from messages: [Message], config: LLMRequestConfig) async -> [ChatQuery.ChatCompletionMessageParam] {
-        var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
-        openAIMessages.reserveCapacity(messages.count)
+    private func openAIChatCompletionMessageParams(from messages: [Message], config: LLMRequestConfig) async throws -> [ChatQuery.ChatCompletionMessageParam] {
         let attachmentDispositions = extractAttachmentDispositions(from: config.additionalParameters)
-        for message in messages {
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
+        var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
+        openAIMessages.reserveCapacity(plan.resolvedMessages.count)
+        for message in plan.resolvedMessages {
             let text: String
-            if message.role == .system, let systemPrompt {
-                do {
-                    let promptMetadata = extractSystemPromptMetadata(from: config.additionalParameters)
-                    text = try await systemPrompt.generateSystemPrompt(
-                        withUserSystemPrompt: message.content,
-                        additionalMetadata: promptMetadata
-                    )
-                } catch {
-                    logger?.error("Failed to generate system prompt: \(error)")
-                    text = ""
-                }
+            if message.role == .system {
+                text = message.content
             } else {
                 text = message.content + attachmentDispositionSuffix(
                     imageNames: message.images.map(\.name),
-                    dispositions: attachmentDispositions
+                    dispositions: attachmentDispositions,
+                    additionalParameters: config.additionalParameters
                 )
             }
             if let param = ChatQuery.ChatCompletionMessageParam(
@@ -364,30 +373,17 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     }
 
     nonisolated private func extractAttachmentDispositions(from additionalParameters: JSON?) -> [String: String] {
-        guard let additionalParameters,
-              case .object(let root) = additionalParameters,
-              let projection = root["contextEngineAttachmentProjection"],
-              case .object(let projectionObject) = projection,
-              let decisionsJSON = projectionObject["decisions"],
-              case .array(let decisions) = decisionsJSON else {
-            return [:]
-        }
-        var output: [String: String] = [:]
-        for decision in decisions {
-            guard case .object(let object) = decision,
-                  case .string(let name)? = object["attachmentName"],
-                  case .string(let disposition)? = object["disposition"] else {
-                continue
-            }
-            output[name] = disposition
-        }
-        return output
+        AttachmentProjectionDispatchCodec.extractDispositions(from: additionalParameters)
     }
 
     nonisolated private func attachmentDispositionSuffix(
         imageNames: [String],
-        dispositions: [String: String]
+        dispositions: [String: String],
+        additionalParameters: JSON?
     ) -> String {
+        if AttachmentProjectionDispatchCodec.hasMaterializedBlocks(in: additionalParameters) {
+            return ""
+        }
         let projected = imageNames.compactMap { name -> String? in
             guard let disposition = dispositions[name],
                   disposition != "inline" else {

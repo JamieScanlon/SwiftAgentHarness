@@ -156,6 +156,8 @@ public enum HarnessRuntimeSessionFactory {
         )
         selection.install(service: conversationSelectionRuntimeService)
         let subAgentPoolResolved = SubAgentPoolRuntimeWiring.resolve(
+            customEndpointConfiguration: deps.configurationSet.subAgentCustomEndpoint,
+            hostingPolicyConfiguration: deps.configurationSet.subAgentHostingPolicy,
             logger: deps.logger
         )
         let subAgentPool: any SubAgentPooling = subAgentPoolResolved.pool
@@ -192,6 +194,7 @@ public enum HarnessRuntimeSessionFactory {
             topics: topics,
             messaging: messaging,
             sessionProjection: sessionProjection,
+            skillActivation: skillActivationService,
             registryOwnerAccountScope: { nil }
         )
         let conversationDomainServices = domainServices.bundle
@@ -278,7 +281,8 @@ public enum HarnessRuntimeSessionFactory {
             messaging: messaging,
             orchestrator: orchestrator,
             startup: conversationStartupService,
-            lifecycle: lifecycle
+            lifecycle: lifecycle,
+            contextProjection: contextProjectionService
         )
         subAgentCompletionRuntimeService.installSpawn(subAgentSpawnService)
         orchestratorRuntimeService.installSpawn(subAgentSpawnService)
@@ -341,7 +345,7 @@ public enum HarnessRuntimeSessionFactory {
         let channelRegistryHolder = ChannelRegistryHolder()
         let acpDelegateFactory = SubAgentHarnessACPClientDelegateFactory(
             deps: deps,
-            gateway: DefaultToolSystemGateway(),
+            gateway: DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants),
             subAgentPool: subAgentPool,
             toolApproval: toolApprovalRuntimeService,
             resolveChannelRegistry: { channelRegistryHolder.registry },

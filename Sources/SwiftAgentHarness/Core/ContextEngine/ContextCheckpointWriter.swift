@@ -77,10 +77,18 @@ enum ContextCheckpointWriter {
         guard let spec else { return }
         let entryIDs = Array(Set(spec.injectedMemoryEntryIDs)).sorted { $0.uuidString < $1.uuidString }
         guard !entryIDs.isEmpty else { return }
+        let selectedKeys = Array(Set(spec.selectedSelectionKeys)).sorted()
+        let projectedKeys = Array(Set(spec.projectedSelectionKeys)).sorted()
+        let contextIDs = spec.selectionContextMessageIDs
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let snapshotData = try? encoder.encode(
-            MemoryStoreSnapshotJSON(memoryEntryIDs: entryIDs, memoryStoreVersion: spec.memoryStoreVersion)
+            MemoryStoreSnapshotJSON(
+                memoryEntryIDs: entryIDs,
+                memoryStoreVersion: spec.memoryStoreVersion,
+                selectedSelectionKeys: selectedKeys.isEmpty ? nil : selectedKeys,
+                projectedSelectionKeys: projectedKeys.isEmpty ? nil : projectedKeys
+            )
         ),
         let snapshotJSON = String(data: snapshotData, encoding: .utf8) else { return }
         let phaseRaw: String = switch spec.phase {
@@ -89,14 +97,27 @@ enum ContextCheckpointWriter {
         case .continuation(let round):
             "agent_build_continuation:\(round)"
         }
-        let fingerprintInput = "v2|\(phaseRaw)|\(spec.conversationID.uuidString)|\(spec.memoryStoreVersion)|\(entryIDs.map(\.uuidString).joined(separator: ","))"
+        let fingerprintInput = MemoryInjectionSnapshotProjectionPolicy.injectionFingerprintInput(
+            phaseRaw: phaseRaw,
+            conversationID: spec.conversationID,
+            memoryStoreVersion: spec.memoryStoreVersion,
+            injectedMemoryEntryIDs: entryIDs,
+            selectedSelectionKeys: selectedKeys,
+            projectedSelectionKeys: projectedKeys,
+            selectionContextMessageIDs: contextIDs,
+            selectorConfigFingerprint: spec.selectorConfigFingerprint
+        )
         let fingerprint = SHA256.hash(data: Data(fingerprintInput.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         if let latest = SuiteCheckpointSupport.latestValidMemoryInjectionSnapshot(
             events: events,
             frontierEventID: frontierEventID,
-            expectedMemoryStoreVersion: spec.memoryStoreVersion
+            rawMessageIDs: contextIDs.isEmpty ? nil : contextIDs,
+            expectedMemoryStoreVersion: spec.memoryStoreVersion,
+            expectedSelectorConfigFingerprint: spec.selectorConfigFingerprint.isEmpty
+                ? nil
+                : spec.selectorConfigFingerprint
         ),
            latest.wire.injectionFingerprint == fingerprint,
            latest.wire.memoryStoreNamespaceKey == spec.memoryStoreNamespaceKey,
@@ -112,6 +133,8 @@ enum ContextCheckpointWriter {
             memoryStoreVersion: spec.memoryStoreVersion,
             memoryStoreNamespaceKey: spec.memoryStoreNamespaceKey,
             memoryEntryIDs: entryIDs,
+            selectorConfigFingerprint: spec.selectorConfigFingerprint.isEmpty ? nil : spec.selectorConfigFingerprint,
+            selectionContextMessageIDs: contextIDs.isEmpty ? nil : contextIDs,
             createdAt: Date()
         )
         do {
@@ -267,8 +290,15 @@ enum ContextCheckpointWriter {
     static func persistSystemPromptAssemblyCheckpointIfNeeded(
         conversationID: UUID,
         fingerprint: String,
-        persistence: ConversationPersistenceStack
+        assembledPromptDigest: String? = nil,
+        replaySpecDigest: String? = nil,
+        assembledPrompt: String? = nil,
+        sectionProvenanceJSON: String? = nil,
+        persistence: ConversationPersistenceStack,
+        logger: Logger? = nil
     ) throws {
+        let checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+        if checkpointConfig.mode == .off { return }
         let (events, frontier) = persistence.conversationManager.loadConversationEventsWithFrontier(
             conversationID: conversationID
         )
@@ -277,11 +307,25 @@ enum ContextCheckpointWriter {
             frontierEventID: frontier
         )
         if prior == fingerprint { return }
+        var resolvedAssembledPrompt: String?
+        if checkpointConfig.mode == .fullText, let assembledPrompt {
+            if assembledPrompt.utf8.count > checkpointConfig.maxFullTextBytes {
+                logger?.warning(
+                    "[ContextCheckpointWriter] assembled prompt exceeds maxFullTextBytes (\(assembledPrompt.utf8.count)); persisting digest + replay spec only"
+                )
+            } else {
+                resolvedAssembledPrompt = assembledPrompt
+            }
+        }
         let derivedTail = persistence.derivedEventStore.latestDerivedStreamSequence(conversationID: conversationID)
         let wire = SystemPromptAssemblyCheckpointWire(
             schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
             basedOnEventID: frontier,
             assemblyFingerprint: fingerprint,
+            assembledPromptDigest: assembledPromptDigest,
+            replaySpecDigest: replaySpecDigest,
+            assembledPrompt: resolvedAssembledPrompt,
+            sectionProvenanceJSON: sectionProvenanceJSON,
             createdAt: Date()
         )
         try persistence.persistSystemPromptAssemblyCheckpoint(
@@ -301,7 +345,12 @@ enum ContextCheckpointWriter {
             try persistSystemPromptAssemblyCheckpointIfNeeded(
                 conversationID: spec.conversationID,
                 fingerprint: spec.fingerprint,
-                persistence: persistence
+                assembledPromptDigest: spec.assembledPromptDigest,
+                replaySpecDigest: spec.replaySpecDigest,
+                assembledPrompt: spec.assembledPrompt,
+                sectionProvenanceJSON: spec.sectionProvenanceJSON,
+                persistence: persistence,
+                logger: logger
             )
         } catch {
             logger?.warning("[ContextCheckpointWriter] persistSystemPromptAssemblyCheckpoint failed: \(error)")
@@ -322,7 +371,10 @@ enum ContextCheckpointWriter {
             expectedProjectionFingerprint: spec.projectionFingerprint
         ),
            latest.wire.projectionFingerprint == spec.projectionFingerprint,
-           latest.wire.decisions == spec.decisions {
+           latest.wire.decisions == spec.decisions,
+           latest.wire.targetDecisions == spec.targetDecisions,
+           latest.wire.materializedBlocks == spec.materializedBlocks,
+           latest.wire.accessWatermarkTurnIndex == spec.accessWatermarkTurnIndex {
             return
         }
         let wire = AttachmentProjectionCheckpointWire(
@@ -330,6 +382,9 @@ enum ContextCheckpointWriter {
             basedOnEventID: frontierEventID,
             projectionFingerprint: spec.projectionFingerprint,
             decisions: spec.decisions,
+            targetDecisions: spec.targetDecisions,
+            materializedBlocks: spec.materializedBlocks,
+            accessWatermarkTurnIndex: spec.accessWatermarkTurnIndex,
             createdAt: Date()
         )
         do {
@@ -339,6 +394,44 @@ enum ContextCheckpointWriter {
             )
         } catch {
             logger?.warning("[ContextCheckpointWriter] persistAttachmentProjectionCheckpoint failed: \(error)")
+        }
+    }
+
+    static func persistAttachmentDigestCheckpointsIfNeeded(
+        spec: ContextAttachmentDigestCheckpointPersistenceSpec?,
+        events: [CachedConversationEvent],
+        frontierEventID: Int,
+        persistence: ConversationPersistenceStack,
+        logger: Logger?
+    ) {
+        guard let spec, !spec.checkpoints.isEmpty else { return }
+        for checkpoint in spec.checkpoints {
+            if SuiteCheckpointSupport.latestValidAttachmentDigest(
+                events: events,
+                frontierEventID: frontierEventID,
+                attachmentID: checkpoint.attachmentID,
+                contentHash: checkpoint.contentHash,
+                configFingerprint: checkpoint.configFingerprint
+            )?.wire.digestBody == checkpoint.digestBody {
+                continue
+            }
+            let wire = AttachmentDigestCheckpointWire(
+                schemaVersion: AttachmentDigestCheckpointWire.currentSchemaVersion,
+                basedOnEventID: frontierEventID,
+                attachmentID: checkpoint.attachmentID,
+                contentHash: checkpoint.contentHash,
+                configFingerprint: checkpoint.configFingerprint,
+                digestBody: checkpoint.digestBody,
+                createdAt: Date()
+            )
+            do {
+                try persistence.persistAttachmentDigestCheckpoint(
+                    conversationID: spec.conversationID,
+                    wire: wire
+                )
+            } catch {
+                logger?.warning("[ContextCheckpointWriter] persistAttachmentDigestCheckpoint failed: \(error)")
+            }
         }
     }
 }

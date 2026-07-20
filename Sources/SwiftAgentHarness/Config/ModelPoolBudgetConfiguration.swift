@@ -34,17 +34,14 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
         self.denyWhenUnknownProjectedCost = denyWhenUnknownProjectedCost
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; model pool budget safe defaults")
-            return .safeDefaults
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = root["settings"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ModelPoolBudgetConfiguration {
+        guard let settings = document.foundationObject(forKey: "settings") else {
             return .safeDefaults
         }
         return configuration(fromSettingsJSON: settings)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromSettingsJSON settings: [String: Any]) -> ModelPoolBudgetConfiguration {
         guard let raw = settings["modelPoolBudget"] as? [String: Any] else {
@@ -121,7 +118,19 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
     }
 
     public func resolvedPolicy() -> BudgetPolicy {
+        resolvedPolicy(tenancyPolicy: .disabled)
+    }
+
+    public func resolvedPolicy(tenancyPolicy: TenancyPolicySettings) -> BudgetPolicy {
         guard enabled else { return .disabled }
+        let effectiveMaxUSDPerAccount: Double?
+        if let maxUSDPerAccount {
+            effectiveMaxUSDPerAccount = maxUSDPerAccount
+        } else if tenancyPolicy.requireAuthenticatedOwnerOnMutations {
+            effectiveMaxUSDPerAccount = maxUSDPerConversation
+        } else {
+            effectiveMaxUSDPerAccount = nil
+        }
         let fallback: BudgetPolicy.ProjectedCostFallback = denyWhenUnknownProjectedCost
             ? .denyWhenUnknown
             : .allowWhenUnknown
@@ -129,7 +138,7 @@ public struct ModelPoolBudgetConfiguration: Sendable, Equatable {
             maxUSDPerCall: maxUSDPerCall,
             maxUSDPerConversation: maxUSDPerConversation,
             maxUSDGlobal: maxUSDGlobal,
-            maxUSDPerAccount: maxUSDPerAccount,
+            maxUSDPerAccount: effectiveMaxUSDPerAccount,
             projectedCostFallback: fallback
         )
     }

@@ -168,6 +168,83 @@ struct AgentRuntimeToolRoundTripTests {
         #expect(await scriptedLLM.observedStreamCallCount() == 3)
     }
 
+    @Test("revert publishes pruned messagesRefresh after high frontier")
+    func revertPublishesPrunedProjectionAfterHighFrontier() async throws {
+        let container = try section6Container()
+        let model = section6Model()
+        let userAnchorID = UUID()
+        let prunedAssistantID = UUID()
+        let scriptedLLM = ScriptedStreamingLLM(
+            modelName: "revert-projection-llm",
+            chunks: ["ok"],
+            finalContent: "post-revert assistant",
+            chunkDelayNanos: 5_000_000,
+            finalDelayNanos: 5_000_000
+        )
+        let manager = HarnessRuntimeSession(
+            container: container,
+            llmFactory: ScriptedLLMFactory(llm: scriptedLLM),
+            harnessSessionPersistenceOverride: InMemoryHarnessSessionPersistence()
+        )
+        let publisher = Section6ConversationEventCapture()
+        await manager.setConversationTopicPublisher(publisher)
+        try await manager.createConversation(
+            with: model,
+            userSystemPrompt: "revert-projection",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        let conversationID = try #require(await manager.currentConversationID)
+        await manager.appendMessagesToConversation(
+            [
+                Message(id: userAnchorID, role: .user, content: "keep me", timestamp: Date(), toolCalls: []),
+                Message(id: prunedAssistantID, role: .assistant, content: "prune-me-after-revert", timestamp: Date(), toolCalls: []),
+            ],
+            conversationID: conversationID
+        )
+        try await manager.selectConversation(conversationID: conversationID)
+
+        let beforeRevert = try await manager.listMessages(conversationID: conversationID)
+        let expectedPrefixCount = try #require(
+            beforeRevert.firstIndex(where: { $0.id == userAnchorID }).map { $0 + 1 }
+        )
+
+        await manager.testing_seedProjectionPublishState(
+            conversationID: conversationID,
+            frontierEventID: 99_999,
+            contentHash: 0
+        )
+        let metricsBefore = await manager.contextProjectionService.projectionHardeningMetrics()
+        let snapshotsBefore = await publisher.messagesRefreshRoles(for: conversationID).count
+
+        let response = try await manager.revertToUserMessageAndStreamResponse(
+            conversationID: conversationID,
+            messageID: userAnchorID
+        )
+        #expect(response.runID != nil)
+
+        await waitUntil(timeoutMS: 5_000) {
+            let roles = await publisher.messagesRefreshRoles(for: conversationID)
+            let newRoles = Array(roles.dropFirst(snapshotsBefore))
+            return newRoles.contains { $0.count == expectedPrefixCount }
+        }
+
+        let metricsAfter = await manager.contextProjectionService.projectionHardeningMetrics()
+        #expect(metricsAfter.staleProjectionDropCount == metricsBefore.staleProjectionDropCount)
+
+        let roleSnapshots = await publisher.messagesRefreshRoles(for: conversationID)
+        let newRoleSnapshots = Array(roleSnapshots.dropFirst(snapshotsBefore))
+        #expect(newRoleSnapshots.contains(where: { $0.count == expectedPrefixCount }))
+
+        await awaitStreamingRunSettled(manager, response: response, timeoutMS: 15_000)
+        let settled = try await manager.listMessages(conversationID: conversationID)
+        #expect(settled.contains { $0.id == userAnchorID })
+        #expect(!settled.contains { $0.id == prunedAssistantID })
+        #expect(!settled.contains { $0.content == "prune-me-after-revert" })
+    }
+
     @Test("chat-mode tool timeout persists tool transcript and publishes terminal lifecycle")
     func chatToolTimeoutPersistsAndPublishesTerminal() async throws {
         let container = try section6Container()

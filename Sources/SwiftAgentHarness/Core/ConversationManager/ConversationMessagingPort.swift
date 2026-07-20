@@ -18,6 +18,11 @@ protocol ConversationMessagingPort: Sendable {
     func stripRunTailAfterAnchorIfNeeded(conversationID: UUID, anchorUserMessageID: UUID) async
     func refreshProjectedConversationMessages(conversationID: UUID, baseMessagesOverride: [Message]?) async
     func syncProjectionFromRegistry(conversationID: UUID) async
+    /// After transcript rewind: clear publish frontier, truncate registry to prefix, publish pruned projection.
+    func publishPrunedProjectionAfterRewind(
+        conversation: ModelConversation,
+        baseMessagesOverride: [Message]
+    ) async
     func applyStreamingUserCancellation(conversationID: UUID) async
     func applySendFailure(_ error: Error, conversationID: UUID) async
     func waitUntilStreamingGenerationSettled(conversationID: UUID, runID: UUID?, timeoutMS: Int) async
@@ -126,6 +131,17 @@ final class ConversationMessagingPortAdapter: ConversationMessagingPort, Sendabl
     func syncProjectionFromRegistry(conversationID: UUID) async {
         guard let messagingService = backing.messagingService else { return }
         await messagingService.syncProjectionFromRegistry(conversationID: conversationID)
+    }
+
+    func publishPrunedProjectionAfterRewind(
+        conversation: ModelConversation,
+        baseMessagesOverride: [Message]
+    ) async {
+        guard let messagingService = backing.messagingService else { return }
+        await messagingService.publishPrunedProjectionAfterRewind(
+            conversation: conversation,
+            baseMessagesOverride: baseMessagesOverride
+        )
     }
 
     func applyStreamingUserCancellation(conversationID: UUID) async {

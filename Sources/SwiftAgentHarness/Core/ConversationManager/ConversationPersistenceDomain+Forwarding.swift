@@ -33,6 +33,25 @@ extension ConversationPersistenceDomain {
         stack.harnessSessionPersistence
     }
 
+    func readAttachmentBytes(
+        attachmentID: UUID,
+        conversationID: UUID
+    ) throws -> (ConversationAttachmentDescriptor, Data) {
+        guard let conversation = modelConversation(id: conversationID) else {
+            throw ConversationAttachmentBlobAccessError.attachmentNotFoundInConversation(attachmentID: attachmentID)
+        }
+        let descriptor = try ConversationAttachmentBlobAccess.resolve(
+            attachmentID: attachmentID,
+            catalog: conversation.attachmentsCatalog
+        )
+        let data = try ConversationAttachmentBlobAccess.loadBytes(
+            descriptor: descriptor,
+            conversationID: conversationID,
+            harness: harnessSessionPersistence
+        )
+        return (descriptor, data)
+    }
+
     func firstConversation(excluding conversationID: UUID) -> ModelConversation? {
         stack.conversationManager.firstConversation(excluding: conversationID)
     }
@@ -501,6 +520,20 @@ extension ConversationPersistenceDomain {
             conversationID: conversationID,
             thinkingConfig: thinkingConfig,
             skipControlPlaneRevisionBump: skipControlPlaneRevisionBump
+        )
+    }
+
+    func recordHarnessPersistenceCwd(conversationID: UUID, cwd: String) throws -> ModelConversation {
+        try stack.conversationManager.recordHarnessPersistenceCwd(conversationID: conversationID, cwd: cwd)
+    }
+
+    func resolveHarnessPersistenceCwdForSideEffects(
+        conversationID: UUID,
+        policy: HarnessWorkspacePolicy
+    ) throws -> String {
+        try stack.conversationManager.resolveHarnessPersistenceCwdForSideEffects(
+            conversationID: conversationID,
+            policy: policy
         )
     }
 

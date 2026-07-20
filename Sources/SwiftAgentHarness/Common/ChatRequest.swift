@@ -12,5 +12,9 @@ struct ChatRequest: Codable {
     let expectedPreviousTailHarnessMessageID: UUID?
     /// Optional user-input trust (same JSON key and semantics as SwiftAgentKit ``Message`` / `inputTrust`).
     let inputTrust: String?
+    /// Optional interactive surface provenance (trigger/channel hosts).
+    let originSurface: String?
+    /// Optional sender id for provenance.
+    let originSenderID: String?
 }
 

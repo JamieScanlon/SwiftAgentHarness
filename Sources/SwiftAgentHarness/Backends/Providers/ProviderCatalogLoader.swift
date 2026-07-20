@@ -57,6 +57,24 @@ struct BundledCatalogRequestFeatures: Codable, Sendable {
     }
 }
 
+struct BundledCatalogSystemPromptContribution: Codable, Sendable {
+    var stablePrefix: String?
+    var sectionOverrides: [String: String]?
+
+    func toProviderSystemPromptContribution() -> ProviderSystemPromptContribution? {
+        var overrides: [ProviderNamedSection: String] = [:]
+        for (key, value) in sectionOverrides ?? [:] {
+            guard let section = ProviderNamedSection(rawValue: key) else { continue }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            overrides[section] = trimmed
+        }
+        let prefix = stablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        guard prefix != nil || !overrides.isEmpty else { return nil }
+        return ProviderSystemPromptContribution(stablePrefix: prefix, sectionOverrides: overrides)
+    }
+}
+
 struct BundledCatalogModelRow: Codable, Sendable {
     var registryId: UUID
     var endpointModelId: String
@@ -70,6 +88,7 @@ struct BundledCatalogModelRow: Codable, Sendable {
     var compat: ProviderModelCompat?
     var canonicalModelKey: String?
     var modelFamily: String?
+    var systemPromptContribution: BundledCatalogSystemPromptContribution?
 
     func toProviderCatalogEntry() -> ProviderCatalogEntry {
         let protocolValue = ModelProtocol(rawValue: modelProtocol) ?? .openAIAPI
@@ -106,6 +125,17 @@ struct BundledProviderCatalogFile: Codable, Sendable {
     var models: [BundledCatalogModelRow]
 }
 
+struct BundledCatalogOverrideModel: Codable, Sendable {
+    var modelFamily: String?
+    var systemPromptContribution: BundledCatalogSystemPromptContribution?
+}
+
+struct BundledProviderOverridesFile: Codable, Sendable {
+    var providerId: String
+    var models: [String: BundledCatalogOverrideModel]?
+    var modelFamilies: [String: BundledCatalogOverrideModel]?
+}
+
 enum ProviderCatalogLoader {
     static func bundledCatalogData(for providerID: ProviderID) -> Data? {
         let candidates = [
@@ -130,12 +160,83 @@ enum ProviderCatalogLoader {
     }
 
     static func decodeBundledCatalog(for providerID: ProviderID) throws -> [ProviderCatalogEntry] {
-        guard let data = bundledCatalogData(for: providerID) else { return [] }
+        try decodeBundledCatalogFile(for: providerID).models.map { $0.toProviderCatalogEntry() }
+    }
+
+    static func decodeBundledCatalogFile(for providerID: ProviderID) throws -> BundledProviderCatalogFile {
+        guard let data = bundledCatalogData(for: providerID) else {
+            return BundledProviderCatalogFile(providerId: providerID, generatedAt: nil, models: [])
+        }
         let file = try JSONDecoder().decode(BundledProviderCatalogFile.self, from: data)
         guard file.providerId == providerID else {
             throw ProviderCatalogLoaderError.providerIDMismatch(expected: providerID, found: file.providerId)
         }
-        return file.models.map { $0.toProviderCatalogEntry() }
+        return file
+    }
+
+    static func catalogModelRow(for binding: ProviderBinding) -> BundledCatalogModelRow? {
+        guard let file = try? decodeBundledCatalogFile(for: binding.providerId) else { return nil }
+        return file.models.first(where: { $0.endpointModelId == binding.endpointModelId })
+    }
+
+    static func decodeBundledOverrides(for providerID: ProviderID) -> BundledProviderOverridesFile? {
+        guard let data = bundledOverridesData(for: providerID) else { return nil }
+        return try? JSONDecoder().decode(BundledProviderOverridesFile.self, from: data)
+    }
+
+    static func systemPromptContribution(for binding: ProviderBinding) -> ProviderSystemPromptContribution? {
+        if let row = catalogModelRow(for: binding),
+           let contribution = row.systemPromptContribution?.toProviderSystemPromptContribution() {
+            return contribution
+        }
+        guard let overrides = decodeBundledOverrides(for: binding.providerId) else { return nil }
+        if let modelOverlay = overrides.models?[binding.endpointModelId],
+           let contribution = modelOverlay.systemPromptContribution?.toProviderSystemPromptContribution() {
+            return contribution
+        }
+        let family = catalogModelRow(for: binding)?.modelFamily
+            ?? overrides.models?[binding.endpointModelId]?.modelFamily
+        guard let family,
+              let familyOverlay = overrides.modelFamilies?[family],
+              let contribution = familyOverlay.systemPromptContribution?.toProviderSystemPromptContribution() else {
+            return nil
+        }
+        return contribution
+    }
+
+    private static func bundledOverridesData(for providerID: ProviderID) -> Data? {
+        let candidates = [
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "overrides.json"
+            ),
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "overrides.json",
+                subdirectory: "catalogs/overrides"
+            ),
+            ProviderResourceBundle.resourceBundle.url(
+                forResource: providerID,
+                withExtension: "overrides.json",
+                subdirectory: "overrides"
+            ),
+            Bundle.module.url(
+                forResource: providerID,
+                withExtension: "overrides.json"
+            ),
+            Bundle.module.url(
+                forResource: providerID,
+                withExtension: "overrides.json",
+                subdirectory: "catalogs/overrides"
+            ),
+            Bundle.module.url(
+                forResource: providerID,
+                withExtension: "overrides.json",
+                subdirectory: "overrides"
+            ),
+        ]
+        guard let url = candidates.compactMap({ $0 }).first else { return nil }
+        return try? Data(contentsOf: url)
     }
 }
 
@@ -160,4 +261,11 @@ public enum ProviderCatalogStableID {
 
 public func bundledStaticCatalogEntries(providerID: ProviderID) -> [ProviderCatalogEntry] {
     (try? ProviderCatalogLoader.decodeBundledCatalog(for: providerID)) ?? []
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }

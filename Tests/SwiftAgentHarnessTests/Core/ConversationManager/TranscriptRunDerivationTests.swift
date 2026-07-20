@@ -119,11 +119,16 @@ struct TranscriptRunDerivationTests {
             conversationID: cid,
             startedAt: Date(timeIntervalSince1970: 2),
             endedAt: Date(timeIntervalSince1970: 3),
-            outcome: .completed,
+            outcome: .bounded,
             iterationCount: 1,
             toolCallCount: 1,
             firstMessageId: "deadbeef",
             lastMessageId: "feedface",
+            terminalReason: ConversationRunTerminalReason(
+                category: .boundedStop,
+                boundedReason: .maxAgentIterations,
+                detail: "hit_guardrail"
+            ),
             tokenRollup: ConversationRunTokenRollup(promptTokens: 12, completionTokens: 8, totalTokens: 20),
             costRollup: ConversationRunCostRollup(usd: 0.015),
             projectionDetail: ConversationRunProjectionDetail(
@@ -134,6 +139,14 @@ struct TranscriptRunDerivationTests {
         let data = try JSONEncoder().encode(row)
         let decoded = try JSONDecoder().decode(ConversationRunInfo.self, from: data)
         #expect(decoded == row)
+
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "terminalReason")
+        let stripped = try JSONSerialization.data(withJSONObject: object)
+        let legacy = try JSONDecoder().decode(ConversationRunInfo.self, from: stripped)
+        #expect(legacy.terminalReason == nil)
+        #expect(legacy.outcome == .bounded)
+        #expect(legacy.id == rid)
     }
 
     @Test("Authoritative usage rollups dedupe repeated completion lifecycle rows")
@@ -260,6 +273,10 @@ struct TranscriptRunDerivationTests {
         let run = try #require(runs.first)
         #expect(run.outcome == .cancelled)
         #expect(run.cancellationReason == "user_stop_requested")
+        #expect(run.terminalReason == ConversationRunTerminalReason(
+            category: .externalCancellation,
+            detail: "user_stop_requested"
+        ))
         #expect(run.firstMessageId == userEntryID.rawValue)
         #expect(run.lastMessageId == cancelledEntryID.rawValue)
     }
@@ -314,9 +331,339 @@ struct TranscriptRunDerivationTests {
         #expect(errored.outcome == .errored)
         #expect(errored.errorDetails?.class == "run_errored")
         #expect(errored.errorDetails?.message == "delegate_failed")
+        #expect(errored.terminalReason == ConversationRunTerminalReason(
+            category: .failure,
+            detail: "delegate_failed"
+        ))
         let bounded = try #require(runs.first(where: { $0.id == boundedRunID }))
         #expect(bounded.outcome == .bounded)
         #expect(bounded.errorDetails == nil)
+        #expect(bounded.terminalReason == ConversationRunTerminalReason(
+            category: .boundedStop,
+            detail: "max_iterations"
+        ))
+    }
+
+    @Test("Structured terminalReason fields enrich but never re-categorize boundary kind")
+    func structuredTerminalReasonDoesNotRecategorizeBoundary() throws {
+        let cid = UUID()
+        let cancelledRunID = UUID()
+        let boundedRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_700_000_025)
+
+        let cancelledMarker = try RunLifecycleTranscriptMarkerPayload(
+            kind: .run_cancelled,
+            runId: cancelledRunID,
+            reason: "budget",
+            createdAt: base.addingTimeInterval(1),
+            terminalReason: ConversationRunTerminalReason(
+                category: .boundedStop,
+                boundedReason: .maxAgentIterations,
+                detail: "stored_conflict"
+            )
+        ).encodedJSONString()
+        let boundedMarker = try RunLifecycleTranscriptMarkerPayload(
+            kind: .run_bounded,
+            runId: boundedRunID,
+            createdAt: base.addingTimeInterval(3),
+            terminalReason: ConversationRunTerminalReason(
+                category: .failure,
+                boundedReason: .maxAgentIterations,
+                detail: "guardrail"
+            )
+        ).encodedJSONString()
+
+        let entries: [SessionTranscriptEntry] = [
+            SessionTranscriptEntry(
+                sequence: 1, entryId: SessionEntryID(rawValue: "a1a1a1a1"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base,
+                payloadJSON: try DerivationTestMessagePayload.json(role: .user, transcriptRunID: cancelledRunID, timestamp: base)
+            ),
+            SessionTranscriptEntry(
+                sequence: 2, entryId: SessionEntryID(rawValue: "b2b2b2b2"), parentEntryId: nil, type: .custom,
+                harnessTypeRaw: RunLifecycleTranscriptMarkerKind.run_cancelled.rawValue,
+                timestamp: base.addingTimeInterval(1), payloadJSON: cancelledMarker
+            ),
+            SessionTranscriptEntry(
+                sequence: 3, entryId: SessionEntryID(rawValue: "c3c3c3c3"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(2),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: boundedRunID, timestamp: base.addingTimeInterval(2)
+                )
+            ),
+            SessionTranscriptEntry(
+                sequence: 4, entryId: SessionEntryID(rawValue: "d4d4d4d4"), parentEntryId: nil, type: .custom,
+                harnessTypeRaw: RunLifecycleTranscriptMarkerKind.run_bounded.rawValue,
+                timestamp: base.addingTimeInterval(3), payloadJSON: boundedMarker
+            ),
+        ]
+        let runs = TranscriptRunDerivation.deriveConversationRuns(
+            sortedEntries: entries,
+            conversationID: cid,
+            activeRuntimeRunID: nil,
+            activeRuntimeConversationID: nil
+        )
+        let cancelled = try #require(runs.first(where: { $0.id == cancelledRunID }))
+        #expect(cancelled.outcome == .cancelled)
+        #expect(cancelled.terminalReason == ConversationRunTerminalReason(
+            category: .externalCancellation,
+            detail: "stored_conflict"
+        ))
+        let bounded = try #require(runs.first(where: { $0.id == boundedRunID }))
+        #expect(bounded.outcome == .bounded)
+        #expect(bounded.terminalReason == ConversationRunTerminalReason(
+            category: .boundedStop,
+            boundedReason: .maxAgentIterations,
+            detail: "guardrail"
+        ))
+    }
+
+    @Test("Legacy and malformed marker terminal fields still project boundary-authoritative reasons")
+    func legacyAndMalformedMarkerTerminalReasonFallbacks() throws {
+        let cid = UUID()
+        let cancelledRunID = UUID()
+        let boundedKnownRunID = UUID()
+        let boundedUnknownRunID = UUID()
+        let erroredRunID = UUID()
+        let orphanedRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_700_000_027)
+
+        func markerEntry(
+            sequence: Int,
+            entryId: String,
+            kind: RunLifecycleTranscriptMarkerKind,
+            runId: UUID,
+            reason: String?,
+            timestamp: Date,
+            categoryOverride: String? = nil,
+            boundedOverride: String? = nil
+        ) throws -> SessionTranscriptEntry {
+            var payload = RunLifecycleTranscriptMarkerPayload(
+                kind: kind,
+                runId: runId,
+                reason: reason,
+                createdAt: timestamp
+            )
+            payload.terminalReasonCategory = categoryOverride
+            payload.terminalReasonBounded = boundedOverride
+            return SessionTranscriptEntry(
+                sequence: sequence,
+                entryId: SessionEntryID(rawValue: entryId),
+                parentEntryId: nil,
+                type: .custom,
+                harnessTypeRaw: kind.rawValue,
+                timestamp: timestamp,
+                payloadJSON: try payload.encodedJSONString()
+            )
+        }
+
+        let entries: [SessionTranscriptEntry] = [
+            SessionTranscriptEntry(
+                sequence: 1, entryId: SessionEntryID(rawValue: "e1e1e1e1"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base,
+                payloadJSON: try DerivationTestMessagePayload.json(role: .user, transcriptRunID: cancelledRunID, timestamp: base)
+            ),
+            try markerEntry(
+                sequence: 2, entryId: "e2e2e2e2", kind: .run_cancelled, runId: cancelledRunID,
+                reason: "parent-cancel", timestamp: base.addingTimeInterval(1), categoryOverride: "not-a-category"
+            ),
+            SessionTranscriptEntry(
+                sequence: 3, entryId: SessionEntryID(rawValue: "e3e3e3e3"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(2),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: boundedKnownRunID, timestamp: base.addingTimeInterval(2)
+                )
+            ),
+            try markerEntry(
+                sequence: 4, entryId: "e4e4e4e4", kind: .run_bounded, runId: boundedKnownRunID,
+                reason: ConversationRunBoundedReason.maxAgentIterations.rawValue,
+                timestamp: base.addingTimeInterval(3),
+                boundedOverride: "not-a-bounded-reason"
+            ),
+            SessionTranscriptEntry(
+                sequence: 5, entryId: SessionEntryID(rawValue: "e5e5e5e5"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(4),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: boundedUnknownRunID, timestamp: base.addingTimeInterval(4)
+                )
+            ),
+            try markerEntry(
+                sequence: 6, entryId: "e6e6e6e6", kind: .run_bounded, runId: boundedUnknownRunID,
+                reason: "context_budget", timestamp: base.addingTimeInterval(5)
+            ),
+            SessionTranscriptEntry(
+                sequence: 7, entryId: SessionEntryID(rawValue: "e7e7e7e7"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(6),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: erroredRunID, timestamp: base.addingTimeInterval(6)
+                )
+            ),
+            try markerEntry(
+                sequence: 8, entryId: "e8e8e8e8", kind: .run_errored, runId: erroredRunID,
+                reason: nil, timestamp: base.addingTimeInterval(7)
+            ),
+            SessionTranscriptEntry(
+                sequence: 9, entryId: SessionEntryID(rawValue: "e9e9e9e9"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(8),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: orphanedRunID, timestamp: base.addingTimeInterval(8)
+                )
+            ),
+            try markerEntry(
+                sequence: 10, entryId: "eaeaeaea", kind: .run_orphaned, runId: orphanedRunID,
+                reason: "stale_running_reconciled", timestamp: base.addingTimeInterval(9)
+            ),
+        ]
+
+        let runs = TranscriptRunDerivation.deriveConversationRuns(
+            sortedEntries: entries,
+            conversationID: cid,
+            activeRuntimeRunID: nil,
+            activeRuntimeConversationID: nil
+        )
+        #expect(runs.first(where: { $0.id == cancelledRunID })?.terminalReason == ConversationRunTerminalReason(
+            category: .externalCancellation,
+            detail: "parent-cancel"
+        ))
+        #expect(runs.first(where: { $0.id == boundedKnownRunID })?.terminalReason == ConversationRunTerminalReason(
+            category: .boundedStop,
+            boundedReason: .maxAgentIterations
+        ))
+        #expect(runs.first(where: { $0.id == boundedUnknownRunID })?.terminalReason == ConversationRunTerminalReason(
+            category: .boundedStop,
+            detail: "context_budget"
+        ))
+        #expect(runs.first(where: { $0.id == erroredRunID })?.terminalReason == ConversationRunTerminalReason(
+            category: .failure,
+            detail: "run_errored"
+        ))
+        #expect(runs.first(where: { $0.id == orphanedRunID })?.terminalReason == ConversationRunTerminalReason(
+            category: .failure,
+            detail: "stale_running_reconciled"
+        ))
+    }
+
+    @Test("Natural assistant completion and open heads omit terminalReason")
+    func naturalCompletionAndOpenOmitTerminalReason() throws {
+        let cid = UUID()
+        let completedRunID = UUID()
+        let openRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_700_000_028)
+        let entries: [SessionTranscriptEntry] = [
+            SessionTranscriptEntry(
+                sequence: 1, entryId: SessionEntryID(rawValue: "f1f1f1f1"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base,
+                payloadJSON: try DerivationTestMessagePayload.json(role: .user, transcriptRunID: completedRunID, timestamp: base)
+            ),
+            SessionTranscriptEntry(
+                sequence: 2, entryId: SessionEntryID(rawValue: "f2f2f2f2"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(1),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .assistant, transcriptRunID: completedRunID,
+                    timestamp: base.addingTimeInterval(1), finishReason: "stop"
+                )
+            ),
+            SessionTranscriptEntry(
+                sequence: 3, entryId: SessionEntryID(rawValue: "f3f3f3f3"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(2),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: openRunID, timestamp: base.addingTimeInterval(2)
+                )
+            ),
+        ]
+        let runs = TranscriptRunDerivation.deriveConversationRuns(
+            sortedEntries: entries,
+            conversationID: cid,
+            activeRuntimeRunID: openRunID,
+            activeRuntimeConversationID: cid
+        )
+        let completed = try #require(runs.first(where: { $0.id == completedRunID }))
+        #expect(completed.outcome == .completed)
+        #expect(completed.terminalReason == nil)
+        let open = try #require(runs.first(where: { $0.id == openRunID }))
+        #expect(open.outcome == .open)
+        #expect(open.terminalReason == nil)
+    }
+
+    @Test("Synthesized orphan reconciliation projects failure before durable marker exists")
+    func synthesizedOrphanProjectsFailureTerminalReason() throws {
+        let cid = UUID()
+        let staleRunID = UUID()
+        let nextRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_700_000_029)
+        let beforeMarker: [SessionTranscriptEntry] = [
+            SessionTranscriptEntry(
+                sequence: 1, entryId: SessionEntryID(rawValue: "01010101"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base,
+                payloadJSON: try DerivationTestMessagePayload.json(role: .user, transcriptRunID: staleRunID, timestamp: base)
+            ),
+            SessionTranscriptEntry(
+                sequence: 2, entryId: SessionEntryID(rawValue: "02020202"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base.addingTimeInterval(1),
+                payloadJSON: try DerivationTestMessagePayload.json(
+                    role: .user, transcriptRunID: nextRunID, timestamp: base.addingTimeInterval(1)
+                )
+            ),
+        ]
+        let before = TranscriptRunDerivation.deriveConversationRuns(
+            sortedEntries: beforeMarker,
+            conversationID: cid,
+            activeRuntimeRunID: nextRunID,
+            activeRuntimeConversationID: cid
+        )
+        let staleBefore = try #require(before.first(where: { $0.id == staleRunID }))
+        #expect(staleBefore.outcome == .errored)
+        #expect(staleBefore.errorDetails?.class == "run_orphaned")
+        #expect(staleBefore.terminalReason == ConversationRunTerminalReason(
+            category: .failure,
+            detail: "stale_running_reconciled"
+        ))
+
+        let orphanMarker = try RunLifecycleTranscriptMarkerPayload(
+            kind: .run_orphaned,
+            runId: staleRunID,
+            reason: "stale_running_reconciled",
+            createdAt: base.addingTimeInterval(0.5),
+            terminalReason: ConversationRunTerminalReason(
+                category: .failure,
+                detail: "stale_running_reconciled"
+            )
+        ).encodedJSONString()
+        let afterMarker = beforeMarker + [
+            SessionTranscriptEntry(
+                sequence: 3, entryId: SessionEntryID(rawValue: "03030303"), parentEntryId: nil, type: .custom,
+                harnessTypeRaw: RunLifecycleTranscriptMarkerKind.run_orphaned.rawValue,
+                timestamp: base.addingTimeInterval(0.5),
+                payloadJSON: orphanMarker
+            ),
+        ]
+        // Marker alone after a later opening input is not re-applied to the already-closed prior run;
+        // verify a dedicated orphan-closed segment retains the same projected reason.
+        let orphanOnly: [SessionTranscriptEntry] = [
+            SessionTranscriptEntry(
+                sequence: 1, entryId: SessionEntryID(rawValue: "11111111"), parentEntryId: nil, type: .message,
+                harnessTypeRaw: nil, timestamp: base,
+                payloadJSON: try DerivationTestMessagePayload.json(role: .user, transcriptRunID: staleRunID, timestamp: base)
+            ),
+            SessionTranscriptEntry(
+                sequence: 2, entryId: SessionEntryID(rawValue: "22222222"), parentEntryId: nil, type: .custom,
+                harnessTypeRaw: RunLifecycleTranscriptMarkerKind.run_orphaned.rawValue,
+                timestamp: base.addingTimeInterval(1),
+                payloadJSON: orphanMarker
+            ),
+        ]
+        let after = TranscriptRunDerivation.deriveConversationRuns(
+            sortedEntries: orphanOnly,
+            conversationID: cid,
+            activeRuntimeRunID: nil,
+            activeRuntimeConversationID: nil
+        )
+        let staleAfter = try #require(after.first(where: { $0.id == staleRunID }))
+        #expect(staleAfter.terminalReason == ConversationRunTerminalReason(
+            category: .failure,
+            detail: "stale_running_reconciled"
+        ))
+        #expect(afterMarker.count == 3)
     }
 
     @Test("Open head run remains open until terminal assistant or terminal marker")

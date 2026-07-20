@@ -30,6 +30,7 @@ public actor AgentRuntimeSessionService {
     nonisolated(unsafe) private var controlPlane: (any ConversationControlPlaneServicing)?
     nonisolated(unsafe) private var channelSessionLifecycleCoordinator: ChannelSessionLifecycleCoordinator?
     nonisolated(unsafe) private var channelRegistryForLifecycle: ChannelListenerRegistry?
+    let toolSystemGateway: any ToolSystemGatewaying
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -47,6 +48,7 @@ public actor AgentRuntimeSessionService {
         self.selection = selection
         self.outbound = outbound
         self.orchestrationCore = orchestrationCore
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installSubAgentSpawnService(_ spawnService: SubAgentSpawnService) {
@@ -340,7 +342,7 @@ public actor AgentRuntimeSessionService {
         messageID: UUID,
         configuration: Configuration = .init()
     ) async throws -> ChatStreamResponse {
-        await cancelGeneration(for: conversationID)
+        await preemptActiveRunToQuiescence(conversationID: conversationID)
         await orchestrationCore.invalidateOrchestrator(for: conversationID)
 
         guard var conversation = await modelConversation(id: conversationID) else {
@@ -352,14 +354,6 @@ public actor AgentRuntimeSessionService {
         let sendingConversationID = conversation.id
         let revertRunID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: sendingConversationID)
-        if let admission = await acquireRunLane(
-            sessionKey: sessionLaneKey,
-            runID: revertRunID,
-            origin: .interactive
-        ) {
-            throw await runtimeSessionError(for: admission, conversationID: sendingConversationID, fallbackRunID: revertRunID)
-        }
-
         let resolvedConfiguration = configurationApplyingInteractiveDefaults(configuration)
 
         do {
@@ -387,6 +381,19 @@ public actor AgentRuntimeSessionService {
                 interactionMode: conversation.interactionMode,
                 previousTurns: conversation.turns
             )
+            await publishPrunedProjectionAfterRewind(
+                conversation: conversation,
+                baseMessagesOverride: prefixMessages
+            )
+
+            if let admission = await acquireRunLane(
+                sessionKey: sessionLaneKey,
+                runID: revertRunID,
+                origin: .interactive
+            ) {
+                throw await runtimeSessionError(for: admission, conversationID: sendingConversationID, fallbackRunID: revertRunID)
+            }
+
             conversation.state = .generating
             conversation.agenticPhase = .started
             conversation.llmRequestPhase = .queued
@@ -635,19 +642,61 @@ public actor AgentRuntimeSessionService {
               conversationID == runtimeLifecycle.activeStreamingConversationID else {
             throw ConversationServiceError.cancelRunNotActive
         }
-        let anchorUserMessageID = runtimeLifecycle.activeAnchorUserMessageID
+        await settleCancelledActiveRun(
+            conversationID: conversationID,
+            forRunID: runID,
+            anchorUserMessageID: runtimeLifecycle.activeAnchorUserMessageID
+        )
+    }
+
+    /// Cancels any in-flight streaming run for `conversationID` and waits until its
+    /// streaming slot and runtime lane are released (cancel-run settle semantics).
+    func preemptActiveRunToQuiescence(conversationID: UUID) async {
+        let runtimeLifecycle = await currentLifecycleSnapshot(for: conversationID)
+        let priorRunID = runtimeLifecycle.currentStreamingRunID
+        let ownsActiveStreaming =
+            priorRunID != nil &&
+            runtimeLifecycle.activeStreamingConversationID == conversationID
+
+        if ownsActiveStreaming, let priorRunID {
+            await settleCancelledActiveRun(
+                conversationID: conversationID,
+                forRunID: priorRunID,
+                anchorUserMessageID: runtimeLifecycle.activeAnchorUserMessageID
+            )
+        } else {
+            await cancelGeneration(for: conversationID)
+        }
+
+        if let priorRunID {
+            await waitUntilStreamingGenerationQuiesced(
+                conversationID: conversationID,
+                runID: priorRunID
+            )
+        }
+    }
+
+    private func settleCancelledActiveRun(
+        conversationID: UUID,
+        forRunID: UUID,
+        anchorUserMessageID: UUID?
+    ) async {
         await cancelGeneration(for: conversationID)
         await subAgentSpawnServiceForRuntime()?.cancelActiveInvocationsForParent(
             parentConversationID: conversationID
         )
         await requestTurnLoopStop(conversationID: conversationID)
         if let anchorUserMessageID {
-            await stripRunTail(
+            await stripRunTailIfBound(
                 conversationID: conversationID,
+                forRunID: forRunID,
                 anchorUserMessageID: anchorUserMessageID
             )
         }
-        await messaging.applyStreamingUserCancellation(conversationID: conversationID)
+        await applyStreamingUserCancellationIfBound(
+            conversationID: conversationID,
+            forRunID: forRunID
+        )
     }
 
     func cancelSubAgentRun(conversationID: UUID, runID: UUID) async {

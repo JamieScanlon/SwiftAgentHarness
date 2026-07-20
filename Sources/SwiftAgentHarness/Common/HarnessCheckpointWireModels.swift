@@ -11,15 +11,25 @@ public enum HarnessCheckpointWireKind: String, Codable, Sendable, CaseIterable {
     case toolResultTrim = "tool_result_trim"
     case systemPromptAssembly = "system_prompt_assembly"
     case attachmentProjection = "attachment_projection"
+    case attachmentDigest = "attachment_digest"
 }
 
 public struct MemoryStoreSnapshotJSON: Codable, Sendable, Equatable {
     public var memoryEntryIDs: [UUID]
     public var memoryStoreVersion: Int
+    public var selectedSelectionKeys: [String]?
+    public var projectedSelectionKeys: [String]?
 
-    public init(memoryEntryIDs: [UUID], memoryStoreVersion: Int) {
+    public init(
+        memoryEntryIDs: [UUID],
+        memoryStoreVersion: Int,
+        selectedSelectionKeys: [String]? = nil,
+        projectedSelectionKeys: [String]? = nil
+    ) {
         self.memoryEntryIDs = memoryEntryIDs
         self.memoryStoreVersion = memoryStoreVersion
+        self.selectedSelectionKeys = selectedSelectionKeys
+        self.projectedSelectionKeys = projectedSelectionKeys
     }
 }
 
@@ -48,6 +58,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
     public var memoryStoreVersion: Int?
     public var memoryStoreNamespaceKey: String?
     public var memoryEntryIDs: [UUID]?
+    public var selectorConfigFingerprint: String?
+    public var selectionContextMessageIDs: [UUID]?
     public var createdAt: Date
 
     public init(
@@ -59,6 +71,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
         memoryStoreVersion: Int? = nil,
         memoryStoreNamespaceKey: String? = nil,
         memoryEntryIDs: [UUID]? = nil,
+        selectorConfigFingerprint: String? = nil,
+        selectionContextMessageIDs: [UUID]? = nil,
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
@@ -69,6 +83,8 @@ public struct MemoryInjectionSnapshotCheckpointWire: Codable, Sendable, Equatabl
         self.memoryStoreVersion = memoryStoreVersion
         self.memoryStoreNamespaceKey = memoryStoreNamespaceKey
         self.memoryEntryIDs = memoryEntryIDs
+        self.selectorConfigFingerprint = selectorConfigFingerprint
+        self.selectionContextMessageIDs = selectionContextMessageIDs
         self.createdAt = createdAt
     }
 }
@@ -101,28 +117,48 @@ public struct ToolResultTrimCheckpointWire: Codable, Sendable, Equatable {
 }
 
 public struct SystemPromptAssemblyCheckpointWire: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var basedOnEventID: Int
     public var assemblyFingerprint: String
+    public var assembledPromptDigest: String?
+    public var replaySpecDigest: String?
+    public var assembledPrompt: String?
+    public var sectionProvenanceJSON: String?
     public var createdAt: Date
 
-    public init(schemaVersion: Int, basedOnEventID: Int, assemblyFingerprint: String, createdAt: Date) {
+    public init(
+        schemaVersion: Int,
+        basedOnEventID: Int,
+        assemblyFingerprint: String,
+        assembledPromptDigest: String? = nil,
+        replaySpecDigest: String? = nil,
+        assembledPrompt: String? = nil,
+        sectionProvenanceJSON: String? = nil,
+        createdAt: Date
+    ) {
         self.schemaVersion = schemaVersion
         self.basedOnEventID = basedOnEventID
         self.assemblyFingerprint = assemblyFingerprint
+        self.assembledPromptDigest = assembledPromptDigest
+        self.replaySpecDigest = replaySpecDigest
+        self.assembledPrompt = assembledPrompt
+        self.sectionProvenanceJSON = sectionProvenanceJSON
         self.createdAt = createdAt
     }
 }
 
 public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var basedOnEventID: Int
     public var projectionFingerprint: String
     public var decisions: [ConversationAttachmentProjectionDecision]
+    public var targetDecisions: [ConversationAttachmentProjectionDecision]?
+    public var materializedBlocks: [AttachmentMaterializedBlock]
+    public var accessWatermarkTurnIndex: Int?
     public var createdAt: Date
 
     public init(
@@ -130,12 +166,83 @@ public struct AttachmentProjectionCheckpointWire: Codable, Sendable, Equatable {
         basedOnEventID: Int,
         projectionFingerprint: String,
         decisions: [ConversationAttachmentProjectionDecision],
+        targetDecisions: [ConversationAttachmentProjectionDecision]? = nil,
+        materializedBlocks: [AttachmentMaterializedBlock] = [],
+        accessWatermarkTurnIndex: Int? = nil,
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
         self.basedOnEventID = basedOnEventID
         self.projectionFingerprint = projectionFingerprint
         self.decisions = decisions
+        self.targetDecisions = targetDecisions
+        self.materializedBlocks = materializedBlocks
+        self.accessWatermarkTurnIndex = accessWatermarkTurnIndex
+        self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case basedOnEventID
+        case projectionFingerprint
+        case decisions
+        case targetDecisions
+        case materializedBlocks
+        case accessWatermarkTurnIndex
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        basedOnEventID = try container.decode(Int.self, forKey: .basedOnEventID)
+        projectionFingerprint = try container.decode(String.self, forKey: .projectionFingerprint)
+        decisions = try container.decode([ConversationAttachmentProjectionDecision].self, forKey: .decisions)
+        targetDecisions = try container.decodeIfPresent([ConversationAttachmentProjectionDecision].self, forKey: .targetDecisions)
+        materializedBlocks = try container.decodeIfPresent([AttachmentMaterializedBlock].self, forKey: .materializedBlocks) ?? []
+        accessWatermarkTurnIndex = try container.decodeIfPresent(Int.self, forKey: .accessWatermarkTurnIndex)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(basedOnEventID, forKey: .basedOnEventID)
+        try container.encode(projectionFingerprint, forKey: .projectionFingerprint)
+        try container.encode(decisions, forKey: .decisions)
+        try container.encodeIfPresent(targetDecisions, forKey: .targetDecisions)
+        try container.encode(materializedBlocks, forKey: .materializedBlocks)
+        try container.encodeIfPresent(accessWatermarkTurnIndex, forKey: .accessWatermarkTurnIndex)
+        try container.encode(createdAt, forKey: .createdAt)
+    }
+}
+
+public struct AttachmentDigestCheckpointWire: Codable, Sendable, Equatable {
+    public static let currentSchemaVersion = 1
+
+    public var schemaVersion: Int
+    public var basedOnEventID: Int
+    public var attachmentID: UUID
+    public var contentHash: String
+    public var configFingerprint: String
+    public var digestBody: String
+    public var createdAt: Date
+
+    public init(
+        schemaVersion: Int,
+        basedOnEventID: Int,
+        attachmentID: UUID,
+        contentHash: String,
+        configFingerprint: String,
+        digestBody: String,
+        createdAt: Date
+    ) {
+        self.schemaVersion = schemaVersion
+        self.basedOnEventID = basedOnEventID
+        self.attachmentID = attachmentID
+        self.contentHash = contentHash
+        self.configFingerprint = configFingerprint
+        self.digestBody = digestBody
         self.createdAt = createdAt
     }
 }
@@ -147,6 +254,7 @@ public enum LatestCheckpointPayload: Sendable, Equatable {
     case toolResultTrim(ToolResultTrimCheckpointWire)
     case systemPromptAssembly(SystemPromptAssemblyCheckpointWire)
     case attachmentProjection(AttachmentProjectionCheckpointWire)
+    case attachmentDigest(AttachmentDigestCheckpointWire)
 }
 
 /// Latest valid checkpoint for `GET /api/conversations/{id}/checkpoints/latest`.
@@ -196,6 +304,8 @@ public struct LatestCheckpointResponse: Codable, Sendable, Equatable {
             return .systemPromptAssembly(try c.decode(SystemPromptAssemblyCheckpointWire.self, forKey: .checkpoint))
         case HarnessCheckpointWireKind.attachmentProjection.rawValue:
             return .attachmentProjection(try c.decode(AttachmentProjectionCheckpointWire.self, forKey: .checkpoint))
+        case HarnessCheckpointWireKind.attachmentDigest.rawValue:
+            return .attachmentDigest(try c.decode(AttachmentDigestCheckpointWire.self, forKey: .checkpoint))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -216,6 +326,8 @@ public struct LatestCheckpointResponse: Codable, Sendable, Equatable {
         case .systemPromptAssembly(let wire):
             try c.encode(wire, forKey: .checkpoint)
         case .attachmentProjection(let wire):
+            try c.encode(wire, forKey: .checkpoint)
+        case .attachmentDigest(let wire):
             try c.encode(wire, forKey: .checkpoint)
         }
     }

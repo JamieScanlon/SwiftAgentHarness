@@ -31,8 +31,8 @@ public struct HTTPPreconditionPolicySettings: Sendable {
 
     /// Canonical default: strict preconditions enabled for guarded mutation routes.
     public static let `default` = HTTPPreconditionPolicySettings(strictMode: true)
-    /// Convenience preset matching canonical strict-mode defaults.
-    public static let disabled = HTTPPreconditionPolicySettings.default
+    /// Explicitly disables strict `If-Match` requirements on guarded mutation routes.
+    public static let disabled = HTTPPreconditionPolicySettings(strictMode: false)
 }
 
 struct APILayerRouteDependencies: Sendable {
@@ -289,11 +289,10 @@ struct APILayerCoreModelsModule: APILayerRESTEndpointModule {
             guard let body = try? req.content.decode(QueryModelsRequest.self),
                   let ref = Self.parseReference(from: body)
             else {
-                let payload = ["message": "Expected JSON body with one of: `modelRef`, `modelID`, or `idOrQuery`."]
-                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                var headers = HTTPHeaders()
-                headers.add(name: .contentType, value: "application/json")
-                return Response(status: .badRequest, headers: headers, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Expected JSON body with one of: `modelRef`, `modelID`, or `idOrQuery`."
+                )
             }
             do {
                 let matches = try await dependencies.modelManager.resolveAll(ref).map { $0.toModel().toModelInfo() }
@@ -310,11 +309,10 @@ struct APILayerCoreModelsModule: APILayerRESTEndpointModule {
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                let payload = ["message": "Model query did not resolve any entries for the requested reference."]
-                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                var headers = HTTPHeaders()
-                headers.add(name: .contentType, value: "application/json")
-                return Response(status: .badRequest, headers: headers, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Model query did not resolve any entries for the requested reference."
+                )
             }
         }
 
@@ -322,11 +320,10 @@ struct APILayerCoreModelsModule: APILayerRESTEndpointModule {
             guard let modelID = Self.modelIDParam(from: req),
                   let coordinator = dependencies.modelInvocationCoordinator
             else {
-                let payload = ["message": "Invalid model id or model state is unavailable."]
-                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                var headers = HTTPHeaders()
-                headers.add(name: .contentType, value: "application/json")
-                return Response(status: .badRequest, headers: headers, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Invalid model id or model state is unavailable."
+                )
             }
             let state = await coordinator.snapshot(for: modelID)
             do {
@@ -343,11 +340,10 @@ struct APILayerCoreModelsModule: APILayerRESTEndpointModule {
             guard let modelID = Self.modelIDParam(from: req),
                   let coordinator = dependencies.modelInvocationCoordinator
             else {
-                let payload = ["message": "Invalid model id or model calls are unavailable."]
-                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                var headers = HTTPHeaders()
-                headers.add(name: .contentType, value: "application/json")
-                return Response(status: .badRequest, headers: headers, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Invalid model id or model calls are unavailable."
+                )
             }
             let calls = await coordinator.callsSnapshot(for: modelID)
             do {
@@ -364,11 +360,10 @@ struct APILayerCoreModelsModule: APILayerRESTEndpointModule {
             guard let modelID = Self.modelIDParam(from: req),
                   let coordinator = dependencies.modelInvocationCoordinator
             else {
-                let payload = ["message": "Invalid model id or model calls stream is unavailable."]
-                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-                var headers = HTTPHeaders()
-                headers.add(name: .contentType, value: "application/json")
-                return Response(status: .badRequest, headers: headers, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Invalid model id or model calls stream is unavailable."
+                )
             }
             let response = Response(status: .ok)
             response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
@@ -612,6 +607,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
         return Date(timeIntervalSince1970: millis / 1000.0)
     }
 
+    /// `304` for run GET validators, with `Cache-Control: no-cache` so clients revalidate.
+    private static func runResourceNotModifiedResponse(etag: String) -> Response {
+        var response = APILayer.notModifiedResponse(etag: etag)
+        response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
+        return response
+    }
+
     private static func conversationListQuery(from req: Request) throws -> ConversationListQuery {
         let limit = req.query[Int.self, at: "limit"] ?? 50
         let offset = req.query[Int.self, at: "offset"] ?? 0
@@ -692,11 +694,10 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
         let searchReq = try conversationSearchRequest(from: req)
         let trimmed = searchReq.query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            let payload = ["message": "Missing or empty required query parameter `q`."]
-            let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
-            var headers = HTTPHeaders()
-            headers.add(name: .contentType, value: "application/json")
-            return Response(status: .badRequest, headers: headers, body: .init(data: data))
+            return APILayerRESTErrorResponse.error(
+                status: .badRequest,
+                message: "Missing or empty required query parameter `q`."
+            )
         }
         let (forbidden, resolvedOwner) = dependencies.tenancyResolveCollectionOwnerScope(
             explicitOwner: searchReq.ownerAccountID
@@ -759,15 +760,15 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
     private static func subAgentPoolErrorResponse(_ error: SubAgentPoolError) -> Response {
         switch error {
         case .lifecycleNotFound:
-            return Response(status: .notFound, body: .init(string: "Sub-agent invocation not found"))
+            return APILayerRESTErrorResponse.error(status: .notFound, message: "Sub-agent invocation not found")
         case .transportUnavailable:
-            return Response(status: .notImplemented, body: .init(string: "Sub-agent transport unavailable"))
+            return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Sub-agent transport unavailable")
         case .unavailable:
-            return Response(status: .badRequest, body: .init(string: "Sub-agent unavailable"))
+            return APILayerRESTErrorResponse.error(status: .badRequest, message: "Sub-agent unavailable")
         case .admissionRejected(let reason):
-            return Response(status: .conflict, body: .init(string: "Sub-agent admission rejected: \(reason)"))
+            return APILayerRESTErrorResponse.error(status: .conflict, message: "Sub-agent admission rejected: \(reason)")
         case .operationFailed(let reason):
-            return Response(status: .badRequest, body: .init(string: "Sub-agent operation failed: \(reason)"))
+            return APILayerRESTErrorResponse.error(status: .badRequest, message: "Sub-agent operation failed: \(reason)")
         }
     }
 
@@ -780,7 +781,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.get(":id", "events") { req async -> Response in
             guard let conversationID = Self.parseConversationID(req) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: conversationID) {
                 return forbidden
@@ -815,7 +816,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.get(":id", "plan") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -833,14 +834,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                     route: "/api/conversations/:id/plan",
                     conversationID: uuid
                 )
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "\(error)")
             }
         }
 
         conversationsPath.get(":id", "tools") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -859,16 +859,15 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                         route: "/api/conversations/:id/tools",
                         conversationID: uuid
                     )
-                    let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "\(error)")
                 }
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
         conversationsPath.get(":id", "skills") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -887,16 +886,15 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                         route: "/api/conversations/:id/skills",
                         conversationID: uuid
                     )
-                    let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "\(error)")
                 }
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
         conversationsPath.get(":id", "slash-commands") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -915,11 +913,9 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                         route: "/api/conversations/:id/slash-commands",
                         conversationID: uuid
                     )
-                    let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "\(error)")
                 }
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -929,14 +925,14 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return Response(status: .notFound)
             }
             guard let expectedToken = compactPreview.authToken, !expectedToken.isEmpty else {
-                return Response(status: .forbidden, body: .init(string: "Context compaction preview is enabled in config but no token is set; refusing requests."))
+                return APILayerRESTErrorResponse.error(status: .forbidden, message: "Context compaction preview is enabled in config but no token is set; refusing requests.")
             }
             let header = req.headers["X-SAH-Context-Compaction-Preview-Token"].first
             guard let header, header == expectedToken else {
-                return Response(status: .unauthorized, body: .init(string: "Invalid or missing X-SAH-Context-Compaction-Preview-Token header"))
+                return APILayerRESTErrorResponse.error(status: .unauthorized, message: "Invalid or missing X-SAH-Context-Compaction-Preview-Token header")
             }
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -965,12 +961,12 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(uuid)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerChatPreviewError {
-                return Response(status: .notImplemented, body: .init(string: "Server chat provider does not support compaction preview"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Server chat provider does not support compaction preview")
             } catch is APILayerConversationRouteError {
-                return Response(status: .notFound, body: .init(string: "Conversation not found"))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             } catch {
                 dependencies.logger.error("preview-context-compaction failed: \(error)")
-                return Response(status: .internalServerError, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .internalServerError, message: "\(error)")
             }
         }
 
@@ -984,14 +980,14 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             }
             let compactPreview = dependencies.contextCompactionPreview
             guard let expectedToken = compactPreview.authToken, !expectedToken.isEmpty else {
-                return Response(status: .forbidden, body: .init(string: "Manual context compaction REST endpoint is enabled but no preview token is set; refusing requests."))
+                return APILayerRESTErrorResponse.error(status: .forbidden, message: "Manual context compaction REST endpoint is enabled but no preview token is set; refusing requests.")
             }
             let header = req.headers["X-SAH-Context-Compaction-Preview-Token"].first
             guard let header, header == expectedToken else {
-                return Response(status: .unauthorized, body: .init(string: "Invalid or missing X-SAH-Context-Compaction-Preview-Token header"))
+                return APILayerRESTErrorResponse.error(status: .unauthorized, message: "Invalid or missing X-SAH-Context-Compaction-Preview-Token header")
             }
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -1026,12 +1022,12 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(uuid)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerChatPreviewError {
-                return Response(status: .notImplemented, body: .init(string: "Server chat provider does not support manual compaction"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Server chat provider does not support manual compaction")
             } catch is APILayerConversationRouteError {
-                return Response(status: .notFound, body: .init(string: "Conversation not found"))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             } catch {
                 dependencies.logger.error("manual context compaction failed: \(error)")
-                return Response(status: .internalServerError, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .internalServerError, message: "\(error)")
             }
         }
 
@@ -1058,21 +1054,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.post(":id", "branch") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
             }
             guard let body = try? req.content.decode(ConversationBranchRequest.self) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected JSON body with userMessageID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected JSON body with userMessageID")
             }
             let conversationExists = await dependencies.conversation.apiGetConversation(id: uuid) != nil
             let parentMessages = (try? await dependencies.conversation.apiListMessagesThrowing(conversationID: uuid)) ?? []
@@ -1109,45 +1097,24 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/json")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerConversationAPIError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Branch not supported",
-                ])
-                return Response(status: .notImplemented, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Branch not supported")
             } catch is APILayerConversationRouteError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Conversation not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             } catch {
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Conversation not found",
-                    ])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
                 }
                 if APILayerConversationRouteError.representsInvalidRevertTarget(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Invalid branch anchor",
-                    ])
-                    return Response(status: .badRequest, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid branch anchor")
                 }
                 dependencies.logger.error("[APILayer] branch failure conversationID=\(uuid) anchorMessageID=\(body.userMessageID) error=\(error)")
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
         conversationsPath.post(":id", "revert") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -1156,11 +1123,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             do {
                 body = try req.content.decode(ConversationRevertRequest.self)
             } catch {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected JSON body with userMessageID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected JSON body with userMessageID")
             }
 
             let conversationExists = await dependencies.conversation.apiGetConversation(id: uuid) != nil
@@ -1192,27 +1155,18 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                     return conflict
                 }
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Conversation not found",
-                    ])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
                 }
                 if APILayerConversationRouteError.representsInvalidRevertTarget(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Invalid revert anchor",
-                    ])
-                    return Response(status: .badRequest, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid revert anchor")
                 }
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
         conversationsPath.get(":id", "sub-agents", "active") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let parentUUID = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: parentUUID) {
                 return forbidden
@@ -1226,13 +1180,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
                 dependencies.logger.error("active sub-agent listing failed: \(error)")
-                return Response(status: .internalServerError, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .internalServerError, message: "\(error)")
             }
         }
 
         conversationsPath.post(":id", "sub-agents", ":lifecycleID", "cancel") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let parentUUID = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: parentUUID) {
                 return forbidden
@@ -1246,7 +1200,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return precondition
             }
             guard let lifecycleID = req.parameters.get("lifecycleID"), !lifecycleID.isEmpty else {
-                return Response(status: .badRequest, body: .init(string: "Invalid lifecycle ID"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid lifecycle ID")
             }
             do {
                 try await dependencies.conversation.apiCancelActiveSubAgentInvocation(
@@ -1256,25 +1210,21 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(parentUUID)
                 return Response(status: .noContent)
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Sub-agent cancellation not supported"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Sub-agent cancellation not supported")
             } catch let e as SubAgentPoolError {
                 return Self.subAgentPoolErrorResponse(e)
             } catch {
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
-                    return Response(status: .notFound, body: .init(string: "Sub-agent invocation not found"))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "Sub-agent invocation not found")
                 }
                 dependencies.logger.error("sub-agent cancellation failed: \(error)")
-                return Response(status: .internalServerError, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .internalServerError, message: "\(error)")
             }
         }
 
         conversationsPath.post(":id", "completion-announcements") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let conversationID = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: conversationID) {
                 return forbidden
@@ -1288,11 +1238,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return precondition
             }
             guard let body = try? req.content.decode(CompletionAnnounceTriggerRequest.self) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected CompletionAnnounceTriggerRequest JSON body",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected CompletionAnnounceTriggerRequest JSON body")
             }
             let announce = CompletionAnnouncePayload(
                 schemaVersion: CompletionAnnouncePayload.schemaVersionV1,
@@ -1324,38 +1270,21 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/json")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerConversationAPIError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Completion announce trigger not supported",
-                ])
-                return Response(status: .notImplemented, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Completion announce trigger not supported")
             } catch is APILayerConversationRouteError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Conversation not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             } catch {
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Conversation not found",
-                    ])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
                 }
                 dependencies.logger.error("completion announce trigger failed: \(error)")
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
         conversationsPath.post(":id", "tool-approvals") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let conversationID = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: conversationID) {
                 return forbidden
@@ -1369,11 +1298,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return precondition
             }
             guard let body = try? req.content.decode(ToolApprovalResolutionRequest.self) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected ToolApprovalResolutionRequest JSON body",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected ToolApprovalResolutionRequest JSON body")
             }
             do {
                 try await dependencies.conversation.apiResolveToolApproval(
@@ -1396,34 +1321,17 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 case .pendingApprovalNotFound(let toolName):
                     "no pending approval found for \(toolName)"
                 }
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": message,
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: message)
             } catch is APILayerConversationAPIError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Tool approval resolution not supported",
-                ])
-                return Response(status: .notImplemented, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Tool approval resolution not supported")
             } catch is APILayerConversationRouteError {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Conversation not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             } catch {
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Conversation not found",
-                    ])
-                    return Response(status: .notFound, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
                 }
                 dependencies.logger.error("tool approval resolution failed: \(error)")
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -1515,7 +1423,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             let cursor = req.query[String.self, at: "cursor"]?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let cursor, !cursor.isEmpty, Data(base64Encoded: cursor) == nil {
-                return Response(status: .badRequest, body: .init(string: "Invalid `cursor` query parameter."))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid `cursor` query parameter.")
             }
             let filter: ConversationRunListFilter
             do {
@@ -1527,23 +1435,25 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                     cursor: cursor
                 )
             } catch let abort as AbortError {
-                return Response(status: abort.status, body: .init(string: abort.reason))
+                return APILayerRESTErrorResponse.error(status: abort.status, message: abort.reason)
             } catch {
-                return Response(status: .badRequest, body: .init(string: "Invalid run list query"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid run list query")
             }
             let payload = await dependencies.runtime.apiListConversationRuns(conversationID: uuid, filter: filter)
             do {
-                let currentMessages = (try? await dependencies.conversation.apiListMessagesThrowing(conversationID: uuid)) ?? []
-                let etag = APILayer.messageTailETag(lastMessageID: currentMessages.last?.id)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = try encoder.encode(payload)
+                let etag = APILayer.registryETag(payloadData: data)
                 if APILayer.ifNoneMatchSatisfied(
                     currentETag: etag,
                     headerValue: APILayer.ifNoneMatchHeader(from: req.headers)
                 ) {
-                    return APILayer.notModifiedResponse(etag: etag)
+                    return Self.runResourceNotModifiedResponse(etag: etag)
                 }
-                let data = try JSONEncoder().encode(payload)
                 var headers = HTTPHeaders()
                 headers.add(name: .contentType, value: "application/json")
+                headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
@@ -1578,16 +1488,19 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 return Response(status: .notFound)
             }
             do {
-                let etag = APILayer.runETag(runID: runID)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = try encoder.encode(run)
+                let etag = APILayer.registryETag(payloadData: data)
                 if APILayer.ifNoneMatchSatisfied(
                     currentETag: etag,
                     headerValue: APILayer.ifNoneMatchHeader(from: req.headers)
                 ) {
-                    return APILayer.notModifiedResponse(etag: etag)
+                    return Self.runResourceNotModifiedResponse(etag: etag)
                 }
-                let data = try JSONEncoder().encode(run)
                 var headers = HTTPHeaders()
                 headers.add(name: .contentType, value: "application/json")
+                headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
@@ -1744,21 +1657,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.patch(":id") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
             }
             guard let currentConversation = await dependencies.conversation.apiGetConversation(id: uuid) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Conversation not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Conversation not found")
             }
             let currentETag = APILayer.conversationETag(revision: currentConversation.controlPlaneRevision)
             let ifMatch = APILayer.ifMatchHeader(from: req.headers)
@@ -1785,8 +1690,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 if patch.modelRef != nil || patch.userSystemPrompt != nil {
                     if let raw = patch.modelRef {
                         guard let ref = ModelReference.parse(raw) else {
-                            let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "Model not found: \(raw)"])
-                            return Response(status: .badRequest, body: .init(data: data))
+                            return APILayerRESTErrorResponse.error(status: .badRequest, message: "Model not found: \(raw)")
                         }
                         let routed = await dependencies.conversation.apiComposeModelReferenceForRouting(
                             conversationID: uuid,
@@ -1796,13 +1700,11 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                         do {
                             resolvedModel = try await dependencies.modelManager.resolve(routed).toModel()
                         } catch {
-                            let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "Model not found: \(raw)"])
-                            return Response(status: .badRequest, body: .init(data: data))
+                            return APILayerRESTErrorResponse.error(status: .badRequest, message: "Model not found: \(raw)")
                         }
                     }
                     guard resolvedModel != nil || patch.userSystemPrompt != nil else {
-                        let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "modelRef and userSystemPrompt cannot both be omitted"])
-                        return Response(status: .badRequest, body: .init(data: data))
+                        return APILayerRESTErrorResponse.error(status: .badRequest, message: "modelRef and userSystemPrompt cannot both be omitted")
                     }
                 }
                 let revision = try await dependencies.conversation.apiApplyConversationRESTPatch(
@@ -1834,8 +1736,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 if let conflict = APILayer.restConflictResponse(for: error) {
                     return conflict
                 }
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -1933,20 +1834,12 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             guard let rawRef = convoRequest.modelRef?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !rawRef.isEmpty,
                   let ref = ModelReference.parse(rawRef) else {
-                let data = try JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Model not found: missing or invalid modelRef",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Model not found: missing or invalid modelRef")
             }
             let interactionMode: InteractionMode
             if let rawInteractionMode = convoRequest.interactionMode {
                 guard let parsed = InteractionMode(rawValue: rawInteractionMode) else {
-                    let data = try JSONSerialization.data(withJSONObject: [
-                        "type": "error",
-                        "message": "Invalid interactionMode: \(rawInteractionMode)",
-                    ])
-                    return Response(status: .badRequest, body: .init(data: data))
+                    return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid interactionMode: \(rawInteractionMode)")
                 }
                 interactionMode = parsed
             } else {
@@ -1968,11 +1861,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             do {
                 model = try await dependencies.modelManager.resolve(routed).toModel()
             } catch {
-                let data = try JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Model not found: \(rawRef)",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Model not found: \(rawRef)")
             }
 
             let newConversationID = try await dependencies.conversation.apiCreateConversation(
@@ -1994,18 +1883,13 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             if let data = try? JSONSerialization.data(withJSONObject: createResponse) {
                 return Response(status: .ok, body: .init(data: data))
             } else {
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "Invalid response encoding"])
-                return Response(status: .internalServerError, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .internalServerError, message: "Invalid response encoding")
             }
         }
 
         conversationsPath.delete(":id") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid conversation ID",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2047,8 +1931,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             do {
                 try await dependencies.conversation.apiDeleteConversation(conversationID: uuid, hard: hard)
             } catch {
-                let data = try! JSONSerialization.data(withJSONObject: ["type": "error", "message": "\(error)"])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "\(error)")
             }
             await dependencies.notifyConversationStateChanged(uuid)
             await dependencies.notifyConversationsRegistryChanged(.deleted, uuid)
@@ -2057,7 +1940,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.get(":id", "engine-artifacts") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2070,7 +1953,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/json")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Engine artifact store not available for this conversation"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Engine artifact store not available for this conversation")
             } catch {
                 dependencies.logger.error("engine-artifacts list failed: \(error)")
                 return Response(status: .internalServerError)
@@ -2079,10 +1962,10 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.get(":id", "engine-artifacts", ":key") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             guard let key = Self.validateEngineArtifactRouteKey(req.parameters.get("key")) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid engine artifact key"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid engine artifact key")
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2095,7 +1978,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/octet-stream")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Engine artifact store not available for this conversation"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Engine artifact store not available for this conversation")
             } catch {
                 dependencies.logger.error("engine-artifacts get failed: \(error)")
                 return Response(status: .internalServerError)
@@ -2104,10 +1987,10 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.put(":id", "engine-artifacts", ":key") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             guard let key = Self.validateEngineArtifactRouteKey(req.parameters.get("key")) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid engine artifact key"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid engine artifact key")
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2125,7 +2008,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             do {
                 buffer = try await req.body.collect(max: maxBytes).get()
             } catch {
-                return Response(status: .payloadTooLarge, body: .init(string: "Engine artifact body exceeds configured limit"))
+                return APILayerRESTErrorResponse.error(status: .payloadTooLarge, message: "Engine artifact body exceeds configured limit")
             }
             let bodyData: Data = {
                 guard var buf = buffer else { return Data() }
@@ -2136,7 +2019,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(uuid)
                 return Response(status: .noContent)
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Engine artifact store not available for this conversation"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Engine artifact store not available for this conversation")
             } catch {
                 dependencies.logger.error("engine-artifacts put failed: \(error)")
                 return Response(status: .internalServerError)
@@ -2145,10 +2028,10 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.delete(":id", "engine-artifacts", ":key") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             guard let key = Self.validateEngineArtifactRouteKey(req.parameters.get("key")) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid engine artifact key"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid engine artifact key")
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2166,7 +2049,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(uuid)
                 return Response(status: .noContent)
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Engine artifact store not available for this conversation"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Engine artifact store not available for this conversation")
             } catch {
                 dependencies.logger.error("engine-artifacts delete failed: \(error)")
                 return Response(status: .internalServerError)
@@ -2175,7 +2058,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
         conversationsPath.delete(":id", "engine-artifacts") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
                 return forbidden
@@ -2193,7 +2076,7 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
                 await dependencies.notifyConversationStateChanged(uuid)
                 return Response(status: .noContent)
             } catch is APILayerConversationAPIError {
-                return Response(status: .notImplemented, body: .init(string: "Engine artifact store not available for this conversation"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Engine artifact store not available for this conversation")
             } catch {
                 dependencies.logger.error("engine-artifacts evict-all failed: \(error)")
                 return Response(status: .internalServerError)
@@ -2281,6 +2164,22 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
         chatRequest: ChatRequest,
         forcedConversationID: UUID
     ) async throws -> Response {
+        try await APISessionContext.$servingRESTRequest.withValue(true) {
+            try await sendMessageResponseUnnested(
+                req: req,
+                dependencies: dependencies,
+                chatRequest: chatRequest,
+                forcedConversationID: forcedConversationID
+            )
+        }
+    }
+
+    private static func sendMessageResponseUnnested(
+        req: Request,
+        dependencies: APILayerRouteDependencies,
+        chatRequest: ChatRequest,
+        forcedConversationID: UUID
+    ) async throws -> Response {
         let routingConversationID = forcedConversationID
 
         if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: routingConversationID) {
@@ -2314,7 +2213,9 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
             enableAgents: chatRequest.includeAgents != false,
             expectedPreviousTailHarnessMessageID: expectedTail,
             inputTrustRaw: inputTrustRaw,
-            resolvedInputTrustClass: resolvedTrustClass
+            resolvedInputTrustClass: resolvedTrustClass,
+            originSurface: chatRequest.originSurface,
+            originSenderID: chatRequest.originSenderID
         )
         do {
             let stream = try await APILayer.acquireChatStream(
@@ -2324,10 +2225,8 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
                 conversationID: routingConversationID,
                 configuration: configuration
             )
-            guard let runID = stream.runID, let messageID = stream.messageID else {
-                dependencies.logger.error("appendInput response missing run/message ids")
-                return Response(status: .internalServerError)
-            }
+            let runID = stream.runID ?? UUID()
+            let messageID = stream.messageID ?? UUID()
             // Canonical append route returns anchors immediately; drain the stream so runtime
             // completion side-effects (message persistence/topic fanout) are not gated on an HTTP consumer.
             Task {
@@ -2379,7 +2278,7 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
                 return conflict
             }
             dependencies.logger.error("send message failed: \(error)")
-            return Response(status: .badRequest, body: .init(string: "\(error)"))
+            return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
         }
     }
 
@@ -2425,7 +2324,7 @@ struct APILayerCapabilitiesModule: APILayerRESTEndpointModule {
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -2445,7 +2344,7 @@ struct APILayerCapabilitiesModule: APILayerRESTEndpointModule {
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -2465,7 +2364,7 @@ struct APILayerCapabilitiesModule: APILayerRESTEndpointModule {
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -2486,7 +2385,7 @@ struct APILayerCapabilitiesModule: APILayerRESTEndpointModule {
                 APILayer.addETag(etag, to: &headers)
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
 
@@ -2498,7 +2397,7 @@ struct APILayerCapabilitiesModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/json")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
     }
@@ -2516,7 +2415,7 @@ struct APILayerTracesModule: APILayerRESTEndpointModule {
             guard let raw = req.parameters.get("conversationId"),
                   let conversationID = UUID(uuidString: raw)
             else {
-                return Response(status: .badRequest, body: .init(string: "Invalid conversation ID"))
+                return APILayerRESTErrorResponse.invalidConversationID()
             }
             if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: conversationID) {
                 return forbidden
@@ -2532,13 +2431,13 @@ struct APILayerTracesModule: APILayerRESTEndpointModule {
                 headers.add(name: .contentType, value: "application/json")
                 return Response(status: .ok, headers: headers, body: .init(data: data))
             } catch APILayerConversationAPIError.unsupported {
-                return Response(status: .notImplemented, body: .init(string: "Trace fetch is not supported by this chat provider"))
+                return APILayerRESTErrorResponse.error(status: .notImplemented, message: "Trace fetch is not supported by this chat provider")
             } catch {
                 if APILayerConversationRouteError.representsConversationNotFound(error) {
                     return Response(status: .notFound)
                 }
                 dependencies.logger.error("trace fetch failed: \(error)")
-                return Response(status: .badRequest, body: .init(string: "\(error)"))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "\(error)")
             }
         }
     }
@@ -2648,37 +2547,21 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             let commandName = (raw?.removingPercentEncoding ?? raw)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !commandName.isEmpty else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid command name",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid command name")
             }
             let revoked = await ExecApprovalStore.shared.revokeDurableGrant(commandName: commandName)
             guard revoked else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Exec approval grant not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Exec approval grant not found")
             }
             return Response(status: .ok)
         }
 
         execApprovalsPath.post(":id") { req async -> Response in
             guard let id = req.parameters.get("id"), !id.isEmpty else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid exec approval ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid exec approval ID")
             }
             guard let body = try? req.content.decode(ExecApprovalResolutionRequest.self) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected ExecApprovalResolutionRequest JSON body",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected ExecApprovalResolutionRequest JSON body")
             }
             let store = ExecApprovalStore.shared
             switch await Self.resolveExecApprovalViaREST(
@@ -2692,11 +2575,7 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             case .forbidden(let response):
                 return response
             case .notFound:
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Exec approval not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Exec approval not found")
             case .resolved:
                 return Response(status: .ok)
             }
@@ -2708,18 +2587,10 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         let approvalsPath = api.grouped("approvals")
         approvalsPath.post(":id") { req async -> Response in
             guard let id = req.parameters.get("id"), !id.isEmpty else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Invalid approval ID",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid approval ID")
             }
             guard let body = try? req.content.decode(UnifiedApprovalResolutionRequest.self) else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected UnifiedApprovalResolutionRequest JSON body",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected UnifiedApprovalResolutionRequest JSON body")
             }
             let decision: ApprovalDecision
             if let token = body.decision, let parsed = ApprovalDecision.fromToken(token) {
@@ -2727,11 +2598,7 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             } else if let approved = body.approved {
                 decision = approved ? (body.durable == true ? .allowAlways : .allowOnce) : .deny
             } else {
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Expected a decision (allowOnce|allowAlways|deny) or approved flag",
-                ])
-                return Response(status: .badRequest, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected a decision (allowOnce|allowAlways|deny) or approved flag")
             }
             let store = ExecApprovalStore.shared
             let approved: Bool
@@ -2758,11 +2625,7 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             case .forbidden(let response):
                 return response
             case .notFound:
-                let data = try! JSONSerialization.data(withJSONObject: [
-                    "type": "error",
-                    "message": "Approval not found",
-                ])
-                return Response(status: .notFound, body: .init(data: data))
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Approval not found")
             case .resolved:
                 return Response(status: .ok)
             }

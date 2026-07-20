@@ -83,7 +83,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         
-        let requestBody = await createLMStudioChatRequest(messages: messages, config: config, stream: false)
+        let requestBody = try await createLMStudioChatRequest(messages: messages, config: config, stream: false)
         
         logger?.debug("Preparing HTTP request - URL: \(serverURL.absoluteString)/api/v0/chat/completions, Model: \(model), MaxTokens: \(requestBody.maxTokens)")
         
@@ -154,7 +154,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                 
                 self.logger?.info("Starting streaming chat request\(LLMRequestPurposeReader.logSuffix(from: config)) - Model: \(self.model), Message count: \(messages.count)")
                 
-                let requestBody = await self.createLMStudioChatRequest(messages: messages, config: config, stream: true)
+                let requestBody = try await self.createLMStudioChatRequest(messages: messages, config: config, stream: true)
                 
                 self.logger?.debug("Preparing streaming HTTP request - URL: \(self.serverURL.absoluteString)/api/v0/chat/completions, Model: \(self.model)")
                 
@@ -327,10 +327,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                         let storedFinishReason = canonicalFinishReason == .unknown ? finishReason : canonicalFinishReason.rawValue
                         if let streamUsage {
                             emitter.yield(
-                                .usage(NormalizedUsage(
-                                    inputTokens: streamUsage.promptTokens,
-                                    outputTokens: streamUsage.completionTokens
-                                )),
+                                .usage(streamUsage.normalizedUsage),
                                 availableTools: config.availableTools
                             )
                         }
@@ -379,10 +376,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     }()
                     if let streamUsage {
                         emitter.yield(
-                            .usage(NormalizedUsage(
-                                inputTokens: streamUsage.promptTokens,
-                                outputTokens: streamUsage.completionTokens
-                            )),
+                            .usage(streamUsage.normalizedUsage),
                             availableTools: config.availableTools
                         )
                     }
@@ -481,30 +475,17 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
     }
 
     nonisolated private func extractAttachmentDispositions(from additionalParameters: JSON?) -> [String: String] {
-        guard let additionalParameters,
-              case .object(let root) = additionalParameters,
-              let projection = root["contextEngineAttachmentProjection"],
-              case .object(let projectionObject) = projection,
-              let decisionsJSON = projectionObject["decisions"],
-              case .array(let decisions) = decisionsJSON else {
-            return [:]
-        }
-        var output: [String: String] = [:]
-        for decision in decisions {
-            guard case .object(let object) = decision,
-                  case .string(let name)? = object["attachmentName"],
-                  case .string(let disposition)? = object["disposition"] else {
-                continue
-            }
-            output[name] = disposition
-        }
-        return output
+        AttachmentProjectionDispatchCodec.extractDispositions(from: additionalParameters)
     }
 
     nonisolated private func attachmentDispositionSuffix(
         imageNames: [String],
-        dispositions: [String: String]
+        dispositions: [String: String],
+        additionalParameters: JSON?
     ) -> String {
+        if AttachmentProjectionDispatchCodec.hasMaterializedBlocks(in: additionalParameters) {
+            return ""
+        }
         let projected = imageNames.compactMap { name -> String? in
             guard let disposition = dispositions[name],
                   disposition != ConversationAttachmentProjectionDisposition.inline.rawValue else {
@@ -516,32 +497,28 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         return "\n\n[Attachment projection]\n" + projected.joined(separator: "\n")
     }
     
-    private func createLMStudioChatRequest(messages: [Message], config: LLMRequestConfig, stream: Bool) async -> LMStudioChatRequest {
+    private func createLMStudioChatRequest(messages: [Message], config: LLMRequestConfig, stream: Bool) async throws -> LMStudioChatRequest {
         let attachmentDispositions = extractAttachmentDispositions(from: config.additionalParameters)
-        
-        // Convert messages to LM Studio format
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
         var lmStudioMessages: [LMStudioMessage] = []
-        for message in messages {
+        for message in plan.resolvedMessages {
             switch message.role {
             case .system:
-                let systemPromptText: String
-                do {
-                    let promptMetadata = extractSystemPromptMetadata(from: config.additionalParameters)
-                    systemPromptText = try await systemPrompt.generateSystemPrompt(
-                        withUserSystemPrompt: message.content,
-                        additionalMetadata: promptMetadata
-                    )
-                } catch {
-                    self.logger?.error("Failed to generate system prompt: \(error)")
-                    systemPromptText = ""
-                }
-                lmStudioMessages.append(LMStudioMessage(role: "system", content: systemPromptText))
+                lmStudioMessages.append(LMStudioMessage(role: "system", content: message.content))
             case .user:
                 lmStudioMessages.append(LMStudioMessage(
                     role: "user",
                     content: message.content + attachmentDispositionSuffix(
                         imageNames: message.images.map(\.name),
-                        dispositions: attachmentDispositions
+                        dispositions: attachmentDispositions,
+                        additionalParameters: config.additionalParameters
                     )
                 ))
             case .assistant:
@@ -555,7 +532,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     role: "assistant",
                     content: message.content + attachmentDispositionSuffix(
                         imageNames: message.images.map(\.name),
-                        dispositions: attachmentDispositions
+                        dispositions: attachmentDispositions,
+                        additionalParameters: config.additionalParameters
                     ),
                     toolCalls: toolCalls
                 ))
@@ -758,6 +736,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             remainingContextTokens: remaining,
             totalTokens: usage?.totalTokens,
             contextWindowTokens: config.maxTokens,
+            cacheReadTokens: usage?.cachedTokens,
+            usageIsProviderReported: usage != nil,
             finishReason: finishReason
         )
     }
@@ -773,7 +753,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         return LMStudioUsage(
             promptTokens: int(usage["prompt_tokens"]),
             completionTokens: int(usage["completion_tokens"]),
-            totalTokens: int(usage["total_tokens"])
+            totalTokens: int(usage["total_tokens"]),
+            cachedTokens: CanonicalUsageExtraction.openAICompatCachedTokens(from: usage)
         )
     }
     
@@ -1040,6 +1021,31 @@ private struct LMStudioUsage: Codable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?
+    let cachedTokens: Int?
+
+    init(
+        promptTokens: Int?,
+        completionTokens: Int?,
+        totalTokens: Int?,
+        cachedTokens: Int? = nil
+    ) {
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.totalTokens = totalTokens
+        self.cachedTokens = cachedTokens
+    }
+
+    var normalizedUsage: NormalizedUsage {
+        CanonicalUsageExtraction.openAICompatUsage(
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            totalTokens: totalTokens,
+            cachedTokens: cachedTokens
+        ) ?? NormalizedUsage(
+            inputTokens: promptTokens,
+            outputTokens: completionTokens
+        )
+    }
 }
 
 // MARK: - Extension for ToolDefinition

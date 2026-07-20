@@ -6,6 +6,8 @@ public struct ExecRuntimeContext: Sendable {
     public let agentID: String
     public let isMainSession: Bool
     public let memoryDirectory: String?
+    public let userMemoryDirectory: String?
+    public let skillsDirectory: String?
     public let memoryWriteOnly: Bool
     public let senderIdentity: ExecSenderIdentity
     public let elevated: ElevatedExecContext
@@ -16,6 +18,8 @@ public struct ExecRuntimeContext: Sendable {
         agentID: String,
         isMainSession: Bool,
         memoryDirectory: String? = nil,
+        userMemoryDirectory: String? = nil,
+        skillsDirectory: String? = nil,
         memoryWriteOnly: Bool = false,
         senderIdentity: ExecSenderIdentity = .cliDefault,
         elevated: ElevatedExecContext = ElevatedExecContext(mode: .off, senderAllowed: false),
@@ -25,6 +29,8 @@ public struct ExecRuntimeContext: Sendable {
         self.agentID = agentID
         self.isMainSession = isMainSession
         self.memoryDirectory = memoryDirectory
+        self.userMemoryDirectory = userMemoryDirectory
+        self.skillsDirectory = skillsDirectory
         self.memoryWriteOnly = memoryWriteOnly
         self.senderIdentity = senderIdentity
         self.elevated = elevated
@@ -100,7 +106,8 @@ public struct ExecRuntimeService: Sendable {
         let bridgeContext = SandboxFsBridgeContext(
             workspaceRoot: workspaceRoot,
             agentWorkspaceDir: agentWorkspaceDir,
-            memoryDirectory: context.memoryDirectory
+            memoryDirectory: context.memoryDirectory,
+            userMemoryDirectory: context.userMemoryDirectory
         )
         switch manifest.workspaceModel {
         case .hostCanonical, .mirror:

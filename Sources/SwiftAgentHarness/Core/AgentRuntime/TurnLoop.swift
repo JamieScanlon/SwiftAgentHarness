@@ -73,11 +73,20 @@ struct TurnLoop {
                 : .continuation(round: continuationsUsed)
             let compaction: CompactionHint = retriedCompactionThisIteration ? .forceCompaction : .normal
 
+            var activeMemoryDiagnostics: ActiveMemoryTurnDiagnostics?
+            let sessionActiveMemoryEnabled = ActiveMemorySessionFlags.isSessionEnabled(metadata: conv.metadata)
+            let sessionVerbose = ActiveMemorySessionFlags.isVerbose(metadata: conv.metadata)
+            let sessionTrace = ActiveMemorySessionFlags.isTrace(metadata: conv.metadata)
+
             // Fire situational prefetch before assembly so recall overlaps context assembly.
-            if isFirstModelCall, let memoryPort = ports.memory,
-               ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                if let query = resolveUserQuery(from: conv.messages, anchorUserMessageID: anchorUserMessageID) {
-                    await memoryPort.prefetchRecall(conversationID: conversationID, userQuery: query)
+            if isFirstModelCall, let memoryPort = ports.memory {
+                if ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
+                    await memoryPort.prefetchRecall(
+                        conversationID: conversationID,
+                        messages: conv.messages,
+                        anchorUserMessageID: anchorUserMessageID,
+                        sessionEnabled: sessionActiveMemoryEnabled
+                    )
                 }
             }
 
@@ -107,19 +116,33 @@ struct TurnLoop {
                     messages = [reminderMessage] + messages
                 }
             }
-            if isFirstModelCall, let memoryPort = ports.memory,
-               ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
-                let userQuery = resolveUserQuery(from: messages, anchorUserMessageID: anchorUserMessageID)
-                if let query = userQuery,
-                   let recall = await memoryPort.blockingRecallSummary(conversationID: conversationID, userQuery: query) {
-                    let recallMessage = HarnessInjectedMessageMetadata.systemMessage(
-                        id: UUID(),
-                        content: """
+            if isFirstModelCall, let memoryPort = ports.memory {
+                if ConversationActiveMemoryPolicy.shouldRunBlockingPreReplyRecall(for: conv) {
+                    let excludedKeys = await ports.context.projectedMemorySelectionKeys(conversationID: conversationID)
+                    // Use persisted conversation messages (same as prefetch) so cache fingerprints match.
+                    let outcome = await memoryPort.blockingRecallSummary(
+                        conversationID: conversationID,
+                        messages: conv.messages,
+                        anchorUserMessageID: anchorUserMessageID,
+                        sessionEnabled: sessionActiveMemoryEnabled,
+                        excludedSelectionKeys: excludedKeys
+                    )
+                    activeMemoryDiagnostics = outcome.diagnostics
+                    if let recall = outcome.note {
+                        let recallMessage = HarnessInjectedMessageMetadata.systemMessage(
+                            id: UUID(),
+                            content: """
 \(HarnessInjectedMessagePrefixes.activeMemoryRecall)
 \(recall)
 """
+                        )
+                        messages = [recallMessage] + messages
+                    }
+                } else {
+                    activeMemoryDiagnostics = .skipped(
+                        reason: "lineage",
+                        queryMode: MemoryConfiguration.default.activeMemoryQueryMode
                     )
-                    messages = [recallMessage] + messages
                 }
             }
             let handle = try await ports.model.resolve(for: conv, orchestrator: orchestrator)
@@ -272,6 +295,18 @@ struct TurnLoop {
             if !rejectedBareRequiredTurn {
                 try await ports.conversation.append(assistant, conversationID: conversationID, runID: runID)
                 hasTranscriptDeltaAcrossRun = true
+                if let diagnostics = activeMemoryDiagnostics,
+                   let followUp = diagnostics.followUpContent(verbose: sessionVerbose, trace: sessionTrace) {
+                    let followUpMessage = HarnessInjectedMessageMetadata.assistantMessage(
+                        id: UUID(),
+                        content: followUp
+                    )
+                    try await ports.conversation.append(
+                        followUpMessage,
+                        conversationID: conversationID,
+                        runID: runID
+                    )
+                }
             }
 
             await lifecycleEmitter.emit(
@@ -360,27 +395,16 @@ struct TurnLoop {
             } else {
                 requiresSerial = false
             }
-            let useBatchDispatch = preferBatch && !requiresSerial
+            let contract = snapshot.dispatchContract
+            let useParallelDispatch =
+                preferBatch
+                && !requiresSerial
+                && contract.parallelDispatchEnabled
 
-            if useBatchDispatch {
-                for call in toolRequests {
-                    await lifecycleEmitter.emit(
-                        .toolCallStarted(
-                            iteration: iteration,
-                            modelID: handle.modelID,
-                            toolName: call.name,
-                            toolCallID: call.id
-                        ),
-                        conversationID: conversationID,
-                        runID: runID
-                    )
-                }
-            }
-
-            let batchOutcomes: [ToolDispatchOutcome]
-            if useBatchDispatch {
-                batchOutcomes = await ports.tools.dispatchBatch(
-                    toolRequests,
+            let orderedOutcomes: [(call: ToolCallRequest, outcome: ToolDispatchOutcome, timedOut: Bool, elapsedMs: Int)]
+            if useParallelDispatch {
+                orderedOutcomes = await dispatchToolsInParallel(
+                    toolRequests: toolRequests,
                     conversationID: conversationID,
                     runID: runID,
                     orchestrator: orchestrator,
@@ -389,30 +413,15 @@ struct TurnLoop {
                     iteration: iteration,
                     modelID: handle.modelID,
                     runtimePolicy: dispatchRuntimePolicy,
-                    lifecycleEmitter: lifecycleEmitter
+                    lifecycleEmitter: lifecycleEmitter,
+                    contract: contract
                 )
             } else {
-                batchOutcomes = []
-            }
-
-            toolDispatchLoop: for (callIndex, call) in toolRequests.enumerated() {
-                let outcome: ToolDispatchOutcome
-                if useBatchDispatch {
-                    guard callIndex < batchOutcomes.count else { break toolDispatchLoop }
-                    outcome = batchOutcomes[callIndex]
-                } else {
-                    await lifecycleEmitter.emit(
-                        .toolCallStarted(
-                            iteration: iteration,
-                            modelID: handle.modelID,
-                            toolName: call.name,
-                            toolCallID: call.id
-                        ),
-                        conversationID: conversationID,
-                        runID: runID
-                    )
-                    outcome = await ports.tools.dispatch(
-                        call,
+                var serial: [(call: ToolCallRequest, outcome: ToolDispatchOutcome, timedOut: Bool, elapsedMs: Int)] = []
+                serial.reserveCapacity(toolRequests.count)
+                for call in toolRequests {
+                    let result = await dispatchOneToolWithWatchdog(
+                        call: call,
                         conversationID: conversationID,
                         runID: runID,
                         orchestrator: orchestrator,
@@ -421,9 +430,24 @@ struct TurnLoop {
                         iteration: iteration,
                         modelID: handle.modelID,
                         runtimePolicy: dispatchRuntimePolicy,
-                        lifecycleEmitter: lifecycleEmitter
+                        lifecycleEmitter: lifecycleEmitter,
+                        contract: contract
                     )
+                    serial.append((call, result.outcome, result.timedOut, result.elapsedMs))
+                    if case .approvalRequired = result.outcome {
+                        break
+                    }
+                    if result.timedOut, contract.onToolTimeout == .failRun {
+                        break
+                    }
                 }
+                orderedOutcomes = serial
+            }
+
+            var failRunAfterTimeout = false
+            toolDispatchLoop: for (callIndex, entry) in orderedOutcomes.enumerated() {
+                let call = entry.call
+                let outcome = entry.outcome
                 switch outcome {
                 case .approvalRequired:
                     sawDispatchApprovalRequired = true
@@ -445,22 +469,44 @@ struct TurnLoop {
                     break toolDispatchLoop
                 case .completed(let message), .pendingHandle(let message), .denied(let message):
                     try await ports.conversation.append(message, conversationID: conversationID, runID: runID)
-                    let resultTruncated = ToolResultSpillEnvelope.isSpillEnvelope(message.content)
-                    await lifecycleEmitter.emit(
-                        .toolCallCompleted(
-                            iteration: iteration,
-                            modelID: handle.modelID,
-                            toolName: call.name,
-                            toolCallID: call.id,
-                            resultTruncated: resultTruncated ? true : nil
-                        ),
+                    await emitToolTerminalLifecycle(
+                        call: call,
+                        message: message,
+                        outcome: outcome,
+                        timedOut: entry.timedOut,
+                        elapsedMs: entry.elapsedMs,
+                        iteration: iteration,
+                        modelID: handle.modelID,
                         conversationID: conversationID,
-                        runID: runID
+                        runID: runID,
+                        lifecycleEmitter: lifecycleEmitter
                     )
                     if ports.tools.isHaltSignal(call.name, in: snapshot) {
                         sawHaltSignal = true
                     }
+                    if entry.timedOut, contract.onToolTimeout == .failRun {
+                        failRunAfterTimeout = true
+                        break toolDispatchLoop
+                    }
                 }
+            }
+
+            if failRunAfterTimeout {
+                let terminal = ConversationRunTerminalReason(
+                    category: .failure,
+                    detail: "tool_call_timeout"
+                )
+                await lifecycleEmitter.emit(
+                    .loopIterationCompleted(iteration: iteration, modelID: handle.modelID),
+                    conversationID: conversationID,
+                    runID: runID
+                )
+                await stampTerminalAssistantFinishReasonIfNeeded(
+                    assistant: assistant,
+                    terminal: terminal,
+                    conversationID: conversationID
+                )
+                return terminal
             }
 
             if sawDispatchApprovalRequired {
@@ -742,6 +788,13 @@ struct TurnLoop {
             modeRegistry: ports.modeRegistry,
             logger: ports.logger
         )
+        if conv.modeProfileID == "memory-pre-compaction-flush",
+           let metadata = conv.metadata,
+           case .object(let object) = metadata,
+           let raw = object["preCompactionFlushMaxIterations"],
+           case .double(let value) = raw {
+            return max(1, Int(value))
+        }
         guard let configured = profile.runtime.maxIterations else {
             return Self.defaultTurnLoopMaxIterations
         }
@@ -930,14 +983,248 @@ struct TurnLoop {
         return [message]
     }
 
-    private func resolveUserQuery(from messages: [Message], anchorUserMessageID: UUID?) -> String? {
-        if let anchorUserMessageID,
-           let anchored = messages.first(where: { $0.id == anchorUserMessageID && $0.role == .user })?.content,
-           !anchored.isEmpty {
-            return anchored
-        }
-        guard let content = messages.last(where: { $0.role == .user })?.content,
-              !content.isEmpty else { return nil }
-        return content
+    private struct ToolDispatchWatchResult: Sendable {
+        let outcome: ToolDispatchOutcome
+        let timedOut: Bool
+        let elapsedMs: Int
     }
+
+    private func dispatchOneToolWithWatchdog(
+        call: ToolCallRequest,
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        iteration: Int,
+        modelID: UUID,
+        runtimePolicy: ModeProfileRuntimeSlice,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter,
+        contract: AgentRuntimeToolDispatchContract
+    ) async -> ToolDispatchWatchResult {
+        let mcpServerName = ToolDispatchWatchdog.mcpServerName(fromToolName: call.name)
+        await lifecycleEmitter.emit(
+            .toolCallStarted(
+                iteration: iteration,
+                modelID: modelID,
+                toolName: call.name,
+                toolCallID: call.id
+            ),
+            conversationID: conversationID,
+            runID: runID
+        )
+        let startedAt = ContinuousClock.now
+        let watchdogContext = ToolDispatchWatchdog.Context(
+            toolName: call.name,
+            toolCallID: call.id,
+            runID: runID,
+            conversationID: conversationID,
+            mcpServerName: mcpServerName,
+            timeoutSeconds: contract.toolCallTimeoutSeconds,
+            watchdogIntervalSeconds: contract.toolCallWatchdogIntervalSeconds
+        )
+        do {
+            let outcome = try await ToolDispatchWatchdog.withTimeoutAndWatchdog(
+                context: watchdogContext,
+                logger: ports.logger
+            ) {
+                let outcome = await self.ports.tools.dispatch(
+                    call,
+                    conversationID: conversationID,
+                    runID: runID,
+                    orchestrator: orchestrator,
+                    snapshot: snapshot,
+                    configuration: configuration,
+                    iteration: iteration,
+                    modelID: modelID,
+                    runtimePolicy: runtimePolicy,
+                    lifecycleEmitter: lifecycleEmitter
+                )
+                try Task.checkCancellation()
+                return outcome
+            }
+            return ToolDispatchWatchResult(
+                outcome: outcome,
+                timedOut: false,
+                elapsedMs: ToolDispatchWatchdog.elapsedMilliseconds(since: startedAt)
+            )
+        } catch let timeout as ToolCallTimeoutError {
+            await maybeReconnectMCPClient(
+                named: mcpServerName,
+                enabled: contract.mcpReconnectOnToolTimeout,
+                orchestrator: orchestrator
+            )
+            let message = AgentLoopToolDispatch.toolResultMessage(
+                toolCallId: call.id,
+                content: timeout.message
+            )
+            return ToolDispatchWatchResult(
+                outcome: .completed(message),
+                timedOut: true,
+                elapsedMs: ToolDispatchWatchdog.elapsedMilliseconds(since: startedAt)
+            )
+        } catch is CancellationError {
+            let message = AgentLoopToolDispatch.toolResultMessage(
+                toolCallId: call.id,
+                content: "Tool call cancelled (tool: \(call.name))."
+            )
+            return ToolDispatchWatchResult(
+                outcome: .completed(message),
+                timedOut: false,
+                elapsedMs: ToolDispatchWatchdog.elapsedMilliseconds(since: startedAt)
+            )
+        } catch {
+            let message = AgentLoopToolDispatch.toolResultMessage(
+                toolCallId: call.id,
+                content: "Tool execution failed: \(error)"
+            )
+            return ToolDispatchWatchResult(
+                outcome: .completed(message),
+                timedOut: false,
+                elapsedMs: ToolDispatchWatchdog.elapsedMilliseconds(since: startedAt)
+            )
+        }
+    }
+
+    private func dispatchToolsInParallel(
+        toolRequests: [ToolCallRequest],
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        configuration: AgentRuntimeTurnConfiguration,
+        iteration: Int,
+        modelID: UUID,
+        runtimePolicy: ModeProfileRuntimeSlice,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter,
+        contract: AgentRuntimeToolDispatchContract
+    ) async -> [(call: ToolCallRequest, outcome: ToolDispatchOutcome, timedOut: Bool, elapsedMs: Int)] {
+        var resultsByIndex: [Int: ToolDispatchWatchResult] = [:]
+        await withTaskGroup(of: (Int, ToolDispatchWatchResult).self) { group in
+            for (index, call) in toolRequests.enumerated() {
+                group.addTask {
+                    let result = await self.dispatchOneToolWithWatchdog(
+                        call: call,
+                        conversationID: conversationID,
+                        runID: runID,
+                        orchestrator: orchestrator,
+                        snapshot: snapshot,
+                        configuration: configuration,
+                        iteration: iteration,
+                        modelID: modelID,
+                        runtimePolicy: runtimePolicy,
+                        lifecycleEmitter: lifecycleEmitter,
+                        contract: contract
+                    )
+                    return (index, result)
+                }
+            }
+            for await (index, result) in group {
+                resultsByIndex[index] = result
+            }
+        }
+        return toolRequests.enumerated().compactMap { index, call in
+            guard let result = resultsByIndex[index] else { return nil }
+            return (call, result.outcome, result.timedOut, result.elapsedMs)
+        }
+    }
+
+    private func emitToolTerminalLifecycle(
+        call: ToolCallRequest,
+        message: Message,
+        outcome: ToolDispatchOutcome,
+        timedOut: Bool,
+        elapsedMs: Int,
+        iteration: Int,
+        modelID: UUID,
+        conversationID: UUID,
+        runID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter
+    ) async {
+        let mcpServerName = ToolDispatchWatchdog.mcpServerName(fromToolName: call.name)
+        let failureClass: String?
+        if timedOut {
+            failureClass = "timeout"
+        } else if case .completed = outcome {
+            let classified = ToolDispatchWatchdog.classifyToolFailure(message: message.content)
+            if classified == "timeout"
+                || message.content.hasPrefix("Tool execution failed")
+                || message.content.hasPrefix("Tool call timed out")
+            {
+                failureClass = classified == "timeout" || message.content.hasPrefix("Tool call timed out")
+                    ? "timeout"
+                    : classified
+            } else {
+                failureClass = nil
+            }
+        } else {
+            failureClass = nil
+        }
+
+        if let failureClass {
+            await lifecycleEmitter.emit(
+                .toolCallFailed(
+                    iteration: iteration,
+                    modelID: modelID,
+                    toolName: call.name,
+                    toolCallID: call.id,
+                    errorClass: failureClass,
+                    message: message.content,
+                    elapsedMs: elapsedMs,
+                    mcpServerName: mcpServerName
+                ),
+                conversationID: conversationID,
+                runID: runID
+            )
+            return
+        }
+
+        let resultTruncated = ToolResultSpillEnvelope.isSpillEnvelope(message.content)
+        await lifecycleEmitter.emit(
+            .toolCallCompleted(
+                iteration: iteration,
+                modelID: modelID,
+                toolName: call.name,
+                toolCallID: call.id,
+                resultTruncated: resultTruncated ? true : nil
+            ),
+            conversationID: conversationID,
+            runID: runID
+        )
+    }
+
+    private func maybeReconnectMCPClient(
+        named serverName: String?,
+        enabled: Bool,
+        orchestrator: SwiftAgentKitOrchestrator
+    ) async {
+        guard enabled else { return }
+        guard let serverName, !serverName.isEmpty else {
+            ports.logger?.warning(
+                "[TurnLoop] mcpReconnectOnToolTimeout=true but mcpServerName is unknown; skipping reconnect"
+            )
+            return
+        }
+        let ok: Bool
+        if let reconnect = ports.reconnectMCPClient {
+            ok = await reconnect(serverName)
+        } else if let mcpManager = await orchestrator.mcpManager {
+            ok = await mcpManager.reconnectClient(named: serverName)
+        } else {
+            ports.logger?.warning(
+                "[TurnLoop] mcpReconnectOnToolTimeout=true but no MCPManager is bound; server=\(serverName)"
+            )
+            return
+        }
+        if ok {
+            ports.logger?.info(
+                "[TurnLoop] reconnected MCP client after tool timeout server=\(serverName)"
+            )
+        } else {
+            ports.logger?.warning(
+                "[TurnLoop] MCP reconnect after tool timeout failed or was unavailable server=\(serverName)"
+            )
+        }
+    }
+
 }

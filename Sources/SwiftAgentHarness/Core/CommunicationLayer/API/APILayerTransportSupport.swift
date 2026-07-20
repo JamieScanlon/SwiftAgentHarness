@@ -5,6 +5,25 @@ import Logging
 import SwiftAgentKit
 import Vapor
 
+/// Canonical REST failure envelope: `{"type":"error","message":"..."}` (`ErrorEnvelope` in OpenAPI).
+enum APILayerRESTErrorResponse {
+    private struct Body: Encodable {
+        var type: String = "error"
+        var message: String
+    }
+
+    static func error(status: HTTPStatus, message: String) -> Response {
+        let data = (try? JSONEncoder().encode(Body(message: message))) ?? Data()
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "application/json")
+        return Response(status: status, headers: headers, body: .init(data: data))
+    }
+
+    static func invalidConversationID() -> Response {
+        error(status: .badRequest, message: "Invalid conversation ID")
+    }
+}
+
 protocol APILayerRESTConflictRepresenting: Error {
     var apiLayerRESTConflictBody: Data? { get }
 }
@@ -242,23 +261,39 @@ extension APILayer {
     }
 
     /// Chunked **200** stream of assistant text after successful stream acquisition.
+    ///
+    /// Commits the response head (and an ignorable flush chunk) to the wire before awaiting
+    /// the first LLM partial so clients observing `URLSession.bytes(for:)` are not blocked on
+    /// provider TTFT / model load.
     static func streamingChatResponse(
         stream: ChatStreamResponse
     ) async throws -> Response {
         let response = Response(status: .ok)
+        response.body = .init(stream: makeStreamingChatBodyStreamCallback(stream: stream))
+        return response
+    }
 
-        response.body = .init(stream: { writer in
+    /// Body-stream callback for ``streamingChatResponse``. Package-visible for early-flush ordering tests.
+    ///
+    /// The callback is invoked on NIO's event loop. The keepalive write runs **synchronously** in
+    /// that callback so `writeAndFlush` commits the HTTP head before any `Task` awaits LLM partials.
+    static func makeStreamingChatBodyStreamCallback(
+        stream: ChatStreamResponse
+    ) -> @Sendable (BodyStreamWriter) -> Void {
+        { writer in
+            // Keepalive must flush on this event-loop turn. Vapor writes response heads without
+            // flush; empty buffers are skipped by the chunked encoder and do not unblock
+            // URLSession.bytes(for:). Leading `\n` is ignorable whitespace, not assistant text.
+            _ = writer.write(.buffer(ByteBuffer(string: "\n")))
+
             Task {
                 for await partial in stream.partialContent {
                     guard let utf8 = partial.chunkedTransferUTF8, !utf8.isEmpty else { continue }
                     let data = utf8.data(using: .utf8)!
-                    let buffer = ByteBuffer(data: data)
-                    _ = writer.write(.buffer(buffer))
+                    _ = writer.write(.buffer(ByteBuffer(data: data)))
                 }
                 _ = writer.write(.end)
             }
-        })
-
-        return response
+        }
     }
 }

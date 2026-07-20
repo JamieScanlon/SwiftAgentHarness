@@ -13,9 +13,23 @@ Safe defaults (`ModelPoolBudgetConfiguration.safeDefaults`, enabled):
 - `maxUSDGlobal`: 100.00
 - `denyWhenUnknownProjectedCost` → `projectedCostFallback`: deny when unknown
 
+Under strict authenticated tenancy (`TenancyPolicySettings.requireAuthenticatedOwnerOnMutations`), `maxUSDPerAccount` defaults to `maxUSDPerConversation` when unset in config. Explicit `settings.modelPoolBudget.maxUSDPerAccount` or `SAH_MODEL_POOL_MAX_USD_PER_ACCOUNT` still wins. When a per-account cap is active, calls without a resolved `ownerAccountID` are rejected (`LLMError.quotaExceeded`).
+
 Disable at runtime with `SAH_MODEL_POOL_BUDGET_DISABLED=1`.
 
 Per-conversation `ConversationBudgetSnapshot.maxUSD` is enforced as a tighter cap when present (hydrated at startup and updated on spend snapshot persistence).
+
+## Response cache
+
+Optional in-process response cache (`ResponseCachingLLM` / `ResponseCacheStore`) keys completions by owner scope (first), then model id, provider credential scope, message digest, and request config digest. Enable via `ServerConfig.modelPoolResponseCacheEnabled`.
+
+Under strict authenticated tenancy (`TenancyPolicySettings.requireAuthenticatedOwnerOnMutations`), `ownerScopeKey` is the conversation owner's UUID — two owners with byte-identical prompts cannot share cached completions. Non-strict deployments use an empty owner scope (legacy process-wide shared cache). Strict tenancy without a resolved `ownerAccountID` bypasses the cache entirely (always calls the provider).
+
+## Scheduler and fan-out under strict tenancy
+
+`ModelCallScheduler` partitions in-flight capacity and rate buckets by owner when strict tenancy is on (`ModelPoolOwnerScope`). `ModelCallSchedulerPolicy.maxConcurrentPerOwner` defaults to half of global `maxConcurrent` when unset. `SchedulingLLM` forwards `ownerAccountID` on every reservation (orchestrator, compaction, memory recall).
+
+`RuntimeLaneCoordinator` enforces per-owner sub-agent limits under strict tenancy: `perOwnerSubagentLaneLimit` (default: half of `globalSubagentLaneLimit`) and `perOwnerSubagentFanoutLimit` (default: `2 × maxChildrenPerAgent`). Sub-agent spawn passes the parent conversation's `ownerAccountID` into lane admission.
 
 ## Thinking config vs thinking signal
 

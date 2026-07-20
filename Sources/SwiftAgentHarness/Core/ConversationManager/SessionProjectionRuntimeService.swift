@@ -60,6 +60,11 @@ actor SessionProjectionRuntimeService {
         cache.projectedMessagesByConversationID[conversation.id] ?? conversation.messages
     }
 
+    /// Clears publish frontier/content-hash so a pruned post-rewind snapshot can apply.
+    func invalidateProjectionPublishState(conversationID: UUID) {
+        cache.projectionPublishStateByConversationID[conversationID] = nil
+    }
+
     func testing_seedProjectionPublishState(conversationID: UUID, frontierEventID: Int, contentHash: Int) {
         cache.projectionPublishStateByConversationID[conversationID] = Cache.PublishState(
             frontierEventID: frontierEventID,
@@ -68,6 +73,6 @@ actor SessionProjectionRuntimeService {
     }
 
     func testing_clearProjectionPublishState(conversationID: UUID) {
-        cache.projectionPublishStateByConversationID[conversationID] = nil
+        invalidateProjectionPublishState(conversationID: conversationID)
     }
 }

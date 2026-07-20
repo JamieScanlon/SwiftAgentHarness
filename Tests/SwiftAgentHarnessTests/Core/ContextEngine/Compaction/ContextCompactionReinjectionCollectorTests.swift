@@ -43,7 +43,7 @@ struct ContextCompactionReinjectionCollectorTests {
         let big = String(repeating: "x", count: 40_000) // ~10k tokens at cpt 4
         let messages = fileAccess(path: "big.txt", content: big, id: "c1")
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: messages, tail: [], skills: [], config: config()
+            head: [], middle: messages, tail: [], skills: [], instructionContext: nil, config: config()
         )
         let fileMsg = out.first { $0.content.contains("recent file content") }
         #expect(fileMsg != nil)
@@ -66,7 +66,7 @@ struct ContextCompactionReinjectionCollectorTests {
             messages.append(contentsOf: fileAccess(path: "f\(i).txt", content: big, id: "c\(i)"))
         }
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: messages, tail: [], skills: [], config: cfg
+            head: [], middle: messages, tail: [], skills: [], instructionContext: nil, config: cfg
         )
         let fileMsgs = out.filter { $0.content.contains("recent file content") }
         // 5k + 5k = 10k <= 12k; third would push to 15k => dropped whole.
@@ -77,7 +77,7 @@ struct ContextCompactionReinjectionCollectorTests {
     func pathFallbackWhenNoContent() {
         let messages = fileAccess(path: "lonely.swift", content: nil, id: "c1")
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: messages, tail: [], skills: [], config: config()
+            head: [], middle: messages, tail: [], skills: [], instructionContext: nil, config: config()
         )
         let fallback = out.first { $0.content.contains("lonely.swift") }
         #expect(fallback != nil)
@@ -96,7 +96,7 @@ struct ContextCompactionReinjectionCollectorTests {
             toolCalls: []
         )
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: [probe], tail: [], skills: [], config: cfg
+            head: [], middle: [probe], tail: [], skills: [], instructionContext: nil, config: cfg
         )
         let list = out.first { $0.content.contains("recent files") }
         #expect(list != nil)
@@ -112,6 +112,7 @@ struct ContextCompactionReinjectionCollectorTests {
         let out = ContextCompactionReinjectionCollector.collectMessages(
             head: [], middle: [], tail: [],
             skills: [ReinjectableSkill(name: "deepdive", content: big)],
+            instructionContext: nil,
             config: config()
         )
         let skillMsg = out.first { $0.content.contains("active skill: deepdive") }
@@ -132,6 +133,7 @@ struct ContextCompactionReinjectionCollectorTests {
                 ReinjectableSkill(name: "alpha", content: big),
                 ReinjectableSkill(name: "beta", content: big),
             ],
+            instructionContext: nil,
             config: cfg
         )
         let skillMsgs = out.filter { $0.content.contains("active skill:") }
@@ -142,7 +144,7 @@ struct ContextCompactionReinjectionCollectorTests {
     @Test("No active skills => no skill attachment")
     func noSkillsNoAttachment() {
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: [], tail: [], skills: [], config: config()
+            head: [], middle: [], tail: [], skills: [], instructionContext: nil, config: config()
         )
         #expect(out.contains { $0.content.contains("active skill:") } == false)
     }
@@ -159,7 +161,7 @@ struct ContextCompactionReinjectionCollectorTests {
             toolCalls: []
         )
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: [probe], tail: [], skills: [], config: config()
+            head: [], middle: [probe], tail: [], skills: [], instructionContext: nil, config: config()
         )
         #expect(out.contains { $0.content.contains("Async/background tasks") })
     }
@@ -168,7 +170,7 @@ struct ContextCompactionReinjectionCollectorTests {
     func noAsyncStatusLine() {
         let probe = Message(id: UUID(), role: .assistant, content: "ordinary turn", timestamp: Date(), toolCalls: [])
         let out = ContextCompactionReinjectionCollector.collectMessages(
-            head: [], middle: [probe], tail: [], skills: [], config: config()
+            head: [], middle: [probe], tail: [], skills: [], instructionContext: nil, config: config()
         )
         #expect(out.contains { $0.content.contains("Async/background tasks") } == false)
     }
@@ -180,9 +182,40 @@ struct ContextCompactionReinjectionCollectorTests {
         let out = ContextCompactionReinjectionCollector.collectMessages(
             head: [], middle: messages, tail: [],
             skills: [ReinjectableSkill(name: "s", content: "body")],
+            instructionContext: "[Context reinjection — post-compaction instruction refresh]\nrules",
             config: cfg
         )
         #expect(out.isEmpty)
+    }
+
+    // MARK: - Instruction section re-injection
+
+    @Test("Instruction context is injected before file and skill attachments")
+    func instructionContextInjected() {
+        let context = "[Context reinjection — post-compaction instruction refresh]\nRun startup."
+        let messages = fileAccess(path: "f.txt", content: "data", id: "c1")
+        let out = ContextCompactionReinjectionCollector.collectMessages(
+            head: [], middle: messages, tail: [],
+            skills: [ReinjectableSkill(name: "s", content: "skill body")],
+            instructionContext: context,
+            config: config()
+        )
+        let instructionIndex = out.firstIndex { $0.content.contains("post-compaction instruction refresh") }
+        let fileIndex = out.firstIndex { $0.content.contains("recent file content") }
+        let skillIndex = out.firstIndex { $0.content.contains("active skill:") }
+        #expect(instructionIndex != nil)
+        #expect(fileIndex != nil)
+        #expect(skillIndex != nil)
+        #expect(instructionIndex! < fileIndex!)
+        #expect(instructionIndex! < skillIndex!)
+    }
+
+    @Test("Nil instruction context emits no instruction attachment")
+    func nilInstructionContextSkipped() {
+        let out = ContextCompactionReinjectionCollector.collectMessages(
+            head: [], middle: [], tail: [], skills: [], instructionContext: nil, config: config()
+        )
+        #expect(out.contains { $0.content.contains("post-compaction instruction refresh") } == false)
     }
 }
 

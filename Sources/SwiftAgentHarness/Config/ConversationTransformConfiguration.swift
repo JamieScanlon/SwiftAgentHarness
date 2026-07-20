@@ -65,6 +65,15 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var cacheStablePrefixMessageCount: Int
     /// Optional TTL for middle messages in cache-aware pruning stage (`nil` / `<=0` disables age pruning).
     public var cachePruningTTLSeconds: Double?
+    /// Projection-time context pruning mode (`off`, `cacheTTL`). When unset, derived from `cacheAwarePruningEnabled`.
+    public var contextPruningMode: String?
+    /// Number of most recent tool results to keep when TTL pruning runs at assemble/projection time.
+    public var contextPruningKeepRecentToolResults: Int
+    /// Optional tool-name filter for TTL pruning; `nil` means all eligible tools.
+    public var contextPruningTargetTools: [String]?
+    /// Idle gap (seconds) after the last foreground model request before inferring the prompt cache
+    /// is dead and batching deferred hygiene. `nil` uses the default (9000s / 2.5h).
+    public var cacheExpiryInferenceThresholdSeconds: Double?
     /// Deterministic stage toggle for tool-result pruning before summarizer invocation.
     public var deterministicToolResultPruningEnabled: Bool
     /// Enables deterministic attachment/image/document hygiene before summarizer invocation.
@@ -75,12 +84,17 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     public var deterministicDocumentCharacterThreshold: Int
     /// Placeholder used when document-like payload content is replaced by deterministic hygiene.
     public var deterministicDocumentPlaceholder: String
+    /// Max UTF-8 preview bytes included in document hygiene receipts.
+    public var deterministicDocumentPreviewMaxBytes: Int
     /// Placeholder used when image attachments are trimmed by deterministic hygiene.
     public var deterministicImagePlaceholder: String
     /// Optional pre-compaction memory flush stage before summarization.
     public var preCompactionMemoryFlushEnabled: Bool
     /// Max number of memory entries included in a pre-compaction flush snapshot.
     public var preCompactionMemoryFlushMaxEntries: Int
+    /// Token headroom below the hard proactive threshold for a flush-only soft pass.
+    /// `0` disables soft flush (flush only on the hard compaction path).
+    public var softThresholdTokens: Int
     /// Optional compaction provider slot id (e.g. `ollama`, `none`). `nil` means default provider.
     public var optionalCompactionProviderSlot: String?
     /// When true, provider errors fall back to the default Ollama provider chain.
@@ -105,6 +119,12 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
     /// When true (default), re-inject the recent files' truncated content (spec primary). When false,
     /// fall back to the path-only list (re-read with tools), the spec's cheaper alternative.
     public var reinjectFileContentEnabled: Bool
+    /// When true (default), re-inject named H2/H3 sections from the nearest project instruction file after compaction.
+    public var reinjectionInstructionSectionsEnabled: Bool
+    /// H2/H3 section names to extract (default: Session Startup + Red Lines).
+    public var reinjectionInstructionSectionNames: [String]
+    /// Total character budget for re-injected instruction sections (OpenClaw default: 3000).
+    public var reinjectionInstructionSectionMaxCharacters: Int
     public var compactionCircuitBreakerMaxFailures: Int
     /// Minimum fractional prompt-token reduction required to persist a compaction checkpoint (0 = disabled).
     public var compactionMinPromptTokenSavingsFraction: Double
@@ -186,14 +206,20 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         cacheAwarePruningEnabled: false,
         cacheStablePrefixMessageCount: 4,
         cachePruningTTLSeconds: nil,
+        contextPruningMode: nil,
+        contextPruningKeepRecentToolResults: 5,
+        contextPruningTargetTools: nil,
+        cacheExpiryInferenceThresholdSeconds: nil,
         deterministicToolResultPruningEnabled: true,
         deterministicAttachmentDocumentHygieneEnabled: false,
         deterministicMaxImagesPerMessage: 3,
         deterministicDocumentCharacterThreshold: 12_000,
         deterministicDocumentPlaceholder: "[Document content cleared for context compaction]",
+        deterministicDocumentPreviewMaxBytes: 2048,
         deterministicImagePlaceholder: "[Image attachment omitted for context compaction]",
-        preCompactionMemoryFlushEnabled: false,
+        preCompactionMemoryFlushEnabled: true,
         preCompactionMemoryFlushMaxEntries: 64,
+        softThresholdTokens: 8_000,
         optionalCompactionProviderSlot: nil,
         optionalCompactionProviderFallbackToOllama: true,
         headMinMessageCount: 3,
@@ -209,6 +235,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         reinjectionPerSkillTokenBudget: 5_000,
         reinjectionTotalSkillTokenBudget: 25_000,
         reinjectFileContentEnabled: true,
+        reinjectionInstructionSectionsEnabled: true,
+        reinjectionInstructionSectionNames: ["Session Startup", "Red Lines"],
+        reinjectionInstructionSectionMaxCharacters: 3_000,
         compactionCircuitBreakerMaxFailures: 3,
         compactionMinPromptTokenSavingsFraction: 0.03,
         useSessionTreeProjection: true
@@ -248,14 +277,20 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         cacheAwarePruningEnabled: Bool = false,
         cacheStablePrefixMessageCount: Int = 4,
         cachePruningTTLSeconds: Double? = nil,
+        contextPruningMode: String? = nil,
+        contextPruningKeepRecentToolResults: Int = 5,
+        contextPruningTargetTools: [String]? = nil,
+        cacheExpiryInferenceThresholdSeconds: Double? = nil,
         deterministicToolResultPruningEnabled: Bool = true,
         deterministicAttachmentDocumentHygieneEnabled: Bool = false,
         deterministicMaxImagesPerMessage: Int = 3,
         deterministicDocumentCharacterThreshold: Int = 12_000,
         deterministicDocumentPlaceholder: String = "[Document content cleared for context compaction]",
+        deterministicDocumentPreviewMaxBytes: Int = 2048,
         deterministicImagePlaceholder: String = "[Image attachment omitted for context compaction]",
-        preCompactionMemoryFlushEnabled: Bool = false,
+        preCompactionMemoryFlushEnabled: Bool = true,
         preCompactionMemoryFlushMaxEntries: Int = 64,
+        softThresholdTokens: Int = 8_000,
         optionalCompactionProviderSlot: String? = nil,
         optionalCompactionProviderFallbackToOllama: Bool = true,
         headMinMessageCount: Int = 3,
@@ -271,6 +306,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         reinjectionPerSkillTokenBudget: Int = 5_000,
         reinjectionTotalSkillTokenBudget: Int = 25_000,
         reinjectFileContentEnabled: Bool = true,
+        reinjectionInstructionSectionsEnabled: Bool = true,
+        reinjectionInstructionSectionNames: [String] = ["Session Startup", "Red Lines"],
+        reinjectionInstructionSectionMaxCharacters: Int = 3_000,
         compactionCircuitBreakerMaxFailures: Int = 3,
         compactionMinPromptTokenSavingsFraction: Double = 0.03,
         useSessionTreeProjection: Bool = true
@@ -308,14 +346,20 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.cacheAwarePruningEnabled = cacheAwarePruningEnabled
         self.cacheStablePrefixMessageCount = cacheStablePrefixMessageCount
         self.cachePruningTTLSeconds = cachePruningTTLSeconds
+        self.contextPruningMode = contextPruningMode
+        self.contextPruningKeepRecentToolResults = contextPruningKeepRecentToolResults
+        self.contextPruningTargetTools = contextPruningTargetTools
+        self.cacheExpiryInferenceThresholdSeconds = cacheExpiryInferenceThresholdSeconds
         self.deterministicToolResultPruningEnabled = deterministicToolResultPruningEnabled
         self.deterministicAttachmentDocumentHygieneEnabled = deterministicAttachmentDocumentHygieneEnabled
         self.deterministicMaxImagesPerMessage = deterministicMaxImagesPerMessage
         self.deterministicDocumentCharacterThreshold = deterministicDocumentCharacterThreshold
         self.deterministicDocumentPlaceholder = deterministicDocumentPlaceholder
+        self.deterministicDocumentPreviewMaxBytes = max(0, deterministicDocumentPreviewMaxBytes)
         self.deterministicImagePlaceholder = deterministicImagePlaceholder
         self.preCompactionMemoryFlushEnabled = preCompactionMemoryFlushEnabled
         self.preCompactionMemoryFlushMaxEntries = preCompactionMemoryFlushMaxEntries
+        self.softThresholdTokens = softThresholdTokens
         self.optionalCompactionProviderSlot = optionalCompactionProviderSlot
         self.optionalCompactionProviderFallbackToOllama = optionalCompactionProviderFallbackToOllama
         self.headMinMessageCount = headMinMessageCount
@@ -331,6 +375,9 @@ public struct ContextCompactionConfiguration: Sendable, Equatable {
         self.reinjectionPerSkillTokenBudget = reinjectionPerSkillTokenBudget
         self.reinjectionTotalSkillTokenBudget = reinjectionTotalSkillTokenBudget
         self.reinjectFileContentEnabled = reinjectFileContentEnabled
+        self.reinjectionInstructionSectionsEnabled = reinjectionInstructionSectionsEnabled
+        self.reinjectionInstructionSectionNames = reinjectionInstructionSectionNames
+        self.reinjectionInstructionSectionMaxCharacters = reinjectionInstructionSectionMaxCharacters
         self.compactionCircuitBreakerMaxFailures = compactionCircuitBreakerMaxFailures
         self.compactionMinPromptTokenSavingsFraction = compactionMinPromptTokenSavingsFraction
         self.useSessionTreeProjection = useSessionTreeProjection
@@ -603,18 +650,14 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
         }
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ConversationTransformConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            logger?.warning("PromptConfig.json not found; conversation transform defaults")
-            return .default
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let block = json["conversationTransforms"] as? [String: Any]
-        else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ConversationTransformConfiguration {
+        guard let block = document.foundationObject(forKey: "conversationTransforms") else {
             return .default
         }
         return configuration(fromJSON: block)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromJSON block: [String: Any]) -> ConversationTransformConfiguration {
         func bool(_ key: String, default def: Bool) -> Bool {
@@ -833,6 +876,42 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.cachePruningTTLSeconds
             }()
+            let contextPruningMode: String? = {
+                if payload["contextPruningMode"] is NSNull { return nil }
+                if let value = payload["contextPruningMode"] as? String, !value.isEmpty {
+                    return value
+                }
+                return def.contextPruningMode
+            }()
+            let contextPruningKeepRecentToolResults: Int = {
+                if let value = payload["contextPruningKeepRecentToolResults"] as? Int {
+                    return Swift.min(200, Swift.max(0, value))
+                }
+                if let value = payload["context_pruning_keep_recent_tool_results"] as? Int {
+                    return Swift.min(200, Swift.max(0, value))
+                }
+                return def.contextPruningKeepRecentToolResults
+            }()
+            let contextPruningTargetTools: [String]? = {
+                if payload["contextPruningTargetTools"] is NSNull { return nil }
+                if let value = payload["contextPruningTargetTools"] as? [String] {
+                    return value.isEmpty ? nil : value
+                }
+                if let value = payload["context_pruning_target_tools"] as? [String] {
+                    return value.isEmpty ? nil : value
+                }
+                return def.contextPruningTargetTools
+            }()
+            let cacheExpiryInferenceThresholdSeconds: Double? = {
+                if payload["cacheExpiryInferenceThresholdSeconds"] is NSNull { return nil }
+                if let value = payload["cacheExpiryInferenceThresholdSeconds"] as? Double {
+                    return value > 0 ? Swift.min(2_592_000, value) : nil
+                }
+                if let value = payload["cacheExpiryInferenceThresholdSeconds"] as? Int {
+                    return value > 0 ? Swift.min(2_592_000, Double(value)) : nil
+                }
+                return def.cacheExpiryInferenceThresholdSeconds
+            }()
             let deterministicToolResultPruningEnabled =
                 (payload["deterministicToolResultPruningEnabled"] as? Bool)
                 ?? def.deterministicToolResultPruningEnabled
@@ -857,6 +936,12 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 }
                 return def.deterministicDocumentPlaceholder
             }()
+            let deterministicDocumentPreviewMaxBytes: Int = {
+                if let value = payload["deterministicDocumentPreviewMaxBytes"] as? Int {
+                    return Swift.min(1_000_000, Swift.max(0, value))
+                }
+                return def.deterministicDocumentPreviewMaxBytes
+            }()
             let deterministicImagePlaceholder: String = {
                 if let value = payload["deterministicImagePlaceholder"] as? String {
                     return value
@@ -871,6 +956,13 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                     return Swift.min(500, Swift.max(1, value))
                 }
                 return def.preCompactionMemoryFlushMaxEntries
+            }()
+            let softThresholdTokens: Int = {
+                if let value = payload["softThresholdTokens"] as? Int {
+                    let upper = Swift.min(100_000, Swift.max(0, proactiveSafetyBufferTokens * 2))
+                    return Swift.min(upper, Swift.max(0, value))
+                }
+                return def.softThresholdTokens
             }()
             let optionalCompactionProviderSlot: String? = {
                 if payload["optionalCompactionProviderSlot"] is NSNull { return nil }
@@ -924,14 +1016,20 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 cacheAwarePruningEnabled: cacheAwarePruningEnabled,
                 cacheStablePrefixMessageCount: cacheStablePrefixMessageCount,
                 cachePruningTTLSeconds: cachePruningTTLSeconds,
+                contextPruningMode: contextPruningMode,
+                contextPruningKeepRecentToolResults: contextPruningKeepRecentToolResults,
+                contextPruningTargetTools: contextPruningTargetTools,
+                cacheExpiryInferenceThresholdSeconds: cacheExpiryInferenceThresholdSeconds,
                 deterministicToolResultPruningEnabled: deterministicToolResultPruningEnabled,
                 deterministicAttachmentDocumentHygieneEnabled: deterministicAttachmentDocumentHygieneEnabled,
                 deterministicMaxImagesPerMessage: deterministicMaxImagesPerMessage,
                 deterministicDocumentCharacterThreshold: deterministicDocumentCharacterThreshold,
                 deterministicDocumentPlaceholder: deterministicDocumentPlaceholder,
+                deterministicDocumentPreviewMaxBytes: deterministicDocumentPreviewMaxBytes,
                 deterministicImagePlaceholder: deterministicImagePlaceholder,
                 preCompactionMemoryFlushEnabled: preCompactionMemoryFlushEnabled,
                 preCompactionMemoryFlushMaxEntries: preCompactionMemoryFlushMaxEntries,
+                softThresholdTokens: softThresholdTokens,
                 optionalCompactionProviderSlot: optionalCompactionProviderSlot,
                 optionalCompactionProviderFallbackToOllama: optionalCompactionProviderFallbackToOllama,
                 headMinMessageCount: (payload["headMinMessageCount"] as? Int) ?? def.headMinMessageCount,
@@ -962,6 +1060,15 @@ public struct ConversationTransformConfiguration: Sendable, Equatable {
                 reinjectFileContentEnabled: (payload["reinjectFileContentEnabled"] as? Bool)
                     ?? (payload["reinject_file_content_enabled"] as? Bool)
                     ?? def.reinjectFileContentEnabled,
+                reinjectionInstructionSectionsEnabled: (payload["reinjectionInstructionSectionsEnabled"] as? Bool)
+                    ?? (payload["reinjection_instruction_sections_enabled"] as? Bool)
+                    ?? def.reinjectionInstructionSectionsEnabled,
+                reinjectionInstructionSectionNames: (payload["reinjectionInstructionSectionNames"] as? [String])
+                    ?? (payload["reinjection_instruction_section_names"] as? [String])
+                    ?? def.reinjectionInstructionSectionNames,
+                reinjectionInstructionSectionMaxCharacters: (payload["reinjectionInstructionSectionMaxCharacters"] as? Int)
+                    ?? (payload["reinjection_instruction_section_max_characters"] as? Int)
+                    ?? def.reinjectionInstructionSectionMaxCharacters,
                 compactionCircuitBreakerMaxFailures: (payload["compactionCircuitBreakerMaxFailures"] as? Int)
                     ?? def.compactionCircuitBreakerMaxFailures,
                 compactionMinPromptTokenSavingsFraction: (payload["compactionMinPromptTokenSavingsFraction"] as? Double)

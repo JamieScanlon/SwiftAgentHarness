@@ -122,6 +122,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 0,
                     assemblyFingerprint: "sys-fp",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -416,6 +417,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: expected,
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -430,6 +432,7 @@ struct LatestCheckpointDispatchTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: "other-fp",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             ),
@@ -451,6 +454,33 @@ struct LatestCheckpointDispatchTests {
         }
         #expect(eventID == 2)
         #expect(wire.assemblyFingerprint == expected)
+    }
+
+    @Test("System prompt assembly v2 wire preserves assembledPromptDigest")
+    func systemPromptAssemblyV2DigestRoundTrip() {
+        let digest = "abc123digest"
+        let wire = SystemPromptAssemblyCheckpointWire(
+            schemaVersion: 2,
+            basedOnEventID: 1,
+            assemblyFingerprint: "fp",
+            assembledPromptDigest: digest,
+            createdAt: Date()
+        )
+        let encoded = ConversationEventCodec.encode(wire)
+        let decoded = ConversationEventCodec.decode(SystemPromptAssemblyCheckpointWire.self, from: encoded)
+        #expect(decoded?.schemaVersion == 2)
+        #expect(decoded?.assembledPromptDigest == digest)
+        let events = [
+            CachedConversationEvent(
+                conversationID: UUID(),
+                eventID: 1,
+                kind: ConversationEventKind.systemPromptAssemblyCheckpoint.rawValue,
+                payloadJSON: encoded,
+                createdAt: Date()
+            ),
+        ]
+        let latest = SuiteCheckpointSupport.latestValidSystemPromptAssembly(events: events, frontierEventID: 1)
+        #expect(latest?.wire.assembledPromptDigest == digest)
     }
 
     @Test("ConversationCheckpoint.load decodes all durable kinds")

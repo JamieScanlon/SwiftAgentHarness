@@ -10,11 +10,20 @@ enum SystemPromptAssemblyFingerprint {
         includeDateTime: Bool,
         toolPolicySignature: String,
         routingPolicyTools: [String],
-        routingPolicySkills: [String]
+        routingPolicySkills: [String],
+        memorySnapshotGeneration: Int? = nil,
+        workspaceSectionContent: String? = nil,
+        memoryTier1SectionContent: String? = nil,
+        providerContributionSignature: String? = nil,
+        systemPromptFullOverride: Bool = false
     ) -> String {
         let tools = routingPolicyTools.sorted().joined(separator: ",")
         let skills = routingPolicySkills.sorted().joined(separator: ",")
         let sliceSig = modeProfileSliceSignature(resolved)
+        let memoryGen = memorySnapshotGeneration.map(String.init) ?? "-"
+        let workspaceSig = contentSignature(workspaceSectionContent)
+        let memorySig = contentSignature(memoryTier1SectionContent)
+        let providerSig = providerContributionSignature?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "-"
         let canonical =
             """
             modeId=\(resolved.id)
@@ -27,9 +36,20 @@ enum SystemPromptAssemblyFingerprint {
             routingTools=\(tools)
             routingSkills=\(skills)
             modeSlices=\(sliceSig)
+            memorySnapshotGeneration=\(memoryGen)
+            workspace=\(workspaceSig)
+            memoryTier1=\(memorySig)
+            providerContribution=\(providerSig)
+            systemPromptFullOverride=\(systemPromptFullOverride)
             """
         let digest = SHA256.hash(data: Data(canonical.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func contentSignature(_ content: String?) -> String {
+        guard let trimmed = content?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return "-" }
+        return "len=\(trimmed.count):prefix=\(String(trimmed.prefix(256)))"
     }
 
     private static func modeProfileSliceSignature(_ r: ResolvedModeProfile) -> String {
@@ -43,6 +63,7 @@ enum SystemPromptAssemblyFingerprint {
         let ctxGuidance = r.context.includeToolGuidance.map { String($0) } ?? "-"
         let compactionSig = r.context.compactionLevel ?? "-"
         let memorySig = r.context.memoryInjection.map { String($0.prefix(128)) } ?? "-"
+        let omitWorkspaceSig = r.context.omitWorkspaceConventions.map { String($0) } ?? "-"
         let sectionOverridesSig = r.context.sectionOverrides
             .keys
             .sorted()
@@ -80,10 +101,17 @@ enum SystemPromptAssemblyFingerprint {
         return [
             "tools:\(toolAllowSig)|\(toolDenySig)|\(toolApprovalSig)",
             "skills:\(skillAllowSig)|\(skillDenySig)",
-            "ctx:\(directiveSig)|skills:\(ctxSkills)|tg:\(ctxGuidance)|cmp:\(compactionSig)|mem:\(memorySig)|sec:\(sectionOverridesSig)|sup:\(suppressSig)",
+            "ctx:\(directiveSig)|skills:\(ctxSkills)|tg:\(ctxGuidance)|cmp:\(compactionSig)|mem:\(memorySig)|omitWs:\(omitWorkspaceSig)|sec:\(sectionOverridesSig)|sup:\(suppressSig)",
             "rt:\(runtimeSig)",
             "mdl:\(modelSig)",
             "sub:\(subSig)",
         ].joined(separator: ";")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

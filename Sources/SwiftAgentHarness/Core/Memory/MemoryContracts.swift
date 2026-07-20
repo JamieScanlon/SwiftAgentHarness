@@ -12,23 +12,35 @@ struct MemorySessionContext: Sendable, Equatable {
     let cwd: String
     let canonicalGitRoot: String?
     let memoryDirectory: URL
+    let userMemoryDirectory: URL
     let chatType: MemoryChatType
     let agentID: String?
+    let ownerAccountID: UUID?
 
     init(
         conversationID: UUID,
         cwd: String,
         canonicalGitRoot: String?,
         memoryDirectory: URL,
+        userMemoryDirectory: URL? = nil,
         chatType: MemoryChatType = .direct,
-        agentID: String? = nil
+        agentID: String? = nil,
+        ownerAccountID: UUID? = nil
     ) {
         self.conversationID = conversationID
         self.cwd = cwd
         self.canonicalGitRoot = canonicalGitRoot
         self.memoryDirectory = memoryDirectory
+        if let userMemoryDirectory {
+            self.userMemoryDirectory = userMemoryDirectory
+        } else if let resolved = try? AgentMemoryPathResolver.resolveUserMemoryDirectory() {
+            self.userMemoryDirectory = resolved
+        } else {
+            self.userMemoryDirectory = memoryDirectory.appendingPathComponent("_user-tier", isDirectory: true)
+        }
         self.chatType = chatType
         self.agentID = agentID
+        self.ownerAccountID = ownerAccountID
     }
 }
 
@@ -42,18 +54,31 @@ struct MemorySystemPromptBlocks: Sendable, Equatable {
     let memoryPathDisclosureText: String
     let snapshotGeneration: Int
 
-    var combinedSystemPromptSection: String {
-        [projectInstructionsText, memoryPathDisclosureText, memoryIndexText, recalledTopicBodiesText,
-         taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
+    var workspaceInstructionSection: String {
+        projectInstructionsText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var memoryStableSection: String {
+        [memoryPathDisclosureText, memoryIndexText, taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
     }
 
-    var stableSystemPromptSection: String {
-        [projectInstructionsText, memoryPathDisclosureText, memoryIndexText,
-         taxonomyPromptText, driftGuardText, sensitiveDataPromptText]
+    var memoryTier1Content: String {
+        [memoryStableSection, recalledTopicBodiesText]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+    }
+
+    var combinedSystemPromptSection: String {
+        [workspaceInstructionSection, memoryTier1Content]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    /// Memory-only stable slice (excludes workspace instruction files).
+    var stableSystemPromptSection: String {
+        memoryStableSection
     }
 }
 
@@ -61,11 +86,50 @@ struct MemoryRecallRequest: Sendable {
     let session: MemorySessionContext
     let userQuery: String
     let manifestEntries: [MemoryManifestEntry]
+    let activeToolNames: Set<String>
+
+    init(
+        session: MemorySessionContext,
+        userQuery: String,
+        manifestEntries: [MemoryManifestEntry],
+        activeToolNames: Set<String> = []
+    ) {
+        self.session = session
+        self.userQuery = userQuery
+        self.manifestEntries = manifestEntries
+        self.activeToolNames = activeToolNames
+    }
+}
+
+struct MemoryRecallHit: Sendable, Equatable {
+    let selectionKey: String
+    /// Scope tag + body; not yet fenced (Context Engine applies injection policy).
+    let formattedBody: String
 }
 
 struct MemoryRecallResult: Sendable, Equatable {
     let selectedFilenames: [String]
-    let recalledBodiesText: String
+    let hits: [MemoryRecallHit]
+
+    var recalledBodiesText: String {
+        let bodies = hits.map(\.formattedBody).filter { !$0.isEmpty }
+        guard !bodies.isEmpty else { return "" }
+        return MemoryContextFencer.fence(bodies.joined(separator: "\n\n"))
+    }
+
+    init(selectedFilenames: [String], hits: [MemoryRecallHit]) {
+        self.selectedFilenames = selectedFilenames
+        self.hits = hits
+    }
+
+    init(selectedFilenames: [String], recalledBodiesText: String) {
+        self.selectedFilenames = selectedFilenames
+        if recalledBodiesText.isEmpty {
+            self.hits = []
+        } else {
+            self.hits = [MemoryRecallHit(selectionKey: "", formattedBody: recalledBodiesText)]
+        }
+    }
 }
 
 struct MemoryTurnEndedRequest: Sendable {
@@ -99,7 +163,8 @@ protocol ActiveMemoryPreReplyRunning: Sendable {
         userQuery: String?,
         lane: RecallLane,
         timeoutMs: Int,
-        maxSummaryChars: Int
+        maxSummaryChars: Int,
+        excludedSelectionKeys: Set<String>
     ) async -> String?
 }
 
@@ -113,7 +178,8 @@ struct MemorySubAgentSpawnPort: Sendable {
         _ userQuery: String?,
         _ lane: RecallLane,
         _ timeoutMs: Int,
-        _ maxSummaryChars: Int
+        _ maxSummaryChars: Int,
+        _ excludedSelectionKeys: Set<String>
     ) async -> String?
 
     var spawnBackgroundExtraction: @Sendable (_ request: MemoryTurnEndedRequest) async -> Void
@@ -166,6 +232,32 @@ struct MemoryManifestEntry: Sendable, Equatable {
     let name: String
     let description: String
     let updatedAt: Date?
+    let tierScope: MemoryTierScope
+
+    init(
+        filename: String,
+        memoryType: MemoryTopicType,
+        name: String,
+        description: String,
+        updatedAt: Date?,
+        tierScope: MemoryTierScope = .project
+    ) {
+        self.filename = filename
+        self.memoryType = memoryType
+        self.name = name
+        self.description = description
+        self.updatedAt = updatedAt
+        self.tierScope = tierScope
+    }
+
+    var selectionKey: String {
+        tierScope == .user ? "user/\(filename)" : filename
+    }
+}
+
+enum MemoryTierScope: String, Sendable, Equatable {
+    case user
+    case project
 }
 
 enum MemoryTopicType: String, Sendable, Codable, Equatable, CaseIterable {
@@ -189,4 +281,5 @@ enum MemoryPathValidationError: Error, Equatable {
     case nullByte
     case unsafeTildeExpansion
     case invalidPath(String)
+    case ownerAccountIDRequiredUnderStrictTenancy
 }

@@ -71,16 +71,20 @@ struct SystemPromptConfigLoadingTests {
         #expect(prompt.includeAgentSkills == true || prompt.includeAgentSkills == false)
     }
 
-    @Test("loadSkillsFolderPathFromConfig returns path from PromptConfig")
-    func loadsSkillsFolderPathFromConfig() async throws {
-        let path = try SystemPrompt.loadSkillsFolderPathFromConfig()
+    @Test("configuration set loads skills folder path from PromptConfig")
+    func loadsSkillsFolderPathFromConfigurationSet() {
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath
         #expect(path != nil)
         #expect(path?.isEmpty == false)
     }
 
-    @Test("loadSkillsFolderPathFromConfig returns valid path string")
-    func skillsFolderPathValidFormat() async throws {
-        let path = try SystemPrompt.loadSkillsFolderPathFromConfig() ?? ""
+    @Test("configuration set returns valid skills folder path")
+    func skillsFolderPathValidFormat() {
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath ?? ""
         #expect(path.hasPrefix("/") || path.contains("skills"))
     }
 }
@@ -175,6 +179,24 @@ struct SystemPromptConversationMetadataTests {
         #expect(result.contains("This conversation id is: ABC-123"))
         #expect(result.contains("This conversation was started on: unknown"))
     }
+
+    @Test("assembleReferenceDateISO freezes datetime token at assemble time")
+    func frozenAssembleReferenceDate() async throws {
+        let frozen = Date(timeIntervalSince1970: 1_700_000_000)
+        let iso = SystemPrompt.assembleReferenceDateISOString(from: frozen)
+        let prompt = try await SystemPrompt(
+            includeCurrentDateTime: true,
+            includeAgentSkills: false,
+            skillLoader: nil,
+            skipConfigLoad: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            additionalMetadata: [SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO: iso]
+        )
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d, yyyy"
+        #expect(result.contains("Today is \(formatter.string(from: frozen))."))
+    }
 }
 
 @Suite("SystemPrompt — Mode context switches")
@@ -200,6 +222,60 @@ struct SystemPromptModeContextSwitchTests {
         #expect(result.contains("# Tools") == false)
     }
 
+    @Test("tool guidance includes filesystem path rules")
+    func toolGuidanceIncludesFilesystemPathRules() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Filesystem paths"))
+        #expect(result.contains("Do not use `~` or `$HOME`"))
+    }
+
+    @Test("tool guidance includes workspace root when provided")
+    func toolGuidanceIncludesWorkspaceRoot() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let workspace = "/Users/me/Projects"
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true,
+            workspaceRoot: workspace
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Workspace root: `\(workspace)`"))
+    }
+
+    @Test("tool guidance omits workspace root line when unset")
+    func toolGuidanceOmitsWorkspaceRootWhenUnset() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let context = SystemPromptAssemblyContext(
+            conversationID: "test",
+            conversationStartDate: "2026-01-01T00:00:00Z",
+            includeAgentSkills: false,
+            includeToolGuidance: true
+        )
+        let result = try await prompt.generateSystemPrompt(
+            context: context,
+            resolved: ResolvedSystemPromptSections(),
+            stablePrefix: nil
+        )
+        #expect(result.contains("Workspace root:") == false)
+    }
+
     @Test("Section override replaces tool section body")
     func sectionOverrideReplacesToolsSection() async throws {
         let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
@@ -220,6 +296,74 @@ struct SystemPromptModeContextSwitchTests {
             additionalMetadata: ["modeMemoryInjection": "off"]
         )
         #expect(result.contains("# Memory") == false)
+    }
+
+    @Test("Tier 1 memory content renders inside Memory section with provenance")
+    func tier1MemoryContentInMemorySection() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: nil,
+            additionalMetadata: [
+                "modeMemoryInjection": "on",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "frozen index body",
+            ]
+        )
+        #expect(result.contains("# Memory"))
+        #expect(result.contains("frozen index body"))
+        #expect(result.contains("<!-- provenance: engine:memory -->"))
+        #expect(result.contains("<memory-context>"))
+        #expect(result.contains(MemoryContextFencer.systemNote))
+    }
+
+    @Test("skills-only with includeSkills false suppresses memory section")
+    func skillsOnlyWithoutIncludeSkillsSuppressesMemory() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: nil,
+            additionalMetadata: [
+                "modeMemoryInjection": "skills-only",
+                "modeIncludeSkills": "false",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "should not appear",
+            ]
+        )
+        #expect(result.contains("# Memory") == false)
+        #expect(result.contains("should not appear") == false)
+    }
+
+    @Test("datetime renders below cache boundary when enabled")
+    func datetimeBelowCacheBoundary() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: true, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: "dynamic requirement",
+            additionalMetadata: [
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "stable memory",
+            ]
+        )
+        let marker = ProviderPromptContribution.cacheBoundaryMarker
+        let boundaryRange = try #require(result.range(of: marker))
+        let todayRange = try #require(result.range(of: "Today is "))
+        #expect(todayRange.lowerBound > boundaryRange.lowerBound)
+    }
+
+    @Test("cache boundary separates stable prefix from volatile sections")
+    func cacheBoundaryBetweenStableAndVolatile() async throws {
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let result = try await prompt.generateSystemPrompt(
+            withUserSystemPrompt: "dynamic requirement",
+            additionalMetadata: [
+                "modeMemoryInjection": "on",
+                SystemPromptAssemblyMetadataKeys.tier1MemoryContent: "stable memory",
+                SystemPromptAssemblyMetadataKeys.providerStablePrefix: "provider prefix",
+            ]
+        )
+        let marker = ProviderPromptContribution.cacheBoundaryMarker
+        #expect(result.hasPrefix("provider prefix"))
+        #expect(result.contains(marker))
+        #expect(result.contains("stable memory"))
+        #expect(result.contains("dynamic requirement"))
+        let memoryRange = try #require(result.range(of: "stable memory"))
+        let additionalRange = try #require(result.range(of: "dynamic requirement"))
+        #expect(memoryRange.lowerBound < additionalRange.lowerBound)
     }
 }
 

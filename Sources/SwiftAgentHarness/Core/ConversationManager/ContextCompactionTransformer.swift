@@ -22,8 +22,11 @@ protocol ContextCompactionSummarizing: Sendable {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID?,
+        conversationID: UUID?
     ) async throws -> [Message]
 }
 
@@ -35,8 +38,11 @@ extension ContextCompactionSummarizing {
         customInstructionsOverride _: String?,
         identifierPreservationPolicy _: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText _: String?,
+        providerPreCompressNotes _: String?,
         summaryBudgetTokens _: Int,
-        maxOutputTokens _: Int
+        maxOutputTokens _: Int,
+        ownerAccountID _: UUID? = nil,
+        conversationID _: UUID? = nil
     ) async throws -> [Message] {
         try await summarizeMiddle(
             messages: messages,
@@ -99,14 +105,18 @@ public struct ContextCompactionLLMScheduling: Sendable {
 
 func wrapCompactionLLMForScheduling(
     _ base: any LLMProtocol,
-    scheduling: ContextCompactionLLMScheduling?
+    scheduling: ContextCompactionLLMScheduling?,
+    conversationID: UUID? = nil,
+    ownerAccountID: UUID? = nil
 ) -> any LLMProtocol {
     guard let scheduling else { return base }
     return SchedulingLLM(
         baseLLM: base,
         scheduler: scheduling.scheduler,
         modelID: scheduling.modelID,
-        priority: .background
+        conversationID: conversationID,
+        priority: .background,
+        ownerAccountID: ownerAccountID
     )
 }
 
@@ -196,6 +206,7 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
             customInstructionsOverride: nil,
             identifierPreservationPolicy: nil,
             previousSummaryText: nil,
+            providerPreCompressNotes: nil,
             summaryBudgetTokens: 2_000,
             maxOutputTokens: 20_000
         )
@@ -208,8 +219,11 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID? = nil,
+        conversationID: UUID? = nil
     ) async throws -> [Message] {
         do {
             return try await primary.summarizeMiddle(
@@ -219,8 +233,11 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 customInstructionsOverride: customInstructionsOverride,
                 identifierPreservationPolicy: identifierPreservationPolicy,
                 previousSummaryText: previousSummaryText,
+                providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
-                maxOutputTokens: maxOutputTokens
+                maxOutputTokens: maxOutputTokens,
+                ownerAccountID: ownerAccountID,
+                conversationID: conversationID
             )
         } catch {
             logger?.warning("[ContextCompactionProvider] primary summarizeMiddle failed; falling back: \(error)")
@@ -231,8 +248,11 @@ struct FallbackContextCompactionSummarizer: ContextCompactionSummarizing {
                 customInstructionsOverride: customInstructionsOverride,
                 identifierPreservationPolicy: identifierPreservationPolicy,
                 previousSummaryText: previousSummaryText,
+                providerPreCompressNotes: providerPreCompressNotes,
                 summaryBudgetTokens: summaryBudgetTokens,
-                maxOutputTokens: maxOutputTokens
+                maxOutputTokens: maxOutputTokens,
+                ownerAccountID: ownerAccountID,
+                conversationID: conversationID
             )
         }
     }
@@ -489,6 +509,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: middleAfterMemorySwap,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(
@@ -528,6 +549,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: deterministicMiddle,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(
@@ -592,6 +614,7 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             middle: composedMiddle,
             tail: tail,
             skills: input.compactionReinjectableSkills,
+            instructionContext: input.compactionPostCompactionInstructionContext,
             config: config
         )
         return summarizedOutput(
@@ -767,8 +790,11 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             customInstructionsOverride: input.compactionCustomInstructionsOverride,
             identifierPreservationPolicy: input.compactionIdentifierPreservationPolicy,
             previousSummaryText: input.compactionPreviousSummaryText,
+            providerPreCompressNotes: input.compactionProviderPreCompressNotes,
             summaryBudgetTokens: summaryBudget,
-            maxOutputTokens: config.resolvedSummarizerMaxOutputTokens
+            maxOutputTokens: config.resolvedSummarizerMaxOutputTokens,
+            ownerAccountID: input.conversation.ownerAccountID,
+            conversationID: input.conversation.conversationID
         )
         return Self.validateCompactedMiddleMessages(raw, maxMessages: middleBudget)
     }
@@ -842,29 +868,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
         return [marker] + middle
     }
 
-    private func applyCacheAwarePruningIfConfigured(
-        middle: [Message],
-        cachePolicy: ContextCompactionCachePolicy?
-    ) -> [Message] {
-        guard let cachePolicy, cachePolicy.enabled else {
-            return middle
-        }
-        let stablePrefixCount = min(max(0, cachePolicy.stablePrefixMessageCount), middle.count)
-        let prefix = Array(middle.prefix(stablePrefixCount))
-        var suffix = Array(middle.dropFirst(stablePrefixCount))
-        if let ttl = cachePolicy.ttlSeconds, ttl > 0 {
-            let cutoff = Date().addingTimeInterval(-ttl)
-            suffix = suffix.filter { message in
-                // Keep assistant/tool rows to avoid slicing through tool-call pair state.
-                if message.role == .assistant || message.role == .tool {
-                    return true
-                }
-                return message.timestamp >= cutoff
-            }
-        }
-        return prefix + suffix
-    }
-
     private func applyDeterministicPreCompactionHygiene(
         input: ContextTransformInput,
         head: [Message],
@@ -878,10 +881,6 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             head: head,
             middle: middle,
             includeBranchContextMarker: includeBranchContextMarker
-        )
-        staged = applyCacheAwarePruningIfConfigured(
-            middle: staged,
-            cachePolicy: input.compactionCachePolicy
         )
         staged = applyAttachmentDocumentImageHygieneIfConfigured(
             middle: staged,
@@ -1074,6 +1073,7 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             customInstructionsOverride: nil,
             identifierPreservationPolicy: nil,
             previousSummaryText: nil,
+            providerPreCompressNotes: nil,
             summaryBudgetTokens: config.compactionSummaryBudgetTokens,
             maxOutputTokens: config.resolvedSummarizerMaxOutputTokens
         )
@@ -1086,11 +1086,17 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
         customInstructionsOverride: String?,
         identifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy?,
         previousSummaryText: String?,
+        providerPreCompressNotes: String?,
         summaryBudgetTokens: Int,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        ownerAccountID: UUID? = nil,
+        conversationID: UUID? = nil
     ) async throws -> [Message] {
         guard !messages.isEmpty else { return [] }
-        let llm = try await resolveLLM()
+        let llm = try await resolveLLM(
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
         // `workingMiddle` is recreated from the `messages` parameter on every call. We never store
         // it on `self`; subsequent invocations always start with the full incoming middle (state
         // hygiene invariant).
@@ -1162,6 +1168,9 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             policy: identifierPreservationPolicy
         )
         let previousSummaryBlock = Self.previousSummaryPromptBlock(previousSummaryText: previousSummaryText)
+        let providerPreCompressBlock = MemoryProviderPreCompressNotes.summarizerHandoffBlock(
+            notes: providerPreCompressNotes
+        )
         let userPrompt = DynamicPrompt(
             template: ContextCompactionHandoffUserPromptTemplate.value,
             defaultTokens: [
@@ -1169,6 +1178,7 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
                 "identifier_preservation_block": identifierPreservationBlock,
                 "custom_instructions_block": customInstructionsBlock,
                 "previous_summary_block": previousSummaryBlock,
+                "memory_provider_pre_compress_block": providerPreCompressBlock,
             ]
         )
         let handoffRendered = userPrompt.render()
@@ -1349,8 +1359,11 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
         )
     }
 
-    private func resolveLLM() async throws -> any LLMProtocol {
-        if let llm {
+    private func resolveLLM(
+        conversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil
+    ) async throws -> any LLMProtocol {
+        if scheduling == nil, let llm {
             return llm
         }
         let prompt = try await SystemPrompt(
@@ -1368,8 +1381,15 @@ actor OllamaContextCompactionSummarizer: ContextCompactionSummarizing {
             systemPrompt: prompt,
             logger: logger
         )
-        let resolved = wrapCompactionLLMForScheduling(base, scheduling: scheduling)
-        llm = resolved
+        let resolved = wrapCompactionLLMForScheduling(
+            base,
+            scheduling: scheduling,
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
+        if scheduling == nil {
+            llm = resolved
+        }
         return resolved
     }
 
@@ -1447,7 +1467,10 @@ actor OllamaTurnSummarizer: TurnSummarizing {
         guard !turnMessages.isEmpty else {
             return TurnSummaryDecision(succeeded: false, summary: "")
         }
-        let llm = try await resolveLLM()
+        let llm = try await resolveLLM(
+            conversationID: conversation.conversationID,
+            ownerAccountID: conversation.ownerAccountID
+        )
         let transcript = turnMessages.enumerated().map { index, message in
             "[\(index)] role=\(message.role.rawValue) toolCallId=\(message.toolCallId ?? "nil")\n\(message.content)"
         }.joined(separator: "\n\n")
@@ -1493,8 +1516,11 @@ actor OllamaTurnSummarizer: TurnSummarizing {
         return try Self.decodeDecision(from: response.content)
     }
 
-    private func resolveLLM() async throws -> any LLMProtocol {
-        if let llm {
+    private func resolveLLM(
+        conversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil
+    ) async throws -> any LLMProtocol {
+        if scheduling == nil, let llm {
             return llm
         }
         let prompt = try await SystemPrompt(
@@ -1512,8 +1538,15 @@ actor OllamaTurnSummarizer: TurnSummarizing {
             systemPrompt: prompt,
             logger: logger
         )
-        let resolved = wrapCompactionLLMForScheduling(base, scheduling: scheduling)
-        llm = resolved
+        let resolved = wrapCompactionLLMForScheduling(
+            base,
+            scheduling: scheduling,
+            conversationID: conversationID,
+            ownerAccountID: ownerAccountID
+        )
+        if scheduling == nil {
+            llm = resolved
+        }
         return resolved
     }
 

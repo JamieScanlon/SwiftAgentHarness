@@ -25,6 +25,9 @@ public enum DeterministicToolResultSummary {
         case "read_file", "read":
             let path = string(toolCall, "path") ?? string(toolCall, "file_path") ?? "?"
             return "[read_file] read \(path) (\(chars) chars)"
+        case "read_attachment":
+            let attachmentID = string(toolCall, "attachment_id") ?? "?"
+            return "[read_attachment] read \(attachmentID) (\(chars) chars)"
         case "grep", "search_files", "search":
             let query = string(toolCall, "pattern") ?? string(toolCall, "query") ?? ""
             let matches = result.content.split(separator: "\n", omittingEmptySubsequences: false).count

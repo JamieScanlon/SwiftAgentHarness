@@ -62,9 +62,10 @@ Link `SwiftAgentHarnessProviders` and call `registerDefaults()`. Built-in plugin
 |---|---|---|
 | `openai` | `OpenAILLM` | Bundled static catalog (`catalogs/openai.catalog.json`) |
 | `anthropic` | `AnthropicLLM` | Bundled static catalog (`catalogs/anthropic.catalog.json`) |
-| `ollama` | `OllamaLLM` | Dynamic probe + `Constants.ollamaModelIDMap` overrides |
-| `lmstudio` | `LMStudioLLM` | Dynamic probe + `Constants.lmStudioModelIDMap` overrides |
+| *(host-configured)* | selected by `adapterKind` (e.g. `ollama`, `lmstudio`) | Dynamic probe + host `InferenceRuntimeConfig.modelIDMap` overlays |
 | `openrouter` | `OpenAILLM` (OpenAI-compat) | Bundled seed + `GET /models` dynamic overlay |
+
+API-server providers are not auto-registered. Pass `DefaultProviderOptions.inferenceRuntimes` (0…N `InferenceRuntimeConfig` values) to `bootstrap` / `registerDefaults`. Host-chosen `providerID` need not match `adapterKind`.
 
 ## Integration points
 

@@ -120,7 +120,6 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     func apiGetLatestCheckpoint(conversationID: UUID, kind: String?) async -> LatestCheckpointResponse? { _ = (conversationID, kind); return nil }
     func apiSnapshotOrchestrationState(conversationID: UUID) async -> ConversationOrchestrationState? { _ = conversationID; return nil }
     func apiReadPlanMarkdown(conversationID: UUID) async throws -> String { _ = conversationID; return "" }
-    func apiOrchestratorBoundConversationID() async -> UUID? { nil }
     func apiPreviewContextCompaction(conversationID: UUID, gating: ContextCompactionGatingOptions, summarizerDebugOutputPath: String?) async throws -> ContextCompactionPreviewResult {
         _ = (conversationID, gating, summarizerDebugOutputPath)
         if let previewContextCompactionResult {
@@ -191,8 +190,10 @@ final class ProtocolOnlyRuntimeGatewayStub: APILayerChatRuntimeManaging, Sendabl
         throw APILayerConversationAPIError.unsupported
     }
     func apiCancelMessageStream() async {}
-    func apiSetOrchestrationStateOutOfBandPush(id: UUID, _ push: @escaping @Sendable (ConversationOrchestrationState) async -> Void) async { _ = (id, push) }
-    func apiClearOrchestrationStateOutOfBandPush(id: UUID) async { _ = id }
+    func apiSetOrchestrationStateTopicRefreshHandler(
+        _ handler: @escaping @Sendable (UUID, ConversationOrchestrationState) async -> Void
+    ) async { _ = handler }
+    func apiClearOrchestrationStateTopicRefreshHandler() async {}
     func apiStartConversationReplay(conversationID: UUID, enableTools: Bool, enableAgents: Bool) async throws {
         _ = (conversationID, enableTools, enableAgents)
         throw APILayerConversationAPIError.unsupported

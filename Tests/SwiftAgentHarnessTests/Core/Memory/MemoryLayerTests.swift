@@ -73,19 +73,85 @@ Body
     }
 }
 
-@Suite("Memory provider registry")
-struct MemoryProviderRegistryTests {
-    @Test("Allows only one external provider")
-    func singleExternalSlot() async throws {
-        let registry = MemoryProviderRegistry(builtin: BuiltinFileMemoryProvider())
-        let external = BuiltinFileMemoryProvider()
-        try await registry.registerExternal(id: "test", provider: external)
+@Suite("Memory capability registry")
+struct MemoryCapabilityRegistryTests {
+    @Test("register rejects duplicate plugin ID")
+    func registerRejectsDuplicatePluginID() async throws {
+        let factory = FileStoreMemoryCapabilityFactory.makeDefault(config: .default)
+        let registry = MemoryCapabilityRegistry(defaultCapability: factory.capability)
         do {
-            try await registry.registerExternal(id: "second", provider: external)
+            try await registry.register(factory.capability)
             Issue.record("expected duplicate registration failure")
-        } catch MemoryProviderRegistryError.externalProviderAlreadyRegistered {
+        } catch MemoryCapabilityRegistryError.alreadyRegistered(incumbentID: "builtin-file") {
             #expect(true)
         }
+    }
+
+    @Test("replaceActive swaps the active backend")
+    func replaceActiveSwapsBackend() async {
+        let factory = FileStoreMemoryCapabilityFactory.makeDefault(config: .default)
+        let registry = MemoryCapabilityRegistry(defaultCapability: factory.capability)
+        #expect(await registry.activePluginID() == "builtin-file")
+        let replacement = MemoryCapability(
+            pluginID: "test-backend",
+            runtime: LegacyLifecycleMemoryRuntime(provider: EmptyMemoryProviding())
+        )
+        await registry.replaceActive(replacement)
+        #expect(await registry.activePluginID() == "test-backend")
+    }
+
+    @Test("Default file backend recall is empty after legacy provider replaces active capability")
+    func backendSwapClearsRecall() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mem-swap-\(UUID().uuidString)", isDirectory: true)
+        let memoryDir = dir.appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let service = DefaultMemoryService(config: .default)
+        let conversationID = UUID()
+        let context = MemorySessionContext(
+            conversationID: conversationID,
+            cwd: dir.path,
+            canonicalGitRoot: dir.path,
+            memoryDirectory: memoryDir
+        )
+        _ = try await service.bootstrapSession(context: context)
+        let store = AgentMemoryStore(memoryDirectory: memoryDir)
+        try store.ensureLayout()
+        let topic = """
+---
+name: User role
+description: data scientist
+type: user
+---
+Body
+"""
+        try store.writeTopic(filename: "user_role.md", content: topic)
+        let manifest = await service.manifestEntries(conversationID: conversationID)
+        let beforeSwap = try await service.recallForTurn(
+            request: MemoryRecallRequest(
+                session: context,
+                userQuery: "user role data scientist",
+                manifestEntries: manifest
+            )
+        )
+        #expect(beforeSwap.selectedFilenames.isEmpty == false)
+
+        try await service.registerExternalMemoryProvider(
+            id: "empty-backend",
+            provider: EmptyMemoryProviding()
+        )
+        let afterSwap = try await service.recallForTurn(
+            request: MemoryRecallRequest(
+                session: context,
+                userQuery: "user role data scientist",
+                manifestEntries: manifest
+            )
+        )
+        #expect(afterSwap.selectedFilenames.isEmpty)
+        #expect(afterSwap.recalledBodiesText.isEmpty)
+        #expect(await service.activeMemoryPluginID() == "empty-backend")
     }
 
     @Test("Bootstrap initializes session memory directory not placeholder")
@@ -245,4 +311,38 @@ struct MemoryRecallSelectorTests {
         let selected = await selector.selectRelevantFiles(request: request)
         #expect(selected == ["topic99.md"])
     }
+}
+
+private struct EmptyMemoryProviding: MemoryProviding {
+    func initialize(sessionID: UUID, context: MemorySessionContext) async throws {
+        _ = sessionID
+        _ = context
+    }
+
+    func systemPromptBlock() async -> String { "" }
+
+    func prefetch(query: String) async -> String? {
+        _ = query
+        return nil
+    }
+
+    func queuePrefetch(query: String) async {
+        _ = query
+    }
+
+    func syncTurn(userContent: String, assistantContent: String) async {
+        _ = userContent
+        _ = assistantContent
+    }
+
+    func onPreCompress(messages: [String]) async -> String {
+        _ = messages
+        return ""
+    }
+
+    func onSessionEnd(messages: [String]) async {
+        _ = messages
+    }
+
+    func shutdown() async {}
 }

@@ -176,7 +176,7 @@ struct ContextCompactionMessageDTO: Codable, Sendable, Equatable {
 enum ContextCompactionCheckpointSupport {
     /// Stable string over every field that affects compaction LLM behavior, gating, or eligibility.
     static func configFingerprint(_ config: ContextCompactionConfiguration) -> String {
-        [
+        let head: [Any] = [
             config.enabled,
             config.ollamaServerURL.absoluteString,
             config.model,
@@ -208,12 +208,21 @@ enum ContextCompactionCheckpointSupport {
             config.cacheAwarePruningEnabled,
             config.cacheStablePrefixMessageCount,
             config.cachePruningTTLSeconds.map { String(describing: $0) } ?? "",
+            config.contextPruningMode ?? "",
+            config.contextPruningKeepRecentToolResults,
+            config.contextPruningTargetTools?.joined(separator: ",") ?? "",
             config.deterministicToolResultPruningEnabled,
             config.deterministicAttachmentDocumentHygieneEnabled,
             config.deterministicMaxImagesPerMessage,
             config.deterministicDocumentCharacterThreshold,
             config.deterministicDocumentPlaceholder,
+            config.deterministicDocumentPreviewMaxBytes,
             config.deterministicImagePlaceholder,
+        ]
+        let tail: [Any] = [
+            config.preCompactionMemoryFlushEnabled,
+            config.preCompactionMemoryFlushMaxEntries,
+            config.softThresholdTokens,
             config.optionalCompactionProviderSlot ?? "",
             config.optionalCompactionProviderFallbackToOllama,
             config.headMinMessageCount,
@@ -229,10 +238,14 @@ enum ContextCompactionCheckpointSupport {
             config.reinjectionPerSkillTokenBudget,
             config.reinjectionTotalSkillTokenBudget,
             config.reinjectFileContentEnabled,
+            config.reinjectionInstructionSectionsEnabled,
+            config.reinjectionInstructionSectionNames.joined(separator: ","),
+            config.reinjectionInstructionSectionMaxCharacters,
             config.compactionCircuitBreakerMaxFailures,
             config.compactionMinPromptTokenSavingsFraction,
             config.useSessionTreeProjection,
-        ].map { String(describing: $0) }.joined(separator: "|")
+        ]
+        return (head + tail).map { String(describing: $0) }.joined(separator: "|")
     }
 
     /// Head / middle / tail definition lives in `ContextCompactionMessageSplit` (Compaction/).
@@ -519,14 +532,16 @@ enum ContextCompactionCheckpointSupport {
         rawMiddle: [Message],
         config: ContextCompactionConfiguration,
         conversationID: UUID,
-        lastLLMDateByConversationID: [UUID: Date]
+        lastCompactionLLMDateByConversationID: [UUID: Date],
+        cacheExpiredHygieneWindow: Bool = false
     ) -> Bool {
         let chars = estimatedMiddleCharacters(rawMiddle)
         if config.middleMinCharactersForCompactionLLM > 0, chars < config.middleMinCharactersForCompactionLLM {
             return false
         }
         if config.compactionLLMCooldownSeconds > 0,
-           let last = lastLLMDateByConversationID[conversationID] {
+           !cacheExpiredHygieneWindow,
+           let last = lastCompactionLLMDateByConversationID[conversationID] {
             let elapsed = Date().timeIntervalSince(last)
             if elapsed < config.compactionLLMCooldownSeconds {
                 return false

@@ -82,7 +82,7 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
         
         let model = getModelName()
         logPromptCacheNoOpIfNeeded(config: config)
-        let requestData = await createOllamaChatRequest(model: model, messages: messages, config: config)
+        let requestData = try await createOllamaChatRequest(model: model, messages: messages, config: config)
         logRequestPayloadIfDebug(requestData)
         var partialResponse: String = ""
         var fullThinking: String = ""
@@ -165,7 +165,7 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
                     supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
                 )
                 
-                let requestData = await createOllamaChatRequest(model: model, messages: messages, config: config)
+                let requestData = try await createOllamaChatRequest(model: model, messages: messages, config: config)
                 self.logRequestPayloadIfDebug(requestData)
                 var fullContent: String = ""
                 var fullThinking: String = ""
@@ -298,29 +298,21 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
         )
     }
     
-    private func createOllamaChatRequest(model: String, messages: [Message], config: LLMRequestConfig) async -> OKChatRequestData {
+    private func createOllamaChatRequest(model: String, messages: [Message], config: LLMRequestConfig) async throws -> OKChatRequestData {
         let attachmentDispositions = extractAttachmentDispositions(from: config.additionalParameters)
-        
-        // Create Ollama formatted Message. If it is a system message, dynamically format it
-        // by incorporating the user system message contained in the message array into a
-        // confugurable system prompt. This way the system prompt can contain dynamic information
-        // like today's date and currently availble services
+        let promptMetadata = SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters)
+        let providerStablePrefix = SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: promptMetadata,
+            providerStablePrefix: providerStablePrefix
+        )
         var ollamaMessages: [OKChatRequestData.Message] = []
-        for message in messages {
+        for message in plan.resolvedMessages {
             switch message.role {
             case .system:
-                let systemPromptText: String
-                do {
-                    let promptMetadata = extractSystemPromptMetadata(from: config.additionalParameters)
-                    systemPromptText = try await systemPrompt.generateSystemPrompt(
-                        withUserSystemPrompt: message.content,
-                        additionalMetadata: promptMetadata
-                    )
-                } catch {
-                    self.logger?.error("Failed to generate system prompt: \(error)")
-                    systemPromptText = ""
-                }
-                ollamaMessages.append(.init(role: message.role.toOllamaKitRole(), content: systemPromptText))
+                ollamaMessages.append(.init(role: message.role.toOllamaKitRole(), content: message.content))
             default:
                 let projectedImages = message.images.filter { image in
                     guard let disposition = attachmentDispositions[image.name] else { return true }
@@ -457,24 +449,7 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
     }
 
     nonisolated private func extractAttachmentDispositions(from additionalParameters: JSON?) -> [String: String] {
-        guard let additionalParameters,
-              case .object(let root) = additionalParameters,
-              let projection = root["contextEngineAttachmentProjection"],
-              case .object(let projectionObject) = projection,
-              let decisionsJSON = projectionObject["decisions"],
-              case .array(let decisions) = decisionsJSON else {
-            return [:]
-        }
-        var output: [String: String] = [:]
-        for decision in decisions {
-            guard case .object(let object) = decision,
-                  case .string(let name)? = object["attachmentName"],
-                  case .string(let disposition)? = object["disposition"] else {
-                continue
-            }
-            output[name] = disposition
-        }
-        return output
+        AttachmentProjectionDispatchCodec.extractDispositions(from: additionalParameters)
     }
 
     nonisolated static func testEncodedChatRequestBody(_ requestData: OKChatRequestData) throws -> Data {

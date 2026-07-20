@@ -12,16 +12,14 @@ public struct ModelPoolProviderPreferenceConfiguration: Sendable, Equatable {
         self.order = order
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> ModelPoolProviderPreferenceConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            return .specDefaults
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let settings = root["settings"] as? [String: Any] else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> ModelPoolProviderPreferenceConfiguration {
+        guard let settings = document.foundationObject(forKey: "settings") else {
             return .specDefaults
         }
         return configuration(fromSettingsJSON: settings)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     internal static func configuration(fromSettingsJSON settings: [String: Any]) -> ModelPoolProviderPreferenceConfiguration {
         guard let raw = settings["modelPoolProviderPreference"] as? [String: Any],

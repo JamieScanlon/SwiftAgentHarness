@@ -18,11 +18,36 @@ extension AgentRuntimeSessionService {
         await topics.publishRuntimeLifecycleEvent(payload)
     }
 
-    func stripRunTailIfBound(conversationID: UUID, anchorUserMessageID: UUID) async {
+    /// Returns whether cancelled-run strip / idle cleanup may still mutate this conversation.
+    /// Skips when a newer run already owns `conversation.currentRunID` or the streaming slot.
+    func shouldApplyCancelledRunCleanup(conversationID: UUID, cancelledRunID: UUID?) async -> Bool {
+        guard let cancelledRunID else { return true }
+        let conversation = await modelConversation(id: conversationID)
+        if let currentRunID = conversation?.currentRunID, currentRunID != cancelledRunID {
+            return false
+        }
+        let lifecycle = await currentLifecycleSnapshot(for: conversationID)
+        if let streamingRunID = lifecycle.currentStreamingRunID, streamingRunID != cancelledRunID {
+            return false
+        }
+        return true
+    }
+
+    func stripRunTailIfBound(
+        conversationID: UUID,
+        forRunID: UUID?,
+        anchorUserMessageID: UUID
+    ) async {
+        guard await shouldApplyCancelledRunCleanup(conversationID: conversationID, cancelledRunID: forRunID) else {
+            return
+        }
         await stripRunTail(conversationID: conversationID, anchorUserMessageID: anchorUserMessageID)
     }
 
-    func applyStreamingUserCancellationIfBound(conversationID: UUID) async {
+    func applyStreamingUserCancellationIfBound(conversationID: UUID, forRunID: UUID?) async {
+        guard await shouldApplyCancelledRunCleanup(conversationID: conversationID, cancelledRunID: forRunID) else {
+            return
+        }
         await messaging.applyStreamingUserCancellation(conversationID: conversationID)
     }
 
@@ -139,14 +164,18 @@ extension AgentRuntimeSessionService {
                 setPendingTerminalReason: { [self] conversationID, runID, reason in
                     await self.setPendingTerminalReason(reason, conversationID: conversationID, runID: runID)
                 },
-                stripRunTailAfterAnchorIfNeeded: { [self] conversationID, anchorID in
+                stripRunTailAfterAnchorIfNeeded: { [self] conversationID, runID, anchorID in
                     await self.stripRunTailIfBound(
                         conversationID: conversationID,
+                        forRunID: runID,
                         anchorUserMessageID: anchorID
                     )
                 },
-                applyStreamingUserCancellation: { [self] conversationID in
-                    await self.applyStreamingUserCancellationIfBound(conversationID: conversationID)
+                applyStreamingUserCancellation: { [self] conversationID, runID in
+                    await self.applyStreamingUserCancellationIfBound(
+                        conversationID: conversationID,
+                        forRunID: runID
+                    )
                 },
                 applySendFailure: { [self] error in
                     await self.applySendFailureIfBound(error, conversationID: sendingConversationID)

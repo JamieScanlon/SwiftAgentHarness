@@ -191,6 +191,9 @@ struct APILayerTenancyRouteTests {
                 req.body = .init(string: "{}")
             }, afterResponse: { res async throws in
                 #expect(res.status == .unauthorized)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(json?["type"] as? String == "error")
+                #expect((json?["message"] as? String)?.contains("X-SAH-Context-Compaction-Preview-Token") == true)
             })
         }
     }

@@ -72,7 +72,7 @@ struct SubAgentForkCapabilityTests {
 
         let childConversation = try #require(await fixture.host.modelConversation(id: childID))
         let modeCtx = ModePolicyContext(conversation: childConversation, resolvedProfile: profile)
-        let gateway = DefaultToolSystemGateway()
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
         let candidateTools = [
             "read_file", "write_file", "get_plan", "spawn_sub_agent",
             ConversationsToolProvider.listConversationsToolName, "schedule_create",
@@ -103,8 +103,8 @@ struct SubAgentForkCapabilityTests {
         #expect(!effectiveNames.contains("schedule_create"))
     }
 
-    @Test("fork spawn applies userSystemPrompt when provided")
-    func forkSpawnAppliesUserSystemPrompt() async throws {
+    @Test("fork spawn ignores userSystemPrompt to preserve inherited bytes")
+    func forkSpawnIgnoresUserSystemPrompt() async throws {
         let fixture = try await makeLocalHost(label: "fork-system-prompt")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -117,6 +117,12 @@ struct SubAgentForkCapabilityTests {
         let parentID = try #require(await fixture.host.currentConversationID)
         let userMessage = Message(id: UUID(), role: .user, content: "fork me", timestamp: Date(), toolCalls: [])
         await fixture.host.testing_applyOrchestratorMessages([userMessage])
+        let parentConversation = try #require(await fixture.host.currentConversation())
+        _ = await fixture.host.contextProjectionService.transformedContextMessages(
+            from: parentConversation.messages,
+            conversation: parentConversation,
+            phase: .initial
+        )
 
         let extractionPrompt = "memory extraction system prompt"
         let childID = try await fixture.conversationAPI.apiSpawnSubAgent(
@@ -133,9 +139,13 @@ struct SubAgentForkCapabilityTests {
         )
 
         let childConversation = try #require(await fixture.host.modelConversation(id: childID))
-        #expect(childConversation.systemPrompt == extractionPrompt)
-        let systemMessage = try #require(childConversation.messages.first(where: { $0.role == .system }))
-        #expect(systemMessage.content == extractionPrompt)
+        #expect(childConversation.systemPrompt != extractionPrompt)
+        #expect(childConversation.systemPrompt == "parent-build")
+        let inherited = ConversationMetadataSubagentPromptComposition.inheritedAssembledPromptText(
+            from: childConversation.metadata
+        )
+        #expect(inherited != extractionPrompt)
+        #expect(inherited?.contains(extractionPrompt) == false)
     }
 
     @Test("isolated extraction spawn applies userSystemPrompt and starts clean conversation")

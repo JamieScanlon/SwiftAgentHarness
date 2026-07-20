@@ -67,7 +67,7 @@ Four checks every trigger must clear *before* the prompt builder is touched:
 1. **Idempotency.** Dedup by `Trigger.id` within a TTL. Dedup webhooks via `X-GitHub-Delivery` cached for 1 hour. Apply the same rule to cron fires (a duplicate fire on a clock-skew restart is the cron equivalent).
 2. **Rate limit.** Per route, per source. 30 req/min per route is a defensible default. For self-registered triggers (the agent created this cron/webhook itself), use a more aggressive global cap to bound runaway loops.
 3. **Authorization.** Is this source allowed to fire this kind of run? Is this skill allowed to be invoked from this source? A manifest-first activation planner is the right reference, though it may be framed for plugin activation rather than triggers.
-4. **Cost ceiling.** Refuse if frequency exceeds a per-source budget. This is a gap in all six harnesses but should exist as a first-class stage. Without it, an attacker-controlled webhook source can burn the user's API credits with valid-HMAC requests.
+4. **Cost ceiling.** Refuse if the source's spend ledger has reached its per-window budget. This is a gap in all six harnesses but should exist as a first-class stage. Without it, an attacker-controlled webhook source can burn the user's API credits with valid-HMAC requests. Full design — the budget object, ledger-based admission, the breach ladder — in [cost-ceilings.md](./cost-ceilings.md).
 
 If any check fails, the trigger is logged and dropped. The agent never sees it. Failures are observable through the same audit log path (see *Cross-cutting* below).
 

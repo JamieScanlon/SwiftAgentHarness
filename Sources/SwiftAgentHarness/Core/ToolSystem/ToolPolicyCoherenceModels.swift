@@ -4,6 +4,8 @@ enum ToolPolicyCoherenceIssueKind: String, Sendable, Equatable {
     case unknownEntry
     case shadowedAllow
     case emptyGroup
+    /// Host registered `.grant(...)` covering this profile, but `allowsHostGrants` is false — co-authorship is a no-op.
+    case grantInactiveWithoutOptIn
 }
 
 enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
@@ -15,6 +17,7 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
     case promptConfigRequireApproval
     case promptConfigEscalationRequired
     case promptConfigElevated
+    case hostVisibilityGrant
 
     var displayLabel: String {
         switch self {
@@ -26,6 +29,7 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
         case .promptConfigRequireApproval: return "PromptConfig.toolPolicy.requireApproval"
         case .promptConfigEscalationRequired: return "PromptConfig.toolPolicy.escalationRequired"
         case .promptConfigElevated: return "PromptConfig.toolPolicy.elevated"
+        case .hostVisibilityGrant: return "Host visibility grant"
         }
     }
 
@@ -45,6 +49,8 @@ enum ToolPolicyCoherenceScope: String, Sendable, Equatable {
             return "PromptConfig.toolPolicy.escalationRequired"
         case .promptConfigElevated:
             return "PromptConfig.toolPolicy.elevated"
+        case .hostVisibilityGrant:
+            return "modeProfiles.\(profileID).allowsHostGrants"
         }
     }
 }
@@ -85,6 +91,10 @@ struct ToolPolicyCoherenceReport: Sendable {
 
     var emptyGroups: [ToolPolicyCoherenceIssue] {
         issues.filter { $0.kind == .emptyGroup }
+    }
+
+    var grantsInactiveWithoutOptIn: [ToolPolicyCoherenceIssue] {
+        issues.filter { $0.kind == .grantInactiveWithoutOptIn }
     }
 
     var isClean: Bool {

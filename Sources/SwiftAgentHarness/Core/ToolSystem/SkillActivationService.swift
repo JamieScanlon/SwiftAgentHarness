@@ -24,6 +24,15 @@ actor SkillActivationService {
         catalogSkillLoader = nil
     }
 
+    func invalidateSkillCatalog(for conversationID: UUID?) async {
+        if let conversationID {
+            skillLoadersByConversationID.removeValue(forKey: conversationID)
+        } else {
+            skillLoadersByConversationID.removeAll()
+        }
+        catalogSkillLoader = nil
+    }
+
     func skillLoader(for conversationID: UUID?) async -> SkillLoader? {
         guard includeAgentSkills else { return nil }
         if let conversationID {
@@ -122,7 +131,7 @@ actor SkillActivationService {
         conversationID: UUID,
         skillName: String,
         eligibleSkills: [AvailableSkillInfo]
-    ) async throws -> Set<String> {
+    ) async throws -> SlashSkillActivationResult {
         guard let skillLoader = await ensureSkillLoader(for: conversationID) else {
             throw SkillActivationSlashError.skillsUnavailable
         }
@@ -130,9 +139,20 @@ actor SkillActivationService {
             throw SkillActivationSlashError.unknownSkill(skillName)
         }
         await skillLoader.activateSkill(named: match.name)
+        guard let skill = try await skillLoader.loadSkill(named: match.name) else {
+            throw SkillActivationSlashError.unknownSkill(skillName)
+        }
         let names = await skillLoader.activatedSkills
         try await persistActivatedSkillNamesToConversation(conversationID: conversationID, names: names)
-        return names
+        let body = SkillActivationBodyFormatter.formattedActivateResult(
+            name: match.name,
+            fullInstructions: skill.fullInstructions
+        )
+        return SlashSkillActivationResult(
+            skillName: match.name,
+            activationBody: body,
+            activatedNames: names
+        )
     }
 
     private func ensureCatalogSkillLoader() async -> SkillLoader? {
@@ -169,7 +189,7 @@ actor SkillActivationService {
         if let testingIncludeAgentSkillsOverride {
             return testingIncludeAgentSkillsOverride
         }
-        return SystemPrompt.loadIncludeAgentSkillsFromConfig()
+        return deps.configurationSet.promptAssembly.includeAgentSkills
     }
 
     private func makeSkillLoader() -> SkillLoader? {
@@ -179,17 +199,16 @@ actor SkillActivationService {
                 logger: deps.logger
             )
         }
-        do {
-            if let skillsPath = try SystemPrompt.loadSkillsFolderPathFromConfig() {
-                return SkillLoader(
-                    skillsDirectoryURL: URL(fileURLWithPath: skillsPath),
-                    logger: deps.logger
-                )
-            }
-        } catch {
-            deps.logger?.error("[SkillActivationService] Failed to load skills config: \(error)")
+        guard let skillsPath = deps.configurationSet.promptAssembly.skillsFolderPath else {
+            deps.logger?.debug(
+                "[SkillActivationService] skillsFolderPath unset; skill catalog unavailable"
+            )
+            return nil
         }
-        return nil
+        return SkillLoader(
+            skillsDirectoryURL: URL(fileURLWithPath: skillsPath),
+            logger: deps.logger
+        )
     }
 
     private func modePolicyContext(for conversation: ModelConversation) async -> ModePolicyContext {
@@ -205,4 +224,10 @@ actor SkillActivationService {
 enum SkillActivationSlashError: Error, Sendable {
     case skillsUnavailable
     case unknownSkill(String)
+}
+
+struct SlashSkillActivationResult: Sendable, Equatable {
+    let skillName: String
+    let activationBody: String
+    let activatedNames: Set<String>
 }

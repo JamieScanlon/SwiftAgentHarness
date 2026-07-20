@@ -17,6 +17,7 @@ enum ContextAssemblyService {
         let routing = conversation.routingPrefs?.explicitToolPolicy
         return ConversationTransformMetadata(
             conversationID: conversation.id,
+            ownerAccountID: conversation.ownerAccountID,
             modelID: conversation.model.id.uuidString,
             modelName: conversation.model.modelName,
             interactionMode: conversation.interactionMode,

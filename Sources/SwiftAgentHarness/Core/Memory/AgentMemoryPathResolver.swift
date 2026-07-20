@@ -16,8 +16,13 @@ enum AgentMemoryPathResolver {
     static func resolveMemoryDirectory(
         canonicalGitRoot: String?,
         cwd: String,
+        ownerAccountID: UUID? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
         fileManager: FileManager = .default
     ) throws -> URL {
+        if tenancyPolicy.requireAuthenticatedOwnerOnMutations, ownerAccountID == nil {
+            throw MemoryPathValidationError.ownerAccountIDRequiredUnderStrictTenancy
+        }
         if let override = ProcessInfo.processInfo.environment[overrideEnvKey],
            !override.isEmpty {
             return try validateAbsoluteDirectory((override as NSString).expandingTildeInPath, fileManager: fileManager)
@@ -26,12 +31,43 @@ enum AgentMemoryPathResolver {
             return try validateAbsoluteDirectory(fromSettings, fileManager: fileManager)
         }
         let key = sanitizedProjectKey(canonicalGitRoot: canonicalGitRoot, cwd: cwd)
-        let dir = MemoryConfigHome.resolve(fileManager: fileManager)
+        var base = MemoryConfigHome.resolve(fileManager: fileManager)
+        if tenancyPolicy.requireAuthenticatedOwnerOnMutations, let ownerAccountID {
+            base = base
+                .appendingPathComponent("owners", isDirectory: true)
+                .appendingPathComponent(ownerSegment(ownerAccountID), isDirectory: true)
+        }
+        let dir = base
             .appendingPathComponent("projects", isDirectory: true)
             .appendingPathComponent(key, isDirectory: true)
             .appendingPathComponent("memory", isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    static func resolveUserMemoryDirectory(
+        ownerAccountID: UUID? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        if tenancyPolicy.requireAuthenticatedOwnerOnMutations, ownerAccountID == nil {
+            throw MemoryPathValidationError.ownerAccountIDRequiredUnderStrictTenancy
+        }
+        var base = MemoryConfigHome.resolve(fileManager: fileManager)
+        if tenancyPolicy.requireAuthenticatedOwnerOnMutations, let ownerAccountID {
+            base = base
+                .appendingPathComponent("owners", isDirectory: true)
+                .appendingPathComponent(ownerSegment(ownerAccountID), isDirectory: true)
+        }
+        let dir = base
+            .appendingPathComponent("memory", isDirectory: true)
+            .appendingPathComponent("user", isDirectory: true)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func ownerSegment(_ ownerAccountID: UUID) -> String {
+        ownerAccountID.uuidString.lowercased()
     }
 
     static func sanitizedProjectKey(canonicalGitRoot: String?, cwd: String) -> String {
@@ -64,6 +100,21 @@ enum AgentMemoryPathResolver {
 
     static func isPathInsideMemoryDirectory(_ path: String, memoryDirectory: URL) -> Bool {
         WorkspacePathPolicy.isPathInsideRoot(path, root: memoryDirectory.standardizedFileURL.path)
+    }
+
+    static func isPathInsideAnyMemoryDirectory(
+        _ path: String,
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?
+    ) -> Bool {
+        if isPathInsideMemoryDirectory(path, memoryDirectory: projectMemoryDirectory) {
+            return true
+        }
+        if let userMemoryDirectory,
+           isPathInsideMemoryDirectory(path, memoryDirectory: userMemoryDirectory) {
+            return true
+        }
+        return false
     }
 
     private static func readTrustedAutoMemoryDirectory(fileManager: FileManager) -> String? {

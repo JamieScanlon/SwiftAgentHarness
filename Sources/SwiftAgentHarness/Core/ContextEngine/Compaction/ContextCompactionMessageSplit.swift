@@ -21,9 +21,11 @@ enum ContextCompactionMessageSplit: Sendable {
     /// Tail sizing follows the harness spec: at least ``ContextCompactionSplitOptions/tailMinMessageCount``
     /// messages and at least ``ContextCompactionSplitOptions/tailTokenBudget`` estimated tokens
     /// (whichever requires a larger suffix). Boundary safety rules:
-    /// - The latest user message is placed in `tail` when it lies within the natural tail window (not merely after head).
+    /// - The latest user message after `head` is always pinned into `tail` (non-negotiable run anchor).
     /// - A `.tool` message never starts the tail; assistant tool-call batches stay intact (fail-closed on ID mismatch).
     /// - The head/middle boundary receives the same tool-pair protection.
+    ///
+    /// `lastUserPinSkipped` is retained for call-site compatibility and is always `false`.
     static func splitForCompaction(
         _ messages: [Message],
         options: ContextCompactionSplitOptions
@@ -50,32 +52,26 @@ enum ContextCompactionMessageSplit: Sendable {
             tailUTF8 += messages[tailStart].content.utf8.count
         }
 
-        let naturalTailStart = tailStart
-        var lastUserPinSkipped = false
         if let lastUserIndex = messages.lastIndex(where: { $0.role == .user }),
            lastUserIndex > headEnd {
-            if lastUserIndex >= naturalTailStart - options.tailMinMessageCount {
-                tailStart = min(tailStart, lastUserIndex)
-            } else {
-                lastUserPinSkipped = true
-            }
+            tailStart = min(tailStart, lastUserIndex)
         }
         tailStart = adjustTailStart(messages: messages, proposedTailStart: tailStart, headEnd: headEnd)
         guard tailStart > headEnd else {
-            return ContextCompactionMessageSegments(head: messages, middle: [], tail: [], lastUserPinSkipped: lastUserPinSkipped)
+            return ContextCompactionMessageSegments(head: messages, middle: [], tail: [], lastUserPinSkipped: false)
         }
 
         let head = Array(messages[..<headEnd])
         let middle = Array(messages[headEnd..<tailStart])
         guard !middle.isEmpty else {
-            return ContextCompactionMessageSegments(head: messages, middle: [], tail: [], lastUserPinSkipped: lastUserPinSkipped)
+            return ContextCompactionMessageSegments(head: messages, middle: [], tail: [], lastUserPinSkipped: false)
         }
         let tail = Array(messages[tailStart...])
         return ContextCompactionMessageSegments(
             head: head,
             middle: middle,
             tail: tail,
-            lastUserPinSkipped: lastUserPinSkipped
+            lastUserPinSkipped: false
         )
     }
 

@@ -7,11 +7,48 @@ public enum WorkspaceFilesystemError: Error, Equatable {
     case symlinkLoop
     case writeDenied
     case invalidPath
+    case invalidPathSyntax(String)
     case readWindowRequired(String)
 }
 
 public enum PathPolicy {
     private static let defaultMaxSymlinkDepth = 40
+    static let userTierPathPrefix = "user/"
+
+    public static func resolveTieredMemoryRelativePath(
+        raw: String,
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?,
+        requireExists: Bool,
+        fileManager: FileManager = .default
+    ) throws -> String {
+        let (tier, filename) = try parseTieredMemoryPath(raw)
+        let root: URL
+        switch tier {
+        case .user:
+            guard let userMemoryDirectory else { throw WorkspaceFilesystemError.writeDenied }
+            root = userMemoryDirectory
+        case .project:
+            root = projectMemoryDirectory
+        }
+        return try resolveMemoryRelativePath(
+            raw: filename,
+            memoryDirectory: root,
+            requireExists: requireExists,
+            fileManager: fileManager
+        )
+    }
+
+    public static func tieredMemoryAllowedRoots(
+        projectMemoryDirectory: URL,
+        userMemoryDirectory: URL?
+    ) -> [String] {
+        var roots = [FilesystemCanonicalPath.resolve(projectMemoryDirectory.path)]
+        if let userMemoryDirectory {
+            roots.append(FilesystemCanonicalPath.resolve(userMemoryDirectory.path))
+        }
+        return roots
+    }
 
     public static func toRelativeWorkspacePath(root: String, candidate: String) throws -> String {
         let normalizedRoot = FilesystemCanonicalPath.resolve(root)
@@ -119,11 +156,31 @@ public enum PathPolicy {
         return candidate
     }
 
-    public static func normalize(raw: String, workspaceRoot: String) -> String {
-        if raw.hasPrefix("/") {
-            return (raw as NSString).standardizingPath
+    static func expandShellPathPrefixes(_ raw: String) -> String {
+        if raw.hasPrefix("~") {
+            return (raw as NSString).expandingTildeInPath
         }
-        return ((workspaceRoot as NSString).appendingPathComponent(raw) as NSString).standardizingPath
+        if raw == "$HOME" {
+            if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty {
+                return home
+            }
+            return raw
+        }
+        if raw.hasPrefix("$HOME/") {
+            if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty {
+                return home + String(raw.dropFirst("$HOME".count))
+            }
+            return raw
+        }
+        return raw
+    }
+
+    public static func normalize(raw: String, workspaceRoot: String) -> String {
+        let expanded = expandShellPathPrefixes(raw)
+        if expanded.hasPrefix("/") {
+            return (expanded as NSString).standardizingPath
+        }
+        return ((workspaceRoot as NSString).appendingPathComponent(expanded) as NSString).standardizingPath
     }
 
     public static func validateBindSource(_ source: String, allowlist: [String]) throws -> String {
@@ -134,10 +191,52 @@ public enum PathPolicy {
         return canonical
     }
 
+    private static func validateWorkspacePathSyntax(raw: String) throws {
+        guard !raw.isEmpty, !raw.contains("\0") else { throw WorkspaceFilesystemError.invalidPath }
+        if raw.hasPrefix("/") { return }
+        if !raw.hasPrefix("~"), raw.contains("~/") {
+            throw WorkspaceFilesystemError.invalidPathSyntax(
+                "file_path contains a literal '~' directory segment. Use a workspace-relative path (e.g. MyProject/src/File.swift) or an absolute path under the workspace root."
+            )
+        }
+        if raw.hasPrefix("~") {
+            let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+            let expanded = (raw as NSString).expandingTildeInPath
+            if home.isEmpty, expanded == raw {
+                throw WorkspaceFilesystemError.invalidPathSyntax(
+                    "Cannot expand ~ in file_path (HOME is not set). Use a workspace-relative path."
+                )
+            }
+        }
+        if raw.hasPrefix("$HOME") {
+            let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+            if home.isEmpty {
+                throw WorkspaceFilesystemError.invalidPathSyntax(
+                    "Cannot expand $HOME in file_path. Use a workspace-relative path."
+                )
+            }
+        }
+    }
+
     private static func validateMemoryFilename(_ raw: String) throws {
         guard !raw.isEmpty, !raw.contains("\0") else { throw WorkspaceFilesystemError.invalidPath }
         guard !raw.hasPrefix("/") else { throw WorkspaceFilesystemError.invalidPath }
         if raw.contains("/") || raw.contains("..") { throw WorkspaceFilesystemError.invalidPath }
+    }
+
+    private enum TieredMemoryPathTier: Sendable {
+        case user
+        case project
+    }
+
+    private static func parseTieredMemoryPath(_ raw: String) throws -> (TieredMemoryPathTier, String) {
+        if raw.hasPrefix(userTierPathPrefix) {
+            let filename = String(raw.dropFirst(userTierPathPrefix.count))
+            try validateMemoryFilename(filename)
+            return (.user, filename)
+        }
+        try validateMemoryFilename(raw)
+        return (.project, raw)
     }
 
     private static func pass1NormalizedPath(
@@ -146,7 +245,7 @@ public enum PathPolicy {
         memoryDirectory: URL?,
         memoryWriteOnly: Bool
     ) throws -> String {
-        guard !raw.isEmpty, !raw.contains("\0") else { throw WorkspaceFilesystemError.invalidPath }
+        try validateWorkspacePathSyntax(raw: raw)
         let canonicalWorkspace = FilesystemCanonicalPath.resolve(workspaceRoot)
         let path = normalize(raw: raw, workspaceRoot: canonicalWorkspace)
         let roots = allowedRoots(workspaceRoot: canonicalWorkspace, memoryDirectory: memoryDirectory, memoryWriteOnly: memoryWriteOnly)

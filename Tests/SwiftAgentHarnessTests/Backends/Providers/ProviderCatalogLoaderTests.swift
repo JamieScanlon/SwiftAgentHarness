@@ -89,6 +89,19 @@ struct ProviderCatalogLoaderTests {
         #expect(first == second)
         #expect(first != other)
     }
+
+    @Test("Bundled provider overrides decode family system prompt contributions")
+    func bundledOverridesDecode() {
+        prepare()
+        let binding = ProviderBinding(
+            providerId: "anthropic",
+            modelProtocol: .anthropic,
+            endpointModelId: "claude-sonnet-4-6",
+            serverURL: URL(string: "https://api.anthropic.com")!
+        )
+        let contribution = ProviderCatalogLoader.systemPromptContribution(for: binding)
+        #expect(contribution?.stablePrefix?.contains("Claude Sonnet") == true)
+    }
 }
 
 @Suite("Frontier provider static catalogs")

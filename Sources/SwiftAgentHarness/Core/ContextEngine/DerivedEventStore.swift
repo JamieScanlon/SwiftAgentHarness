@@ -73,6 +73,12 @@ protocol DerivedEventStore: Sendable {
         expectedDerivedSequence: Int?
     ) throws
 
+    func appendAttachmentDigestCheckpoint(
+        conversationID: UUID,
+        wire: AttachmentDigestCheckpointWire,
+        expectedDerivedSequence: Int?
+    ) throws
+
     func appendRunLifecycleEvent(
         conversationID: UUID,
         runID: UUID,

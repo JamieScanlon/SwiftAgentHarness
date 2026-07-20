@@ -10,6 +10,7 @@ public struct ModeProfileConfiguration: Sendable {
         let assemblyKind: SystemPromptAssemblyKind?
         let allowsProactiveCompactionTriggers: Bool?
         let appliesAgentBuildOrchestratorHarness: Bool?
+        let allowsHostGrants: Bool?
         let semanticLayerTags: [String]?
         let label: String?
         let profileDescription: String?
@@ -29,16 +30,13 @@ public struct ModeProfileConfiguration: Sendable {
 
     static let empty = ModeProfileConfiguration(profiles: [], diagnostics: [])
 
-    static func loadFromPromptConfigBundle() -> ModeProfileConfiguration {
-        guard let data = PromptConfigBundleResource.data(),
-              let root = try? JSONDecoder().decode(JSON.self, from: data),
-              case .object(let json) = root,
-              let modeProfiles = json["modeProfiles"]
-        else {
+    static func load(from document: PromptConfigDocument) -> ModeProfileConfiguration {
+        guard let modeProfiles = document.modeProfiles else {
             return .empty
         }
         return load(fromJSONRoot: modeProfiles)
     }
+
 
     /// Loads mode profiles from a project directory (`*.json` files).
     /// Each file can be either a single profile object, a profile array, or `{ "profiles": [...] }`.
@@ -169,6 +167,7 @@ public struct ModeProfileConfiguration: Sendable {
 
             let allowsProactiveCompactionTriggers = profile.optionalBool(for: "allowsProactiveCompactionTriggers")
             let appliesAgentBuildOrchestratorHarness = profile.optionalBool(for: "appliesAgentBuildOrchestratorHarness")
+            let allowsHostGrants = profile.optionalBool(for: "allowsHostGrants")
             let semanticLayerTags = ModeProfileJSONParsing.normalizedStringArray(from: profile["semanticLayerTags"])
 
             let label = profile.optionalString(for: "label")
@@ -183,6 +182,7 @@ public struct ModeProfileConfiguration: Sendable {
                     assemblyKind: assemblyKind,
                     allowsProactiveCompactionTriggers: allowsProactiveCompactionTriggers,
                     appliesAgentBuildOrchestratorHarness: appliesAgentBuildOrchestratorHarness,
+                    allowsHostGrants: allowsHostGrants,
                     semanticLayerTags: semanticLayerTags,
                     label: label,
                     profileDescription: profileDescription,
@@ -230,6 +230,7 @@ extension ModeProfileConfiguration.RawProfile {
         self.assemblyKind = nil
         self.allowsProactiveCompactionTriggers = nil
         self.appliesAgentBuildOrchestratorHarness = nil
+        self.allowsHostGrants = nil
         self.semanticLayerTags = nil
         self.label = nil
         self.profileDescription = nil
@@ -252,6 +253,7 @@ extension ModeProfileConfiguration.RawProfile {
         appliesAgentBuildOrchestratorHarness: Bool,
         semanticLayerTags: [String],
         extends: String? = nil,
+        allowsHostGrants: Bool? = nil,
         label: String? = nil,
         profileDescription: String? = nil,
         symbol: String? = nil,
@@ -269,6 +271,7 @@ extension ModeProfileConfiguration.RawProfile {
         self.assemblyKind = assemblyKind
         self.allowsProactiveCompactionTriggers = allowsProactiveCompactionTriggers
         self.appliesAgentBuildOrchestratorHarness = appliesAgentBuildOrchestratorHarness
+        self.allowsHostGrants = allowsHostGrants
         self.semanticLayerTags = semanticLayerTags
         self.label = label
         self.profileDescription = profileDescription

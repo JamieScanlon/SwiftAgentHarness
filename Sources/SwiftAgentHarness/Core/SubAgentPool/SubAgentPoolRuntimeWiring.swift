@@ -14,11 +14,11 @@ enum SubAgentPoolRuntimeWiring {
     static func resolve(
         a2aManager: A2AManager? = nil,
         acpManager: ACPManager? = nil,
-        customEndpointConfiguration: SubAgentCustomEndpointConfiguration = .loadFromPromptConfigBundle(),
+        customEndpointConfiguration: SubAgentCustomEndpointConfiguration,
         customEndpointExecutor: (any CustomEndpointDelegateExecuting)? = nil,
         sessionStore: SubAgentRemoteTransportSessionStore = .shared,
         toolCallTimeout: TimeInterval = 300,
-        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.loadFromPromptConfigBundle(),
+        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration,
         logger: Logger? = nil
     ) -> Resolved {
         let a2aManagerProvider = SubAgentPoolA2AManagerProvider()

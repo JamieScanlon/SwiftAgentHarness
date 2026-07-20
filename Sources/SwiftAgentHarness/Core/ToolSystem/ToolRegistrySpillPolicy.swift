@@ -3,6 +3,7 @@ import Foundation
 enum ToolRegistrySpillPolicy {
     private static let spillExemptCanonicalNames: Set<String> = [
         "read_file",
+        "read_attachment",
         "glob",
         "grep",
     ]

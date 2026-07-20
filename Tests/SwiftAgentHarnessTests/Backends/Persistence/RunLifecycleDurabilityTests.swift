@@ -288,6 +288,7 @@ struct RunLifecycleDurabilityTests {
                 #expect(runs?.first?["id"] as? String == runID.uuidString)
                 #expect(runs?.first?["outcome"] as? String == ConversationRunOutcome.completed.rawValue)
                 #expect(runs?.first?["status"] == nil)
+                // Natural assistant completion may omit terminalReason until natural-stop mapping is specified.
                 #expect(runs?.first?["terminalReason"] == nil)
                 #expect(runs?.first?["markerKind"] == nil)
                 #expect(runs?.first?["iterationCount"] as? Int == 1)
@@ -372,6 +373,191 @@ struct RunLifecycleDurabilityTests {
         let row = try #require(rows.first(where: { $0.id == runID }))
         #expect(row.outcome == .cancelled)
         #expect(row.cancellationReason == "user_stop_requested")
+        #expect(row.terminalReason == ConversationRunTerminalReason(
+            category: .externalCancellation,
+            detail: "user_stop_requested"
+        ))
+    }
+
+    @Test("REST /runs restart round-trip retains terminalReason for marker-closed runs")
+    func restRunsRetainTerminalReasonAfterRestart() async throws {
+        let container = try RunLifecycleDurabilityTestSupport.makeContainer()
+        let model = RunLifecycleDurabilityTestSupport.makeTestModel()
+        let mem = InMemoryHarnessSessionPersistence()
+        let writer = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: mem)
+        try await writer.createConversation(with: model, userSystemPrompt: "terminal-reason durability")
+        let conversationID = try #require(await writer.currentConversationID)
+
+        let boundedRunID = UUID()
+        let cancelledRunID = UUID()
+        let erroredRunID = UUID()
+        let orphanedRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_700_000_300)
+
+        func appendOpeningUser(runID: UUID, sequence: Int, at: Date, content: String) throws {
+            let user = Message(
+                id: UUID(),
+                role: .user,
+                content: content,
+                timestamp: at,
+                images: [],
+                toolCalls: [],
+                toolCallId: nil,
+                inputTrustRaw: "user"
+            )
+            try mem.appendTranscriptEntry(
+                conversationID: conversationID,
+                entry: try RunLifecycleDurabilityTestSupport.messageEntry(user, sequence: sequence, transcriptRunID: runID)
+            )
+        }
+
+        // Opening rows use explicit sequences; marker appends auto-assign the next sequence.
+        try appendOpeningUser(runID: boundedRunID, sequence: 1, at: base, content: "bounded")
+        try await writer.persistRunLifecycleTranscriptMarkerForTesting(
+            conversationID: conversationID,
+            payload: RunLifecycleTranscriptMarkerPayload(
+                kind: .run_bounded,
+                runId: boundedRunID,
+                createdAt: base.addingTimeInterval(1),
+                terminalReason: ConversationRunTerminalReason(
+                    category: .boundedStop,
+                    boundedReason: .maxAgentIterations
+                )
+            )
+        )
+        try appendOpeningUser(runID: cancelledRunID, sequence: 3, at: base.addingTimeInterval(10), content: "cancelled")
+        try await writer.persistRunLifecycleTranscriptMarkerForTesting(
+            conversationID: conversationID,
+            payload: RunLifecycleTranscriptMarkerPayload(
+                kind: .run_cancelled,
+                runId: cancelledRunID,
+                reason: "user_stop_requested",
+                createdAt: base.addingTimeInterval(11),
+                terminalReason: ConversationRunTerminalReason(
+                    category: .externalCancellation,
+                    detail: "user_stop_requested"
+                )
+            )
+        )
+        try appendOpeningUser(runID: erroredRunID, sequence: 5, at: base.addingTimeInterval(20), content: "errored")
+        try await writer.persistRunLifecycleTranscriptMarkerForTesting(
+            conversationID: conversationID,
+            payload: RunLifecycleTranscriptMarkerPayload(
+                kind: .run_errored,
+                runId: erroredRunID,
+                reason: "delegate_failed",
+                createdAt: base.addingTimeInterval(21),
+                terminalReason: ConversationRunTerminalReason(
+                    category: .failure,
+                    detail: "delegate_failed"
+                )
+            )
+        )
+        try appendOpeningUser(runID: orphanedRunID, sequence: 7, at: base.addingTimeInterval(30), content: "orphaned")
+        try await writer.persistRunLifecycleTranscriptMarkerForTesting(
+            conversationID: conversationID,
+            payload: RunLifecycleTranscriptMarkerPayload(
+                kind: .run_orphaned,
+                runId: orphanedRunID,
+                reason: "stale_running_reconciled",
+                createdAt: base.addingTimeInterval(31),
+                terminalReason: ConversationRunTerminalReason(
+                    category: .failure,
+                    detail: "stale_running_reconciled"
+                )
+            )
+        )
+
+        let reader = HarnessRuntimeSession(container: container, harnessSessionPersistenceOverride: mem)
+        try await reader.resetConversationsFromCatalog(availableModels: [model])
+        let api = APILayer(port: 0)
+        let modelProvider = RunLifecycleStubModelProvider(models: [model])
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(app: app, runtimeSession: reader, modelProvider: modelProvider)
+
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1"
+            ) { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                let runs = body?["runs"] as? [[String: Any]]
+                #expect(runs?.count == 1)
+                #expect(runs?.first?["id"] as? String == orphanedRunID.uuidString)
+                let reason = runs?.first?["terminalReason"] as? [String: Any]
+                #expect(reason?["category"] as? String == ConversationRunTerminalCategory.failure.rawValue)
+                #expect(reason?["detail"] as? String == "stale_running_reconciled")
+                #expect(runs?.first?["markerKind"] == nil)
+                #expect(body?["total"] as? Int == 4)
+            }
+
+            let expected: [(UUID, ConversationRunOutcome, ConversationRunTerminalReason)] = [
+                (
+                    orphanedRunID,
+                    .errored,
+                    ConversationRunTerminalReason(category: .failure, detail: "stale_running_reconciled")
+                ),
+                (
+                    erroredRunID,
+                    .errored,
+                    ConversationRunTerminalReason(category: .failure, detail: "delegate_failed")
+                ),
+                (
+                    cancelledRunID,
+                    .cancelled,
+                    ConversationRunTerminalReason(category: .externalCancellation, detail: "user_stop_requested")
+                ),
+                (
+                    boundedRunID,
+                    .bounded,
+                    ConversationRunTerminalReason(category: .boundedStop, boundedReason: .maxAgentIterations)
+                ),
+            ]
+
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=10"
+            ) { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                let runs = try #require(body?["runs"] as? [[String: Any]])
+                #expect(runs.count == 4)
+                for (index, expectation) in expected.enumerated() {
+                    #expect(runs[index]["id"] as? String == expectation.0.uuidString)
+                    #expect(runs[index]["outcome"] as? String == expectation.1.rawValue)
+                    let reason = runs[index]["terminalReason"] as? [String: Any]
+                    #expect(reason?["category"] as? String == expectation.2.category.rawValue)
+                    if let bounded = expectation.2.boundedReason {
+                        #expect(reason?["boundedReason"] as? String == bounded.rawValue)
+                    }
+                    if let detail = expectation.2.detail {
+                        #expect(reason?["detail"] as? String == detail)
+                    }
+                    #expect(runs[index]["markerKind"] == nil)
+                }
+            }
+
+            for expectation in expected {
+                try await app.testing().test(
+                    .GET,
+                    "/api/conversations/\(conversationID.uuidString)/runs/\(expectation.0.uuidString)"
+                ) { res async throws in
+                    #expect(res.status == .ok)
+                    let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    #expect(body?["outcome"] as? String == expectation.1.rawValue)
+                    let reason = body?["terminalReason"] as? [String: Any]
+                    #expect(reason?["category"] as? String == expectation.2.category.rawValue)
+                    if let bounded = expectation.2.boundedReason {
+                        #expect(reason?["boundedReason"] as? String == bounded.rawValue)
+                    }
+                    if let detail = expectation.2.detail {
+                        #expect(reason?["detail"] as? String == detail)
+                    }
+                    #expect(body?["markerKind"] == nil)
+                }
+            }
+        }
     }
 
     @Test("REST /runs supports kinds/outcomes/since/cursor and 304 cache validation")
@@ -431,6 +617,7 @@ struct RunLifecycleDurabilityTests {
             var etag: String?
             try await app.testing().test(.GET, "/api/conversations/\(conversationID.uuidString)/runs?limit=1") { res async throws in
                 #expect(res.status == .ok)
+                #expect(res.headers.first(name: .cacheControl) == "no-cache")
                 etag = res.headers.first(name: .eTag)
                 let payload = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
                 let runs = payload?["runs"] as? [[String: Any]]
@@ -439,7 +626,20 @@ struct RunLifecycleDurabilityTests {
                 #expect(payload?["total"] as? Int == 2)
             }
 
-            _ = try #require(etag)
+            let listETag = try #require(etag)
+            #expect(listETag.hasPrefix("\"reg-"))
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(conversationID.uuidString)/runs?limit=1",
+                beforeRequest: { req in
+                    req.headers.replaceOrAdd(name: .ifNoneMatch, value: listETag)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notModified)
+                    #expect(res.headers.first(name: .eTag) == listETag)
+                    #expect(res.headers.first(name: .cacheControl) == "no-cache")
+                }
+            )
 
             var cursor: String?
             try await app.testing().test(.GET, "/api/conversations/\(conversationID.uuidString)/runs?limit=1") { res async throws in

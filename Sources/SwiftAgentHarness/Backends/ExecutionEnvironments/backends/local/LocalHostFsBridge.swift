@@ -3,6 +3,7 @@ import Foundation
 public struct LocalHostFsBridge: SandboxFsBridge {
     private let workspaceRoot: String
     private let memoryDirectory: URL?
+    private let userMemoryDirectory: URL?
     private let memoryWriteOnly: Bool
 
     public init(
@@ -11,6 +12,7 @@ public struct LocalHostFsBridge: SandboxFsBridge {
     ) {
         self.workspaceRoot = FilesystemCanonicalPath.resolve(context.workspaceRoot)
         self.memoryDirectory = context.memoryDirectory.map { URL(fileURLWithPath: $0) }
+        self.userMemoryDirectory = context.userMemoryDirectory.map { URL(fileURLWithPath: $0) }
         self.memoryWriteOnly = memoryWriteOnly
     }
 
@@ -50,9 +52,10 @@ public struct LocalHostFsBridge: SandboxFsBridge {
 
     private func resolveReadPath(raw: String) throws -> String {
         if memoryWriteOnly, let memoryDirectory {
-            return try PathPolicy.resolveMemoryRelativePath(
+            return try PathPolicy.resolveTieredMemoryRelativePath(
                 raw: raw,
-                memoryDirectory: memoryDirectory,
+                projectMemoryDirectory: memoryDirectory,
+                userMemoryDirectory: userMemoryDirectory,
                 requireExists: true
             )
         }
@@ -66,9 +69,10 @@ public struct LocalHostFsBridge: SandboxFsBridge {
 
     private func resolveWritePath(raw: String, requireExists: Bool) throws -> String {
         if memoryWriteOnly, let memoryDirectory {
-            return try PathPolicy.resolveMemoryRelativePath(
+            return try PathPolicy.resolveTieredMemoryRelativePath(
                 raw: raw,
-                memoryDirectory: memoryDirectory,
+                projectMemoryDirectory: memoryDirectory,
+                userMemoryDirectory: userMemoryDirectory,
                 requireExists: requireExists
             )
         }

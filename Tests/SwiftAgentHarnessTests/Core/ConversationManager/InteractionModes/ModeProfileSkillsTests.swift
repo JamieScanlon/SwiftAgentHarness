@@ -8,7 +8,7 @@ struct ModeProfileSkillsTests {
 
     @Test("Bundled PromptConfig mode profiles parse and resolve")
     func bundledPromptConfigModeProfilesResolve() async throws {
-        let config = ModeProfileConfiguration.loadFromPromptConfigBundle()
+        let config = try HarnessConversationTestFixtures.promptConfigFixture().modeProfiles
         #expect(!config.profiles.isEmpty)
         let registry = ModeRegistryTestSupport.makeService(
             seedingBuiltIns: true,

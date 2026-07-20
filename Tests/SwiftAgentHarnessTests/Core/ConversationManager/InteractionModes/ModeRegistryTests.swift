@@ -70,10 +70,9 @@ struct ModeRegistryTests {
             strictAgentHarnessPrompts: true,
             resolvedProfile: extraction
         )
-        #expect(switches.metadata["agentWorkflowBlock"] == nil)
-        #expect(switches.metadata["planPath"] == nil)
-        #expect(switches.metadata["modeIncludeSkills"] == "false")
-        #expect(switches.metadata["modeIncludeToolGuidance"] == "false")
+        #expect(switches.assemblyContext.includeAgentSkills == false)
+        #expect(switches.assemblyContext.includeToolGuidance == false)
+        #expect(switches.assemblyContext.workflowBlock.isEmpty)
     }
 
     @Test("All machine sub-agent mode profiles resolve from built-ins without external config")
@@ -109,7 +108,7 @@ struct ModeRegistryTests {
         let minimal = try await registry.resolve(modeId: "subagent-minimal")
         #expect(minimal.tools.allow == [])
         let extraction = try await registry.resolve(modeId: "memory-extraction")
-        #expect(extraction.tools.allow?.sorted() == ["edit_file", "read_file", "write_file"].sorted())
+        #expect(extraction.tools.allow?.sorted() == ["edit_file", "read_attachment", "read_file", "write_file"].sorted())
         #expect(!(extraction.tools.allow ?? []).contains("spawn_sub_agent"))
     }
 

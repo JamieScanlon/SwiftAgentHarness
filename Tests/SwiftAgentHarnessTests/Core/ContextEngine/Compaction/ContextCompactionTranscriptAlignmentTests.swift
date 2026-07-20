@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Context compaction transcript alignment")
 struct ContextCompactionTranscriptAlignmentTests {
-    private func injectedMemoryMessages() -> [Message] {
+    private func injectedTier1MemoryContext() -> [Message] {
         [
             Message(
                 id: UUID(),
@@ -17,6 +17,11 @@ snapshot
                 timestamp: Date(),
                 toolCalls: []
             ),
+        ]
+    }
+
+    private func injectedMemoryMessages() -> [Message] {
+        injectedTier1MemoryContext() + [
             Message(
                 id: UUID(),
                 role: .system,
@@ -57,21 +62,51 @@ recalled
         )
     }
 
-    @Test("partition separates injected prefix from compaction transcript")
-    func partitionSeparatesInjectedPrefix() {
-        let injected = injectedMemoryMessages()
+    @Test("partition has no Tier 1 memory prefix when only conversation messages are present")
+    func partitionHasNoTier1MemoryPrefix() {
         let thread = compressibleThread()
-        let full = injected + thread
-        let (prefix, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(full)
-        #expect(prefix.count == 2)
+        let (prefix, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(thread)
+        #expect(prefix.isEmpty)
         #expect(transcript.map(\.id) == thread.map(\.id))
         #expect(!transcript.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryContext) }))
-        #expect((prefix + transcript).map(\.id) == full.map(\.id))
+    }
+
+    private func injectedSeniorHarnessPrefix() -> [Message] {
+        [
+            HarnessInjectedMessageMetadata.systemMessage(
+                id: UUID(),
+                content: """
+\(HarnessInjectedMessagePrefixes.triggerProvenance)
+trigger snapshot
+"""
+            ),
+        ]
+    }
+
+    @Test("late-placed Tier 2 recall is excluded from compaction transcript")
+    func lateRecallExcludedFromCompactionTranscript() {
+        let thread = compressibleThread()
+        let recall = HarnessInjectedMessageMetadata.systemMessage(
+            id: UUID(),
+            content: """
+\(HarnessInjectedMessagePrefixes.memoryRecall)
+recalled
+"""
+        )
+        guard let lastUserIndex = thread.lastIndex(where: { $0.role == .user }) else {
+            Issue.record("expected user message in thread")
+            return
+        }
+        var withLateRecall = thread
+        withLateRecall.insert(recall, at: lastUserIndex)
+        let (_, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(withLateRecall)
+        #expect(!transcript.contains(where: { $0.content.contains(HarnessInjectedMessagePrefixes.memoryRecall) }))
+        #expect(transcript.filter { $0.role == .user }.count == thread.filter { $0.role == .user }.count)
     }
 
     @Test("builder rawMiddle matches split on filtered transcript only")
     func builderRawMiddleMatchesFilteredSplit() async throws {
-        let injected = injectedMemoryMessages()
+        let injected = injectedSeniorHarnessPrefix()
         let thread = compressibleThread()
         let full = injected + thread
         let conversation = makeConversation()
@@ -86,7 +121,7 @@ recalled
             lastPromptTokens: 200_000,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .forcedReactiveRetry,
             compactionInjectedPrefix: injected
         )
@@ -102,12 +137,12 @@ recalled
         ).middle
         #expect(rawMiddle.map(\.id) == splitMiddle.map(\.id))
         #expect(!rawMiddle.contains(where: { injected.map(\.id).contains($0.id) }))
-        #expect(input.compactionInjectedPrefixMessages?.count == 2)
+        #expect(input.compactionInjectedPrefixMessages?.count == 1)
     }
 
     @Test("transformer prepends injected prefix to split head")
     func transformerPrependsInjectedPrefixToHead() async throws {
-        let injected = injectedMemoryMessages()
+        let injected = injectedSeniorHarnessPrefix()
         let thread = compressibleThread()
         let (_, transcript) = ContextCompactionCheckpointSupport.partitionForCompaction(injected + thread)
         let conversation = makeConversation()
@@ -142,7 +177,7 @@ recalled
             lastPromptTokens: 200_000,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: .forcedReactiveRetry,
             compactionInjectedPrefix: injected
         )

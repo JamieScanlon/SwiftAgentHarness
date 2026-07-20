@@ -14,7 +14,7 @@ This folder implements the harness **Tool System** spec. Model-driven tool visib
 - Canonicalization invariant: `ToolRegistryEntry(descriptor:)` is a pure projection; Tool System no longer applies name-based fallback metadata inference or app-layer descriptor reconstruction from raw `ToolDefinition`.
 - Parallel dispatch matrix invariant: host parallel execution is enabled when `toolPolicy.parallelDispatchEnabled` is true and no effective entry has unknown static capability metadata; per-call `parallelSafety(for:)` predicates (via `ToolCallCapabilityClassifier` for polymorphic tools like `bash` and `process`) drive `mixedDeterministic` batch planning in SwiftAgentKit. Static registration metadata remains fail-closed for polymorphic tools; call-time classification determines read fan-out and call-level approval severity.
 
-### Production gate (X2 batch parallelism)
+### Production gate (batch parallelism)
 
 Batch-level parallelism is **opt-in**. Defaults remain conservative:
 
@@ -36,7 +36,7 @@ When enabling in PromptConfig:
 
 **Supported planner modes for hosts:** `serial` and `mixedDeterministic` (partition semantics — order-preserving groups of contiguous concurrency-safe calls). `allParallel` is **deprecated and ignored**: it still parses from PromptConfig for backward compatibility but is always remapped to `mixedDeterministic` at the harness dispatch boundary with a structured warning. No model-turn batch reaches Kit with `plannerMode: allParallel`. See [parallel-execution.md](../../../../harness-template/core/tool-system/parallel-execution.md) for floor vs partition semantics.
 
-## Description change control (S4)
+## Description change control
 
 Tool `description` strings are **behavioral surface**, not documentation polish. They are sent to the model in the tool block and can change tool-selection behavior with no test failure. Treat edits like system-prompt changes: review for scope, safety, and confusion with sibling tools. MCP/A2A descriptions are third-party passthrough unless the harness explicitly overrides them.
 
@@ -47,8 +47,8 @@ Process: [docs/process/tool-description-change-control.md](../../../../docs/proc
 | Concern | SwiftAgentKit | Harness / host |
 |--------|----------------|----------------|
 | Tool dispatch / execution | `ToolManager` from `[ToolProvider]`; MCP and A2A inside `SwiftAgentKitOrchestrator` | [`OrchestratorRuntimeService.setupOrchestrator`](../ConversationManager/OrchestratorRuntimeService.swift) builds providers; MCP/A2A from [`ConversationStartupService`](../ConversationManager/ConversationStartupService.swift) |
-| In-process tools | `ToolProvider` protocol | This folder: `ConversationsToolProvider`, `AgentPlanToolProvider`, `TerminationToolProvider` (`finish`, structured `ask_user`, non-halting `think(snapshot)`), `ModeTransitionToolProvider` (`enter_plan_mode`, `exit_plan_mode`), skills wrappers, optional `ContextCompactionToolProvider` |
-| Host-supplied tools | `ToolProvider` protocol | Non-harness providers are injected by the host via `OrchestratorRuntimeService.installAdditionalToolProviders(_:)` ([`HarnessToolProviderSeam`](HarnessToolProviderSeam.swift)); the factory receives a per-turn `HarnessToolProviderContext` (active conversation, workspace root, logger). Example: `PersonalMessagingToolProvider` is registered by the app, not the harness |
+| In-process tools | `ToolProvider` protocol | This folder: `ConversationsToolProvider`, `AgentPlanToolProvider`, `TerminationToolProvider` (`finish`, structured `ask_user`, non-halting `think(snapshot)`), `ModeTransitionToolProvider` (`enter_plan_mode`, `exit_plan_mode`), skills wrappers, optional `ContextCompactionToolProvider`, optional `SkillWorkshopToolProvider` ([`../SkillWorkshop/README.md`](../SkillWorkshop/README.md)) |
+| Host-supplied tools | `ToolProvider` protocol | Non-harness providers are injected by the host via `OrchestratorRuntimeService.installAdditionalToolProviders(_:visibilityGrant:)` ([`HarnessToolProviderSeam`](HarnessToolProviderSeam.swift)); default grant is `.inheritModeLists`. MCP registration via `setMCPManager(_:visibilityGrant:)` also defaults to `.inheritModeLists`. Dual opt-in (`.grant(modes: .allOptedIn)` or `.explicit([...])` **plus** profile `allowsHostGrants: true`) means the host may **co-author that mode's allow list** — not that grants are another intersecting scope. Deny/routing still intersect afterward. `.allOptedIn` = profiles that opted into host grants, not every user-facing profile. Example: `PersonalMessagingToolProvider` is registered by the app, not the harness |
 | Gateway allow / deny (hard enforcement) | N/A | `ToolPolicyConfiguration` (host `PromptConfig.json`) + per-conversation `ModelConversation.disabledToolNames` + send flags via [`DefaultToolSystemGateway`](ToolSystemGateway.swift) |
 | Skill gates | N/A | [`ModeProfileSkillsSlice`](../ConversationManager/InteractionModes/ResolvedModeProfile.swift) + `SkillPolicySkillsToolProvider` |
 | Runtime result shaping (middleware seam) | Raw `ToolResult` from provider | [`TransformingToolProvider`](TransformingToolProvider.swift) wrapping each provider; host-supplied deterministic middleware mounted via `OrchestratorRuntimeService.registerAgentToolResultMiddleware(_:)` (no LLM call on this seam) |
@@ -73,7 +73,7 @@ At boot, the host app typically:
 
 ## Gateway vs prompt-only guidance
 
-- **Gateway (enforced):** `ToolPolicyConfiguration` allowlists in **PromptConfig.json**; per-conversation **disabled** tool names; **send** options (`enableTools`, `enableAgents` for A2A tool names). The model cannot “talk its way” into a blocked tool if it is not in the filtered set passed to the orchestrator.
+- **Gateway (enforced):** `ToolPolicyConfiguration` allowlists in **PromptConfig.json**; per-conversation **disabled** tool names; **send** options (`enableTools`, `enableAgents` for A2A tool names); registration-time **`ToolVisibilityGrant`** (defaults `.inheritModeLists`; dual opt-in `.grant` + `allowsHostGrants: true` = host co-authors that mode's allow list — **not** a separate intersecting scope; deny/routing still intersect afterward; machine profiles never opt in). Mode allow lists may also use MCP name globs / group aliases such as `"mcp__<server>__*"` or `group:mcp`. The model cannot “talk its way” into a blocked tool if it is not in the filtered set passed to the orchestrator.
 - **Prompt-only:** system prompt / skills text that *discourages* tool use is **not** a substitute for the allowlist; both layers are recommended (harness: prompt injection does not defeat Gateway policy).
 
 ## Halting-tool contract
@@ -82,6 +82,15 @@ At boot, the host app typically:
 - Canonical halting tools are `finish`, `ask_user`, `exit_plan_mode`, and `declare_agent_build_complete`.
 - `think` is intentionally non-halting (`haltsLoop == false`) and is used as a continuation/no-op tool for required-tool-choice rounds.
 - `ask_user` returns a structured prompt payload (`question`, `options`, `allowMultiple`, optional `defaultOptionID`) in `ToolResult.metadata.askUser` for UI/API consumers.
+
+## Sensitive write scanning
+
+[`WorkspaceFilesystemToolProvider`](WorkspaceFilesystemToolProvider.swift) and sub-agent ACP `writeTextFile` scan **post-edit content** before persisting when the resolved path is inside either:
+
+- the session **memory directory** (agent-written memory), or
+- the configured **skills directory** (`settings.skillsFolderPath`, resolved via [`SkillsDirectoryResolver`](../Common/SkillsDirectoryResolver.swift) against the workspace root).
+
+Rules come from [`ProjectInstructionContentScanner`](../Memory/ProjectInstructionContentScanner.swift) (instruction injection, exfiltration shapes, invisible unicode) — the same trust profile for both surfaces. Writes elsewhere in the workspace are not scanned. The skill workshop apply path uses a broader scanner on proposals ([`../SkillWorkshop/README.md`](../SkillWorkshop/README.md)).
 
 ## Approval and elevated lifecycle
 

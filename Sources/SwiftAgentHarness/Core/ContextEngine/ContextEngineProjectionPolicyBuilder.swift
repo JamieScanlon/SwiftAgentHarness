@@ -63,22 +63,38 @@ enum ContextEngineProjectionPolicyBuilder {
             logger: deps.logger
         )
         let routingNames = ConversationRoutingPolicyNames.names(for: conversation)
+        var providerContribution: SystemPromptContribution?
+        var providerEligibility: ProviderCacheTTLEligibility = .none
+        if let entry = await deps.registryEntryProvider?(conversation.model.id),
+           let binding = entry.primaryBinding {
+            providerEligibility = ProviderRuntimeHooks.cacheTtlEligibility(binding: binding)
+            if let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+                providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+            }
+        }
         let promptPolicy = ContextEngineSystemPromptAssemblyPolicyInput(
             resolvedModeProfile: resolvedProfile,
             strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            includeAgentSkills: resolvedProfile.context.includeSkills ?? SystemPrompt.loadIncludeAgentSkillsFromConfig(),
-            includeDateTime: SystemPrompt.loadIncludeCurrentDateTimeFromConfig(),
+            includeAgentSkills: resolvedProfile.context.includeSkills ?? deps.configurationSet.promptAssembly.includeAgentSkills,
+            includeDateTime: deps.configurationSet.promptAssembly.includeCurrentDateTime,
             toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
             routingPolicyTools: routingNames.tools,
-            routingPolicySkills: routingNames.skills
+            routingPolicySkills: routingNames.skills,
+            providerContribution: providerContribution
         )
         let compactionCfg = deps.conversationTransformConfiguration.contextCompaction
+        let contextPruningPolicy = ContextPruningPolicyResolver.resolve(
+            config: compactionCfg,
+            providerEligibility: providerEligibility
+        )
         var transcriptEntries: [SessionTranscriptEntry]?
         if compactionCfg.useSessionTreeProjection,
            let entries = try? await deps.persistenceDomain.sessionTreeTranscriptEntries(conversationID: conversation.id),
            !entries.isEmpty {
             transcriptEntries = entries
         }
+        let harness = await deps.persistenceDomain.harnessSessionPersistence
+        let blobReader = AttachmentBlobReading.harness(harness, conversationID: conversation.id)
         return ContextEngineProjectionPolicyInput(
             requestInputTrustRaw: trustRaw,
             safeDefaultTrustClass: deps.trustPolicyConfiguration.safeDefaultClass,
@@ -88,8 +104,10 @@ enum ContextEngineProjectionPolicyBuilder {
             modelSupportsVision: conversation.model.capabilities.contains(.vision),
             systemPromptAssemblyPolicy: promptPolicy,
             attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(),
+            attachmentBlobReader: blobReader,
             useSessionTreeProjection: compactionCfg.useSessionTreeProjection,
-            sessionTranscriptEntries: transcriptEntries
+            sessionTranscriptEntries: transcriptEntries,
+            contextPruningPolicy: contextPruningPolicy
         )
     }
 

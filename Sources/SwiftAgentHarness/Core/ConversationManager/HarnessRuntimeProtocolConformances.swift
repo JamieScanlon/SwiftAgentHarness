@@ -23,6 +23,10 @@ extension ContextProjectionService: ContextProjectionTransformServicing {
             gatingOverride: gatingOverride
         )
     }
+
+    func cachedProjectedMemorySelectionKeys(conversationID: UUID) async -> Set<String> {
+        projectedMemorySelectionKeysSnapshot(conversationID: conversationID)
+    }
 }
 
 extension SlashCommandDispatchService: SlashCommandRuntimeDispatching {

@@ -3,7 +3,7 @@ import Logging
 
 /// Which derived checkpoints to persist after **`ContextEngine`** **`assemble`** / **`compact`**.
 enum ContextAssemblyDerivedCheckpointScope: Sendable {
-    /// Orchestrator **`assemble`** path: memory injection + pre-flush (when transform produced output), system prompt assembly, attachment projection, compaction.
+    /// Orchestrator **`assemble`** path: memory injection + pre-flush (when transform or flush-only produced output), system prompt assembly, attachment projection, compaction.
     case orchestratorAssemble
     /// **`compact`** / manual compaction: memory injection, pre-flush, compaction only (matches historical **`performManualCompaction`**).
     case manualCompaction
@@ -14,6 +14,10 @@ struct ContextAssemblyPersistenceSideEffects: Sendable {
     let persistedCompactionCheckpoint: Bool
     /// When non-nil, caller should merge into **`lastAttachmentProjectionByConversationID`** (orchestrator path).
     let attachmentProjectionArtifactForCache: ContextEngineAttachmentProjectionArtifact?
+    /// When non-nil, caller should merge into **`lastSystemPromptAssemblyByConversationID`** (orchestrator path).
+    let systemPromptAssemblyArtifactForCache: ContextEngineSystemPromptAssemblyArtifact?
+    /// Tier-2 projected memory file ids for cross-tier dedupe (MI3).
+    let projectedMemorySelectionKeysForCache: [String]?
 }
 
 /// Single place to apply ``ContextCheckpointWriter`` after a ``ContextEngineAssembleResult``.
@@ -25,7 +29,7 @@ enum ContextAssemblyPersistenceApplicator {
         persistence: ConversationPersistenceStack,
         logger: Logger?,
         scope: ContextAssemblyDerivedCheckpointScope,
-        /// When false, skips memory injection + pre-compaction flush rows (orchestrator passthrough / no transform output).
+        /// When false, skips memory injection + pre-compaction flush rows (orchestrator passthrough with no flush).
         persistMemoryAndFlushCheckpoints: Bool
     ) -> ContextAssemblyPersistenceSideEffects {
         switch scope {
@@ -69,7 +73,15 @@ enum ContextAssemblyPersistenceApplicator {
                 persistence: persistence,
                 logger: logger
             )
+            ContextCheckpointWriter.persistAttachmentDigestCheckpointsIfNeeded(
+                spec: result.attachmentDigestCheckpoints,
+                events: assembleRequest.events,
+                frontierEventID: assembleRequest.eventLogFrontier,
+                persistence: persistence,
+                logger: logger
+            )
             let attachmentCache = result.projectionArtifact?.attachmentProjection
+            let systemPromptCache = result.projectionArtifact?.systemPromptAssembly
             let persistedCompaction = ContextCheckpointWriter.persistCompactionCheckpointIfNeeded(
                 spec: result.checkpointPersistence,
                 persistence: persistence,
@@ -77,7 +89,11 @@ enum ContextAssemblyPersistenceApplicator {
             )
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
-                attachmentProjectionArtifactForCache: attachmentCache
+                attachmentProjectionArtifactForCache: attachmentCache,
+                systemPromptAssemblyArtifactForCache: systemPromptCache,
+                projectedMemorySelectionKeysForCache: result.projectedMemorySelectionKeys.isEmpty
+                    ? nil
+                    : result.projectedMemorySelectionKeys
             )
 
         case .manualCompaction:
@@ -113,7 +129,9 @@ enum ContextAssemblyPersistenceApplicator {
             )
             return ContextAssemblyPersistenceSideEffects(
                 persistedCompactionCheckpoint: persistedCompaction,
-                attachmentProjectionArtifactForCache: nil
+                attachmentProjectionArtifactForCache: nil,
+                systemPromptAssemblyArtifactForCache: nil,
+                projectedMemorySelectionKeysForCache: nil
             )
         }
     }

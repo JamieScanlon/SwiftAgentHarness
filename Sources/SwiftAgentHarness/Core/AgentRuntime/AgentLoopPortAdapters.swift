@@ -52,6 +52,7 @@ struct SessionRuntimeContextPort: RuntimeContextPort {
         CompactionHint,
         AgentRuntimeTurnConfiguration
     ) async throws -> [Message]
+    let projectedMemorySelectionKeysFn: @Sendable (UUID) async -> Set<String>
     let afterTurnFn: @Sendable (UUID, UUID?, ConversationRunTerminalReason?) async -> Void
 
     func bootstrap(conversationID: UUID, runID: UUID?) async {
@@ -70,8 +71,33 @@ struct SessionRuntimeContextPort: RuntimeContextPort {
         return try await assembleFn(conversationID, phase, ephemeralTail, compaction, configuration)
     }
 
+    func projectedMemorySelectionKeys(conversationID: UUID) async -> Set<String> {
+        await projectedMemorySelectionKeysFn(conversationID)
+    }
+
     func afterTurn(conversationID: UUID, runID: UUID?, terminal: ConversationRunTerminalReason?) async {
         await afterTurnFn(conversationID, runID, terminal)
+    }
+}
+
+extension SessionRuntimeContextPort {
+    init(
+        bootstrapFn: @escaping @Sendable (UUID, UUID?) async -> Void,
+        assembleFn: @escaping @Sendable (
+            UUID,
+            ContextTransformInvocationPhase,
+            [Message],
+            CompactionHint,
+            AgentRuntimeTurnConfiguration
+        ) async throws -> [Message],
+        afterTurnFn: @escaping @Sendable (UUID, UUID?, ConversationRunTerminalReason?) async -> Void
+    ) {
+        self.init(
+            bootstrapFn: bootstrapFn,
+            assembleFn: assembleFn,
+            projectedMemorySelectionKeysFn: { _ in [] },
+            afterTurnFn: afterTurnFn
+        )
     }
 }
 
@@ -324,15 +350,40 @@ struct SessionRuntimeConversationPort: RuntimeConversationPort {
 }
 
 struct SessionRuntimeMemoryPort: RuntimeMemoryPort {
-    let recallFn: @Sendable (UUID, String) async -> String?
-    let prefetchFn: @Sendable (UUID, String) async -> Void
+    let recallFn: @Sendable (UUID, [Message], UUID?, Bool, Set<String>) async -> ActiveMemoryRecallOutcome
+    let prefetchFn: @Sendable (UUID, [Message], UUID?, Bool) async -> Void
 
-    func blockingRecallSummary(conversationID: UUID, userQuery: String) async -> String? {
-        await recallFn(conversationID, userQuery)
+    func blockingRecallSummary(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool,
+        excludedSelectionKeys: Set<String>
+    ) async -> ActiveMemoryRecallOutcome {
+        await recallFn(conversationID, messages, anchorUserMessageID, sessionEnabled, excludedSelectionKeys)
     }
 
-    func prefetchRecall(conversationID: UUID, userQuery: String) async {
-        await prefetchFn(conversationID, userQuery)
+    func prefetchRecall(
+        conversationID: UUID,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool
+    ) async {
+        await prefetchFn(conversationID, messages, anchorUserMessageID, sessionEnabled)
+    }
+}
+
+extension SessionRuntimeMemoryPort {
+    init(
+        recallFn: @escaping @Sendable (UUID, [Message], UUID?, Bool) async -> ActiveMemoryRecallOutcome,
+        prefetchFn: @escaping @Sendable (UUID, [Message], UUID?, Bool) async -> Void
+    ) {
+        self.init(
+            recallFn: { conversationID, messages, anchorUserMessageID, sessionEnabled, _ in
+                await recallFn(conversationID, messages, anchorUserMessageID, sessionEnabled)
+            },
+            prefetchFn: prefetchFn
+        )
     }
 }
 

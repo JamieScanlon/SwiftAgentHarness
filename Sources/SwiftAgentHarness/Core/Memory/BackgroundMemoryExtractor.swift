@@ -105,9 +105,12 @@ Turn 1 — issue all Read calls in parallel for every file you might update; tur
 Existing memory manifest:
 \(manifestLines.joined(separator: "\n"))
 
-File tools are scoped to the memory directory. Use bare filenames only (e.g. `MEMORY.md`, `notes.md`). Do not attempt to read project or source files referenced in the transcript — they are not accessible.
+File tools are scoped to project and user memory directories. Use bare filenames for project-tier files (e.g. today's `YYYY-MM-DD.md`, typed topic files, `MEMORY.md`). Prefix `user/` for user-tier files (e.g. `user/MEMORY.md`, `user/preferences.md`). Do not attempt to read project or source files referenced in the transcript — they are not accessible.
 When no memory files exist yet (blank manifest above), create them using write_file rather than reading first.
 
+\(MemoryTypeTaxonomy.dailyCapturePrompt)
+\(MemoryTypeTaxonomy.userTierWriteRoutingPrompt)
+\(MemoryTypeTaxonomy.declarativeVsProceduralRoutingPrompt)
 \(MemoryTypeTaxonomy.whatNotToSavePrompt)
 \(MemoryTypeTaxonomy.indexUsagePrompt)
 """
@@ -129,22 +132,21 @@ When no memory files exist yet (blank manifest above), create them using write_f
 }
 
 enum MemoryPreCompactionFlushPrompts {
-    static func systemPrompt(manifestLines: [String], teamMemoryEnabled: Bool = false) -> String {
-        var prompt = MemoryExtractionPrompts.systemPrompt(
+    static func systemPrompt(
+        manifestLines: [String],
+        customBody: String? = nil,
+        teamMemoryEnabled: Bool = false
+    ) -> String {
+        MemoryPreCompactionFlushPromptComposer.systemPrompt(
             manifestLines: manifestLines,
+            customBody: customBody,
             teamMemoryEnabled: teamMemoryEnabled
         )
-        prompt += """
-
-URGENT: Context compaction is about to summarize away conversation history.
-Save anything durable from the messages below to memory files NOW before it is lost.
-"""
-        return prompt
     }
 
     static func userPrompt(middleTranscript: String) -> String {
         """
-The following conversation messages will be summarized away. Persist any durable cross-session facts to memory files now:
+The following conversation messages will be summarized away. Persist durable cross-session facts to curated typed topic files (and append index lines to MEMORY.md when needed):
 
 \(middleTranscript)
 """

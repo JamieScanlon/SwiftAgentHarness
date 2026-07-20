@@ -42,13 +42,8 @@ public struct TrustPolicyConfiguration: Sendable {
         }
     }
 
-    public static func loadFromPromptConfigBundle(logger: Logger? = nil) -> TrustPolicyConfiguration {
-        guard let data = PromptConfigBundleResource.data() else {
-            return .disabled
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let block = json["trustPolicy"] as? [String: Any]
-        else {
+    public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> TrustPolicyConfiguration {
+        guard let block = document.foundationObject(forKey: "trustPolicy") else {
             return .disabled
         }
 
@@ -66,6 +61,8 @@ public struct TrustPolicyConfiguration: Sendable {
         }
         return TrustPolicyConfiguration(mode: mode, safeDefaultClass: safeDefaultClass)
     }
+
+    @available(*, deprecated, message: "Pass HarnessConfigurationSet or load(from: PromptConfigDocument)")
 
     public func applyingOverrides(
         modeRawOverride: String?,

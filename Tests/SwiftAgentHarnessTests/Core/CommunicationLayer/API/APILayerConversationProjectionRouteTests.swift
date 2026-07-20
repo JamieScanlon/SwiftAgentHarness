@@ -80,6 +80,7 @@ struct APILayerConversationProjectionRouteTests {
                 schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                 basedOnEventID: 0,
                 assemblyFingerprint: "sys-fp",
+                replaySpecDigest: "replay-digest",
                 createdAt: Date()
             ),
             expectedDerivedSequence: nil
@@ -140,6 +141,7 @@ struct APILayerConversationProjectionRouteTests {
                 schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                 basedOnEventID: 0,
                 assemblyFingerprint: "etag-fp",
+                replaySpecDigest: "replay-digest",
                 createdAt: Date()
             ),
             expectedDerivedSequence: nil

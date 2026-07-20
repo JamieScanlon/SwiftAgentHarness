@@ -6,13 +6,17 @@ public struct RuntimeLaneConfiguration: Sendable, Equatable {
     public var globalSubagentLaneLimit: Int
     public var globalCronLaneLimit: Int
     public var maxChildrenPerAgent: Int
+    public var perOwnerSubagentLaneLimit: Int?
+    public var perOwnerSubagentFanoutLimit: Int?
 
     public static let `default` = RuntimeLaneConfiguration(
         sessionMaxConcurrentRuns: 1,
         globalMainLaneLimit: 4,
         globalSubagentLaneLimit: 8,
         globalCronLaneLimit: 2,
-        maxChildrenPerAgent: 5
+        maxChildrenPerAgent: 5,
+        perOwnerSubagentLaneLimit: nil,
+        perOwnerSubagentFanoutLimit: nil
     )
 
     public init(
@@ -20,13 +24,29 @@ public struct RuntimeLaneConfiguration: Sendable, Equatable {
         globalMainLaneLimit: Int = 4,
         globalSubagentLaneLimit: Int = 8,
         globalCronLaneLimit: Int = 2,
-        maxChildrenPerAgent: Int = 5
+        maxChildrenPerAgent: Int = 5,
+        perOwnerSubagentLaneLimit: Int? = nil,
+        perOwnerSubagentFanoutLimit: Int? = nil
     ) {
         self.sessionMaxConcurrentRuns = max(1, sessionMaxConcurrentRuns)
         self.globalMainLaneLimit = max(1, globalMainLaneLimit)
         self.globalSubagentLaneLimit = max(1, globalSubagentLaneLimit)
         self.globalCronLaneLimit = max(1, globalCronLaneLimit)
         self.maxChildrenPerAgent = min(20, max(1, maxChildrenPerAgent))
+        self.perOwnerSubagentLaneLimit = perOwnerSubagentLaneLimit.map { max(1, $0) }
+        self.perOwnerSubagentFanoutLimit = perOwnerSubagentFanoutLimit.map { max(1, $0) }
+    }
+
+    public func applyingStrictTenancyDefaults(tenancyPolicy: TenancyPolicySettings) -> RuntimeLaneConfiguration {
+        guard tenancyPolicy.requireAuthenticatedOwnerOnMutations else { return self }
+        var resolved = self
+        if resolved.perOwnerSubagentLaneLimit == nil {
+            resolved.perOwnerSubagentLaneLimit = max(1, globalSubagentLaneLimit / 2)
+        }
+        if resolved.perOwnerSubagentFanoutLimit == nil {
+            resolved.perOwnerSubagentFanoutLimit = maxChildrenPerAgent * 2
+        }
+        return resolved
     }
 }
 
@@ -36,6 +56,8 @@ enum RuntimeLaneAdmissionError: Error, Sendable, Equatable {
     case globalSubagentLaneAtCapacity(limit: Int)
     case globalCronLaneAtCapacity(limit: Int)
     case parentFanoutExceeded(limit: Int)
+    case perOwnerSubagentLaneAtCapacity(limit: Int)
+    case perOwnerSubagentFanoutExceeded(limit: Int)
 }
 
 actor RuntimeLaneCoordinator {
@@ -49,6 +71,8 @@ actor RuntimeLaneCoordinator {
     private var admissionContextByRunID: [UUID: RunLaneAdmissionContext] = [:]
     private var childRunParentIdentityByRunID: [UUID: String] = [:]
     private var childRunCountByParentIdentity: [String: Int] = [:]
+    private var activeSubagentRunIDsByOwnerScope: [String: Set<UUID>] = [:]
+    private var childRunCountByOwnerScope: [String: Int] = [:]
 
     init(configuration: RuntimeLaneConfiguration = .default) {
         self.configuration = configuration
@@ -70,6 +94,10 @@ actor RuntimeLaneCoordinator {
         return nil
     }
 
+    func isRunAdmitted(runID: UUID) -> Bool {
+        admissionContextByRunID[runID] != nil
+    }
+
     func release(runID: UUID) {
         guard let context = admissionContextByRunID.removeValue(forKey: runID) else { return }
         release(context)
@@ -84,6 +112,7 @@ actor RuntimeLaneCoordinator {
         admissionContextByRunID.removeValue(forKey: context.runID)
         if context.globalLane == .subagent {
             releaseSubagentFanoutTracking(runID: context.runID)
+            releasePerOwnerSubagentLimits(context)
         } else {
             childRunCountByParentIdentity.removeValue(forKey: context.runID.uuidString.lowercased())
         }
@@ -117,6 +146,7 @@ actor RuntimeLaneCoordinator {
     func tryAcquireSubagentRun(
         parentRunID: UUID?,
         parentConversationID: UUID? = nil,
+        ownerAccountID: UUID? = nil,
         runID: UUID,
         sessionKey: String = "subagent:anonymous"
     ) -> RuntimeLaneAdmissionError? {
@@ -126,7 +156,8 @@ actor RuntimeLaneCoordinator {
                 runID: runID,
                 origin: .subagentSpawn,
                 parentRunID: parentRunID,
-                parentConversationID: parentConversationID
+                parentConversationID: parentConversationID,
+                ownerAccountID: ownerAccountID
             )
         )
         return tryAcquire(context)
@@ -144,6 +175,9 @@ actor RuntimeLaneCoordinator {
                 return .globalMainLaneAtCapacity(limit: configuration.globalMainLaneLimit)
             }
         case .subagent:
+            if let ownerError = tryAcquirePerOwnerSubagentLimits(context) {
+                return ownerError
+            }
             let count = activeRunIDsByGlobalLane[.subagent, default: []].count
             if count >= configuration.globalSubagentLaneLimit {
                 return .globalSubagentLaneAtCapacity(limit: configuration.globalSubagentLaneLimit)
@@ -151,6 +185,7 @@ actor RuntimeLaneCoordinator {
             if let fanoutError = tryAcquireSubagentFanout(context) {
                 return fanoutError
             }
+            commitPerOwnerSubagentLimits(context)
         case .cron:
             let count = activeRunIDsByGlobalLane[.cron, default: []].count
             if count >= configuration.globalCronLaneLimit {
@@ -158,6 +193,61 @@ actor RuntimeLaneCoordinator {
             }
         }
         return nil
+    }
+
+    private func tryAcquirePerOwnerSubagentLimits(_ context: RunLaneAdmissionContext) -> RuntimeLaneAdmissionError? {
+        guard let ownerScopeKey = ownerScopeKey(for: context.ownerAccountID), !ownerScopeKey.isEmpty else {
+            if configuration.perOwnerSubagentLaneLimit != nil || configuration.perOwnerSubagentFanoutLimit != nil {
+                return .perOwnerSubagentLaneAtCapacity(limit: configuration.perOwnerSubagentLaneLimit ?? 0)
+            }
+            return nil
+        }
+        if let laneLimit = configuration.perOwnerSubagentLaneLimit {
+            let ownerCount = activeSubagentRunIDsByOwnerScope[ownerScopeKey, default: []].count
+            if ownerCount >= laneLimit {
+                return .perOwnerSubagentLaneAtCapacity(limit: laneLimit)
+            }
+        }
+        if let fanoutLimit = configuration.perOwnerSubagentFanoutLimit {
+            let fanoutCount = childRunCountByOwnerScope[ownerScopeKey, default: 0]
+            if fanoutCount >= fanoutLimit {
+                return .perOwnerSubagentFanoutExceeded(limit: fanoutLimit)
+            }
+        }
+        return nil
+    }
+
+    private func commitPerOwnerSubagentLimits(_ context: RunLaneAdmissionContext) {
+        guard let ownerScopeKey = ownerScopeKey(for: context.ownerAccountID), !ownerScopeKey.isEmpty else {
+            return
+        }
+        activeSubagentRunIDsByOwnerScope[ownerScopeKey, default: []].insert(context.runID)
+        childRunCountByOwnerScope[ownerScopeKey] = childRunCountByOwnerScope[ownerScopeKey, default: 0] + 1
+    }
+
+    private func releasePerOwnerSubagentLimits(_ context: RunLaneAdmissionContext) {
+        guard let ownerScopeKey = ownerScopeKey(for: context.ownerAccountID), !ownerScopeKey.isEmpty else {
+            return
+        }
+        if var runs = activeSubagentRunIDsByOwnerScope[ownerScopeKey] {
+            runs.remove(context.runID)
+            if runs.isEmpty {
+                activeSubagentRunIDsByOwnerScope.removeValue(forKey: ownerScopeKey)
+            } else {
+                activeSubagentRunIDsByOwnerScope[ownerScopeKey] = runs
+            }
+        }
+        let fanoutCount = childRunCountByOwnerScope[ownerScopeKey, default: 0]
+        if fanoutCount <= 1 {
+            childRunCountByOwnerScope.removeValue(forKey: ownerScopeKey)
+        } else {
+            childRunCountByOwnerScope[ownerScopeKey] = fanoutCount - 1
+        }
+    }
+
+    private func ownerScopeKey(for ownerAccountID: UUID?) -> String? {
+        guard let ownerAccountID else { return nil }
+        return AgentMemoryPathResolver.ownerSegment(ownerAccountID)
     }
 
     private func tryAcquireSubagentFanout(_ context: RunLaneAdmissionContext) -> RuntimeLaneAdmissionError? {

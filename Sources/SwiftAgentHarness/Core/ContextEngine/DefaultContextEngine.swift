@@ -10,6 +10,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     public let memoryService: DefaultMemoryService?
     private let preCompactionMemoryFlushRunner: any PreCompactionMemoryFlushRunning
     private let reinjectionSkillProvider: any CompactionReinjectionSkillProviding
+    private let reinjectionInstructionProvider: any CompactionReinjectionInstructionProviding
+    private let systemPromptAssemblyRenderer: (any SystemPromptAssemblyRendering)?
     private let logger: Logger?
 
     public init(
@@ -20,8 +22,10 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         self.init(
             compactionCoordinator: compactionCoordinator,
             memoryService: memoryService,
+            systemPromptAssemblyRenderer: nil,
             preCompactionMemoryFlushRunner: nil,
             reinjectionSkillProvider: nil,
+            reinjectionInstructionProvider: nil,
             logger: logger
         )
     }
@@ -29,12 +33,15 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     init(
         compactionCoordinator: CompactionConcurrencyCoordinator? = nil,
         memoryService: DefaultMemoryService? = nil,
+        systemPromptAssemblyRenderer: (any SystemPromptAssemblyRendering)? = nil,
         preCompactionMemoryFlushRunner: (any PreCompactionMemoryFlushRunning)? = nil,
         reinjectionSkillProvider: (any CompactionReinjectionSkillProviding)? = nil,
+        reinjectionInstructionProvider: (any CompactionReinjectionInstructionProviding)? = nil,
         logger: Logger? = nil
     ) {
         self.compactionCoordinator = compactionCoordinator
         self.memoryService = memoryService
+        self.systemPromptAssemblyRenderer = systemPromptAssemblyRenderer
         if let preCompactionMemoryFlushRunner {
             self.preCompactionMemoryFlushRunner = preCompactionMemoryFlushRunner
         } else if let memoryService {
@@ -44,6 +51,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         }
         self.reinjectionSkillProvider = reinjectionSkillProvider
             ?? DefaultCompactionReinjectionSkillProvider(logger: logger)
+        self.reinjectionInstructionProvider = reinjectionInstructionProvider
+            ?? DefaultCompactionReinjectionInstructionProvider()
         self.logger = logger
     }
 
@@ -69,7 +78,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextEngineAssembleRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextEngineAssembleResult {
-        await ensureMemoryBootstrapped(conversation: request.conversation)
+        await ensureMemoryBootstrapped(conversation: request.conversation, policy: request.workspacePolicy)
         let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
         let modeSwitches = ContextSystemPromptModeSwitches.build(
             conversation: request.conversation,
@@ -81,26 +90,14 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     assemblyKind: request.conversation.interactionMode.harnessAssemblyKind
                 )
         )
-        let messagesWithMemory = await injectingMemoryLayerMessages(
-            into: request.messages,
-            conversation: request.conversation,
-            phase: request.phase,
-            modeMemoryInjection: modeSwitches.memoryInjectionMode,
-            resolvedProfile: request.projectionPolicy?.systemPromptAssemblyPolicy?.resolvedModeProfile
-        )
-        let memorySnapshot = memoryStoreVersion > 0 ? ContextMemoryInjectionSnapshotSpec(
-            conversationID: request.conversation.id,
-            phase: request.phase,
-            memoryStoreVersion: memoryStoreVersion,
-            memoryStoreNamespaceKey: request.conversation.id.uuidString,
-            injectedMemoryEntryIDs: [Self.snapshotEntryID(generation: memoryStoreVersion)]
-        ) : nil
+        let messagesForAssembly = request.messages
+        var memorySnapshot: ContextMemoryInjectionSnapshotSpec?
         let sessionMemoryNote = sessionMemoryNoteForCompaction(
             memoryStoreVersion: memoryStoreVersion,
             config: request.compactionConfig
         )
         let preparedTurnRequest = ContextEngineAssembleRequest(
-            messages: messagesWithMemory,
+            messages: messagesForAssembly,
             conversation: request.conversation,
             phase: request.phase,
             gatingOverride: request.gatingOverride,
@@ -112,7 +109,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             lastPromptTokens: request.lastPromptTokens,
             events: request.events,
             eventLogFrontier: request.eventLogFrontier,
-            lastLLMDateByConversationID: request.lastLLMDateByConversationID,
+            lastModelRequestAtByConversationID: request.lastModelRequestAtByConversationID,
+            lastCompactionLLMDateByConversationID: request.lastCompactionLLMDateByConversationID,
             persistCompactionCheckpoint: request.persistCompactionCheckpoint,
             allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
             compactionLockAlreadyHeldByCaller: request.compactionLockAlreadyHeldByCaller,
@@ -120,11 +118,51 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             projectionPolicy: request.projectionPolicy,
             preCompactionMemoryFlushPolicy: request.preCompactionMemoryFlushPolicy,
             sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction ?? sessionMemoryNote,
-            preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec
+            preCompactionMemoryFlushSpec: request.preCompactionMemoryFlushSpec,
+            workspacePolicy: request.workspacePolicy
         )
         let result = await executeTurnAssembly(request: preparedTurnRequest, performTransform: performTransform)
+        let ttlPruned = applyCacheTTLPruningIfNeeded(messages: result.messages, request: preparedTurnRequest)
+        if ttlPruned.transformationKind == .cacheEditing {
+            logger?.debug(
+                "[ContextEngine] cache TTL pruning substituted stale tool results conversation=\(request.conversation.id)"
+            )
+        }
+        let selectorConfigFingerprint = await memoryService?.recallSelectorConfigFingerprint() ?? ""
+        let tier2Result = await applyTier2MemoryRecallIfNeeded(
+            into: ttlPruned.messages,
+            conversation: request.conversation,
+            phase: request.phase,
+            modeMemoryInjection: modeSwitches.memoryInjectionMode,
+            resolvedProfile: request.projectionPolicy?.systemPromptAssemblyPolicy?.resolvedModeProfile,
+            compactionConfig: request.compactionConfig,
+            lastContextLimitTokens: request.lastContextLimitTokens,
+            lastPromptTokens: request.lastPromptTokens,
+            memoryStoreVersion: memoryStoreVersion,
+            tier1MemorySectionContent: Self.tier1ContentForCrossTierDedup(
+                memoryTier1: result.projectionArtifact?.systemPromptAssembly?.tier1MemorySectionContent,
+                workspace: result.projectionArtifact?.systemPromptAssembly?.workspaceSectionContent
+            ),
+            rawMessages: request.messages,
+            events: request.events,
+            eventLogFrontier: request.eventLogFrontier,
+            selectorConfigFingerprint: selectorConfigFingerprint
+        )
+        if tier2Result.injected, memoryStoreVersion > 0 {
+            memorySnapshot = ContextMemoryInjectionSnapshotSpec(
+                conversationID: request.conversation.id,
+                phase: request.phase,
+                memoryStoreVersion: memoryStoreVersion,
+                memoryStoreNamespaceKey: request.conversation.id.uuidString,
+                injectedMemoryEntryIDs: [Self.recallEntryID(generation: memoryStoreVersion)],
+                selectedSelectionKeys: tier2Result.selectedSelectionKeys,
+                projectedSelectionKeys: tier2Result.projectedMemorySelectionKeys,
+                selectionContextMessageIDs: request.messages.map(\.id),
+                selectorConfigFingerprint: selectorConfigFingerprint
+            )
+        }
         return ContextEngineAssembleResult(
-            messages: result.messages,
+            messages: tier2Result.messages,
             transformOutput: result.transformOutput,
             checkpointPersistence: result.checkpointPersistence,
             memoryInjectionSnapshot: memorySnapshot,
@@ -133,8 +171,11 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             projectionArtifact: result.projectionArtifact,
             systemPromptCheckpoint: result.systemPromptCheckpoint,
             attachmentProjectionCheckpoint: result.attachmentProjectionCheckpoint,
+            attachmentDigestCheckpoints: result.attachmentDigestCheckpoints,
             preCompactionMemoryFlush: result.preCompactionMemoryFlush,
-            compactionLowSavings: result.compactionLowSavings
+            compactionLowSavings: result.compactionLowSavings,
+            projectedMemorySelectionKeys: tier2Result.projectedMemorySelectionKeys,
+            cacheExpiredHygieneWindow: result.cacheExpiredHygieneWindow
         )
     }
 
@@ -203,11 +244,44 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             conversationID: request.conversationID,
             invalidatedKinds: invalidationKinds
         )
+        let compositionArtifact = promptCompositionArtifact(for: request)
         return ContextEnginePrepareSubagentSpawnResult(
             approvedToolNames: approved,
             handoffArtifact: handoff,
-            checkpointInvalidation: invalidation
+            checkpointInvalidation: invalidation,
+            promptCompositionArtifact: compositionArtifact
         )
+    }
+
+    private func promptCompositionArtifact(
+        for request: ContextEnginePrepareSubagentSpawnRequest
+    ) -> ContextEngineSubagentPromptCompositionArtifact? {
+        guard let mode = request.compositionMode else { return nil }
+        switch mode {
+        case .fork:
+            return ContextEngineSubagentPromptCompositionArtifact(
+                mode: .fork,
+                inheritedAssembledPromptText: nil,
+                inheritedAssembledPromptDigest: nil,
+                inheritedReplaySpecDigest: nil,
+                spawnSectionSuppressions: nil,
+                spawnTaskDirective: nil
+            )
+        case .spawn:
+            let directive = SystemPromptSubagentComposition.spawnTaskDirective(
+                taskDescription: request.taskDescription,
+                prompt: request.spawnPrompt,
+                userSystemPrompt: request.spawnUserSystemPrompt
+            )
+            return ContextEngineSubagentPromptCompositionArtifact(
+                mode: .spawn,
+                inheritedAssembledPromptText: nil,
+                inheritedAssembledPromptDigest: nil,
+                inheritedReplaySpecDigest: nil,
+                spawnSectionSuppressions: SystemPromptSubagentComposition.spawnSectionSuppressions,
+                spawnTaskDirective: directive
+            )
+        }
     }
 
     public func onSubagentEnded(
@@ -242,7 +316,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
     public func projectedContextBudget(
         request: ContextEngineProjectedContextBudgetRequest
     ) async -> ConversationContextBudget? {
-        let projected = applyProjectionPolicy(
+        let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
             policy: request.projectionPolicy
@@ -256,7 +330,7 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             charactersPerToken: request.compactionConfig.charactersPerToken
         )
         let remaining = max(0, contextLimit - promptTokens)
-        let cachePolicy = ContextCompactionPolicy.resolvedCachePolicy(config: request.compactionConfig)
+        let cachePolicy = ContextPruningPolicyResolver.resolve(config: request.compactionConfig)
         let focusQuery = request.compactionConfig.focusedCompactionQuery
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let strategy = ContextCompactionPolicy.resolvedStrategy(
@@ -268,8 +342,8 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             contextLimitTokens: contextLimit,
             promptTokens: promptTokens,
             remainingTokens: remaining,
-            cacheStablePrefixMessageCount: cachePolicy.enabled ? cachePolicy.stablePrefixMessageCount : nil,
-            cachePruningTTLSeconds: cachePolicy.ttlSeconds.map { Double($0) },
+            cacheStablePrefixMessageCount: nil,
+            cachePruningTTLSeconds: cachePolicy.ttlSeconds,
             compactionStrategy: strategy.rawValue
         )
     }
@@ -278,26 +352,64 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         request: ContextTurnAssemblyRequest,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput
     ) async -> ContextTurnAssemblyResult {
-        let projected = applyProjectionPolicy(
+        let cacheExpiredHygieneWindow = resolveCacheExpiredHygieneWindow(request: request)
+        let projected = await applyProjectionPolicy(
             messages: request.messages,
             conversation: request.conversation,
-            policy: request.projectionPolicy
+            policy: request.projectionPolicy,
+            events: request.events,
+            frontierEventID: request.eventLogFrontier
         )
         let policyAdjustedMessages = projected.messages
         let (compactionInjectedPrefix, compactionTranscript) =
             ContextCompactionCheckpointSupport.partitionForCompaction(policyAdjustedMessages)
         let projectionArtifact = projected.artifact
         let promptCheckpoint = projectionArtifact.systemPromptAssembly.map {
-            ContextSystemPromptAssemblyCheckpointPersistenceSpec(
+            let checkpointConfig: (mode: SystemPromptAssemblyCheckpointMode, maxFullTextBytes: Int)
+            if let snapshot = $0.replaySpec?.promptConfigSnapshot {
+                checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load(from: snapshot)
+            } else {
+                checkpointConfig = SystemPromptAssemblyCheckpointConfiguration.load()
+            }
+            let sectionJSON = $0.sectionProvenance.flatMap { map -> String? in
+                let sectionMap = Dictionary(
+                    uniqueKeysWithValues: map.compactMap { key, value -> (SystemPromptSectionName, String)? in
+                        guard let section = SystemPromptSectionName(rawValue: key) else { return nil }
+                        return (section, value)
+                    }
+                )
+                return SystemPromptSectionProvenanceFormatter.encodeSectionProvenanceJSON(sectionMap)
+            }
+            var assembledPrompt: String?
+            if checkpointConfig.mode == .fullText,
+               let text = $0.assembledSystemPromptText,
+               text.utf8.count <= checkpointConfig.maxFullTextBytes {
+                assembledPrompt = text
+            }
+            return ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
-                fingerprint: $0.fingerprint
+                fingerprint: $0.fingerprint,
+                assembledPromptDigest: $0.assembledPromptDigest,
+                replaySpecDigest: $0.replaySpecDigest,
+                assembledPrompt: assembledPrompt,
+                sectionProvenanceJSON: sectionJSON
             )
         }
         let attachmentCheckpoint = projectionArtifact.attachmentProjection.map {
             ContextAttachmentProjectionCheckpointPersistenceSpec(
                 conversationID: request.conversation.id,
                 projectionFingerprint: $0.projectionFingerprint,
-                decisions: $0.decisions
+                decisions: $0.decisions,
+                targetDecisions: $0.targetDecisions,
+                materializedBlocks: $0.materializedBlocks,
+                accessWatermarkTurnIndex: $0.accessWatermarkTurnIndex
+            )
+        }
+        let attachmentDigestCheckpoints = projectionArtifact.attachmentProjection.flatMap { artifact -> ContextAttachmentDigestCheckpointPersistenceSpec? in
+            guard !artifact.newDigestCheckpoints.isEmpty else { return nil }
+            return ContextAttachmentDigestCheckpointPersistenceSpec(
+                conversationID: request.conversation.id,
+                checkpoints: artifact.newDigestCheckpoints
             )
         }
 
@@ -312,7 +424,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
-                preCompactionMemoryFlush: nil
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
+                preCompactionMemoryFlush: nil,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
 
@@ -324,6 +438,18 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             let reinjectableSkills = await reinjectionSkillProvider.reinjectableSkillContent(
                 activatedSkillNames: activatedSkillNames
             )
+            let promptCwd = HarnessWorkspaceResolver.resolveForPromptContext(conversation: request.conversation)
+            let postCompactionInstructionContext: String?
+            if let promptCwd {
+                let gitRoot = GitRootResolver.canonicalGitRoot(for: promptCwd)
+                postCompactionInstructionContext = await reinjectionInstructionProvider.postCompactionInstructionContext(
+                    cwd: promptCwd,
+                    canonicalGitRoot: gitRoot,
+                    config: request.compactionConfig
+                )
+            } else {
+                postCompactionInstructionContext = nil
+            }
             let initial = ContextCompactionInputBuilder.buildInitialPhaseInput(
                 messages: compactionTranscript,
                 conversation: request.conversation,
@@ -334,15 +460,23 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 lastPromptTokens: request.lastPromptTokens,
                 events: request.events,
                 eventLogFrontier: request.eventLogFrontier,
-                lastLLMDateByConversationID: request.lastLLMDateByConversationID,
+                lastCompactionLLMDateByConversationID: request.lastCompactionLLMDateByConversationID,
                 gating: request.gatingOverride ?? .production,
                 allowProactiveCompactionTriggers: request.allowProactiveCompactionTriggers,
                 sessionMemoryNoteForCompaction: request.sessionMemoryNoteForCompaction,
                 compactionInjectedPrefix: compactionInjectedPrefix,
-                reinjectableSkills: reinjectableSkills
+                reinjectableSkills: reinjectableSkills,
+                postCompactionInstructionContext: postCompactionInstructionContext,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
             switch initial {
             case .passthrough(let reason):
+                let softFlush = await softFlushOnlyIfEligible(
+                    request: request,
+                    compactionTranscript: compactionTranscript,
+                    compactionInjectedPrefix: compactionInjectedPrefix,
+                    passthroughReason: reason
+                )
                 return ContextTurnAssemblyResult(
                     messages: policyAdjustedMessages,
                     transformOutput: Optional<ContextTransformOutput>.none,
@@ -353,7 +487,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
-                    preCompactionMemoryFlush: nil
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
+                    preCompactionMemoryFlush: softFlush,
+                    cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
             case .transform(let built):
                 input = built
@@ -390,7 +526,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                     projectionArtifact: projectionArtifact,
                     systemPromptCheckpoint: promptCheckpoint,
                     attachmentProjectionCheckpoint: attachmentCheckpoint,
-                    preCompactionMemoryFlush: nil
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
+                    preCompactionMemoryFlush: nil,
+                    cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
                 )
             }
         }
@@ -418,86 +556,189 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 compactionIdentifierPreservationPolicy: input.compactionIdentifierPreservationPolicy,
                 compactionPreviousSummaryText: input.compactionPreviousSummaryText,
                 compactionSessionMemoryNote: input.compactionSessionMemoryNote,
+                compactionProviderPreCompressNotes: input.compactionProviderPreCompressNotes,
                 compactionSplitBaseMessages: input.compactionSplitBaseMessages,
-                compactionInjectedPrefixMessages: input.compactionInjectedPrefixMessages
+                compactionInjectedPrefixMessages: input.compactionInjectedPrefixMessages,
+                compactionReinjectableSkills: input.compactionReinjectableSkills,
+                compactionPostCompactionInstructionContext: input.compactionPostCompactionInstructionContext,
+                compactionProtectedToolNames: input.compactionProtectedToolNames
             )
         } else {
             inputWithManualOverride = input
         }
 
-        var preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
-        if request.preCompactionMemoryFlushPolicy?.enabled == true,
-           request.persistCompactionCheckpoint,
-           case .initial = request.phase,
-           request.enableContextTransform,
-           request.compactionConfig.enabled {
-            let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
-            if memoryStoreVersion > 0 {
-                let modelLimit = request.lastContextLimitTokens
-                    ?? request.conversation.model.maxContextLength
-                    ?? request.compactionConfig.fallbackContextLimitTokens
-                let segments = ContextCompactionCheckpointSupport.splitForCompaction(
-                    compactionTranscript,
-                    config: request.compactionConfig,
-                    modelContextLimitTokens: modelLimit
-                )
-                if segments.lastUserPinSkipped, !segments.middle.isEmpty {
-                    logger?.debug(
-                        "[ContextEngine] last-user pin skipped (outside tail window) conversation=\(request.conversation.id)"
-                    )
-                }
-                let middle = segments.middle
-                if !middle.isEmpty {
-                    let timeoutMs = await memoryService?.preCompactionFlushTimeoutMs() ?? 30_000
-                    let flushContext = PreCompactionMemoryFlushContext(
-                        conversationID: request.conversation.id,
-                        middleMessages: middle,
-                        maxFlushedMemoryEntries: request.preCompactionMemoryFlushPolicy?.maxFlushedMemoryEntries ?? 64,
-                        timeoutMs: timeoutMs
-                    )
-                    let flushResult = await preCompactionMemoryFlushRunner.runSilentFlushIfNeeded(
-                        context: flushContext,
-                        logger: logger
-                    )
-                    if flushResult.succeeded {
-                        preCompactionMemoryFlush = ContextPreCompactionMemoryFlushSpec(
-                            conversationID: request.conversation.id,
-                            phase: request.phase,
-                            memoryStoreVersion: flushResult.memoryStoreVersion,
-                            memoryStoreNamespaceKey: request.conversation.id.uuidString,
-                            flushedMemoryEntryIDs: flushResult.flushedMemoryEntryIDs
-                        )
-                    }
-                }
-            }
-        }
+        let (preCompactionMemoryFlush, novelMiddleForProvider) = await runPreCompactionFlushIfEligible(
+            request: request,
+            compactionTranscript: compactionTranscript,
+            skipIfSoftAlreadyFlushed: false
+        )
+
+        let providerNotes = novelMiddleForProvider.isEmpty
+            ? ""
+            : await memoryService?.collectProviderPreCompressNotes(
+                messages: novelMiddleForProvider.map(\.content)
+            ) ?? ""
+        let inputForTransform = inputWithManualOverride.withCompactionProviderPreCompressNotes(
+            providerNotes.isEmpty ? nil : providerNotes
+        )
 
         if acquiredCompactionLock, let coordinator = compactionCoordinator {
             let conversationID = request.conversation.id
             let result = await runTransformStep(
                 request: request,
                 fallbackMessages: policyAdjustedMessages,
-                input: inputWithManualOverride,
+                input: inputForTransform,
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: promptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 performTransform: performTransform,
-                preCompactionMemoryFlush: preCompactionMemoryFlush
+                preCompactionMemoryFlush: preCompactionMemoryFlush,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
+            if result.checkpointPersistence != nil {
+                await memoryService?.clearPreCompactionFlushCycle(conversationID: conversationID)
+            }
             await coordinator.release(for: conversationID)
             return result
         }
 
-        return await runTransformStep(
+        let result = await runTransformStep(
             request: request,
             fallbackMessages: policyAdjustedMessages,
-            input: inputWithManualOverride,
+            input: inputForTransform,
             projectionArtifact: projectionArtifact,
             systemPromptCheckpoint: promptCheckpoint,
             attachmentProjectionCheckpoint: attachmentCheckpoint,
+            attachmentDigestCheckpoints: attachmentDigestCheckpoints,
             performTransform: performTransform,
-            preCompactionMemoryFlush: preCompactionMemoryFlush
+            preCompactionMemoryFlush: preCompactionMemoryFlush,
+            cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
         )
+        if result.checkpointPersistence != nil {
+            await memoryService?.clearPreCompactionFlushCycle(conversationID: request.conversation.id)
+        }
+        return result
+    }
+
+    /// Soft-threshold flush-only path: when under the hard proactive threshold but above soft,
+    /// await a silent flush and return uncompacted context (no summarizer).
+    private func softFlushOnlyIfEligible(
+        request: ContextTurnAssemblyRequest,
+        compactionTranscript: [Message],
+        compactionInjectedPrefix: [Message],
+        passthroughReason: String
+    ) async -> ContextPreCompactionMemoryFlushSpec? {
+        guard passthroughReason == "context_compaction_noop_under_token_threshold" else { return nil }
+        guard request.preCompactionMemoryFlushPolicy?.enabled == true else { return nil }
+        guard request.persistCompactionCheckpoint else { return nil }
+        guard case .initial = request.phase else { return nil }
+        guard request.enableContextTransform, request.compactionConfig.enabled else { return nil }
+        guard request.allowProactiveCompactionTriggers else { return nil }
+        guard request.compactionConfig.softThresholdTokens > 0 else { return nil }
+
+        let modelLimit = request.lastContextLimitTokens
+            ?? request.conversation.model.maxContextLength
+            ?? request.compactionConfig.fallbackContextLimitTokens
+        let softFires = ContextCompactionPolicy.softProactiveTriggerFires(
+            messages: compactionInjectedPrefix + compactionTranscript,
+            modelContextLimitTokens: modelLimit,
+            lastActualPromptTokens: request.lastPromptTokens,
+            config: request.compactionConfig
+        )
+        guard softFires else { return nil }
+
+        return (await runPreCompactionFlushIfEligible(
+            request: request,
+            compactionTranscript: compactionTranscript,
+            skipIfSoftAlreadyFlushed: true
+        )).0
+    }
+
+    /// Shared silent flush used by soft flush-only and hard flush-then-transform paths.
+    private func runPreCompactionFlushIfEligible(
+        request: ContextTurnAssemblyRequest,
+        compactionTranscript: [Message],
+        skipIfSoftAlreadyFlushed: Bool
+    ) async -> (ContextPreCompactionMemoryFlushSpec?, [Message]) {
+        guard request.preCompactionMemoryFlushPolicy?.enabled == true,
+              request.persistCompactionCheckpoint,
+              case .initial = request.phase,
+              request.enableContextTransform,
+              request.compactionConfig.enabled
+        else { return (nil, []) }
+
+        if skipIfSoftAlreadyFlushed,
+           await memoryService?.hasCompletedSoftPreCompactionFlush(conversationID: request.conversation.id) == true {
+            return (nil, [])
+        }
+
+        let memoryStoreVersion = await memoryService?.currentSnapshotGeneration(conversationID: request.conversation.id) ?? 0
+        guard memoryStoreVersion > 0 else { return (nil, []) }
+
+        let modelLimit = request.lastContextLimitTokens
+            ?? request.conversation.model.maxContextLength
+            ?? request.compactionConfig.fallbackContextLimitTokens
+        let segments = ContextCompactionCheckpointSupport.splitForCompaction(
+            compactionTranscript,
+            config: request.compactionConfig,
+            modelContextLimitTokens: modelLimit
+        )
+        let middle = segments.middle
+        guard !middle.isEmpty else { return (nil, []) }
+
+        let novelMiddle = await memoryService?.filterPreCompactionFlushMiddle(
+            conversationID: request.conversation.id,
+            middle: middle
+        ) ?? middle
+        guard !novelMiddle.isEmpty else {
+            logger?.debug(
+                "[PreCompactionMemoryFlush] skipped: no novel middle messages conversation=\(request.conversation.id)"
+            )
+            return (nil, [])
+        }
+
+        let fingerprint = PreCompactionFlushMiddleFingerprint.of(messages: novelMiddle)
+        if await memoryService?.shouldSkipPreCompactionFlushFingerprint(
+            conversationID: request.conversation.id,
+            fingerprint: fingerprint
+        ) == true {
+            logger?.debug(
+                "[PreCompactionMemoryFlush] skipped: duplicate middle fingerprint conversation=\(request.conversation.id)"
+            )
+            return (nil, [])
+        }
+
+        let timeoutMs = await memoryService?.preCompactionFlushTimeoutMs() ?? 30_000
+        let flushContext = PreCompactionMemoryFlushContext(
+            conversationID: request.conversation.id,
+            middleMessages: novelMiddle,
+            maxFlushedMemoryEntries: request.preCompactionMemoryFlushPolicy?.maxFlushedMemoryEntries ?? 64,
+            timeoutMs: timeoutMs
+        )
+        let flushResult = await preCompactionMemoryFlushRunner.runSilentFlushIfNeeded(
+            context: flushContext,
+            logger: logger
+        )
+        guard flushResult.succeeded else { return (nil, novelMiddle) }
+
+        await memoryService?.recordPreCompactionFlushMiddle(
+            conversationID: request.conversation.id,
+            middle: novelMiddle
+        )
+
+        if skipIfSoftAlreadyFlushed {
+            await memoryService?.markSoftPreCompactionFlushCompleted(conversationID: request.conversation.id)
+        }
+
+        let spec = ContextPreCompactionMemoryFlushSpec(
+            conversationID: request.conversation.id,
+            phase: request.phase,
+            memoryStoreVersion: flushResult.memoryStoreVersion,
+            memoryStoreNamespaceKey: request.conversation.id.uuidString,
+            flushedMemoryEntryIDs: flushResult.flushedMemoryEntryIDs
+        )
+        return (spec, novelMiddle)
     }
 
     private func runTransformStep(
@@ -507,8 +748,10 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
         projectionArtifact: ContextEngineProjectionArtifact,
         systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec?,
         attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec?,
+        attachmentDigestCheckpoints: ContextAttachmentDigestCheckpointPersistenceSpec?,
         performTransform: @Sendable @escaping (ContextTransformInput) async throws -> ContextTransformOutput,
-        preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?
+        preCompactionMemoryFlush: ContextPreCompactionMemoryFlushSpec?,
+        cacheExpiredHygieneWindow: Bool
     ) async -> ContextTurnAssemblyResult {
         do {
             let output = try await performTransform(input)
@@ -588,7 +831,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                                 kind: kind,
                                 config: request.compactionConfig,
                                 strategyRawValue: input.compactionStrategy.rawValue,
-                                cachePolicyFingerprint: cachePolicyFingerprint(for: input.compactionCachePolicy),
+                                cachePolicyFingerprint: contextPruningPolicyFingerprint(
+                                    for: ContextPruningPolicyResolver.resolve(config: request.compactionConfig)
+                                ),
                                 expectedDerivedSequence: request.derivedTailAtProjectionStart,
                                 firstKeptTailMessageID: before.tail.first?.id,
                                 summaryBodyForTranscript: summaryBody,
@@ -618,8 +863,10 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
                 preCompactionMemoryFlush: preCompactionMemoryFlush,
-                compactionLowSavings: compactionLowSavings
+                compactionLowSavings: compactionLowSavings,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         } catch {
             return ContextTurnAssemblyResult(
@@ -632,7 +879,9 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 projectionArtifact: projectionArtifact,
                 systemPromptCheckpoint: systemPromptCheckpoint,
                 attachmentProjectionCheckpoint: attachmentProjectionCheckpoint,
-                preCompactionMemoryFlush: preCompactionMemoryFlush
+                attachmentDigestCheckpoints: attachmentDigestCheckpoints,
+                preCompactionMemoryFlush: preCompactionMemoryFlush,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
     }
@@ -648,83 +897,175 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
 """
     }
 
-    private static func snapshotEntryID(generation: Int) -> UUID {
-        UUID(uuidString: String(format: "00000000-0000-4000-8000-%012x", generation)) ?? UUID()
-    }
-
     private static func recallEntryID(generation: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-9000-%012x", generation)) ?? UUID()
     }
 
-    private func ensureMemoryBootstrapped(conversation: ModelConversation) async {
+    private func ensureMemoryBootstrapped(conversation: ModelConversation, policy: HarnessWorkspacePolicy) async {
         guard let memoryService else { return }
         let generation = await memoryService.currentSnapshotGeneration(conversationID: conversation.id)
         guard generation == 0 else { return }
-        let cwd = conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
+        let cwd: String
+        if let recorded = HarnessWorkspaceResolver.recordedCwd(on: conversation) {
+            cwd = recorded
+        } else if policy.allowAmbientWorkspaceFallback,
+                  let ambient = HarnessWorkspaceResolver.ambientIfKnown() {
+            cwd = ambient
+        } else {
+            return
+        }
         do {
-            let context = try memoryService.makeSessionContext(conversationID: conversation.id, cwd: cwd)
+            let context = try memoryService.makeSessionContext(
+                conversationID: conversation.id,
+                cwd: cwd,
+                ownerAccountID: conversation.ownerAccountID
+            )
             _ = try await memoryService.bootstrapSession(context: context)
         } catch {
             logger?.error("[ContextEngine] memory bootstrap failed conversation=\(conversation.id): \(error)")
         }
     }
 
-    private func injectingMemoryLayerMessages(
+    private struct Tier2RecallApplicationResult: Sendable {
+        let messages: [Message]
+        let injected: Bool
+        let selectedSelectionKeys: [String]
+        let projectedMemorySelectionKeys: [String]
+
+        static func unchanged(_ messages: [Message]) -> Self {
+            Tier2RecallApplicationResult(
+                messages: messages,
+                injected: false,
+                selectedSelectionKeys: [],
+                projectedMemorySelectionKeys: []
+            )
+        }
+    }
+
+    @discardableResult
+    private func applyTier2MemoryRecallIfNeeded(
         into baseMessages: [Message],
         conversation: ModelConversation,
         phase: ContextTransformInvocationPhase,
         modeMemoryInjection: String,
-        resolvedProfile: ResolvedModeProfile?
-    ) async -> [Message] {
+        resolvedProfile: ResolvedModeProfile?,
+        compactionConfig: ContextCompactionConfiguration,
+        lastContextLimitTokens: Int?,
+        lastPromptTokens: Int?,
+        memoryStoreVersion: Int,
+        tier1MemorySectionContent: String?,
+        rawMessages: [Message],
+        events: [CachedConversationEvent],
+        eventLogFrontier: Int,
+        selectorConfigFingerprint: String
+    ) async -> Tier2RecallApplicationResult {
+        guard case .initial = phase else {
+            return .unchanged(baseMessages)
+        }
         switch modeMemoryInjection {
         case "off":
-            return baseMessages
+            return .unchanged(baseMessages)
         case "skills-only":
             let includeSkills = resolvedProfile?.context.includeSkills ?? true
-            guard includeSkills else { return baseMessages }
+            guard includeSkills else {
+                return .unchanged(baseMessages)
+            }
         default:
             break
         }
-        guard let memoryService else { return baseMessages }
-        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
-            return baseMessages
+        guard let memoryService else {
+            return .unchanged(baseMessages)
         }
-        var recalledText = ""
-        if case .initial = phase,
-           let query = latestUserQuery(from: baseMessages),
-           let session = await memoryService.sessionContext(for: conversation.id),
-           let recall = try? await memoryService.recallForTurn(
-               request: MemoryRecallRequest(
-                   session: session,
-                   userQuery: query,
-                   manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id)
-               )
-           ),
-           !recall.recalledBodiesText.isEmpty {
-            recalledText = recall.recalledBodiesText
+        guard let query = latestUserQuery(from: baseMessages),
+              let session = await memoryService.sessionContext(for: conversation.id) else {
+            return .unchanged(baseMessages)
         }
-        let stable = blocks.stableSystemPromptSection
-        guard !stable.isEmpty || !recalledText.isEmpty else { return baseMessages }
-        var injected: [Message] = []
-        if !stable.isEmpty {
-            injected.append(HarnessInjectedMessageMetadata.systemMessage(
-                id: Self.snapshotEntryID(generation: blocks.snapshotGeneration),
-                content: """
-\(HarnessInjectedMessagePrefixes.memoryContext)
-\(stable)
-"""
-            ))
+        let recall: MemoryRecallResult?
+        if let cached = await recallFromInjectionSnapshotIfValid(
+            memoryService: memoryService,
+            session: session,
+            rawMessages: rawMessages,
+            events: events,
+            eventLogFrontier: eventLogFrontier,
+            memoryStoreVersion: memoryStoreVersion,
+            selectorConfigFingerprint: selectorConfigFingerprint
+        ) {
+            recall = cached
+        } else {
+            recall = try? await memoryService.recallForTurn(
+                request: MemoryRecallRequest(
+                    session: session,
+                    userQuery: query,
+                    manifestEntries: await memoryService.manifestEntries(conversationID: conversation.id),
+                    activeToolNames: MemoryRecallSelectionPolicy.activeToolNames(from: baseMessages)
+                )
+            )
         }
-        if !recalledText.isEmpty {
-            injected.append(HarnessInjectedMessageMetadata.systemMessage(
-                id: Self.recallEntryID(generation: blocks.snapshotGeneration),
-                content: """
-\(HarnessInjectedMessagePrefixes.memoryRecall)
-\(recalledText)
-"""
-            ))
+        guard let recall, !recall.hits.isEmpty else {
+            return .unchanged(baseMessages)
         }
-        return injected + baseMessages
+        let selectedKeys = recall.selectedFilenames
+        let alreadyProjected = MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier1Content: tier1MemorySectionContent)
+        let dedupedHits = MemoryCrossTierDedupPolicy.filterTier2Hits(recall.hits, excluding: alreadyProjected)
+        guard !dedupedHits.isEmpty else {
+            return .unchanged(baseMessages)
+        }
+        let modelLimit = lastContextLimitTokens
+            ?? conversation.model.maxContextLength
+            ?? compactionConfig.fallbackContextLimitTokens
+        let recallEntryID = Self.recallEntryID(generation: max(memoryStoreVersion, 1))
+        let budgetedHits = MemoryRecallInjectionPolicy.hitsFittingCompactionGuard(
+            hits: dedupedHits,
+            baseMessages: baseMessages,
+            recallEntryID: recallEntryID,
+            modelLimit: modelLimit,
+            lastPromptTokens: lastPromptTokens,
+            config: compactionConfig
+        )
+        guard let recallMessage = MemoryRecallInjectionPolicy.makeRecallMessage(
+            hits: budgetedHits,
+            entryID: recallEntryID
+        ) else {
+            return .unchanged(baseMessages)
+        }
+        let projectedKeys = Array(MemoryCrossTierDedupPolicy.bodyProjectedSelectionKeys(fromTier2Hits: budgetedHits)).sorted()
+        let withRecall = MemoryRecallInjectionPolicy.insertLateRecall(recallMessage, into: baseMessages)
+        return Tier2RecallApplicationResult(
+            messages: withRecall,
+            injected: true,
+            selectedSelectionKeys: selectedKeys,
+            projectedMemorySelectionKeys: projectedKeys
+        )
+    }
+
+    private func recallFromInjectionSnapshotIfValid(
+        memoryService: DefaultMemoryService,
+        session: MemorySessionContext,
+        rawMessages: [Message],
+        events: [CachedConversationEvent],
+        eventLogFrontier: Int,
+        memoryStoreVersion: Int,
+        selectorConfigFingerprint: String
+    ) async -> MemoryRecallResult? {
+        let rawIDs = rawMessages.map(\.id)
+        guard !selectorConfigFingerprint.isEmpty else { return nil }
+        guard let latest = SuiteCheckpointSupport.latestValidMemoryInjectionSnapshot(
+            events: events,
+            frontierEventID: eventLogFrontier,
+            rawMessageIDs: rawIDs,
+            expectedMemoryStoreVersion: memoryStoreVersion,
+            expectedSelectorConfigFingerprint: selectorConfigFingerprint
+        ) else { return nil }
+        guard MemoryInjectionSnapshotProjectionPolicy.isProjectionCacheHit(
+            wire: latest.wire,
+            currentRawMessageIDs: rawIDs,
+            expectedMemoryStoreVersion: memoryStoreVersion,
+            expectedSelectorConfigFingerprint: selectorConfigFingerprint
+        ) else { return nil }
+        guard let keys = MemoryInjectionSnapshotProjectionPolicy.cachedSelectedSelectionKeys(from: latest.wire) else {
+            return nil
+        }
+        return try? await memoryService.recallHits(selectionKeys: keys, session: session)
     }
 
     private func latestUserQuery(from messages: [Message]) -> String? {
@@ -733,20 +1074,66 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
         return content
     }
 
-    private func cachePolicyFingerprint(for policy: ContextCompactionCachePolicy?) -> String? {
-        guard let policy else { return nil }
+    private func applyCacheTTLPruningIfNeeded(
+        messages: [Message],
+        request: ContextEngineAssembleRequest
+    ) -> (messages: [Message], transformationKind: CacheProjectionTransformationKind) {
+        guard let policy = request.projectionPolicy?.contextPruningPolicy else {
+            return (messages, .cacheNeutral)
+        }
+        return ContextCacheTTLPruning.applyIfNeeded(
+            messages: messages,
+            policy: policy,
+            lastLLMDate: request.lastModelRequestAtByConversationID[request.conversation.id],
+            referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages),
+            toolCallResolutionContext: request.messages
+        )
+    }
+
+    private func resolveCacheExpiredHygieneWindow(request: ContextEngineAssembleRequest) -> Bool {
+        guard request.persistCompactionCheckpoint else { return false }
+        guard let policy = request.projectionPolicy?.contextPruningPolicy,
+              policy.mode == .cacheTTL
+        else { return false }
+        let eligibility: ProviderCacheTTLEligibility = .short
+        guard let threshold = CacheExpiryInference.resolvedThresholdSeconds(
+            config: request.compactionConfig,
+            providerEligibility: eligibility
+        ) else { return false }
+        let referenceInstant = ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages)
+        let lastModelRequestAt = request.lastModelRequestAtByConversationID[request.conversation.id]
+        let expired = CacheExpiryInference.isCacheExpired(
+            lastModelRequestAt: lastModelRequestAt,
+            referenceInstant: referenceInstant,
+            providerEligibility: eligibility,
+            thresholdSeconds: threshold
+        )
+        if expired, let lastModelRequestAt {
+            let gap = referenceInstant.timeIntervalSince(lastModelRequestAt)
+            logger?.info(
+                "[ContextEngine] cache expired; hygiene window conversation=\(request.conversation.id) gap=\(Int(gap))s threshold=\(Int(threshold))s"
+            )
+        }
+        return expired
+    }
+
+    private func contextPruningPolicyFingerprint(for policy: ContextPruningPolicy) -> String? {
+        guard policy.mode != .off else { return nil }
         return [
-            policy.enabled ? "1" : "0",
-            String(policy.stablePrefixMessageCount),
-            policy.ttlSeconds.map { String(describing: $0) } ?? ""
+            policy.mode.rawValue,
+            policy.ttlSeconds.map { String(describing: $0) } ?? "",
+            String(policy.keepRecentToolResults),
+            policy.targetTools?.sorted().joined(separator: ",") ?? ""
         ].joined(separator: "|")
     }
 
     private func applyProjectionPolicy(
         messages: [Message],
         conversation: ModelConversation,
-        policy: ContextEngineProjectionPolicyInput?
-    ) -> (messages: [Message], artifact: ContextEngineProjectionArtifact) {
+        policy: ContextEngineProjectionPolicyInput?,
+        events: [CachedConversationEvent] = [],
+        frontierEventID: Int? = nil
+    ) async -> (messages: [Message], artifact: ContextEngineProjectionArtifact) {
         guard let policy else {
             return (
                 messages,
@@ -784,17 +1171,50 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             messages: projected,
             policy: policy.deterministicAttachmentHygiene
         )
-        let promptArtifact = policy.systemPromptAssemblyPolicy.map {
-            buildSystemPromptAssemblyArtifact(
-                conversation: conversation,
-                policy: $0
-            )
-        }
-        let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjection(
+        let attachmentArtifact = ContextEngineAttachmentProjectionPolicyHelper.resolveAttachmentProjectionArtifact(
             catalog: policy.attachmentCatalog,
             modelSupportsVision: policy.modelSupportsVision,
-            policy: policy.attachmentProjectionPolicy
+            policy: policy.attachmentProjectionPolicy,
+            blobReader: policy.attachmentBlobReader,
+            conversationID: conversation.id,
+            messages: projected,
+            priorAttachmentProjection: policy.priorAttachmentProjection,
+            pendingCacheBreakEvents: policy.pendingCacheBreakEvents,
+            events: events,
+            frontierEventID: frontierEventID
         )
+        if let attachmentArtifact {
+            projected = CatalogVisionImageProjector.apply(
+                messages: projected,
+                catalog: policy.attachmentCatalog,
+                effectiveDecisions: attachmentArtifact.decisions,
+                blobReader: policy.attachmentBlobReader,
+                conversationID: conversation.id,
+                modelSupportsVision: policy.modelSupportsVision ?? false
+            )
+        }
+        let attachmentSectionContent = attachmentArtifact.flatMap {
+            AttachmentRepresentationMaterializer.attachmentsSectionBody(blocks: $0.materializedBlocks)
+        }
+        let promptArtifact = if let assemblyPolicy = policy.systemPromptAssemblyPolicy {
+            await buildSystemPromptAssemblyArtifact(
+                conversation: conversation,
+                policy: assemblyPolicy,
+                projectedMessages: projected,
+                modeMemoryInjection: ContextSystemPromptModeSwitches.build(
+                    conversation: conversation,
+                    strictAgentHarnessPrompts: assemblyPolicy.strictAgentHarnessPrompts,
+                    resolvedProfile: assemblyPolicy.resolvedModeProfile
+                ).memoryInjectionMode,
+                resolvedProfile: assemblyPolicy.resolvedModeProfile,
+                attachmentSectionContent: attachmentSectionContent
+            )
+        } else {
+            nil as ContextEngineSystemPromptAssemblyArtifact?
+        }
+        if let assembledText = promptArtifact?.assembledSystemPromptText {
+            projected = SystemPromptAssemblyApplicator.apply(assembledText: assembledText, to: projected)
+        }
         return (
             projected,
             ContextEngineProjectionArtifact(
@@ -807,13 +1227,71 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
 
     private func buildSystemPromptAssemblyArtifact(
         conversation: ModelConversation,
-        policy: ContextEngineSystemPromptAssemblyPolicyInput
-    ) -> ContextEngineSystemPromptAssemblyArtifact {
-        let metadata = ContextSystemPromptModeSwitches.build(
+        policy: ContextEngineSystemPromptAssemblyPolicyInput,
+        projectedMessages: [Message],
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?,
+        attachmentSectionContent: String? = nil
+    ) async -> ContextEngineSystemPromptAssemblyArtifact {
+        if ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata) == .fork,
+           let inheritedText = ConversationMetadataSubagentPromptComposition.inheritedAssembledPromptText(
+               from: conversation.metadata
+           ) {
+            let expectedDigest = ConversationMetadataSubagentPromptComposition.inheritedParentPromptDigest(
+                from: conversation.metadata
+            )
+            let actualDigest = SystemPromptDispatchCodec.sha256Digest(of: inheritedText)
+            if let expectedDigest, expectedDigest != actualDigest {
+                logger?.warning(
+                    "[DefaultContextEngine] fork inherited prompt digest mismatch for conversation \(conversation.id)"
+                )
+            }
+            var dispatchMetadata: [String: String] = [:]
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = actualDigest
+            if let replayDigest = ConversationMetadataSubagentPromptComposition.inheritedReplaySpecDigest(
+                from: conversation.metadata
+            ) {
+                dispatchMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = replayDigest
+            }
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] =
+                SystemPrompt.assembleReferenceDateISOString(from: Date())
+            return ContextEngineSystemPromptAssemblyArtifact(
+                metadata: dispatchMetadata,
+                fingerprint: "fork-inherited",
+                tier1MemorySectionContent: nil,
+                workspaceSectionContent: nil,
+                memorySnapshotGeneration: nil,
+                assembledSystemPromptText: inheritedText,
+                assembledPromptDigest: actualDigest,
+                replaySpec: nil,
+                replaySpecDigest: ConversationMetadataSubagentPromptComposition.inheritedReplaySpecDigest(
+                    from: conversation.metadata
+                ),
+                sectionProvenance: nil,
+                frozenSkillsIndexXML: ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(
+                    from: conversation.metadata
+                )
+            )
+        }
+        let referenceDate = Date()
+        let memoryBlocks = await loadMemoryBlocks(
             conversation: conversation,
-            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
-            resolvedProfile: policy.resolvedModeProfile
-        ).metadata
+            modeMemoryInjection: modeMemoryInjection,
+            resolvedProfile: resolvedProfile
+        )
+        let userSystemPrompt = SystemPromptAssemblyApplicator.userSystemPrompt(from: projectedMessages)
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conversation,
+            policy: policy,
+            userSystemPrompt: userSystemPrompt,
+            memoryBlocks: memoryBlocks?.blocks,
+            memorySnapshotGeneration: memoryBlocks?.generation,
+            modeMemoryInjection: modeMemoryInjection,
+            engineDynamicAddition: nil,
+            attachmentSectionContent: attachmentSectionContent,
+            referenceDate: referenceDate
+        )
+
         let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
             resolved: policy.resolvedModeProfile,
             strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
@@ -821,9 +1299,172 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             includeDateTime: policy.includeDateTime,
             toolPolicySignature: policy.toolPolicySignature,
             routingPolicyTools: policy.routingPolicyTools,
-            routingPolicySkills: policy.routingPolicySkills
+            routingPolicySkills: policy.routingPolicySkills,
+            memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
+            workspaceSectionContent: bundle.memorySlice.workspaceContent,
+            memoryTier1SectionContent: bundle.memorySlice.tier1Content,
+            providerContributionSignature: bundle.providerContributionSignature,
+            systemPromptFullOverride: conversation.systemPromptFullOverride
         )
-        return ContextEngineSystemPromptAssemblyArtifact(metadata: metadata, fingerprint: fingerprint)
+        let assembleReferenceDateISO = SystemPrompt.assembleReferenceDateISOString(from: referenceDate)
+        var renderContext = bundle.assemblyContext
+        if policy.includeAgentSkills {
+            renderContext.frozenSkillsIndexXML = ConversationMetadataFrozenSkillsIndex.frozenSkillsIndexXML(
+                from: conversation.metadata
+            )
+        }
+        var assembledSystemPromptText: String?
+        var renderAudit: SystemPromptAssemblyRenderAudit?
+        if let renderer = systemPromptAssemblyRenderer {
+            do {
+                renderAudit = try await renderer.renderWithAudit(
+                    conversation: conversation,
+                    policy: policy,
+                    userSystemPrompt: userSystemPrompt,
+                    assemblyContext: renderContext,
+                    contributions: bundle.contributions,
+                    referenceDate: referenceDate,
+                    fullOverrideText: bundle.fullOverrideText
+                )
+                assembledSystemPromptText = renderAudit?.text
+            } catch {
+                logger?.warning("[DefaultContextEngine] system prompt assembly render failed: \(error)")
+            }
+        }
+        let assembledPromptDigest = assembledSystemPromptText.map { SystemPromptDispatchCodec.sha256Digest(of: $0) }
+        let replaySpec = renderAudit.map {
+            SystemPromptAssemblyReplayer.buildReplaySpec(
+                assemblyFingerprint: fingerprint,
+                assembleReferenceDateISO: assembleReferenceDateISO,
+                audit: $0,
+                contributions: bundle.contributions,
+                policy: policy
+            )
+        }
+        let replaySpecDigest = replaySpec?.replaySpecDigest
+        let sectionProvenance = renderAudit.map {
+            SystemPromptSectionProvenanceFormatter.stringSectionProvenanceMap(from: $0.product)
+        }
+        var dispatchMetadata: [String: String] = [:]
+        dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO] = assembleReferenceDateISO
+        if let assembledPromptDigest {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.assembledPromptDigest] = assembledPromptDigest
+        }
+        if let replaySpecDigest {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = replaySpecDigest
+        }
+        if let json = SystemPromptSectionProvenanceFormatter.encodeSectionProvenanceJSON(
+            renderAudit?.product.sectionProvenance ?? [:]
+        ) {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.sectionProvenanceJSON] = json
+        }
+        if let generation = bundle.memorySlice.snapshotGeneration {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.memorySnapshotGeneration] = String(generation)
+        }
+        if conversation.systemPromptFullOverride {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.systemPromptFullOverrideActive] = "true"
+        }
+        if let stablePrefix = renderAudit?.providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stablePrefix.isEmpty {
+            dispatchMetadata[SystemPromptAssemblyMetadataKeys.providerStablePrefix] = stablePrefix
+        }
+        return ContextEngineSystemPromptAssemblyArtifact(
+            metadata: dispatchMetadata,
+            fingerprint: fingerprint,
+            tier1MemorySectionContent: bundle.memorySlice.tier1Content,
+            workspaceSectionContent: bundle.memorySlice.workspaceContent,
+            memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
+            assembledSystemPromptText: assembledSystemPromptText,
+            assembledPromptDigest: assembledPromptDigest,
+            replaySpec: replaySpec,
+            replaySpecDigest: replaySpecDigest,
+            sectionProvenance: sectionProvenance,
+            frozenSkillsIndexXML: renderAudit?.product.frozenSkillsIndexXML
+        )
+    }
+
+    private static func tier1ContentForCrossTierDedup(memoryTier1: String?, workspace: String?) -> String? {
+        let parts = [workspace, memoryTier1]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private struct LoadedMemoryBlocks: Sendable {
+        let blocks: MemorySystemPromptBlocks
+        let generation: Int?
+    }
+
+    private func loadMemoryBlocks(
+        conversation: ModelConversation,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?
+    ) async -> LoadedMemoryBlocks? {
+        switch modeMemoryInjection {
+        case "off":
+            return nil
+        case "skills-only":
+            let includeSkills = resolvedProfile?.context.includeSkills ?? true
+            guard includeSkills else { return nil }
+        default:
+            break
+        }
+        guard let memoryService else { return nil }
+        if let frozen = ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) {
+            return LoadedMemoryBlocks(
+                blocks: ConversationMetadataFrozenMemoryTier1.memorySystemPromptBlocks(from: frozen),
+                generation: frozen.snapshotGeneration
+            )
+        }
+        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
+            return nil
+        }
+        let hasContent = !blocks.workspaceInstructionSection.isEmpty || !blocks.memoryTier1Content.isEmpty
+        guard hasContent else { return nil }
+        let generation = await memoryService.currentSnapshotGeneration(conversationID: conversation.id)
+        return LoadedMemoryBlocks(blocks: blocks, generation: generation)
+    }
+
+    private struct Tier1MemorySectionContent: Sendable {
+        let content: String?
+        let generation: Int?
+    }
+
+    private func tier1MemorySectionContent(
+        conversation: ModelConversation,
+        modeMemoryInjection: String,
+        resolvedProfile: ResolvedModeProfile?
+    ) async -> Tier1MemorySectionContent {
+        switch modeMemoryInjection {
+        case "off":
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        case "skills-only":
+            let includeSkills = resolvedProfile?.context.includeSkills ?? true
+            guard includeSkills else {
+                return Tier1MemorySectionContent(content: nil, generation: nil)
+            }
+        default:
+            break
+        }
+        guard let memoryService else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        if let frozen = ConversationMetadataFrozenMemoryTier1.frozenSlice(from: conversation.metadata) {
+            let tier1 = frozen.tier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tier1.isEmpty else {
+                return Tier1MemorySectionContent(content: nil, generation: frozen.snapshotGeneration)
+            }
+            return Tier1MemorySectionContent(content: tier1, generation: frozen.snapshotGeneration)
+        }
+        guard let blocks = await memoryService.systemPromptBlocks(conversationID: conversation.id) else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        let memoryOnly = blocks.memoryTier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !memoryOnly.isEmpty else {
+            return Tier1MemorySectionContent(content: nil, generation: nil)
+        }
+        return Tier1MemorySectionContent(content: memoryOnly, generation: blocks.snapshotGeneration)
     }
 
 

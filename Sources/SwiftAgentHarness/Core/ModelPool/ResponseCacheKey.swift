@@ -3,6 +3,7 @@ import Foundation
 import SwiftAgentKit
 
 struct ResponseCacheKey: Hashable, Sendable {
+    let ownerScopeKey: String
     let modelID: UUID
     let providerScopeKey: String
     let stablePrefixMessageCount: Int
@@ -10,25 +11,51 @@ struct ResponseCacheKey: Hashable, Sendable {
     let configDigestHex: String
 
     static func make(
+        ownerScopeKey: String,
         modelID: UUID,
         providerScopeKey: String,
         messages: [Message],
         config: LLMRequestConfig,
         stablePrefixMessageCount: Int?
     ) -> ResponseCacheKey {
-        let prefixCount = min(messages.count, max(0, stablePrefixMessageCount ?? messages.count))
-        let prefix = messages.prefix(prefixCount)
-        let messageMaterial = prefix.enumerated()
+        let prefixMessages = boundaryStablePrefixMessages(
+            messages: messages,
+            stablePrefixMessageCount: stablePrefixMessageCount
+        )
+        let messageMaterial = prefixMessages.enumerated()
             .map { "\($0.offset):\(String(describing: $0.element))" }
             .joined(separator: "\n")
         let configMaterial = String(describing: config)
         return ResponseCacheKey(
+            ownerScopeKey: ownerScopeKey,
             modelID: modelID,
             providerScopeKey: providerScopeKey,
-            stablePrefixMessageCount: prefixCount,
+            stablePrefixMessageCount: prefixMessages.count,
             messagesDigestHex: digestHex(messageMaterial),
             configDigestHex: digestHex(configMaterial)
         )
+    }
+
+    private static func boundaryStablePrefixMessages(
+        messages: [Message],
+        stablePrefixMessageCount: Int?
+    ) -> [Message] {
+        guard let stablePrefixMessageCount, stablePrefixMessageCount > 0 else {
+            return messages.filter { !HarnessInjectedMessageMetadata.isHarnessInjected($0) }
+        }
+        var count = 0
+        var selected: [Message] = []
+        for message in messages {
+            if HarnessInjectedMessageMetadata.isHarnessInjected(message) {
+                continue
+            }
+            selected.append(message)
+            count += 1
+            if count >= stablePrefixMessageCount {
+                break
+            }
+        }
+        return selected
     }
 
     private static func digestHex(_ value: String) -> String {
@@ -36,4 +63,3 @@ struct ResponseCacheKey: Hashable, Sendable {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
-

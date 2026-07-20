@@ -323,8 +323,8 @@ struct ModelQueryTests {
 
     @Test("catalog overlays include both budget and premium cost tiers")
     func catalogContainsCostTiers() {
-        let budget = Constants.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost
-        let premium = Constants.ollamaModelIDMap["deepseek-r1:70b"]?.hardcodedCost
+        let budget = InferenceRuntimeCatalogFixtures.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost
+        let premium = InferenceRuntimeCatalogFixtures.ollamaModelIDMap["deepseek-r1:70b"]?.hardcodedCost
         #expect(budget?.combinedPer1MUSD != nil)
         #expect(premium?.combinedPer1MUSD != nil)
         #expect((budget?.combinedPer1MUSD ?? 0) < (premium?.combinedPer1MUSD ?? 0))
@@ -335,14 +335,14 @@ struct ModelQueryTests {
         let budgetEntry = Self.costEntry(
             id: UUID(),
             slug: "gemma3:27b",
-            cost: Constants.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost
+            cost: InferenceRuntimeCatalogFixtures.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost
         )
         let premiumEntry = Self.costEntry(
             id: UUID(),
             slug: "deepseek-r1:70b",
-            cost: Constants.ollamaModelIDMap["deepseek-r1:70b"]?.hardcodedCost
+            cost: InferenceRuntimeCatalogFixtures.ollamaModelIDMap["deepseek-r1:70b"]?.hardcodedCost
         )
-        let cap = Constants.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost?.combinedPer1MUSD ?? 0
+        let cap = InferenceRuntimeCatalogFixtures.ollamaModelIDMap["gemma3:27b"]?.hardcodedCost?.combinedPer1MUSD ?? 0
         let ranked = ModelQuery.rank(
             entries: [premiumEntry, budgetEntry],
             query: ModelQuery(maximumCostPer1MCombinedUSD: cap)

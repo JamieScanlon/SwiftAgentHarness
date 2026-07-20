@@ -112,7 +112,7 @@ Three delivery modes:
 
 ### Pre-flight prompt validation at create time
 
-The `user-deferred` trust level earns its "treat as user-authored at fire time" handling by paying for validation at the *registration* boundary. A `_scan_cron_prompt` check runs on every cron prompt at create time and refuses jobs matching injection or exfiltration patterns. This is the scheduler's hook into the provenance machinery; the mechanics live in [input-provenance.md § Pre-flight scanning](./input-provenance.md), but the *call site* is the scheduler's create path. Critically, the **self-registration path runs the same scanner** — there's no privileged JSON-write that skips it (see anti-patterns).
+The `user-deferred` trust level earns its "treat as user-authored at fire time" handling by paying for validation at the *registration* boundary. A `_scan_cron_prompt` check runs on every cron prompt at create time and refuses jobs matching injection or exfiltration patterns. This is the scheduler's hook into the provenance machinery; the mechanics live in [input-provenance.md § Pre-flight scanning](./input-provenance.md), but the *call site* is the scheduler's create path. Critically, the **self-registration path runs the same scanner** — there's no privileged JSON-write that skips it (see anti-patterns, and [self-modification.md](./self-modification.md) for the general contract on agent-registered triggers).
 
 ### On-demand "fire now"
 

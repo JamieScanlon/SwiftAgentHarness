@@ -3,6 +3,7 @@ import EasyJSON
 import Foundation
 import SwiftAgentKit
 import SwiftAgentKitOrchestrator
+import SwiftAgentKitSkills
 
 extension SlashCommandDispatchService {
     private func publishSlashRuntimeLifecycle(_ payload: RuntimeLifecycleEventPayload) async {
@@ -68,6 +69,94 @@ extension SlashCommandDispatchService {
             )
         }
         partialContinuation.yield(.text(content))
+        partialContinuation.finish()
+        let (orchestrationStream, orchestrationContinuation) = AsyncStream.makeStream(
+            of: ConversationOrchestrationState.self,
+            bufferingPolicy: .bufferingNewest(8)
+        )
+        orchestrationContinuation.yield(
+            ConversationOrchestrationState(
+                llmRuntimePhase: .idleReady,
+                agenticPhase: .idle,
+                llmRequestPhase: nil
+            )
+        )
+        orchestrationContinuation.finish()
+        return ChatStreamResponse(
+            partialContent: partialStream,
+            orchestrationState: orchestrationStream,
+            conversationID: conversationID
+        )
+    }
+
+    func deliverSyntheticSlashSkillActivation(
+        conversationID: UUID,
+        skillName: String,
+        activationBody: String,
+        confirmation: String
+    ) async throws -> ChatStreamResponse {
+        let toolCallID = UUID().uuidString
+        let assistantCall = Message(
+            id: UUID(),
+            role: .assistant,
+            content: "",
+            timestamp: Date(),
+            toolCalls: [
+                ToolCall(
+                    name: SkillsToolProvider.activateToolName,
+                    arguments: .object(["skill_name": .string(skillName)]),
+                    id: toolCallID
+                ),
+            ]
+        )
+        let toolResult = Message(
+            id: UUID(),
+            role: .tool,
+            content: activationBody,
+            timestamp: Date(),
+            toolCalls: [],
+            toolCallId: toolCallID
+        )
+        let confirmationMessage = Message(
+            id: UUID(),
+            role: .assistant,
+            content: confirmation,
+            timestamp: Date(),
+            toolCalls: []
+        )
+        let transcriptMessages = [assistantCall, toolResult, confirmationMessage]
+        for message in transcriptMessages {
+            do {
+                _ = try await messaging.saveMessageToCache(
+                    message,
+                    for: conversationID,
+                    expectedPreviousTailHarnessMessageID: nil,
+                    transcriptRunID: nil
+                )
+            } catch {
+                deps.logger?.warning(
+                    "[SlashCommandDispatchService] Slash skill activation message persist failed: \(String(describing: error))"
+                )
+            }
+        }
+        if var convo = await deps.persistenceDomain.modelConversation(id: conversationID) {
+            convo.messages.append(contentsOf: transcriptMessages)
+            convo.turns = await selection.transformedTurns(
+                messages: convo.messages,
+                interactionMode: convo.interactionMode,
+                previousTurns: convo.turns
+            )
+            convo.state = .idle
+            convo.agenticPhase = .idle
+            convo.llmRequestPhase = nil
+            await deps.persistenceDomain.replaceConversationInRegistry(convo)
+            await sessionProjection.syncFromRegistry(conversationID: conversationID, conversation: convo)
+        }
+        let (partialStream, partialContinuation) = AsyncStream.makeStream(
+            of: ChatStreamingPartial.self,
+            bufferingPolicy: .bufferingNewest(8)
+        )
+        partialContinuation.yield(.text(confirmation))
         partialContinuation.finish()
         let (orchestrationStream, orchestrationContinuation) = AsyncStream.makeStream(
             of: ConversationOrchestrationState.self,

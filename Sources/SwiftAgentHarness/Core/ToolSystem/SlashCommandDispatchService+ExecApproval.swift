@@ -13,15 +13,23 @@ extension SlashCommandDispatchService {
         let approvalID = String(parts[0])
         // Accept the unified `allow-always` aliases (`always`, `durable`, ...).
         let durable = parts.count > 1 && ApprovalDecision.fromToken(String(parts[1])) == .allowAlways
-        let store = ExecApprovalStore.shared
         let resolverContext = await execApprovalResolverContext(conversationID: conversationID)
-        guard let resolution = await store.resolve(
-            id: approvalID,
-            scope: resolverContext.scope,
-            strictTenancy: resolverContext.strictTenancy,
-            ownerScope: resolverContext.ownerScope,
+        let store = ExecApprovalStore.shared
+        guard let resolution = await HarnessEmbeddedMutation.resolveExecApproval(
+            approvalID: approvalID,
             approved: true,
-            durable: durable
+            durable: durable,
+            reason: nil,
+            fallback: {
+                await store.resolve(
+                    id: approvalID,
+                    scope: resolverContext.scope,
+                    strictTenancy: resolverContext.strictTenancy,
+                    ownerScope: resolverContext.ownerScope,
+                    approved: true,
+                    durable: durable
+                )
+            }
         ) else {
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
@@ -56,15 +64,23 @@ extension SlashCommandDispatchService {
         let reason = parts.count > 1
             ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
             : "denied via slash command"
-        let store = ExecApprovalStore.shared
         let resolverContext = await execApprovalResolverContext(conversationID: conversationID)
-        guard let resolution = await store.resolve(
-            id: approvalID,
-            scope: resolverContext.scope,
-            strictTenancy: resolverContext.strictTenancy,
-            ownerScope: resolverContext.ownerScope,
+        let store = ExecApprovalStore.shared
+        guard let resolution = await HarnessEmbeddedMutation.resolveExecApproval(
+            approvalID: approvalID,
             approved: false,
-            reason: reason
+            durable: false,
+            reason: reason,
+            fallback: {
+                await store.resolve(
+                    id: approvalID,
+                    scope: resolverContext.scope,
+                    strictTenancy: resolverContext.strictTenancy,
+                    ownerScope: resolverContext.ownerScope,
+                    approved: false,
+                    reason: reason
+                )
+            }
         ) else {
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,

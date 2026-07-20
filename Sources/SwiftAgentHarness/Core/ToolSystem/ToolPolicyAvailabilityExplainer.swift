@@ -11,7 +11,7 @@ enum ToolPolicyAvailabilityExplainer {
         toolPolicy: ToolPolicyConfiguration,
         trustPolicy: TrustPolicyConfiguration,
         subAgentToolClassifier: (any SubAgentToolClassifying)?,
-        gateway: any ToolSystemGatewaying = DefaultToolSystemGateway(),
+        gateway: any ToolSystemGatewaying,
         filterToolName: String? = nil,
         gatingArgumentPreview: String? = nil
     ) -> ToolPolicyExplainReport {
@@ -235,18 +235,42 @@ enum ToolPolicyAvailabilityExplainer {
             groupIndex: groupIndex,
             entry: entry
         ) {
-            let allowRules = modePolicyContext.resolvedProfile.tools.allow.flatMap {
-                ToolPolicyRulesCache.parseList($0)
-            } ?? []
-            let allowList = modePolicyContext.resolvedProfile.tools.allow ?? []
-            record(.modeAllow, .fail(
-                scope: .modeAllow,
-                detail: allowList.isEmpty
-                    ? "Closed-world mode allow list is empty."
-                    : "Not matched by mode allow list.",
-                matchedRule: allowList.isEmpty ? nil : allowList.joined(separator: ", ")
-            ))
-            let _ = allowRules
+            let grants = (gateway as? DefaultToolSystemGateway)?.visibilityGrants.snapshot()
+                ?? ToolVisibilityGrantTable.empty
+            let profile = modePolicyContext.resolvedProfile
+            let effectiveAllow = grants.effectiveAllowList(
+                authored: profile.tools.allow,
+                entry: entry,
+                profile: profile
+            )
+            let effectiveSlice = ModeProfileToolsSlice(
+                allow: effectiveAllow,
+                deny: profile.tools.deny,
+                approvalPolicy: profile.tools.approvalPolicy
+            )
+            var effectiveProfile = profile
+            effectiveProfile.tools = effectiveSlice
+            let effectiveContext = ModePolicyContext(
+                interactionMode: modePolicyContext.interactionMode,
+                resolvedProfile: effectiveProfile
+            )
+            if toolPolicy.isToolAllowed(
+                name: entry.name,
+                context: effectiveContext,
+                groupIndex: groupIndex,
+                entry: entry
+            ) {
+                record(.modeAllow, .pass)
+            } else {
+                let allowList = effectiveAllow ?? []
+                record(.modeAllow, .fail(
+                    scope: .modeAllow,
+                    detail: allowList.isEmpty
+                        ? "Closed-world mode allow list is empty."
+                        : "Not matched by mode allow list.",
+                    matchedRule: allowList.isEmpty ? nil : allowList.joined(separator: ", ")
+                ))
+            }
         } else {
             record(.modeAllow, .pass)
         }
@@ -322,7 +346,10 @@ enum ToolPolicyAvailabilityExplainer {
             }.map { ToolPolicyScopeVerdictFormatting.detailText(for: $0.verdict) } ?? nil
         }
 
-        let fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
+        let fixIt: String?
+        fixIt = primaryScope.map { $0.fixItConfigKey(profileID: context.profileID) }
+
+        let resolvedPrimaryDetail: String? = primaryDetail
 
         var gatingAppendix: ToolPolicyGatingExplainAppendix?
         if let gatingArgumentPreview {
@@ -349,7 +376,7 @@ enum ToolPolicyAvailabilityExplainer {
             source: entry.source,
             status: status,
             primaryScope: primaryScope,
-            primaryDetail: primaryDetail,
+            primaryDetail: resolvedPrimaryDetail,
             fixItConfigKey: fixIt,
             scopeTrace: trace,
             gatewayBlockReason: gatewayDecision.blockReason,

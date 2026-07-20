@@ -53,6 +53,7 @@ public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
     public let enabled: Bool
     public let maxImagesPerMessage: Int
     public let documentCharacterThreshold: Int
+    public let documentPreviewMaxBytes: Int
     public let imagePlaceholder: String
     public let documentPlaceholder: String
 
@@ -60,12 +61,14 @@ public struct ContextCompactionAttachmentDocumentHygienePolicy: Sendable {
         enabled: Bool,
         maxImagesPerMessage: Int,
         documentCharacterThreshold: Int,
+        documentPreviewMaxBytes: Int = 2048,
         imagePlaceholder: String,
         documentPlaceholder: String
     ) {
         self.enabled = enabled
         self.maxImagesPerMessage = maxImagesPerMessage
         self.documentCharacterThreshold = documentCharacterThreshold
+        self.documentPreviewMaxBytes = max(0, documentPreviewMaxBytes)
         self.imagePlaceholder = imagePlaceholder
         self.documentPlaceholder = documentPlaceholder
     }
@@ -102,6 +105,7 @@ public struct ContextCompactionIdentifierPreservationPolicy: Sendable {
 
 public struct ConversationTransformMetadata: Sendable {
     let conversationID: UUID
+    let ownerAccountID: UUID?
     let modelID: String
     let modelName: String
     let interactionMode: InteractionMode
@@ -112,6 +116,7 @@ public struct ConversationTransformMetadata: Sendable {
 
     init(
         conversationID: UUID,
+        ownerAccountID: UUID? = nil,
         modelID: String,
         modelName: String,
         interactionMode: InteractionMode,
@@ -121,6 +126,7 @@ public struct ConversationTransformMetadata: Sendable {
         metadata: JSON?
     ) {
         self.conversationID = conversationID
+        self.ownerAccountID = ownerAccountID
         self.modelID = modelID
         self.modelName = modelName
         self.interactionMode = interactionMode
@@ -132,6 +138,7 @@ public struct ConversationTransformMetadata: Sendable {
 
     init(
         conversationID: UUID,
+        ownerAccountID: UUID? = nil,
         modelID: String,
         modelName: String,
         interactionMode: InteractionMode,
@@ -160,6 +167,7 @@ public struct ConversationTransformMetadata: Sendable {
         }
         self.init(
             conversationID: conversationID,
+            ownerAccountID: ownerAccountID,
             modelID: modelID,
             modelName: modelName,
             interactionMode: interactionMode,
@@ -233,12 +241,16 @@ public struct ContextTransformInput: Sendable {
     let compactionPreviousSummaryText: String?
     /// Pre-compaction session memory note for middle swap (spec stage 3).
     let compactionSessionMemoryNote: String?
+    /// Aggregated memory provider `onPreCompress` notes for the compaction summarizer handoff prompt.
+    let compactionProviderPreCompressNotes: String?
     /// Filtered transcript used for head/middle/tail split and checkpoint validity (excludes harness injections).
     let compactionSplitBaseMessages: [Message]?
     /// Harness-injected system messages prepended to split head in transformer output.
     let compactionInjectedPrefixMessages: [Message]?
     /// Active skills (name + content) resolved upstream for budgeted post-compaction re-injection.
     let compactionReinjectableSkills: [ReinjectableSkill]
+    /// Formatted post-compaction instruction sections from the nearest project instruction file.
+    let compactionPostCompactionInstructionContext: String?
     /// Tool names whose compaction hygiene must never clear tool-result content (e.g. sub-agent delegates).
     let compactionProtectedToolNames: Set<String>
 
@@ -263,9 +275,11 @@ public struct ContextTransformInput: Sendable {
         compactionIdentifierPreservationPolicy: ContextCompactionIdentifierPreservationPolicy? = nil,
         compactionPreviousSummaryText: String? = nil,
         compactionSessionMemoryNote: String? = nil,
+        compactionProviderPreCompressNotes: String? = nil,
         compactionSplitBaseMessages: [Message]? = nil,
         compactionInjectedPrefixMessages: [Message]? = nil,
         compactionReinjectableSkills: [ReinjectableSkill] = [],
+        compactionPostCompactionInstructionContext: String? = nil,
         compactionProtectedToolNames: Set<String> = []
     ) {
         self.messages = messages
@@ -288,10 +302,43 @@ public struct ContextTransformInput: Sendable {
         self.compactionIdentifierPreservationPolicy = compactionIdentifierPreservationPolicy
         self.compactionPreviousSummaryText = compactionPreviousSummaryText
         self.compactionSessionMemoryNote = compactionSessionMemoryNote
+        self.compactionProviderPreCompressNotes = compactionProviderPreCompressNotes
         self.compactionSplitBaseMessages = compactionSplitBaseMessages
         self.compactionInjectedPrefixMessages = compactionInjectedPrefixMessages
         self.compactionReinjectableSkills = compactionReinjectableSkills
+        self.compactionPostCompactionInstructionContext = compactionPostCompactionInstructionContext
         self.compactionProtectedToolNames = compactionProtectedToolNames
+    }
+
+    func withCompactionProviderPreCompressNotes(_ notes: String?) -> ContextTransformInput {
+        ContextTransformInput(
+            messages: messages,
+            conversation: conversation,
+            phase: phase,
+            compactionEffectiveMiddle: compactionEffectiveMiddle,
+            compactionRawMiddleMessages: compactionRawMiddleMessages,
+            effectiveContextLimitTokens: effectiveContextLimitTokens,
+            compactionSummarizerDebugOutputPath: compactionSummarizerDebugOutputPath,
+            compactionCustomInstructionsOverride: compactionCustomInstructionsOverride,
+            compactionCheckpointKind: compactionCheckpointKind,
+            compactionCheckpointPrefixCount: compactionCheckpointPrefixCount,
+            compactionModelContextLimitTokens: compactionModelContextLimitTokens,
+            compactionLastPromptTokens: compactionLastPromptTokens,
+            compactionStrategy: compactionStrategy,
+            compactionFocusQuery: compactionFocusQuery,
+            branchParentConversationID: branchParentConversationID,
+            compactionCachePolicy: compactionCachePolicy,
+            compactionDeterministicHygienePolicy: compactionDeterministicHygienePolicy,
+            compactionIdentifierPreservationPolicy: compactionIdentifierPreservationPolicy,
+            compactionPreviousSummaryText: compactionPreviousSummaryText,
+            compactionSessionMemoryNote: compactionSessionMemoryNote,
+            compactionProviderPreCompressNotes: notes,
+            compactionSplitBaseMessages: compactionSplitBaseMessages,
+            compactionInjectedPrefixMessages: compactionInjectedPrefixMessages,
+            compactionReinjectableSkills: compactionReinjectableSkills,
+            compactionPostCompactionInstructionContext: compactionPostCompactionInstructionContext,
+            compactionProtectedToolNames: compactionProtectedToolNames
+        )
     }
 }
 

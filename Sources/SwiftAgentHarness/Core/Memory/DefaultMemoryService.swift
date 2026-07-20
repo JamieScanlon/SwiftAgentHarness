@@ -1,108 +1,126 @@
 import Foundation
 import Logging
-import CryptoKit
+import SwiftAgentKit
 
 public actor DefaultMemoryService: MemoryServicing {
     private let config: MemoryConfiguration
     private let logger: Logger?
-    private let snapshotStore: MemorySessionSnapshotStore
     private let writeTracker: MemoryWriteTracker
-    private let recallSelector: MemoryRecallSelector
-    private let extractor: BackgroundMemoryExtractor
-    private let activeMemory: ActiveMemoryPreReplyService
-    private let search: HybridMemorySearch
-    private let dreaming: DreamingConsolidationScheduler
-    private let providerRegistry: MemoryProviderRegistry
+    private let capabilityRegistry: MemoryCapabilityRegistry
+    private let corpusSupplementRegistry = MemoryCorpusSupplementRegistry()
     private let spawnPortBox = MemorySubAgentSpawnPortBox()
-    private var extractionRunner: MemoryExtractionRunning?
-    private var sessionByConversation: [UUID: MemorySessionContext] = [:]
-    private var storeByConversation: [UUID: AgentMemoryStore] = [:]
     private var hintTrackerByConversation: [UUID: SubdirectoryHintTracker] = [:]
+    private var softPreCompactionFlushCompleted: Set<UUID> = []
+    private var preCompactionFlushDedupeByConversation: [UUID: PreCompactionFlushDedupeState] = [:]
+    private var preCompactionFlushWriteGuardByConversation: [UUID: PreCompactionFlushWriteGuard.Policy] = [:]
     private let userConfigDir: URL
+    private let tenancyPolicy: TenancyPolicySettings
 
-    /// Silenia / composition-root entry: caller supplies resolved memory configuration explicitly.
     public init(
         config: MemoryConfiguration,
         logger: Logger? = nil,
-        userConfigDir: URL? = nil
+        userConfigDir: URL? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
-        self.init(config: config, logger: logger, userConfigDir: userConfigDir, llmRecallSelector: nil)
+        self.init(
+            config: config,
+            logger: logger,
+            userConfigDir: userConfigDir,
+            llmRecallSelector: nil,
+            tenancyPolicy: tenancyPolicy
+        )
     }
 
     init(
-        config: MemoryConfiguration = MemoryConfigurationLoader.loadFromPromptConfigBundle(),
+        config: MemoryConfiguration = MemoryConfiguration.default,
         logger: Logger? = nil,
         userConfigDir: URL? = nil,
-        llmRecallSelector: MemoryLLMRecallSelecting? = nil
+        llmRecallSelector: MemoryLLMRecallSelecting? = nil,
+        tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.config = config
         self.logger = logger
-        self.snapshotStore = MemorySessionSnapshotStore()
         self.writeTracker = MemoryWriteTracker()
-        self.recallSelector = MemoryRecallSelector(llmSelector: llmRecallSelector)
-        self.extractor = BackgroundMemoryExtractor(config: config, logger: logger)
-        self.search = HybridMemorySearch()
-        self.activeMemory = ActiveMemoryPreReplyService(config: config)
-        self.dreaming = DreamingConsolidationScheduler(config: config, logger: logger)
         self.userConfigDir = userConfigDir ?? MemoryConfigHome.resolve().appendingPathComponent("user", isDirectory: true)
-        self.providerRegistry = MemoryProviderRegistry(builtin: BuiltinFileMemoryProvider())
+        self.tenancyPolicy = tenancyPolicy
+        let factory = FileStoreMemoryCapabilityFactory.makeDefault(
+            config: config,
+            logger: logger,
+            llmRecallSelector: llmRecallSelector
+        )
+        self.capabilityRegistry = MemoryCapabilityRegistry(defaultCapability: factory.capability)
     }
 
     func writeObserver() -> MemoryWriteTracker { writeTracker }
 
     func bootstrapSession(context: MemorySessionContext) async throws -> MemorySystemPromptBlocks {
-        sessionByConversation[context.conversationID] = context
         hintTrackerByConversation[context.conversationID] = SubdirectoryHintTracker()
-        let store = AgentMemoryStore(memoryDirectory: context.memoryDirectory)
-        try store.ensureLayout()
-        storeByConversation[context.conversationID] = store
-        let providers = await providerRegistry.activeProviders()
-        for provider in providers {
-            try await provider.initialize(sessionID: context.conversationID, context: context)
-        }
-        let blocks = try buildBlocks(context: context, store: store, recalled: "")
-        let manifest = store.manifest()
-        await snapshotStore.capture(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
-        Task { await self.activeMemory.warmStanding(session: context) }
+        let capability = await capabilityRegistry.activeCapability()
+        try await capability.runtime.initialize(sessionID: context.conversationID, context: context)
+        let blocks = try await buildBlocks(context: context, capability: capability, recalled: "")
+        let manifest = await capability.runtime.manifestEntries(conversationID: context.conversationID)
+        await capability.runtime.updateSnapshot(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
         return blocks
     }
 
     func systemPromptBlocks(conversationID: UUID) async -> MemorySystemPromptBlocks? {
-        await snapshotStore.snapshot(for: conversationID)?.blocks
+        await capabilityRegistry.activeCapability().runtime.systemPromptBlocks(conversationID: conversationID)
     }
 
     func recallForTurn(request: MemoryRecallRequest) async throws -> MemoryRecallResult {
-        let selected = await recallSelector.selectRelevantFiles(request: request)
-        guard let store = storeByConversation[request.session.conversationID] else {
-            return MemoryRecallResult(selectedFilenames: selected, recalledBodiesText: "")
-        }
-        var bodies: [String] = []
-        for filename in selected {
-            if let body = try store.readTopicBody(filename: filename) {
-                bodies.append("<!-- \(filename) -->\n\(body)")
-            }
-        }
-        let recalled = MemoryContextFencer.fence(bodies.joined(separator: "\n\n"))
-        return MemoryRecallResult(selectedFilenames: selected, recalledBodiesText: recalled)
+        let capability = await capabilityRegistry.activeCapability()
+        return try await capability.runtime.recallForTurn(request: request)
+    }
+
+    func recallHits(selectionKeys: [String], session: MemorySessionContext) async throws -> MemoryRecallResult {
+        let capability = await capabilityRegistry.activeCapability()
+        return try await capability.runtime.recallHits(selectionKeys: selectionKeys, session: session)
+    }
+
+    func recallSelectorConfigFingerprint() -> String {
+        MemoryInjectionSnapshotProjectionPolicy.selectorConfigFingerprint(config: config)
     }
 
     func bindSpawnPort(_ port: MemorySubAgentSpawnPort) async {
         spawnPortBox.set(port)
-        let activeRunner = SubAgentPoolActiveMemoryRunner(
-            spawnPort: port,
-            config: config,
-            logger: logger
-        )
-        await activeMemory.setRunner(activeRunner)
-        extractionRunner = SubAgentPoolMemoryExtractionRunner(
-            spawnPort: port,
-            config: config,
-            logger: logger
-        )
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.bindSpawnPort(port)
     }
 
     func spawnPort() -> MemorySubAgentSpawnPort? {
         spawnPortBox.get()
+    }
+
+    func resolveFlushPlan(
+        conversationID: UUID,
+        manifestLines: [String],
+        middleTranscript: String
+    ) async -> MemoryFlushPlan? {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let resolver = capability.flushPlanResolver,
+              let session = await capability.runtime.sessionContext(for: conversationID),
+              let store = await capability.runtime.store(for: conversationID) else { return nil }
+        return resolver.resolveFlushPlan(
+            manifestLines: manifestLines,
+            middleTranscript: middleTranscript,
+            session: session,
+            store: store
+        )
+    }
+
+    func flushedMemoryEntryIDs(
+        conversationID: UUID,
+        flushPaths: Set<String>,
+        maxEntries: Int
+    ) async -> [UUID] {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let resolver = capability.flushPlanResolver,
+              let session = await capability.runtime.sessionContext(for: conversationID) else { return [] }
+        return resolver.flushedMemoryEntryIDs(
+            from: flushPaths,
+            session: session,
+            maxEntries: maxEntries
+        )
     }
 
     func runPreCompactionFlush(
@@ -112,18 +130,32 @@ public actor DefaultMemoryService: MemoryServicing {
     ) async -> PreCompactionMemoryFlushResult {
         guard config.preCompactionFlushEnabled else { return .skipped }
         guard !context.middleMessages.isEmpty else { return .skipped }
-        guard let session = sessionByConversation[context.conversationID],
-              let store = storeByConversation[context.conversationID] else { return .skipped }
+        let capability = await capabilityRegistry.activeCapability()
+        guard let session = await capability.runtime.sessionContext(for: context.conversationID),
+              let store = await capability.runtime.store(for: context.conversationID) else { return .skipped }
+
+        let manifestLines = await extractionManifestLines(conversationID: context.conversationID)
+        let middleTranscript = MemoryExtractionPrompts.recentTranscriptSlice(
+            messages: context.middleMessages,
+            limit: context.middleMessages.count
+        )
+        guard !middleTranscript.isEmpty,
+              let plan = capability.flushPlanResolver?.resolveFlushPlan(
+                manifestLines: manifestLines,
+                middleTranscript: middleTranscript,
+                session: session,
+                store: store
+              ) else { return .skipped }
+
+        registerPreCompactionFlushWriteGuard(
+            conversationID: context.conversationID,
+            policy: plan.writeGuardPolicy
+        )
+        defer {
+            clearPreCompactionFlushWriteGuard(conversationID: context.conversationID)
+        }
 
         let pathsBefore = Set(await writeTracker.auxiliaryWrittenPaths(conversationID: context.conversationID))
-        let messageStrings = context.middleMessages.map(\.content)
-        let providers = await providerRegistry.activeProviders()
-        for provider in providers {
-            let note = await provider.onPreCompress(messages: messageStrings)
-            if !note.isEmpty {
-                logger?.info("[MemoryFlush] pre-compaction note: \(note.prefix(120))")
-            }
-        }
 
         let completed = await spawnPort.spawnBlockingPreCompactionFlush(
             context.conversationID,
@@ -143,20 +175,21 @@ public actor DefaultMemoryService: MemoryServicing {
         }
 
         do {
-            let blocks = try buildBlocks(context: session, store: store, recalled: "")
+            try await capability.runtime.refreshSnapshotAfterFlush(conversationID: context.conversationID)
+            let blocks = try await buildBlocks(context: session, capability: capability, recalled: "")
             let manifest = store.manifest()
-            await snapshotStore.capture(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
+            await capability.runtime.updateSnapshot(conversationID: context.conversationID, blocks: blocks, manifest: manifest)
         } catch {
             logger?.error("[PreCompactionMemoryFlush] snapshot refresh failed: \(error)")
             return .skipped
         }
 
-        let version = await snapshotStore.generation(for: context.conversationID)
-        let entryIDs = flushPaths.sorted()
-            .map { URL(fileURLWithPath: $0).lastPathComponent }
-            .filter { !$0.isEmpty && $0 != "MEMORY.md" }
-            .prefix(context.maxFlushedMemoryEntries)
-            .map { Self.manifestEntryID(filename: $0) }
+        let version = await capability.runtime.currentSnapshotGeneration(conversationID: context.conversationID)
+        let entryIDs = await flushedMemoryEntryIDs(
+            conversationID: context.conversationID,
+            flushPaths: flushPaths,
+            maxEntries: context.maxFlushedMemoryEntries
+        )
 
         guard !entryIDs.isEmpty else { return .skipped }
         logger?.info("[PreCompactionMemoryFlush] flushed \(entryIDs.count) entries conversation=\(context.conversationID)")
@@ -167,29 +200,41 @@ public actor DefaultMemoryService: MemoryServicing {
         )
     }
 
-    nonisolated static func manifestEntryID(filename: String) -> UUID {
-        let digest = SHA256.hash(data: Data("memory-manifest:\(filename)".utf8))
-        var bytes = Array(digest.prefix(16))
-        bytes[6] = (bytes[6] & 0x0F) | 0x40
-        bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
+    func activeRecallSummary(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool = true,
+        excludedSelectionKeys: Set<String> = []
+    ) async -> ActiveMemoryRecallOutcome {
+        let capability = await capabilityRegistry.activeCapability()
+        return await capability.runtime.activeRecallSummary(
+            session: session,
+            messages: messages,
+            anchorUserMessageID: anchorUserMessageID,
+            sessionEnabled: sessionEnabled,
+            excludedSelectionKeys: excludedSelectionKeys
+        )
     }
 
-    func activeRecallSummary(session: MemorySessionContext, userQuery: String) async -> String? {
-        await activeMemory.recallSummaryIfEnabled(session: session, userQuery: userQuery)
+    func warmStandingRecall(session: MemorySessionContext, sessionEnabled: Bool = true) async {
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.warmStandingRecall(session: session, sessionEnabled: sessionEnabled)
     }
 
-    func warmStandingRecall(session: MemorySessionContext) async {
-        await activeMemory.warmStanding(session: session)
-    }
-
-    func prefetchSituationalRecall(session: MemorySessionContext, userQuery: String) async {
-        await activeMemory.prefetchSituational(session: session, userQuery: userQuery)
+    func prefetchSituationalRecall(
+        session: MemorySessionContext,
+        messages: [Message],
+        anchorUserMessageID: UUID?,
+        sessionEnabled: Bool = true
+    ) async {
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.prefetchSituationalRecall(
+            session: session,
+            messages: messages,
+            anchorUserMessageID: anchorUserMessageID,
+            sessionEnabled: sessionEnabled
+        )
     }
 
     func appendSubdirectoryHintsIfNeeded(
@@ -208,17 +253,296 @@ public actor DefaultMemoryService: MemoryServicing {
 
     func onTurnEnded(request: MemoryTurnEndedRequest) async {
         await writeTracker.resetTurn(conversationID: request.session.conversationID)
-        await extractor.scheduleIfNeeded(request: request) { req in
-            await self.runScheduledExtraction(request: req)
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.onTurnEnded(request: request)
+    }
+
+    func onPreCompress(conversationID: UUID, messages: [String]) async throws {
+        _ = conversationID
+        _ = await collectProviderPreCompressNotes(messages: messages)
+    }
+
+    public func drainPendingWork(timeoutMs: Int) async {
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.drainPendingWork(timeoutMs: timeoutMs)
+    }
+
+    public func shutdown() async {
+        await capabilityRegistry.shutdownActive()
+    }
+
+    func invalidateSnapshot(conversationID: UUID) async {
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.invalidateSnapshot(conversationID: conversationID)
+    }
+
+    func endSession(conversationID: UUID) async {
+        hintTrackerByConversation.removeValue(forKey: conversationID)
+        softPreCompactionFlushCompleted.remove(conversationID)
+        preCompactionFlushDedupeByConversation.removeValue(forKey: conversationID)
+        preCompactionFlushWriteGuardByConversation.removeValue(forKey: conversationID)
+        await writeTracker.removeConversation(conversationID: conversationID)
+        await capabilityRegistry.endSessionActive(conversationID: conversationID)
+    }
+
+    func hasCompletedSoftPreCompactionFlush(conversationID: UUID) -> Bool {
+        softPreCompactionFlushCompleted.contains(conversationID)
+    }
+
+    func markSoftPreCompactionFlushCompleted(conversationID: UUID) {
+        softPreCompactionFlushCompleted.insert(conversationID)
+    }
+
+    func filterPreCompactionFlushMiddle(conversationID: UUID, middle: [Message]) -> [Message] {
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        let novel = state.filterNovelMiddle(middle)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+        return novel
+    }
+
+    func shouldSkipPreCompactionFlushFingerprint(conversationID: UUID, fingerprint: String) -> Bool {
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        let skip = state.shouldSkipFingerprint(fingerprint)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+        return skip
+    }
+
+    func recordPreCompactionFlushMiddle(conversationID: UUID, middle: [Message]) {
+        guard !middle.isEmpty else { return }
+        var state = preCompactionFlushDedupeByConversation[conversationID] ?? PreCompactionFlushDedupeState()
+        state.recordSuccessfulFlush(middle: middle)
+        preCompactionFlushDedupeByConversation[conversationID] = state
+    }
+
+    func clearPreCompactionFlushCycle(conversationID: UUID) {
+        softPreCompactionFlushCompleted.remove(conversationID)
+        preCompactionFlushDedupeByConversation[conversationID]?.beginNewCycle()
+        preCompactionFlushDedupeByConversation.removeValue(forKey: conversationID)
+    }
+
+    func clearSoftPreCompactionFlush(conversationID: UUID) {
+        clearPreCompactionFlushCycle(conversationID: conversationID)
+    }
+
+    func activePublicArtifacts(conversationID: UUID) async -> [MemoryArtifact] {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let provider = capability.publicArtifacts,
+              let session = await capability.runtime.sessionContext(for: conversationID),
+              let store = await capability.runtime.store(for: conversationID) else { return [] }
+        return provider.publicArtifacts(context: session, store: store)
+    }
+
+    func registerPreCompactionFlushWriteGuard(
+        conversationID: UUID,
+        policy: PreCompactionFlushWriteGuard.Policy
+    ) {
+        preCompactionFlushWriteGuardByConversation[conversationID] = policy
+    }
+
+    func clearPreCompactionFlushWriteGuard(conversationID: UUID) {
+        preCompactionFlushWriteGuardByConversation.removeValue(forKey: conversationID)
+    }
+
+    func validatePreCompactionFlushWrite(
+        conversationID: UUID,
+        absolutePath: String,
+        priorContent: String?,
+        newContent: String
+    ) -> String? {
+        guard let policy = preCompactionFlushWriteGuardByConversation[conversationID] else { return nil }
+        let basename = URL(fileURLWithPath: absolutePath).lastPathComponent
+        let result: Result<Void, PreCompactionFlushWriteGuard.Violation>
+        if let priorContent {
+            result = PreCompactionFlushWriteGuard.validateEditFile(
+                basename: basename,
+                priorContent: priorContent,
+                newContent: newContent,
+                policy: policy
+            )
+        } else {
+            result = PreCompactionFlushWriteGuard.validateWriteFile(
+                basename: basename,
+                content: newContent,
+                policy: policy
+            )
+        }
+        switch result {
+        case .success:
+            return nil
+        case .failure(let violation):
+            return violation.userMessage
         }
     }
 
-    private func runScheduledExtraction(request: MemoryTurnEndedRequest) async {
-        if let extractionRunner {
-            await extractionRunner.startBackgroundExtraction(request: request)
-        } else {
-            await runExtractionPlaceholder(request: request)
+    func currentSnapshotGeneration(conversationID: UUID) async -> Int {
+        let capability = await capabilityRegistry.activeCapability()
+        return await capability.runtime.currentSnapshotGeneration(conversationID: conversationID)
+    }
+
+    func collectProviderPreCompressNotes(messages: [String]) async -> String {
+        let capability = await capabilityRegistry.activeCapability()
+        let note = await capability.runtime.onPreCompress(messages: messages)
+        return note.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func registerActiveMemoryCapability(_ capability: MemoryCapability) async {
+        await capabilityRegistry.replaceActive(capability)
+    }
+
+    func registerExternalMemoryProvider(id: String, provider: any MemoryProviding) async throws {
+        await capabilityRegistry.replaceActive(.fromLegacyLifecycleProvider(id: id, provider: provider))
+    }
+
+    func activeMemoryPluginID() async -> String {
+        await capabilityRegistry.activePluginID()
+    }
+
+    func registerCorpusSupplement(_ supplement: any MemoryCorpusSupplementSearching) async {
+        await corpusSupplementRegistry.register(supplement)
+    }
+
+    func corpusSupplementNames() async -> [String] {
+        await corpusSupplementRegistry.corpusNames()
+    }
+
+    func searchMemory(conversationID: UUID, query: String, corpus: String?, limit: Int = 10) async -> [MemorySearchHit] {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return [] }
+        return await coordinator.search(query: query, corpus: corpus, limit: limit)
+    }
+
+    func getMemory(conversationID: UUID, lookupID: String, corpus: String?) async -> String? {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return nil }
+        return await coordinator.get(lookupID: lookupID, corpus: corpus)
+    }
+
+    func memorySearchToolDependencies(conversationID: UUID) async -> MemorySearchToolDependencies? {
+        guard let coordinator = await makeSearchCoordinator(conversationID: conversationID) else { return nil }
+        let activeCorpus = await activeMemoryPluginID()
+        return MemorySearchToolDependencies(
+            search: { query, corpus, limit in
+                await coordinator.search(query: query, corpus: corpus, limit: limit)
+            },
+            get: { lookupID, corpus in
+                await coordinator.get(lookupID: lookupID, corpus: corpus)
+            },
+            activeCorpusName: { activeCorpus },
+            availableCorpora: { await coordinator.availableCorpora() }
+        )
+    }
+
+    func preCompactionFlushTimeoutMs() -> Int {
+        config.preCompactionFlushTimeoutMs
+    }
+
+    func recordMemoryWrite(path: String, conversationID: UUID) async {
+        await writeTracker.recordMainAgentWrite(path: path, conversationID: conversationID)
+        let capability = await capabilityRegistry.activeCapability()
+        await capability.runtime.invalidateStandingRecall(conversationID: conversationID)
+    }
+
+    func recordAuxiliaryMemoryWrite(path: String, conversationID: UUID) async {
+        await writeTracker.recordAuxiliaryWrite(path: path, conversationID: conversationID)
+    }
+
+    func sessionContext(for conversationID: UUID) async -> MemorySessionContext? {
+        let capability = await capabilityRegistry.activeCapability()
+        return await capability.runtime.sessionContext(for: conversationID)
+    }
+
+    func manifestEntries(conversationID: UUID) async -> [MemoryManifestEntry] {
+        let capability = await capabilityRegistry.activeCapability()
+        return await capability.runtime.manifestEntries(conversationID: conversationID)
+    }
+
+    func extractionManifestLines(conversationID: UUID) async -> [String] {
+        let entries = await manifestEntries(conversationID: conversationID)
+        return entries.map(MemoryManifestScanner.formatManifestLine)
+    }
+
+    func hybridSearch() async -> HybridMemorySearch {
+        let capability = await capabilityRegistry.activeCapability()
+        return await capability.runtime.hybridSearch()
+    }
+
+    func runDreamingSweep(memoryDirectory: URL, rollback: Bool = false) async throws {
+        let capability = await capabilityRegistry.activeCapability()
+        try await capability.runtime.runDreamingSweep(memoryDirectory: memoryDirectory, rollback: rollback)
+    }
+
+    func runDreamingSweep(conversationID: UUID, rollback: Bool = false) async throws {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let context = await capability.runtime.sessionContext(for: conversationID) else { return }
+        try await capability.runtime.runDreamingSweep(memoryDirectory: context.memoryDirectory, rollback: rollback)
+    }
+
+    nonisolated func makeSessionContext(
+        conversationID: UUID,
+        cwd: String,
+        ownerAccountID: UUID? = nil,
+        chatType: MemoryChatType = .direct
+    ) throws -> MemorySessionContext {
+        let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
+        let memoryDir = try AgentMemoryPathResolver.resolveMemoryDirectory(
+            canonicalGitRoot: gitRoot,
+            cwd: cwd,
+            ownerAccountID: ownerAccountID,
+            tenancyPolicy: tenancyPolicy
+        )
+        let userMemoryDir = try AgentMemoryPathResolver.resolveUserMemoryDirectory(
+            ownerAccountID: ownerAccountID,
+            tenancyPolicy: tenancyPolicy
+        )
+        return MemorySessionContext(
+            conversationID: conversationID,
+            cwd: cwd,
+            canonicalGitRoot: gitRoot,
+            memoryDirectory: memoryDir,
+            userMemoryDirectory: userMemoryDir,
+            chatType: chatType,
+            ownerAccountID: ownerAccountID
+        )
+    }
+
+    private func buildBlocks(
+        context: MemorySessionContext,
+        capability: MemoryCapability,
+        recalled: String
+    ) async throws -> MemorySystemPromptBlocks {
+        let project = ProjectInstructionLoader.load(
+            cwd: context.cwd,
+            canonicalGitRoot: context.canonicalGitRoot,
+            managedPath: config.managedInstructionsPath,
+            userConfigDir: userConfigDir
+        )
+        guard let store = await capability.runtime.store(for: context.conversationID) else {
+            return MemorySystemPromptBlocks(
+                projectInstructionsText: project.text,
+                memoryIndexText: "",
+                recalledTopicBodiesText: recalled,
+                taxonomyPromptText: "",
+                driftGuardText: "",
+                sensitiveDataPromptText: "",
+                memoryPathDisclosureText: "",
+                snapshotGeneration: 0
+            )
         }
+        let promptBuilder = capability.promptBuilder ?? EmptyMemoryPromptBuilder()
+        let sections = try promptBuilder.buildPromptSections(
+            context: context,
+            store: store,
+            recalled: recalled,
+            availableToolNames: []
+        )
+        return MemorySystemPromptBlocks(
+            projectInstructionsText: project.text,
+            memoryIndexText: sections.memoryIndexText,
+            recalledTopicBodiesText: sections.recalledTopicBodiesText,
+            taxonomyPromptText: sections.taxonomyPromptText,
+            driftGuardText: sections.driftGuardText,
+            sensitiveDataPromptText: sections.sensitiveDataPromptText,
+            memoryPathDisclosureText: sections.memoryPathDisclosureText,
+            snapshotGeneration: 0
+        )
     }
 
     private func hintTracker(for conversationID: UUID) -> SubdirectoryHintTracker {
@@ -230,119 +554,25 @@ public actor DefaultMemoryService: MemoryServicing {
         return created
     }
 
-    func onPreCompress(conversationID: UUID, messages: [String]) async throws {
-        _ = conversationID
-        _ = messages
-    }
-
-    public func drainPendingWork(timeoutMs: Int) async {
-        await extractor.drain(timeoutMs: timeoutMs)
-    }
-
-    public func shutdown() async {
-        await providerRegistry.shutdownAll()
-    }
-
-    func invalidateSnapshot(conversationID: UUID) async {
-        await snapshotStore.invalidate(conversationID: conversationID)
-    }
-
-    func endSession(conversationID: UUID) async {
-        sessionByConversation.removeValue(forKey: conversationID)
-        storeByConversation.removeValue(forKey: conversationID)
-        hintTrackerByConversation.removeValue(forKey: conversationID)
-        await snapshotStore.endSession(conversationID: conversationID)
-        await writeTracker.removeConversation(conversationID: conversationID)
-        await activeMemory.endSession(conversationID: conversationID)
-        await extractor.discardStashedWork(for: conversationID)
-        await providerRegistry.endSessionAll(messages: [])
-    }
-
-    func currentSnapshotGeneration(conversationID: UUID) async -> Int {
-        await snapshotStore.generation(for: conversationID)
-    }
-
-    func preCompactionFlushTimeoutMs() -> Int {
-        config.preCompactionFlushTimeoutMs
-    }
-
-    func recordMemoryWrite(path: String, conversationID: UUID) async {
-        await writeTracker.recordMainAgentWrite(path: path, conversationID: conversationID)
-        await activeMemory.invalidateStanding(conversationID: conversationID)
-    }
-
-    func recordAuxiliaryMemoryWrite(path: String, conversationID: UUID) async {
-        await writeTracker.recordAuxiliaryWrite(path: path, conversationID: conversationID)
-    }
-
-    func memoryDirectory(for conversationID: UUID) -> URL? {
-        sessionByConversation[conversationID]?.memoryDirectory
-    }
-
-    func sessionContext(for conversationID: UUID) async -> MemorySessionContext? {
-        sessionByConversation[conversationID]
-    }
-
-    func manifestEntries(conversationID: UUID) async -> [MemoryManifestEntry] {
-        storeByConversation[conversationID]?.manifest() ?? []
-    }
-
-    func hybridSearch() -> HybridMemorySearch { search }
-
-    func runDreamingSweep(conversationID: UUID, rollback: Bool = false) async throws {
-        guard let context = sessionByConversation[conversationID] else { return }
-        try await dreaming.runSweep(memoryDirectory: context.memoryDirectory, rollback: rollback)
-    }
-
-    nonisolated func makeSessionContext(conversationID: UUID, cwd: String, chatType: MemoryChatType = .direct) throws -> MemorySessionContext {
-        let gitRoot = GitRootResolver.canonicalGitRoot(for: cwd)
-        let memoryDir = try AgentMemoryPathResolver.resolveMemoryDirectory(canonicalGitRoot: gitRoot, cwd: cwd)
-        return MemorySessionContext(
-            conversationID: conversationID,
-            cwd: cwd,
-            canonicalGitRoot: gitRoot,
-            memoryDirectory: memoryDir,
-            chatType: chatType
+    private func makeSearchCoordinator(conversationID: UUID) async -> MemorySearchCoordinator? {
+        let capability = await capabilityRegistry.activeCapability()
+        guard let session = await capability.runtime.sessionContext(for: conversationID) else { return nil }
+        let searchEngine = await capability.runtime.hybridSearch()
+        let activeCorpus = await activeMemoryPluginID()
+        let memoryDirectory = session.memoryDirectory
+        return MemorySearchCoordinator(
+            activeCorpusName: activeCorpus,
+            backendSearch: { query, limit in
+                await searchEngine.search(query: query, memoryDirectory: memoryDirectory, limit: limit)
+            },
+            backendGet: { lookupID in
+                guard let store = await capability.runtime.store(for: conversationID) else { return nil }
+                if let topic = try? store.readTopicBody(filename: lookupID) {
+                    return topic
+                }
+                return try? store.readDailyBody(filename: lookupID)
+            },
+            supplementRegistry: corpusSupplementRegistry
         )
-    }
-
-    private func buildBlocks(context: MemorySessionContext, store: AgentMemoryStore, recalled: String) throws -> MemorySystemPromptBlocks {
-        let project = ProjectInstructionLoader.load(
-            cwd: context.cwd,
-            canonicalGitRoot: context.canonicalGitRoot,
-            managedPath: config.managedInstructionsPath,
-            userConfigDir: userConfigDir
-        )
-        let index = try store.readIndexSnapshot()
-        let taxonomy = """
-\(MemoryTypeTaxonomy.indexUsagePrompt)
-\(MemoryTypeTaxonomy.whatNotToSavePrompt)
-\(MemoryTypeTaxonomy.persistenceDistinctionPrompt)
-"""
-        var sensitive = MemoryTypeTaxonomy.sensitiveDataPrompt
-        if config.teamMemoryEnabled {
-            sensitive += "\n" + MemoryTypeTaxonomy.teamSensitiveDataPrompt
-        }
-        let pathDisclosure = """
-You have a persistent, file-based memory system at \(context.memoryDirectory.path).
-"""
-        let generation = 0
-        return MemorySystemPromptBlocks(
-            projectInstructionsText: project.text,
-            memoryIndexText: index.isEmpty ? "" : "# Agent memory index\n\(index)",
-            recalledTopicBodiesText: recalled,
-            taxonomyPromptText: taxonomy,
-            driftGuardText: MemoryTypeTaxonomy.driftGuardPrompt,
-            sensitiveDataPromptText: sensitive,
-            memoryPathDisclosureText: pathDisclosure,
-            snapshotGeneration: generation
-        )
-    }
-
-    private func runExtractionPlaceholder(request: MemoryTurnEndedRequest) async {
-        guard let store = storeByConversation[request.session.conversationID] else { return }
-        let manifest = store.manifest().map(MemoryManifestScanner.formatManifestLine)
-        logger?.debug("[MemoryExtractor] would extract with manifest lines=\(manifest.count)")
-        _ = MemoryExtractionPrompts.systemPrompt(manifestLines: manifest, teamMemoryEnabled: config.teamMemoryEnabled)
     }
 }

@@ -20,15 +20,26 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
         guard let conversation = await deps.persistenceDomain.modelConversation(id: request.parentConversationID) else {
             return DefaultACPClientDelegate(autoApprovePermissions: false)
         }
-        let workspaceRoot = conversation.harnessPersistenceCwd ?? FileManager.default.currentDirectoryPath
+        guard let workspaceRoot = try? await deps.persistenceDomain.resolveHarnessPersistenceCwdForSideEffects(
+            conversationID: conversation.id,
+            policy: deps.workspacePolicy
+        ) else {
+            deps.logger?.warning(
+                "[SubAgentHarnessACPClientDelegateFactory] harness workspace not recorded conversationID=\(conversation.id)"
+            )
+            return DefaultACPClientDelegate(autoApprovePermissions: false)
+        }
         let memoryService = (deps.contextEngine as? DefaultContextEngine)?.memoryService
         var memoryDirectory: URL?
+        var userMemoryDirectory: URL?
         if let memoryService,
            let context = try? memoryService.makeSessionContext(
             conversationID: conversation.id,
-            cwd: workspaceRoot
+            cwd: workspaceRoot,
+            ownerAccountID: conversation.ownerAccountID
            ) {
             memoryDirectory = context.memoryDirectory
+            userMemoryDirectory = context.userMemoryDirectory
         }
         let sessionKey = conversation.id.uuidString
         let approvalDelivery = await ExecApprovalDeliveryFactory.make(
@@ -44,11 +55,15 @@ struct SubAgentHarnessACPClientDelegateFactory: SubAgentACPClientDelegateMaking 
             approvalDelivery: approvalDelivery,
             logger: deps.logger
         )
+        let skillsDirectory = (deps.configurationSet.promptAssembly.skillsFolderPath)
+            .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
         let runtimeContext = ExecRuntimeContext(
             sessionKey: sessionKey,
             agentID: sessionKey,
             isMainSession: true,
             memoryDirectory: memoryDirectory?.path,
+            userMemoryDirectory: userMemoryDirectory?.path,
+            skillsDirectory: skillsDirectory?.path,
             memoryWriteOnly: ConversationLineageInference.isMemoryWriteScopedProfile(conversation.modeProfileID)
         )
         let baseConfiguration = HarnessRuntimeSession.Configuration(enableTools: true, enableAgents: true)

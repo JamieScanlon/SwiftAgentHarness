@@ -51,6 +51,29 @@ struct SessionTranscriptAttachmentPayloadTests {
         #expect(payload.attachmentRefs?.count == 1)
         #expect(payload.attachmentRefs?.first?.blobId == blobRef.id)
 
+        let messageWithIngest = Message(
+            id: UUID(),
+            role: .user,
+            content: "catalog linked",
+            timestamp: Date(),
+            images: [Message.Image(name: "linked.png", path: SessionBlobImageRef.path(for: blobRef.id))],
+            toolCalls: []
+        )
+        let ingestRef = AttachmentIngestRef(
+            attachmentId: UUID(),
+            blobId: blobRef.id,
+            name: "linked.png",
+            kind: "image",
+            mimeType: "image/png",
+            trust: "user-direct"
+        )
+        let ingestJSON = try MessageTranscriptPayloadCodec.encodePayloadJSON(
+            from: messageWithIngest,
+            attachmentIngestRefs: [ingestRef]
+        )
+        let ingestPayload = try MessageTranscriptPayloadCodec.decode(ingestJSON)
+        #expect(ingestPayload.attachmentRefs?.first?.attachmentId == ingestRef.attachmentId)
+
         let rows = try local.readTranscriptEntries(conversationID: cid, request: .full)
         let replayed = try #require(try SessionTranscriptMapping.messageForReplay(from: rows[0]))
         #expect(replayed.images.count == 1)

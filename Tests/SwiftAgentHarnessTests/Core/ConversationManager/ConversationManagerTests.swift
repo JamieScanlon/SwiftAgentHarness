@@ -107,6 +107,38 @@ struct ConversationManagerTests {
         #expect(child.harnessPersistenceCwd == "/trusted/parent")
     }
 
+    @Test("recordHarnessPersistenceCwd persists explicit workspace for recovery")
+    func recordHarnessPersistenceCwdPersists() throws {
+        let container = try makeContainer()
+        let model = makeModel()
+        let cm = makeManager(container: container)
+        let created = try cm.createConversation(with: model, userSystemPrompt: "sys")
+        let updated = try cm.recordHarnessPersistenceCwd(
+            conversationID: created.id,
+            cwd: "/patched/workspace"
+        )
+        #expect(updated.harnessPersistenceCwd == "/patched/workspace")
+        let reloaded = try #require(cm.modelConversation(id: created.id))
+        #expect(reloaded.harnessPersistenceCwd == "/patched/workspace")
+    }
+
+    @Test("resolveHarnessPersistenceCwdForSideEffects returns recorded workspace")
+    func resolveSideEffectsUsesRecorded() throws {
+        let container = try makeContainer()
+        let model = makeModel()
+        let cm = makeManager(container: container)
+        let created = try cm.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            cwd: "/trusted/root"
+        )
+        let resolved = try cm.resolveHarnessPersistenceCwdForSideEffects(
+            conversationID: created.id,
+            policy: .default
+        )
+        #expect(resolved == "/trusted/root")
+    }
+
     @Test("deleteConversation removes registry row and cache row")
     func deleteRemoves() throws {
         let container = try makeContainer()
@@ -486,6 +518,7 @@ struct ConversationManagerTests {
                         schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                         basedOnEventID: basedOn,
                         assemblyFingerprint: "assembly-fp",
+                        replaySpecDigest: "replay-digest",
                         createdAt: Date()
                     )
                 )
@@ -904,6 +937,7 @@ struct ConversationManagerTests {
                     schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                     basedOnEventID: 1,
                     assemblyFingerprint: "mode+tools+prompt",
+                    replaySpecDigest: "replay-digest",
                     createdAt: Date()
                 )
             )
@@ -1007,6 +1041,7 @@ struct ConversationManagerTests {
                 schemaVersion: SystemPromptAssemblyCheckpointWire.currentSchemaVersion,
                 basedOnEventID: 1,
                 assemblyFingerprint: "base-fingerprint",
+                replaySpecDigest: "replay-digest",
                 createdAt: Date()
             )
         )

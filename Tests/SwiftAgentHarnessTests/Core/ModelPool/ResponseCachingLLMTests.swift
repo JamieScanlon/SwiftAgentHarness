@@ -145,5 +145,111 @@ struct ResponseCachingLLMTests {
         )
         #expect(llm.getRequestFeatures().responseFormats == [.text])
     }
+
+    @Test("owner scope key isolates cache entries under strict tenancy")
+    func ownerScopeIsolation() async throws {
+        let sharedStore = ResponseCacheStore()
+        let modelID = UUID()
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let scopeA = ModelPoolOwnerScope.resolve(
+            ownerAccountID: ownerA,
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        )!
+        let scopeB = ModelPoolOwnerScope.resolve(
+            ownerAccountID: ownerB,
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        )!
+        let baseA = CacheScriptedLLM(sendQueue: [LLMResponse(content: "owner-a", toolCalls: [])])
+        let baseB = CacheScriptedLLM(sendQueue: [LLMResponse(content: "owner-b", toolCalls: [])])
+        let llmA = ResponseCachingLLM(
+            base: baseA,
+            store: sharedStore,
+            modelID: modelID,
+            providerScopeKey: "provider#a",
+            policy: .enabled(maxEntries: 8, ttlSeconds: nil, stablePrefixMessageCount: nil),
+            cacheOwnerScopeKey: scopeA
+        )
+        let llmB = ResponseCachingLLM(
+            base: baseB,
+            store: sharedStore,
+            modelID: modelID,
+            providerScopeKey: "provider#a",
+            policy: .enabled(maxEntries: 8, ttlSeconds: nil, stablePrefixMessageCount: nil),
+            cacheOwnerScopeKey: scopeB
+        )
+        let messages = [Self.message("hello")]
+        let ra = try await llmA.send(messages, config: LLMRequestConfig())
+        let rb = try await llmB.send(messages, config: LLMRequestConfig())
+        #expect(ra.content == "owner-a")
+        #expect(rb.content == "owner-b")
+        #expect(await baseA.observedSendCalls() == 1)
+        #expect(await baseB.observedSendCalls() == 1)
+    }
+
+    @Test("empty owner scope shares cache entries in non-strict deployments")
+    func sharedNonStrictOwnerScope() async throws {
+        let sharedStore = ResponseCacheStore()
+        let modelID = UUID()
+        let baseA = CacheScriptedLLM(sendQueue: [LLMResponse(content: "shared", toolCalls: [])])
+        let baseB = CacheScriptedLLM(sendQueue: [LLMResponse(content: "other", toolCalls: [])])
+        let llmA = ResponseCachingLLM(
+            base: baseA,
+            store: sharedStore,
+            modelID: modelID,
+            providerScopeKey: "provider#a",
+            policy: .enabled(maxEntries: 8, ttlSeconds: nil, stablePrefixMessageCount: nil),
+            cacheOwnerScopeKey: ""
+        )
+        let llmB = ResponseCachingLLM(
+            base: baseB,
+            store: sharedStore,
+            modelID: modelID,
+            providerScopeKey: "provider#a",
+            policy: .enabled(maxEntries: 8, ttlSeconds: nil, stablePrefixMessageCount: nil),
+            cacheOwnerScopeKey: ""
+        )
+        let messages = [Self.message("hello")]
+        _ = try await llmA.send(messages, config: LLMRequestConfig())
+        let r2 = try await llmB.send(messages, config: LLMRequestConfig())
+        #expect(r2.content == "shared")
+        #expect(await baseA.observedSendCalls() == 1)
+        #expect(await baseB.observedSendCalls() == 0)
+    }
+
+    @Test("strict tenancy without owner bypasses cache")
+    func strictNilOwnerBypassesCache() async throws {
+        let base = CacheScriptedLLM(sendQueue: [
+            LLMResponse(content: "first", toolCalls: []),
+            LLMResponse(content: "second", toolCalls: []),
+        ])
+        let llm = ResponseCachingLLM(
+            base: base,
+            store: ResponseCacheStore(),
+            modelID: UUID(),
+            providerScopeKey: "provider#a",
+            policy: .enabled(maxEntries: 8, ttlSeconds: nil, stablePrefixMessageCount: nil),
+            cacheOwnerScopeKey: nil
+        )
+        let messages = [Self.message("hello")]
+        let r1 = try await llm.send(messages, config: LLMRequestConfig())
+        let r2 = try await llm.send(messages, config: LLMRequestConfig())
+        #expect(r1.content == "first")
+        #expect(r2.content == "second")
+        #expect(await base.observedSendCalls() == 2)
+    }
+
+    @Test("ModelPoolOwnerScope produces distinct keys for different owners")
+    func ownerScopeResolverDistinctOwners() {
+        let strict = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        let ownerA = UUID()
+        let ownerB = UUID()
+        let scopeA = ModelPoolOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: strict)
+        let scopeB = ModelPoolOwnerScope.resolve(ownerAccountID: ownerB, tenancyPolicy: strict)
+        #expect(scopeA != scopeB)
+        #expect(scopeA == AgentMemoryPathResolver.ownerSegment(ownerA))
+        #expect(ModelPoolOwnerScope.resolve(ownerAccountID: nil, tenancyPolicy: strict) == nil)
+        #expect(ModelPoolOwnerScope.resolve(ownerAccountID: ownerA, tenancyPolicy: .disabled) == "")
+    }
 }
 

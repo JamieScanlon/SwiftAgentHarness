@@ -282,7 +282,9 @@ struct ModelInvocationCoordinatorTests {
                 promptCacheEstimatedInputTokens: 900,
                 promptCacheEstimatedCachedInputTokens: 300,
                 promptCacheEstimatedCacheWriteTokens: 300,
-                promptCacheEstimatedSavingsUSD: 0.0006
+                promptCacheEstimatedSavingsUSD: 0.0006,
+                promptCacheValuesAreProviderReported: true,
+                promptCacheUnexpectedCacheWrite: true
             )
         )
         let snapshot = await coordinator.callsSnapshot(for: modelID)
@@ -292,7 +294,9 @@ struct ModelInvocationCoordinatorTests {
                 attempt.outcome == .observed &&
                 attempt.promptCacheMode == "persistent" &&
                 attempt.promptCacheProviderApplied == true &&
-                attempt.promptCacheEstimatedCachedInputTokens == 300
+                attempt.promptCacheEstimatedCachedInputTokens == 300 &&
+                attempt.promptCacheValuesAreProviderReported == true &&
+                attempt.promptCacheUnexpectedCacheWrite == true
         }
         #expect(hasPromptCacheAttempt)
     }

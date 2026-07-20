@@ -158,7 +158,7 @@ struct ContextCompactionCheckpointProgressionTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: forceGating
         )
         guard case .transform(let input1) = build1 else {
@@ -214,7 +214,7 @@ struct ContextCompactionCheckpointProgressionTests {
             lastPromptTokens: nil,
             events: [checkpointEvent],
             eventLogFrontier: 1,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: forceGating
         )
         guard case .transform(let input2) = build2 else {
@@ -257,7 +257,7 @@ struct ContextCompactionCheckpointProgressionTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: forceGating
         )
         guard case .transform(let input1) = build1 else {
@@ -324,7 +324,7 @@ struct ContextCompactionCheckpointProgressionTests {
             lastPromptTokens: nil,
             events: [checkpointEvent],
             eventLogFrontier: 1,
-            lastLLMDateByConversationID: [:],
+            lastCompactionLLMDateByConversationID: [:],
             gating: forceGating
         )
         guard case .transform(let input2) = build2 else {

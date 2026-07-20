@@ -4,7 +4,7 @@ import SwiftAgentKit
 /// Harness `kind: subscribe` / `unsubscribe` / `ack` / `dedupe_check_and_set` routing for multiplexed WebSocket topics (`model/...`, `conversation/...`, pool health, model registry, session capability registries).
 /// Lives in ``Communication`` so topic naming and hub delegation stay out of the Vapor gateway.
 enum WebSocketTopicSubscriptionRouter {
-    /// Applies control message to hubs. Returns an error message for the gateway to send as `type: error`, or `nil` on success.
+    /// Applies control message to hubs. Returns an error message for the gateway to send as `kind: error`, or `nil` on success.
     static func applyCommClientControlMessage(
         modelHub: ModelStateTopicHub?,
         conversationHub: ConversationEventsTopicHub?,

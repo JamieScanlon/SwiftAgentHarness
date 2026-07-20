@@ -64,6 +64,9 @@ enum ModeProfileProjectOverlayPolicy {
         if raw.appliesAgentBuildOrchestratorHarness != nil {
             diagnostics.append("modeProfiles[\(raw.id)] project overlay stripped structural field 'appliesAgentBuildOrchestratorHarness'")
         }
+        if raw.allowsHostGrants != nil {
+            diagnostics.append("modeProfiles[\(raw.id)] project overlay stripped confinement field 'allowsHostGrants'")
+        }
 
         let sanitizedContext = sanitizeContextOverlay(raw.context, profileID: raw.id, diagnostics: &diagnostics)
 
@@ -74,6 +77,7 @@ enum ModeProfileProjectOverlayPolicy {
             assemblyKind: nil,
             allowsProactiveCompactionTriggers: nil,
             appliesAgentBuildOrchestratorHarness: nil,
+            allowsHostGrants: nil,
             semanticLayerTags: raw.semanticLayerTags,
             label: raw.label,
             profileDescription: raw.profileDescription,

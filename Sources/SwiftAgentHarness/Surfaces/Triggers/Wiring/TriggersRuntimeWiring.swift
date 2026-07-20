@@ -5,9 +5,14 @@ import SwiftAgentKit
 
 struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
     private let runtime: any APILayerChatRuntimeManaging
+    private let session: EmbeddedHarnessAPISession
 
-    init(runtime: any APILayerChatRuntimeManaging) {
+    init(
+        runtime: any APILayerChatRuntimeManaging,
+        session: EmbeddedHarnessAPISession = EmbeddedHarnessAPISession()
+    ) {
         self.runtime = runtime
+        self.session = session
     }
 
     func dispatchTriggerMessage(
@@ -21,18 +26,18 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         originSurface: String?,
         originSenderID: String?
     ) async throws {
-        _ = try await runtime.apiSendMessageAndStreamResponse(
+        try await HarnessEmbeddedMutation.dispatchTriggerMessage(
             conversationID: conversationID,
-            text,
-            images: [],
-            enableTools: enableTools,
-            enableAgents: enableAgents,
-            expectedPreviousTailHarnessMessageID: nil,
+            text: text,
+            systemReminder: systemReminder,
             inputTrustRaw: inputTrustRaw,
             resolvedInputTrustClass: resolvedInputTrustClass,
-            systemReminder: systemReminder,
+            enableTools: enableTools,
+            enableAgents: enableAgents,
             originSurface: originSurface,
-            originSenderID: originSenderID
+            originSenderID: originSenderID,
+            session: session,
+            fallbackRuntime: runtime
         )
     }
 }
@@ -255,14 +260,31 @@ public enum TriggersRuntimeWiring {
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
         )
         let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
+        let memoryConfig = MemoryConfiguration.default
+        let dreamingBridge = MemoryDreamingBridge(config: memoryConfig, logger: logger)
+        let dreamingDeliver = MemoryDreamingDeliver.wrap(
+            dispatch: dispatch,
+            bridge: dreamingBridge,
+            logger: logger
+        )
         let scheduler = TriggerSchedulerService(
             store: taskStore,
-            dispatch: dispatch,
+            deliver: dreamingDeliver,
             lockURL: lockURL,
             config: TriggerSchedulerConfiguration(lockIdentity: configuration.schedulerIdentity),
             taskRuns: taskRuns,
             logger: logger
         )
+        // Permanent system cron — installer path only (`allowPermanent` via scanner on store upsert).
+        do {
+            try MemoryDreamingCronInstaller.ensureInstalled(
+                store: taskStore,
+                config: memoryConfig,
+                logger: logger
+            )
+        } catch {
+            logger.error("[Dreaming] failed to install dream cron: \(error.localizedDescription)")
+        }
         let dynamicStore = WebhookDynamicRouteStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
         )

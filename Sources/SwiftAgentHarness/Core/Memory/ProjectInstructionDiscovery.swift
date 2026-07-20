@@ -50,6 +50,39 @@ enum ProjectInstructionDiscovery {
         }
     }
 
+    /// Nearest primary instruction file walking upward from `cwd`. Prefers `AGENTS.md` over `CLAUDE.md`
+    /// at the same directory level.
+    static func nearestPrimaryInstructionFile(
+        cwd: String,
+        fileManager: FileManager = .default
+    ) -> String? {
+        var current = (cwd as NSString).standardizingPath
+        let root = "/"
+        while true {
+            if let path = primaryInstructionFileInDirectory(current, fileManager: fileManager) {
+                return path
+            }
+            if current == root { break }
+            let parent = (current as NSString).deletingLastPathComponent
+            if parent == current { break }
+            current = parent
+        }
+        return nil
+    }
+
+    private static func primaryInstructionFileInDirectory(
+        _ directory: String,
+        fileManager: FileManager
+    ) -> String? {
+        let agents = (directory as NSString).appendingPathComponent("AGENTS.md")
+        if fileManager.fileExists(atPath: agents) { return agents }
+        let claude = (directory as NSString).appendingPathComponent("CLAUDE.md")
+        if fileManager.fileExists(atPath: claude) { return claude }
+        let claudeAlt = (directory as NSString).appendingPathComponent(".claude/CLAUDE.md")
+        if fileManager.fileExists(atPath: claudeAlt) { return claudeAlt }
+        return nil
+    }
+
     static func discoverInDirectory(_ directory: String, fileManager: FileManager = .default) -> [String] {
         var found: [String] = []
         let names = ["AGENTS.md", "CLAUDE.md", "AGENTS.local.md", "CLAUDE.local.md", ".cursorrules"]

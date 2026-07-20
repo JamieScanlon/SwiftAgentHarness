@@ -29,9 +29,10 @@ public actor OrchestratorRuntimeService {
     nonisolated(unsafe) private var toolData: (any ConversationToolDataProviding)!
     internal let subAgentPool: any SubAgentPooling
     nonisolated(unsafe) private var toolApproval: (any ToolApprovalRuntimeServicing)!
-    internal let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    internal let toolSystemGateway: any ToolSystemGatewaying
 
     nonisolated(unsafe) private var additionalToolProviderFactory: HarnessToolProviderFactory?
+    nonisolated(unsafe) private var additionalToolProviderVisibilityGrant: ToolVisibilityGrant = .inheritModeLists
     nonisolated(unsafe) private var channelRegistry: (any ChannelPluginLooking)?
     nonisolated(unsafe) private var topicPublication: ConversationTopicPublicationPort?
 
@@ -49,6 +50,7 @@ public actor OrchestratorRuntimeService {
         self.contextProjection = contextProjection
         self.subAgentPool = subAgentPool
         self.selection = selection
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installStartup(_ startup: ConversationStartupService) {
@@ -86,9 +88,24 @@ public actor OrchestratorRuntimeService {
         self.toolData = toolData
     }
 
-    nonisolated public func installAdditionalToolProviders(_ factory: @escaping HarnessToolProviderFactory) {
+    nonisolated public func installAdditionalToolProviders(
+        _ factory: @escaping HarnessToolProviderFactory,
+        visibilityGrant: ToolVisibilityGrant = .inheritModeLists
+    ) {
         precondition(self.additionalToolProviderFactory == nil, "Additional tool providers already installed")
         self.additionalToolProviderFactory = factory
+        self.additionalToolProviderVisibilityGrant = visibilityGrant
+        if case .grant = visibilityGrant {
+            deps.visibilityGrants.register(
+                ToolVisibilityGrantRecord(
+                    id: ToolVisibilityGrantStore.hostProvidersRegistrationID,
+                    grant: visibilityGrant,
+                    match: .groupPolicyTag("plugins")
+                )
+            )
+        } else {
+            deps.visibilityGrants.remove(id: ToolVisibilityGrantStore.hostProvidersRegistrationID)
+        }
     }
 
     nonisolated func installChannelRegistry(_ registry: any ChannelPluginLooking, holder: ChannelRegistryHolder? = nil) {
@@ -337,14 +354,12 @@ public actor OrchestratorRuntimeService {
             thinkingConfig = nil
         }
         var enrichedMetadata = metadata
-        if let conversation,
-           let entry = await deps.registryEntryProvider?(conversation.model.id),
-           let binding = entry.primaryBinding,
-           let contribution = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
-            ProviderPromptContribution.applySectionOverrides(
-                metadata: &enrichedMetadata,
-                contribution: contribution
-            )
+        if let conversationID = conversation?.id,
+           let assembly = await contextProjection.cachedSystemPromptAssembly(conversationID: conversationID) {
+            enrichedMetadata.merge(assembly.metadata) { _, new in new }
+            if assembly.replaySpecDigest != nil {
+                enrichedMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = assembly.replaySpecDigest
+            }
         }
         if enrichedMetadata.isEmpty, thinkingConfig == nil {
             return nil
@@ -366,13 +381,28 @@ public actor OrchestratorRuntimeService {
                     "reason": .string(decision.reason),
                 ])
             }
+            let materializedBlocks: [JSON] = attachmentProjection.materializedBlocks.map { block in
+                .object([
+                    "attachmentID": .string(block.attachmentID.uuidString),
+                    "attachmentName": .string(block.attachmentName),
+                    "disposition": .string(block.disposition.rawValue),
+                    "body": .string(block.body),
+                ])
+            }
             payload["contextEngineAttachmentProjection"] = .object([
                 "projectionFingerprint": .string(attachmentProjection.projectionFingerprint),
                 "decisions": .array(decisions),
+                "materializedBlocks": .array(materializedBlocks),
             ])
         }
         if let thinkingConfig {
             payload["thinkingConfig"] = thinkingConfigJSON(thinkingConfig)
+        }
+        if let conversationID = conversation?.id,
+           let lastLLMDate = await contextProjection.lastLLMDate(for: conversationID) {
+            payload[PromptCacheDispatchMetadataKeys.lastLLMDateISO] = .string(
+                ISO8601DateFormatter().string(from: lastLLMDate)
+            )
         }
 
         return .object(payload)
@@ -548,6 +578,20 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        let attachmentPersistence = deps.persistenceDomain
+        let attachmentConversation = activeConversation
+        providers.append(
+            ConversationAttachmentToolProvider(
+                resolveConversation: { attachmentConversation },
+                readAttachmentBytes: { attachmentID, conversationID in
+                    try await attachmentPersistence.readAttachmentBytes(
+                        attachmentID: attachmentID,
+                        conversationID: conversationID
+                    )
+                },
+                logger: logger
+            )
+        )
         providers.append(
             AgentPlanToolProvider(
                 dataProvider: toolData,
@@ -581,14 +625,27 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
-        let workspaceRoot = activeConversation?.harnessPersistenceCwd
-            ?? FileManager.default.currentDirectoryPath
-        if !workspaceRoot.isEmpty {
+        let workspaceRoot: String?
+        if let conv = activeConversation {
+            workspaceRoot = try? await deps.persistenceDomain.resolveHarnessPersistenceCwdForSideEffects(
+                conversationID: conv.id,
+                policy: deps.workspacePolicy
+            )
+        } else {
+            workspaceRoot = nil
+        }
+        if let workspaceRoot {
             let memoryService = (deps.contextEngine as? DefaultContextEngine)?.memoryService
             var memoryDirectory: URL?
+            var userMemoryDirectory: URL?
             if let memoryService, let conv = activeConversation,
-               let context = try? memoryService.makeSessionContext(conversationID: conv.id, cwd: workspaceRoot) {
+               let context = try? memoryService.makeSessionContext(
+                   conversationID: conv.id,
+                   cwd: workspaceRoot,
+                   ownerAccountID: conv.ownerAccountID
+               ) {
                 memoryDirectory = context.memoryDirectory
+                userMemoryDirectory = context.userMemoryDirectory
             }
             let memoryWriteOnly = ConversationLineageInference.isMemoryWriteScopedProfile(
                 activeConversation?.modeProfileID
@@ -641,11 +698,15 @@ public actor OrchestratorRuntimeService {
                 approvalDelivery: approvalDelivery,
                 logger: logger
             )
+            let skillsDirectory = (deps.configurationSet.promptAssembly.skillsFolderPath)
+                .flatMap { SkillsDirectoryResolver.resolve(workspaceRoot: workspaceRoot, configuredPath: $0) }
             let runtimeContext = ExecRuntimeContext(
                 sessionKey: sessionKey,
                 agentID: sessionKey,
                 isMainSession: true,
                 memoryDirectory: memoryDirectory?.path,
+                userMemoryDirectory: userMemoryDirectory?.path,
+                skillsDirectory: skillsDirectory?.path,
                 memoryWriteOnly: memoryWriteOnly
             )
             let perCallElevationModes: [String: ElevatedMode] = Dictionary(
@@ -691,6 +752,18 @@ public actor OrchestratorRuntimeService {
                             await memoryService.recordMemoryWrite(path: path, conversationID: conv.id)
                         }
                     },
+                    validatePreCompactionFlushWrite: { path, priorContent, newContent in
+                        guard let memoryService, let conv = activeConversation else { return }
+                        let guardConversationID = conv.parentConversationID ?? conv.id
+                        if let message = await memoryService.validatePreCompactionFlushWrite(
+                            conversationID: guardConversationID,
+                            absolutePath: path,
+                            priorContent: priorContent,
+                            newContent: newContent
+                        ) {
+                            throw PreCompactionFlushWriteToolError(message: message)
+                        }
+                    },
                     logger: logger,
                     sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
                     sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,
@@ -698,7 +771,38 @@ public actor OrchestratorRuntimeService {
                 )
             )
             if let memoryDirectory {
-                providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
+                if let memoryService, let conversationID,
+                   let searchDependencies = await memoryService.memorySearchToolDependencies(conversationID: conversationID) {
+                    providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, dependencies: searchDependencies))
+                } else {
+                    providers.append(MemorySearchToolProvider(memoryDirectory: memoryDirectory, search: HybridMemorySearch()))
+                }
+            }
+            let workshopConfig = deps.configurationSet.skillWorkshop
+            if workshopConfig.enabled,
+               let skillsPath = deps.configurationSet.promptAssembly.skillsFolderPath {
+                let gitRoot = GitRootResolver.canonicalGitRoot(for: workspaceRoot)
+                let workspaceKey = AgentMemoryPathResolver.sanitizedProjectKey(
+                    canonicalGitRoot: gitRoot,
+                    cwd: workspaceRoot
+                )
+                let skillsRoot = URL(fileURLWithPath: skillsPath)
+                let store = SkillWorkshopProposalStore(workspaceKey: workspaceKey, config: workshopConfig)
+                let workshopService = SkillWorkshopService(
+                    config: workshopConfig,
+                    workspaceKey: workspaceKey,
+                    skillsRoot: skillsRoot,
+                    store: store,
+                    onApplied: { [skillActivation] sessionID in
+                        await skillActivation.invalidateSkillCatalog(for: sessionID ?? conversationID)
+                    }
+                )
+                providers.append(
+                    SkillWorkshopToolProvider(
+                        service: workshopService,
+                        conversationID: conversationID
+                    )
+                )
             }
         }
         if deps.conversationTransformConfiguration.contextCompaction.manualToolEnabled {
@@ -712,7 +816,7 @@ public actor OrchestratorRuntimeService {
         if let additionalToolProviderFactory {
             let context = HarnessToolProviderContext(
                 conversation: activeConversation,
-                workspaceRoot: workspaceRoot.isEmpty ? nil : workspaceRoot,
+                workspaceRoot: workspaceRoot,
                 logger: logger,
                 pluginGroupID: "plugins"
             )
@@ -915,6 +1019,7 @@ public actor OrchestratorRuntimeService {
             modelID: model.id,
             conversationID: conversationID,
             credentialKey: schedulerCredentialKey(for: providerBindings),
+            ownerAccountID: ownerAccountID,
             coordinator: deps.invocationCoordinator
         )
     }
@@ -1117,6 +1222,7 @@ public actor OrchestratorRuntimeService {
                 modelID: effectivePrimaryModel.id,
                 conversationID: activeConversationID,
                 credentialKey: credentialKey,
+                ownerAccountID: activeConversation?.ownerAccountID,
                 coordinator: deps.invocationCoordinator
             )
         }
@@ -1140,7 +1246,7 @@ public actor OrchestratorRuntimeService {
             a2aIntegration: a2aManager != nil ? .registrationOnly : .disabled,
             acpIntegration: acpManager != nil ? .registrationOnly : .disabled,
             mcpConnectionTimeout: 30.0,
-            toolCallTimeout: 5 * 60,
+            toolCallTimeout: deps.toolPolicy.toolCallTimeoutSeconds,
             maxTokens: effectivePrimaryModel.maxContextLength,
             temperature: nil,
             topP: nil,

@@ -101,13 +101,15 @@ enum ContextCompactionInputBuilder: Sendable {
         lastPromptTokens: Int?,
         events: [CachedConversationEvent],
         eventLogFrontier: Int,
-        lastLLMDateByConversationID: [UUID: Date],
+        lastCompactionLLMDateByConversationID: [UUID: Date],
         gating: ContextCompactionGatingOptions,
         compactionSummarizerDebugOutputPath: String? = nil,
         allowProactiveCompactionTriggers: Bool = true,
         sessionMemoryNoteForCompaction: String? = nil,
         compactionInjectedPrefix: [Message] = [],
-        reinjectableSkills: [ReinjectableSkill] = []
+        reinjectableSkills: [ReinjectableSkill] = [],
+        postCompactionInstructionContext: String? = nil,
+        cacheExpiredHygieneWindow: Bool = false
     ) -> ContextCompactionInitialPhaseBuildResult {
         guard enableContextTransform else {
             return .passthrough(reason: "context_transform_disabled")
@@ -135,7 +137,6 @@ enum ContextCompactionInputBuilder: Sendable {
             branchParentConversationID: conversation.parentConversationID,
             explicitFocusQuery: resolvedFocusQuery
         )
-        let cachePolicy = ContextCompactionPolicy.resolvedCachePolicy(config: compactionConfig)
         let deterministicHygienePolicy = ContextCompactionPolicy.resolvedDeterministicHygienePolicy(
             config: compactionConfig
         )
@@ -184,7 +185,8 @@ enum ContextCompactionInputBuilder: Sendable {
                 rawMiddle: rawMiddle,
                 config: compactionConfig,
                 conversationID: conversation.id,
-                lastLLMDateByConversationID: lastLLMDateByConversationID
+                lastCompactionLLMDateByConversationID: lastCompactionLLMDateByConversationID,
+                cacheExpiredHygieneWindow: cacheExpiredHygieneWindow
             )
         }
 
@@ -217,14 +219,15 @@ enum ContextCompactionInputBuilder: Sendable {
             compactionStrategy: strategy,
             compactionFocusQuery: resolvedFocusQuery,
             branchParentConversationID: conversation.parentConversationID,
-            compactionCachePolicy: cachePolicy,
+            compactionCachePolicy: nil,
             compactionDeterministicHygienePolicy: deterministicHygienePolicy,
             compactionIdentifierPreservationPolicy: identifierPreservationPolicy,
             compactionPreviousSummaryText: previousSummaryText,
             compactionSessionMemoryNote: sessionMemoryNoteForCompaction,
             compactionSplitBaseMessages: messages,
             compactionInjectedPrefixMessages: compactionInjectedPrefix,
-            compactionReinjectableSkills: reinjectableSkills
+            compactionReinjectableSkills: reinjectableSkills,
+            compactionPostCompactionInstructionContext: postCompactionInstructionContext
         )
         return .transform(input)
     }
@@ -252,7 +255,7 @@ enum ContextCompactionInputBuilder: Sendable {
             phase: phase,
             effectiveContextLimitTokens: effective,
             compactionStrategy: .default,
-            compactionCachePolicy: ContextCompactionPolicy.resolvedCachePolicy(config: compactionConfig),
+            compactionCachePolicy: nil,
             compactionDeterministicHygienePolicy: ContextCompactionPolicy.resolvedDeterministicHygienePolicy(
                 config: compactionConfig
             ),

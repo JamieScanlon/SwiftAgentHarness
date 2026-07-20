@@ -333,10 +333,6 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         try await residualAPI.readPlanMarkdown(conversationID: conversationID)
     }
 
-    func apiOrchestratorBoundConversationID() async -> UUID? {
-        await residualAPI.orchestratorBoundConversationID()
-    }
-
     func apiPreviewContextCompaction(
         conversationID: UUID,
         gating: ContextCompactionGatingOptions,

@@ -5,16 +5,16 @@ enum ContextSystemPromptModeSwitches {
     static let nonSuppressibleSectionIDs: Set<String> = ["constraints"]
 
     struct Result: Sendable {
-        let metadata: [String: String]
-        let suppressions: Set<String>
-        let sectionOverrides: [String: String]
+        let assemblyContext: SystemPromptAssemblyContext
+        let modeContribution: SystemPromptContribution
         let memoryInjectionMode: String
     }
 
     static func build(
         conversation: ModelConversation,
         strictAgentHarnessPrompts: Bool,
-        resolvedProfile: ResolvedModeProfile
+        resolvedProfile: ResolvedModeProfile,
+        referenceDate: Date = Date()
     ) -> Result {
         let conversationStartDate: Date = {
             if let systemMessage = conversation.messages.first(where: { $0.role == .system }) {
@@ -33,60 +33,58 @@ enum ContextSystemPromptModeSwitches {
         let suppressions = normalizedSuppressions(context.suppressSections)
         let sectionOverrides = normalizedSectionOverrides(context.sectionOverrides)
 
-        var metadata: [String: String] = [
-            "conversationID": conversation.id.uuidString,
-            "conversationStartDate": isoFormatter.string(from: conversationStartDate),
-            "registryProfileId": resolvedProfile.id,
-            "modeMemoryInjection": memoryMode,
-            "modeIncludeSkills": String(context.includeSkills ?? true),
-            "modeIncludeToolGuidance": String(context.includeToolGuidance ?? true),
-        ]
-        if let directive {
-            metadata["modeDirective"] = directive
-        }
-        if let compactionLevel {
-            metadata["modeCompactionLevel"] = compactionLevel
-        }
-        if !suppressions.isEmpty {
-            metadata["modeSuppressSections"] = suppressions.sorted().joined(separator: ",")
-        }
-        for (key, value) in sectionOverrides {
-            metadata["modeSectionOverride.\(key)"] = value
-        }
-        if conversation.interactionMode == .plan || conversation.interactionMode == .agent {
-            let planPath = AgentPlanStore.planPathString(for: conversation.id)
-            metadata["interactionMode"] = conversation.interactionMode.rawValue
-            metadata["planPath"] = planPath
-            metadata["agentWorkflowBlock"] = agentWorkflowPromptBlock(
+        var workflowBlock = ""
+        let compositionMode = ConversationMetadataSubagentPromptComposition.promptCompositionMode(from: conversation.metadata)
+            ?? (conversation.lineageKind == .subAgent ? .spawn : nil)
+        if compositionMode == .spawn {
+            workflowBlock = ConversationMetadataSubagentPromptComposition.spawnTaskDirective(from: conversation.metadata) ?? ""
+        } else if compositionMode != .fork,
+                  conversation.interactionMode == .plan || conversation.interactionMode == .agent {
+            workflowBlock = agentWorkflowPromptBlock(
                 for: conversation,
                 strictAgentHarnessPrompts: strictAgentHarnessPrompts
             )
         }
-        var mergedOverrides = sectionOverrides
-        if conversation.lineageKind == .subAgent {
-            let scope = conversation.conversationScope()
-            let prompt = subAgentContextPrompt(scope: scope)
-            mergedOverrides["sub_agent_context"] = prompt
-            metadata["modeSectionOverride.sub_agent_context"] = prompt
-            metadata["conversationLineageKind"] = conversation.lineageKind.rawValue
-            metadata["conversationOrigin"] = conversation.origin.rawValue
-            metadata["subAgentRootConversationID"] = scope.rootID.uuidString.lowercased()
-            if let parentID = scope.parentID {
-                metadata["subAgentParentConversationID"] = parentID.uuidString.lowercased()
+
+        let subAgentPrompt: String? = nil
+
+        let assemblyContext = SystemPromptAssemblyContext(
+            conversationID: conversation.id.uuidString,
+            conversationStartDate: isoFormatter.string(from: conversationStartDate),
+            referenceDate: referenceDate,
+            userSystemPrompt: "",
+            workflowBlock: workflowBlock,
+            memoryInjectionMode: memoryMode,
+            includeAgentSkills: context.includeSkills ?? true,
+            includeToolGuidance: context.includeToolGuidance ?? true,
+            subAgentContextPrompt: subAgentPrompt,
+            registryProfileID: resolvedProfile.id,
+            modeCompactionLevel: compactionLevel,
+            workspaceRoot: conversation.harnessPersistenceCwd?.trimmedOrNil
+        )
+
+        var modeContribution = SystemPromptContribution(source: .mode)
+        modeContribution.suppress = Set(
+            suppressions.compactMap { SystemPromptSectionName.canonicalSection(forLegacyKey: $0) }
+        )
+        for (key, value) in sectionOverrides {
+            if let section = SystemPromptSectionName.canonicalSection(forLegacyKey: key) {
+                modeContribution.sectionOverrides[section] = value
             }
-            metadata["subAgentDepth"] = String(scope.depth)
+        }
+        if let directive {
+            modeContribution.sectionDirectives[.modeDirective] = directive
         }
 
         return Result(
-            metadata: metadata,
-            suppressions: suppressions,
-            sectionOverrides: mergedOverrides,
+            assemblyContext: assemblyContext,
+            modeContribution: modeContribution,
             memoryInjectionMode: memoryMode
         )
     }
 
     private static func subAgentContextPrompt(scope: ConversationScope) -> String {
-        let template = SystemPrompt.loadSubAgentContextTemplateFromConfig()
+        let template = PromptAssemblyConfiguration.default.subAgentContextTemplate
         let parent = scope.parentID?.uuidString.lowercased() ?? "none"
         return template
             .replacingOccurrences(of: "{{subAgentDepth}}", with: String(scope.depth))

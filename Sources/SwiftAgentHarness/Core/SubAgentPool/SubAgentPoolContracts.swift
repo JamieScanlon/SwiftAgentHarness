@@ -447,6 +447,8 @@ struct SubAgentLaunchRequest: Sendable {
     var description: String?
     var metadata: JSON?
     var interactionMode: String?
+    /// Optional closed-world tool allowlist → child `routingPrefs.explicitToolPolicy`.
+    var toolsAllow: [String]?
     /// Harness-internal trust signal: delegate tool approval already cleared upstream (model-turn path only).
     var permissionAlreadyGranted: Bool
 
@@ -467,6 +469,7 @@ struct SubAgentLaunchRequest: Sendable {
         description: String? = nil,
         metadata: JSON? = nil,
         interactionMode: String? = nil,
+        toolsAllow: [String]? = nil,
         permissionAlreadyGranted: Bool = false
     ) {
         self.context = context
@@ -485,6 +488,7 @@ struct SubAgentLaunchRequest: Sendable {
         self.description = description
         self.metadata = metadata
         self.interactionMode = interactionMode
+        self.toolsAllow = toolsAllow
         self.permissionAlreadyGranted = permissionAlreadyGranted
     }
 
@@ -511,6 +515,7 @@ struct SubAgentLaunchRequest: Sendable {
             description: request.description,
             metadata: Self.sanitizedClientMetadata(request.metadata),
             interactionMode: request.interactionMode,
+            toolsAllow: request.toolsAllow,
             permissionAlreadyGranted: false
         )
     }
@@ -548,17 +553,20 @@ enum SubAgentRequestPriority: Sendable, Equatable {
 struct SubAgentRunReservation: Sendable, Equatable {
     var parentConversationID: UUID
     var parentRunID: UUID?
+    var ownerAccountID: UUID?
     var lifecycleID: String
     var priority: SubAgentRequestPriority
 
     init(
         parentConversationID: UUID,
         parentRunID: UUID? = nil,
+        ownerAccountID: UUID? = nil,
         lifecycleID: String,
         priority: SubAgentRequestPriority = .foreground
     ) {
         self.parentConversationID = parentConversationID
         self.parentRunID = parentRunID
+        self.ownerAccountID = ownerAccountID
         self.lifecycleID = lifecycleID
         self.priority = priority
     }
@@ -780,7 +788,7 @@ struct DefaultSubAgentPool: SubAgentPooling, SubAgentTransportAdapterResolving {
 
     init(
         adapters: [any SubAgentTransportAdapting] = SubAgentDefaultAdapters.make(),
-        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.loadFromPromptConfigBundle()
+        hostingPolicyConfiguration: SubAgentHostingPolicyConfiguration
     ) {
         var registry: [SubAgentTransportKind: any SubAgentTransportAdapting] = [:]
         for adapter in adapters {

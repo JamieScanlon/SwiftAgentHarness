@@ -14,7 +14,7 @@ actor SlashCommandDispatchService {
     let orchestratorRuntime: OrchestratorRuntimeService
     let agentRuntime: any AgentRuntimeOrchestratorBinding
     let subAgentPool: any SubAgentPooling
-    let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    let toolSystemGateway: any ToolSystemGatewaying
     nonisolated(unsafe) var subAgentSpawnService: SubAgentSpawnService?
     private var pendingSlashCommandsByConversationID: [UUID: [String]] = [:]
     private var isDrainingPendingSlashCommands = false
@@ -45,6 +45,7 @@ actor SlashCommandDispatchService {
         self.orchestratorRuntime = orchestratorRuntime
         self.agentRuntime = agentRuntime
         self.subAgentPool = subAgentPool
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installSubAgentSpawnService(_ spawnService: SubAgentSpawnService) {
@@ -114,7 +115,7 @@ actor SlashCommandDispatchService {
         switch parsedInput {
         case let .skill(skillName, args):
             guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-                  SystemPrompt.loadIncludeAgentSkillsFromConfig()
+                  deps.configurationSet.promptAssembly.includeAgentSkills
             else { return nil }
             if !skipQueue, await isSlashDispatchBlocked(conversationID: conversationID) {
                 enqueuePendingSlashCommand(conversationID: conversationID, rawText: text)
@@ -152,6 +153,16 @@ actor SlashCommandDispatchService {
                     return try await runSlashMemoryCommand(
                         conversationID: conversationID,
                         filename: innerParsed.args.isEmpty ? nil : innerParsed.args
+                    )
+                case "dreaming":
+                    return try await runSlashDreamingCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
+                    )
+                case "active-memory":
+                    return try await runSlashActiveMemoryCommand(
+                        conversationID: conversationID,
+                        args: innerParsed.args
                     )
                 case "init":
                     return try await runSlashInitCommand(conversationID: conversationID)
@@ -217,7 +228,7 @@ actor SlashCommandDispatchService {
         let excluded = Set(deps.conversationTransformConfiguration.slashCommands.staticSkillNamesExcludedFromSkillColon)
         let baseRegistry: SlashCommandRegistry
         guard slashCommandRuntimeConfiguration.skillSlashEnabled,
-              SystemPrompt.loadIncludeAgentSkillsFromConfig(),
+              deps.configurationSet.promptAssembly.includeAgentSkills,
               let skills = try? await skillActivation.listAvailableSkillsForSlash(conversationID: conversationID)
         else {
             baseRegistry = SlashCommandRegistry.builtins(compactEnabled: slashCommandRuntimeConfiguration.compactEnabled)
@@ -282,8 +293,9 @@ actor SlashCommandDispatchService {
         args: String
     ) async throws -> ChatStreamResponse {
         let eligible = (try? await skillActivation.listAvailableSkillsForSlash(conversationID: conversationID)) ?? []
+        let activationResult: SlashSkillActivationResult
         do {
-            _ = try await skillActivation.activateSkillForSlash(
+            activationResult = try await skillActivation.activateSkillForSlash(
                 conversationID: conversationID,
                 skillName: skillName,
                 eligibleSkills: eligible
@@ -308,21 +320,15 @@ actor SlashCommandDispatchService {
                 preserveGeneratingState: false
             )
         }
-        guard let match = eligible.first(where: { $0.name.lowercased() == skillName.lowercased() }) else {
-            return try await deliverSyntheticSlashAssistantResponse(
-                conversationID: conversationID,
-                content: "Unknown or unavailable skill `\(skillName)` for this conversation.",
-                preserveGeneratingState: false
-            )
-        }
-        var detail = "Activated skill **\(match.name)**."
+        var confirmation = "Activated skill **\(activationResult.skillName)**."
         if !args.isEmpty {
-            detail += " (Additional text after the skill name was not sent to the model; start a normal message to use it.)"
+            confirmation += " (Additional text after the skill name was not sent to the model; start a normal message to use it.)"
         }
-        return try await deliverSyntheticSlashAssistantResponse(
+        return try await deliverSyntheticSlashSkillActivation(
             conversationID: conversationID,
-            content: detail,
-            preserveGeneratingState: false
+            skillName: activationResult.skillName,
+            activationBody: activationResult.activationBody,
+            confirmation: confirmation
         )
     }
 

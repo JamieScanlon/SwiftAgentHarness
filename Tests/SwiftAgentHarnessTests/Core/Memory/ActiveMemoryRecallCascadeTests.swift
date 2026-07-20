@@ -16,10 +16,10 @@ struct ActiveMemoryRecallCascadeTests {
     func singleSpawnPerBlockingRecall() async {
         let counter = RecallSpawnCounter()
         let port = MemorySubAgentSpawnPort(
-            spawnBlockingRecall: { _, _, _, _, _ in
+            spawnBlockingRecall: { _, _, _, _, _, _ in
                 await counter.increment()
                 let nestedPort = MemorySubAgentSpawnPort(
-                    spawnBlockingRecall: { _, _, _, _, _ in
+                    spawnBlockingRecall: { _, _, _, _, _, _ in
                         await counter.increment()
                         return "nested-should-not-run"
                     },
@@ -47,7 +47,8 @@ struct ActiveMemoryRecallCascadeTests {
                         userQuery: "nested query",
                         lane: .situational,
                         timeoutMs: 1000,
-                        maxSummaryChars: 100
+                        maxSummaryChars: 100,
+                        excludedSelectionKeys: []
                     )
                 }
                 #expect(nested == nil)
@@ -76,7 +77,8 @@ struct ActiveMemoryRecallCascadeTests {
                 userQuery: "parent query",
                 lane: .situational,
                 timeoutMs: 1000,
-                maxSummaryChars: 100
+                maxSummaryChars: 100,
+                excludedSelectionKeys: []
             )
         }
         #expect(await counter.count == 1)

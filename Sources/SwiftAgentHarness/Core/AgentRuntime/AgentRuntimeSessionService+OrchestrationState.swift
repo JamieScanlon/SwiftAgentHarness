@@ -14,6 +14,10 @@ extension AgentRuntimeSessionService {
         await orchestrationCore.tokenSnapshotsForOrchestration(for: conversationID)
     }
 
+    func lastModelRequestAt(for conversationID: UUID) async -> Date? {
+        await orchestrationCore.lastModelRequestAt(for: conversationID)
+    }
+
     func contextTokenMetricsForOrchestration(conversationID: UUID? = nil) async -> (
         lastPromptTokens: Int?,
         lastContextLimitTokens: Int?,
@@ -173,16 +177,16 @@ extension AgentRuntimeSessionService {
         await orchestrationCore.setOrchestrationEmissionConversationID(conversationID)
     }
 
-    func orchestrationOutOfBandWireSnapshot() -> ConversationOrchestrationState? {
-        sessionState.lastOrchestrationOutOfBandWireSnapshot
+    func lastTopicRefreshOrchestrationSnapshot() -> ConversationOrchestrationState? {
+        sessionState.lastTopicRefreshOrchestrationSnapshot
     }
 
-    func setOrchestrationOutOfBandWireSnapshot(_ snapshot: ConversationOrchestrationState?) {
-        sessionState.lastOrchestrationOutOfBandWireSnapshot = snapshot
+    func setLastTopicRefreshOrchestrationSnapshot(_ snapshot: ConversationOrchestrationState?) {
+        sessionState.lastTopicRefreshOrchestrationSnapshot = snapshot
     }
 
-    func orchestrationOutOfBandPush() -> (id: UUID, push: @Sendable (ConversationOrchestrationState) async -> Void)? {
-        sessionState.orchestrationStateOutOfBandPush
+    func orchestrationStateTopicRefreshHandler() -> (@Sendable (UUID, ConversationOrchestrationState) async -> Void)? {
+        sessionState.orchestrationStateTopicRefreshHandler
     }
 
     func applyLLMContextSnapshot(

@@ -48,7 +48,7 @@ struct ScheduleCreateCallApprovalTests {
             snapshot: snapshot,
             configuration: AgentRuntimeTurnConfiguration(enableTools: true, enableAgents: true),
             conversation: root,
-            gateway: DefaultToolSystemGateway(),
+            gateway: DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()),
             parentLookup: { id in await catalog.getConversation(id: id) }
         )
         guard case .approvalRequired(let toolName, _) = outcome else {
@@ -104,7 +104,7 @@ struct ScheduleCreateCallApprovalTests {
                 preApprovedCallBindings: [binding]
             ),
             conversation: root,
-            gateway: DefaultToolSystemGateway(),
+            gateway: DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()),
             parentLookup: { id in await catalog.getConversation(id: id) }
         )
         if case .approvalRequired = outcome {
@@ -157,7 +157,7 @@ struct ScheduleCreateCallApprovalTests {
                 preApprovedToolNames: ["schedule_create"]
             ),
             conversation: root,
-            gateway: DefaultToolSystemGateway(),
+            gateway: DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()),
             parentLookup: { id in await catalog.getConversation(id: id) }
         )
         guard case .approvalRequired(let toolName, _) = outcome else {

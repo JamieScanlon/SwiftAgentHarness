@@ -78,6 +78,7 @@ enum PublishingContractValidator {
             }
             if lifecycle.name == .toolCallStarted
                 || lifecycle.name == .toolCallCompleted
+                || lifecycle.name == .toolCallFailed
                 || lifecycle.name == .toolCompletionAnnounced
                 || lifecycle.name == .toolApprovalRequired
                 || lifecycle.name == .toolApprovalResolved
@@ -89,6 +90,7 @@ enum PublishingContractValidator {
             }
             if lifecycle.name == .toolCallStarted
                 || lifecycle.name == .toolCallCompleted
+                || lifecycle.name == .toolCallFailed
                 || lifecycle.name == .toolCompletionAnnounced
             {
                 if (lifecycle.toolCallID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {

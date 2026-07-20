@@ -253,6 +253,10 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
             schemaVersion: wire.schemaVersion,
             basedOnEventID: basedOnGlobal,
             assemblyFingerprint: wire.assemblyFingerprint,
+            assembledPromptDigest: wire.assembledPromptDigest,
+            replaySpecDigest: wire.replaySpecDigest,
+            assembledPrompt: wire.assembledPrompt,
+            sectionProvenanceJSON: wire.sectionProvenanceJSON,
             createdAt: wire.createdAt
         )
         try appendDerived(
@@ -278,11 +282,41 @@ final class RoutingDerivedEventStore: DerivedEventStore, Sendable {
             basedOnEventID: basedOnGlobal,
             projectionFingerprint: wire.projectionFingerprint,
             decisions: wire.decisions,
+            targetDecisions: wire.targetDecisions,
+            materializedBlocks: wire.materializedBlocks,
+            accessWatermarkTurnIndex: wire.accessWatermarkTurnIndex,
             createdAt: wire.createdAt
         )
         try appendDerived(
             conversationID: conversationID,
             kind: .attachmentProjectionCheckpoint,
+            payloadJSON: ConversationEventCodec.encode(persist),
+            basedOnEventID: basedOnGlobal,
+            coversStartEventID: nil,
+            coversEndEventID: nil,
+            createdAt: persist.createdAt,
+            expectedDerivedSequence: expectedDerivedSequence
+        )
+    }
+
+    func appendAttachmentDigestCheckpoint(
+        conversationID: UUID,
+        wire: AttachmentDigestCheckpointWire,
+        expectedDerivedSequence: Int?
+    ) throws {
+        let basedOnGlobal = latestGlobalEventID(conversationID: conversationID)
+        let persist = AttachmentDigestCheckpointWire(
+            schemaVersion: wire.schemaVersion,
+            basedOnEventID: basedOnGlobal,
+            attachmentID: wire.attachmentID,
+            contentHash: wire.contentHash,
+            configFingerprint: wire.configFingerprint,
+            digestBody: wire.digestBody,
+            createdAt: wire.createdAt
+        )
+        try appendDerived(
+            conversationID: conversationID,
+            kind: .attachmentDigestCheckpoint,
             payloadJSON: ConversationEventCodec.encode(persist),
             basedOnEventID: basedOnGlobal,
             coversStartEventID: nil,

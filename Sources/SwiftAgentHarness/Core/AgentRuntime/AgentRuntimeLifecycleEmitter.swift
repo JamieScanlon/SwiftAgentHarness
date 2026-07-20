@@ -50,6 +50,16 @@ enum AgentRuntimeLifecycleEmit: Sendable {
         toolCallID: String?,
         resultTruncated: Bool? = nil
     )
+    case toolCallFailed(
+        iteration: Int,
+        modelID: UUID,
+        toolName: String,
+        toolCallID: String?,
+        errorClass: String,
+        message: String,
+        elapsedMs: Int?,
+        mcpServerName: String? = nil
+    )
     case toolApprovalRequired(ToolApprovalRequiredInfo)
     case toolApprovalResolved(ToolApprovalResolvedInfo)
     case turnTerminal(ConversationRunTerminalReason)
@@ -148,6 +158,33 @@ struct AgentRuntimeLifecycleEmitter {
                     toolName: toolName,
                     toolCallID: toolCallID,
                     resultTruncated: resultTruncated,
+                    source: source
+                )
+            )
+        case .toolCallFailed(
+            let iteration,
+            let modelID,
+            let toolName,
+            let toolCallID,
+            let errorClass,
+            let message,
+            let elapsedMs,
+            let mcpServerName
+        ):
+            await publishPayload(
+                RuntimeLifecycleEventPayload(
+                    name: .toolCallFailed,
+                    conversationID: conversationID,
+                    runID: runID,
+                    iteration: iteration,
+                    modelID: modelID,
+                    toolName: toolName,
+                    policyReason: errorClass,
+                    toolCallID: toolCallID,
+                    summaryText: message,
+                    errorClass: errorClass,
+                    elapsedMs: elapsedMs,
+                    mcpServerName: mcpServerName,
                     source: source
                 )
             )

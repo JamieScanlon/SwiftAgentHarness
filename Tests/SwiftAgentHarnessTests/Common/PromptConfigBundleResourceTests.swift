@@ -4,14 +4,29 @@ import Testing
 
 @Suite("PromptConfigBundleResource")
 struct PromptConfigBundleResourceTests {
+    @Test("test bundle fallback is opt-in")
+    func testBundleFallbackIsOptIn() {
+        PromptConfigBundleResource.resetForTesting()
+        #expect(PromptConfigBundleResource.url() == nil)
+
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        #expect(PromptConfigBundleResource.url() != nil)
+    }
+
     @Test("test bundle exposes PromptConfig.json")
     func testBundleProvidesPromptConfig() {
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
         #expect(PromptConfigBundleResource.url() != nil)
     }
 
     @Test("test PromptConfig disables agent skills for orchestrator warm-up")
     func testPromptConfigDisablesAgentSkills() {
-        #expect(SystemPrompt.loadIncludeAgentSkillsFromConfig() == false)
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let configuration = HarnessConfigurationSet.resolveFromAmbient()
+        #expect(configuration.promptAssembly.includeAgentSkills == false)
     }
 }
 
@@ -111,7 +126,41 @@ struct PromptConfigBundleResourceOverrideTests {
     func resetRestoresDefault() {
         PromptConfigBundleResource.configure(data: config("temporary"))
         PromptConfigBundleResource.resetForTesting()
+        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+        defer { PromptConfigBundleResource.resetForTesting() }
         #expect(PromptConfigBundleResource.url() != nil)
         #expect(markerValue(of: PromptConfigBundleResource.data()) != "temporary")
+    }
+
+    @Test("resolveFromAmbient after configure(data:) equals load(from:)")
+    func resolveFromAmbientMatchesLoad() throws {
+        defer { PromptConfigBundleResource.resetForTesting() }
+        let json = """
+        {
+          "options": { "includeAgentSkills": false, "includeCurrentDateTime": false },
+          "agentHarness": { "strictAgentHarnessPrompts": false },
+          "memory": { "activeMemoryEnabled": false }
+        }
+        """
+        let data = Data(json.utf8)
+        PromptConfigBundleResource.configure(data: data)
+        let document = try PromptConfigDocument.parse(data: data)
+        let fromDocument = HarnessConfigurationSet.load(from: document)
+        let fromAmbient = HarnessConfigurationSet.resolveFromAmbient()
+
+        #expect(fromAmbient.agentHarness.strictAgentHarnessPrompts == fromDocument.agentHarness.strictAgentHarnessPrompts)
+        #expect(fromAmbient.promptAssembly.includeAgentSkills == fromDocument.promptAssembly.includeAgentSkills)
+        #expect(fromAmbient.memory.activeMemoryEnabled == fromDocument.memory.activeMemoryEnabled)
+        #expect(fromAmbient.agentHarness.strictAgentHarnessPrompts == false)
+        #expect(fromAmbient.promptAssembly.includeAgentSkills == false)
+    }
+
+    @Test("resolveFromAmbient with invalid config returns baseline")
+    func resolveFromAmbientInvalidReturnsBaseline() {
+        defer { PromptConfigBundleResource.resetForTesting() }
+        PromptConfigBundleResource.configure(data: Data("[1]".utf8))
+        let set = HarnessConfigurationSet.resolveFromAmbient()
+        #expect(set.promptAssembly.includeAgentSkills == HarnessConfigurationSet.lockedDownBaseline.promptAssembly.includeAgentSkills)
+        #expect(set.agentHarness.strictAgentHarnessPrompts == HarnessConfigurationSet.lockedDownBaseline.agentHarness.strictAgentHarnessPrompts)
     }
 }

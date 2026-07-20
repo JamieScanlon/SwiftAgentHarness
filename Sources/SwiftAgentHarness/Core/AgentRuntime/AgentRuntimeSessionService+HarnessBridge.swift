@@ -179,6 +179,16 @@ extension AgentRuntimeSessionService {
         )
     }
 
+    func publishPrunedProjectionAfterRewind(
+        conversation: ModelConversation,
+        baseMessagesOverride: [Message]
+    ) async {
+        await messaging.publishPrunedProjectionAfterRewind(
+            conversation: conversation,
+            baseMessagesOverride: baseMessagesOverride
+        )
+    }
+
     func routingPersistRunLifecycleTranscriptMarker(
         conversationID: UUID,
         payload: RunLifecycleTranscriptMarkerPayload

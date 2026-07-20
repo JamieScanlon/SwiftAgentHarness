@@ -48,7 +48,7 @@ public struct TUIControlInputBridge {
     public func runtimeTurnConfiguration(
         from submission: ComposerSubmission,
         base: AgentRuntimeTurnConfiguration = AgentRuntimeTurnConfiguration(),
-        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.loadFromPromptConfigBundle()
+        harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         var configuration = submission.runtimeTurnConfiguration(base: base, harness: harness)
         if let patch = turnConfigurationPatch(from: classify(submission)) {

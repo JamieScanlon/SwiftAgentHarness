@@ -114,7 +114,8 @@ struct ACPStdioSubAgentTransportAdapterTests {
             adapters: SubAgentDefaultAdapters.make(
                 acpManagerProvider: provider,
                 sessionStore: sessionStore
-            )
+            ),
+            hostingPolicyConfiguration: .empty
         )
         let parentConversationID = UUID()
         let toolEntry = ToolRegistryEntry(
@@ -168,7 +169,7 @@ struct ACPStdioSubAgentTransportAdapterTests {
 
     @Test("manager unavailable emits failed delegate event")
     func managerUnavailableFailsClosed() async throws {
-        let pool = DefaultSubAgentPool()
+        let pool = DefaultSubAgentPool(hostingPolicyConfiguration: .empty)
         let toolEntry = ToolRegistryEntry(
             definition: ToolDefinition(name: "delegate_acp_worker", description: "acp worker", parameters: [], type: .acpAgent),
             source: .unknown,

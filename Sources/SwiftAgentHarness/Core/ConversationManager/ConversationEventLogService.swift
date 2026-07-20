@@ -105,7 +105,7 @@ extension ConversationEventKind {
         switch self {
         case .messageAppended, .interactionModeChanged:
             return .raw
-        case .turnSummaryEvent, .turnFinalized, .compactionApplied, .contextCompactionCheckpoint, .memoryInjectionSnapshotCheckpoint, .toolResultTrimCheckpoint, .systemPromptAssemblyCheckpoint, .attachmentProjectionCheckpoint, .runLifecycleEvent, .toolAuditLifecycleEvent, .toolUsageSummaryEvent, .checkpointInvalidated, .completionAnnounceEvent:
+        case .turnSummaryEvent, .turnFinalized, .compactionApplied, .contextCompactionCheckpoint, .memoryInjectionSnapshotCheckpoint, .toolResultTrimCheckpoint, .systemPromptAssemblyCheckpoint, .attachmentProjectionCheckpoint, .attachmentDigestCheckpoint, .runLifecycleEvent, .toolAuditLifecycleEvent, .toolUsageSummaryEvent, .checkpointInvalidated, .completionAnnounceEvent:
             return .derived
         }
     }

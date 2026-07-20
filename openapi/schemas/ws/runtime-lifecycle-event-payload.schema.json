@@ -19,6 +19,7 @@
         "model.callCompleted",
         "tool.callStarted",
         "tool.callCompleted",
+        "tool.callFailed",
         "tool.completionAnnounced",
         "tool.usageSummary",
         "tool.approvalRequired",
@@ -168,6 +169,19 @@
     },
     "summaryText": {
       "type": "string"
+    },
+    "errorClass": {
+      "type": "string",
+      "description": "Stable failure class for tool.callFailed (timeout, cancelled, mcp_error, dispatch_error, …)."
+    },
+    "elapsedMs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock elapsed milliseconds for the tool call when known."
+    },
+    "mcpServerName": {
+      "type": "string",
+      "description": "MCP server name when the tool was dispatched via MCP (best-effort)."
     },
     "terminalReason": {
       "type": "object",

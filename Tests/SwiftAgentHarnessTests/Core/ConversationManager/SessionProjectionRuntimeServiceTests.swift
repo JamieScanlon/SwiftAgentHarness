@@ -14,6 +14,7 @@ struct SessionProjectionRuntimeServiceTests {
         func currentConversationID() async -> UUID? { nil }
         func currentConversation() async -> ModelConversation? { nil }
         func projectedMessages(for conversation: ModelConversation) async -> [Message] { conversation.messages }
+        func invalidateProjectionPublishState(conversationID: UUID) async {}
         func testing_seedProjectionPublishState(conversationID: UUID, frontierEventID: Int, contentHash: Int) async {}
         func testing_clearProjectionPublishState(conversationID: UUID) async {}
         func configurationApplyingTrustPolicy(_ configuration: HarnessRuntimeSession.Configuration) async -> HarnessRuntimeSession.Configuration { configuration }
@@ -72,6 +73,42 @@ struct SessionProjectionRuntimeServiceTests {
         )
         guard case .applied(let shouldPublish) = applied else {
             Issue.record("expected applied outcome")
+            return
+        }
+        #expect(shouldPublish == true)
+    }
+
+    @Test("invalidateProjectionPublishState allows previously stale lower frontier to apply")
+    func invalidateAllowsLowerFrontierAfterClear() async throws {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
+        let selection = RecordingSelection()
+        let service = SessionProjectionRuntimeService(persistenceDomain: domain, selection: selection)
+        let conversationID = UUID()
+        let messages = [Message(id: UUID(), role: .user, content: "prefix", timestamp: Date())]
+        let hash = ConversationEventLogService.contentHash(for: messages)
+
+        await service.testing_seedProjectionPublishState(conversationID: conversationID, frontierEventID: 100, contentHash: hash)
+        let stale = await service.applySnapshotIfNotStale(
+            conversationID: conversationID,
+            messages: messages,
+            frontierEventID: 50,
+            contentHash: hash
+        )
+        guard case .droppedStale = stale else {
+            Issue.record("expected stale drop before invalidate")
+            return
+        }
+
+        await service.invalidateProjectionPublishState(conversationID: conversationID)
+        let applied = await service.applySnapshotIfNotStale(
+            conversationID: conversationID,
+            messages: messages,
+            frontierEventID: 50,
+            contentHash: hash
+        )
+        guard case .applied(let shouldPublish) = applied else {
+            Issue.record("expected applied after invalidate")
             return
         }
         #expect(shouldPublish == true)

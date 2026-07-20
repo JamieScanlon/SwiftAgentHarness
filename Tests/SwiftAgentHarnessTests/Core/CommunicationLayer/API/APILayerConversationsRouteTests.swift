@@ -928,7 +928,7 @@ struct APILayerConversationsRouteTests {
         }
     }
 
-    @Test("DELETE /api/conversations returns notFound for invalid UUID")
+    @Test("DELETE /api/conversations returns badRequest for invalid UUID")
     func conversationDeleteInvalidUUID() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()
         let runtime = ProtocolOnlyRuntimeGatewayStub()
@@ -943,7 +943,7 @@ struct APILayerConversationsRouteTests {
                 modelProvider: modelProvider
             )
             try await app.testing().test(.DELETE, "/api/conversations/not-a-uuid") { res async throws in
-                #expect(res.status == .notFound)
+                #expect(res.status == .badRequest)
                 let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
                 #expect(json?["type"] as? String == "error")
                 #expect((json?["message"] as? String)?.contains("Invalid conversation ID") == true)
@@ -2062,6 +2062,34 @@ struct APILayerConversationsRouteTests {
             try await app.testing().test(.GET, "/api/conversations/\(cid)/engine-artifacts/demo.bin", afterResponse: { res async throws in
                 #expect(res.status == .notFound)
             })
+        }
+    }
+
+    @Test("GET engine artifact with invalid key returns typed error envelope")
+    func engineArtifactInvalidKeyReturnsErrorEnvelope() async throws {
+        let conversation = ProtocolOnlyConversationGatewayStub()
+        let runtime = ProtocolOnlyRuntimeGatewayStub()
+        let model = APILayerRESTRouteTestSupport.makeTestModel()
+        let api = APILayer(port: 0)
+        let cid = UUID()
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(
+                app: app,
+                conversation: conversation,
+                runtime: runtime,
+                modelProvider: APILayerRESTStubModelProvider(models: [model])
+            )
+            try await app.testing().test(
+                .GET,
+                "/api/conversations/\(cid.uuidString)/engine-artifacts/%2E%2E%2Fescape.txt",
+                afterResponse: { res async throws in
+                    #expect(res.status == .badRequest)
+                    let json = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                    #expect(json?["type"] as? String == "error")
+                    #expect((json?["message"] as? String)?.contains("Invalid engine artifact key") == true)
+                }
+            )
         }
     }
 

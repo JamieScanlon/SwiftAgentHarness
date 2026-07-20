@@ -363,7 +363,7 @@ private func layoutAssembleRequest(
         lastPromptTokens: nil,
         events: [],
         eventLogFrontier: 0,
-        lastLLMDateByConversationID: [:],
+        lastModelRequestAtByConversationID: [:], lastCompactionLLMDateByConversationID: [:],
         persistCompactionCheckpoint: true,
         allowProactiveCompactionTriggers: true,
         compactionLockAlreadyHeldByCaller: false,

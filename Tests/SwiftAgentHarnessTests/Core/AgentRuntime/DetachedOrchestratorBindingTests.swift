@@ -265,7 +265,7 @@ struct ActiveMemoryPoolOrchestratorTests {
             modelProtocol: .openAIAPI,
             maxContextLength: 8_192
         )
-        let recallModel = MemorySubAgentSpawnAdapter.activeMemoryModel(from: .default)
+        let recallModel = MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel()
         try await session.createConversation(with: parentModel, userSystemPrompt: "parent", topic: nil, description: nil)
         let parent = try #require(await session.currentConversation())
         await session.orchestratorRuntimeService.setupOrchestrator(with: parentModel, activeConversation: parent)

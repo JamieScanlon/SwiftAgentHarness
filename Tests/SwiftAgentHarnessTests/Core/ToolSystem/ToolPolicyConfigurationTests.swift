@@ -9,6 +9,10 @@ struct ToolPolicyConfigurationTests {
         let policy = ToolPolicyConfiguration.unrestricted
         #expect(policy.parallelDispatchEnabled == false)
         #expect(policy.pendingToolTimeoutSeconds == nil)
+        #expect(policy.toolCallTimeoutSeconds == 300)
+        #expect(policy.toolCallWatchdogIntervalSeconds == 20)
+        #expect(policy.onToolTimeout == .continue)
+        #expect(policy.mcpReconnectOnToolTimeout == false)
     }
 
     @Test("approval timeout floors positive values and preserves nil disable")
@@ -37,6 +41,25 @@ struct ToolPolicyConfigurationTests {
             pendingToolTimeoutSeconds: 30
         )
         #expect(base.stableAllowlistSignature() != enabled.stableAllowlistSignature())
+    }
+
+    @Test("dispatch parses tool call timeout and recovery policy")
+    func dispatchParsesToolCallTimeoutPolicy() {
+        let root: [String: Any] = [
+            "toolPolicy": [
+                "dispatch": [
+                    "toolCallTimeoutSeconds": 45,
+                    "toolCallWatchdogIntervalSeconds": 5,
+                    "onToolTimeout": "failRun",
+                    "mcpReconnectOnToolTimeout": true,
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
+        let policy = ToolPolicyConfiguration.load(fromPromptConfigRoot: root)
+        #expect(policy.toolCallTimeoutSeconds == 45)
+        #expect(policy.toolCallWatchdogIntervalSeconds == 5)
+        #expect(policy.onToolTimeout == .failRun)
+        #expect(policy.mcpReconnectOnToolTimeout == true)
     }
 
     @Test("deny policy precedence and sensitivity metadata are available")

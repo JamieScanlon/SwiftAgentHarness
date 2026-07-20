@@ -44,6 +44,7 @@ public struct SystemPrompt: Sendable {
         includeAgentSkills: Bool?,
         skillLoader: SkillLoader?,
         skipConfigLoad: Bool = false,
+        allowSkillLoaderAbsence: Bool = false,
         logger: Logger? = nil,
         interactionMode: InteractionMode = .chat,
         assemblyKind: SystemPromptAssemblyKind? = nil,
@@ -55,16 +56,6 @@ public struct SystemPrompt: Sendable {
         var resolvedIncludeAgentSkills = true
         var resolvedStrictAgentHarnessPrompts = true
 
-        if !skipConfigLoad {
-            do {
-                let config = try Self.loadConfigFromBundle()
-                resolvedIncludeCurrentDateTime = config.includeCurrentDateTime
-                resolvedIncludeAgentSkills = config.includeAgentSkills
-                resolvedStrictAgentHarnessPrompts = config.strictAgentHarnessPrompts
-            } catch {
-                logger?.error("Error loading prompt config: \(error)")
-            }
-        }
         if skipConfigLoad {
             if let includeCurrentDateTime {
                 resolvedIncludeCurrentDateTime = includeCurrentDateTime
@@ -77,7 +68,7 @@ public struct SystemPrompt: Sendable {
         }
 
         var effectiveIncludeAgentSkills = resolvedIncludeAgentSkills
-        if effectiveIncludeAgentSkills, skillLoader == nil {
+        if effectiveIncludeAgentSkills, skillLoader == nil, !allowSkillLoaderAbsence {
             if skipConfigLoad {
                 throw PromptsConfigError.skillLoaderNotFound
             }
@@ -85,10 +76,7 @@ public struct SystemPrompt: Sendable {
         }
 
         let resolvedSkillMetadata: [SkillMetadata]?
-        if effectiveIncludeAgentSkills {
-            guard let skillLoader else {
-                throw PromptsConfigError.skillLoaderNotFound
-            }
+        if effectiveIncludeAgentSkills, let skillLoader {
             var loaded = try await skillLoader.loadMetadata()
             loaded = loaded.filter { meta in
                 let allowed: Bool = if let modePolicyContext {
@@ -118,76 +106,185 @@ public struct SystemPrompt: Sendable {
         self.promptTemplate = Self.makePromptTemplate(includeCurrentDateTime: resolvedIncludeCurrentDateTime)
     }
 
-    public func generateSystemPrompt(withUserSystemPrompt userSystemPrompt: String? = nil, additionalMetadata: [String: String] = [:]) async throws -> String {
-        var dynamicPrompt = DynamicPrompt(template: promptTemplate)
+    public func generateSystemPrompt(
+        context assemblyContext: SystemPromptAssemblyContext,
+        resolved: ResolvedSystemPromptSections,
+        stablePrefix: String?
+    ) async throws -> String {
+        try await renderAssemblyProduct(
+            context: assemblyContext,
+            resolved: resolved,
+            stablePrefix: stablePrefix,
+            providerID: nil,
+            modeProfileID: assemblyContext.registryProfileID
+        ).text
+    }
 
-        let dateString: String = {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEEE, MMM d, yyyy"
-            return formatter.string(from: Date())
-        }()
-        dynamicPrompt["datetime"] = dateString
-
-        dynamicPrompt["conversationID"] = additionalMetadata["conversationID"] ?? "unknown"
-        dynamicPrompt["conversationStartDate"] = additionalMetadata["conversationStartDate"] ?? "unknown"
-        let workflowBlock = additionalMetadata["agentWorkflowBlock"] ?? ""
-        if assemblyKind != .chat {
-            dynamicPrompt["agentWorkflowBlock"] = workflowBlock
-        }
-
-        for (token, value) in additionalMetadata {
-            dynamicPrompt[token] = value
-        }
-
-        var skillsFolderPathValue: String?
-        var availableSkillsValue: String?
-        var activatedSkillsValue: String?
+    func renderAssemblyProduct(
+        context assemblyContext: SystemPromptAssemblyContext,
+        resolved: ResolvedSystemPromptSections,
+        stablePrefix: String?,
+        providerID: String?,
+        modeProfileID: String?
+    ) async throws -> SystemPromptAssemblyRenderProduct {
+        let dateString = Self.dateString(from: assemblyContext.referenceDate)
+        var skillsFolderPathValue = ""
+        var availableSkillsValue = ""
+        var skillSnapshot = SystemPromptSkillRenderSnapshot(
+            activatedSkillNames: [],
+            skillsIndexDigest: nil
+        )
+        var capturedFrozenIndexXML: String?
         if includeAgentSkills {
-            guard let skillLoader else {
-                throw PromptsConfigError.skillLoaderNotFound
-            }
-            skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
-            availableSkillsValue = SkillPromptFormatter.formatAsXML(skillMetadata ?? [])
-            dynamicPrompt["skillsFolderPath"] = skillsFolderPathValue
-            dynamicPrompt["agentSkillsMetadata"] = availableSkillsValue
-
-            let activeSkillNames = await skillLoader.activatedSkills
-            var loadedActiveSkills: [String: Skill] = [:]
-            for name in activeSkillNames {
-                if let skill = try await skillLoader.loadSkill(named: name) {
-                    loadedActiveSkills[name] = skill
+            if let frozenIndex = assemblyContext.frozenSkillsIndexXML?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !frozenIndex.isEmpty {
+                availableSkillsValue = frozenIndex
+                capturedFrozenIndexXML = frozenIndex
+            } else {
+                availableSkillsValue = SkillPromptFormatter.formatAsXML(skillMetadata ?? [])
+                if !availableSkillsValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    capturedFrozenIndexXML = availableSkillsValue
                 }
             }
-
-            activatedSkillsValue = loadedActiveSkills.isEmpty
-                ? "No active skills.\n\n"
-                : loadedActiveSkills.map { "\($0.value.name):\n\($0.value.fullInstructions)" }.joined(separator: "\n\n")
-            dynamicPrompt["activatedAgentSkills"] = activatedSkillsValue
+            if let skillLoader {
+                skillsFolderPathValue = await skillLoader.skillsDirectoryURL.absoluteString
+            }
+            let activatedNames: [String]
+            if let skillLoader {
+                activatedNames = Array(await skillLoader.activatedSkills).sorted()
+            } else {
+                activatedNames = []
+            }
+            skillSnapshot = SystemPromptSkillRenderSnapshot.capture(
+                activatedSkillNames: activatedNames,
+                skillsIndexXML: capturedFrozenIndexXML
+            )
         }
 
-        dynamicPrompt["userSystemPrompt"] = userSystemPrompt
-
-        let sections = resolvedTemplateSections(
-            additionalMetadata: additionalMetadata,
-            conversationID: additionalMetadata["conversationID"] ?? "unknown",
-            conversationStartDate: additionalMetadata["conversationStartDate"] ?? "unknown",
-            workflowBlock: workflowBlock,
-            userSystemPrompt: userSystemPrompt ?? "",
-            skillsFolderPath: skillsFolderPathValue ?? "",
-            availableSkills: availableSkillsValue ?? "",
-            activatedSkills: activatedSkillsValue ?? ""
+        var sections = Self.finalSections(
+            assemblyContext: assemblyContext,
+            resolved: resolved,
+            skillsFolderPath: skillsFolderPathValue,
+            availableSkills: availableSkillsValue,
+            includeAgentSkills: includeAgentSkills,
+            assemblyKind: assemblyKind,
+            strictAgentHarnessPrompts: strictAgentHarnessPrompts
         )
-        dynamicPrompt["sectionConversation"] = sections[.conversation]
-        dynamicPrompt["sectionSubAgentContext"] = sections[.subAgentContext]
-        dynamicPrompt["sectionWorkflow"] = sections[.workflow]
-        dynamicPrompt["sectionModeDirective"] = sections[.modeDirective]
-        dynamicPrompt["sectionMemory"] = sections[.memory]
-        dynamicPrompt["sectionTools"] = sections[.tools]
-        dynamicPrompt["sectionSkills"] = sections[.skills]
-        dynamicPrompt["sectionTriggers"] = sections[.triggers]
-        dynamicPrompt["sectionAdditionalRequirements"] = sections[.additionalRequirements]
+        Self.applySectionProvenanceTags(
+            sections: &sections,
+            resolved: resolved,
+            providerID: providerID,
+            modeProfileID: modeProfileID
+        )
+        let provenanceMap = SystemPromptSectionProvenanceFormatter.provenanceMap(
+            resolved: resolved,
+            sections: sections,
+            providerID: providerID,
+            modeProfileID: modeProfileID
+        )
 
-        return dynamicPrompt.render()
+        var dynamicPrompt = DynamicPrompt(template: promptTemplate)
+        if includeCurrentDateTime {
+            dynamicPrompt["datetime"] = dateString
+        }
+        dynamicPrompt["conversationID"] = assemblyContext.conversationID
+        dynamicPrompt["conversationStartDate"] = assemblyContext.conversationStartDate
+        if assemblyKind != .chat {
+            dynamicPrompt["agentWorkflowBlock"] = assemblyContext.workflowBlock
+        }
+        dynamicPrompt["userSystemPrompt"] = assemblyContext.userSystemPrompt
+        if includeAgentSkills {
+            dynamicPrompt["skillsFolderPath"] = skillsFolderPathValue
+            dynamicPrompt["agentSkillsMetadata"] = availableSkillsValue
+        }
+        for section in SystemPromptSectionName.allCases {
+            dynamicPrompt[section.dynamicPromptToken] = sections[section] ?? ""
+        }
+
+        let text = Self.assemblePromptWithCacheBoundary(
+            sections: sections,
+            includeDateTimePrefix: includeCurrentDateTime ? "Today is \(dateString).\n" : "",
+            providerStablePrefix: stablePrefix
+        )
+        return SystemPromptAssemblyRenderProduct(
+            text: text,
+            sectionProvenance: provenanceMap,
+            skillSnapshot: skillSnapshot,
+            frozenSkillsIndexXML: capturedFrozenIndexXML
+        )
+    }
+
+    private static func applySectionProvenanceTags(
+        sections: inout [SystemPromptSectionName: String],
+        resolved: ResolvedSystemPromptSections,
+        providerID: String?,
+        modeProfileID: String?
+    ) {
+        for section in SystemPromptSectionName.allCases {
+            guard SystemPromptSectionName.overrideProof.contains(section) == false else { continue }
+            guard let body = sections[section]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !body.isEmpty else { continue }
+            let label = SystemPromptSectionProvenanceFormatter.label(
+                for: section,
+                resolved: resolved,
+                providerID: providerID,
+                modeProfileID: modeProfileID
+            )
+            let tag = SystemPromptSectionProvenanceFormatter.provenanceComment(for: label)
+            guard !body.contains(tag) else { continue }
+            sections[section] = tag + "\n" + body
+        }
+    }
+
+    public func generateSystemPrompt(withUserSystemPrompt userSystemPrompt: String? = nil, additionalMetadata: [String: String] = [:]) async throws -> String {
+        let unknown = SystemPromptLegacyMetadataAdapter.unknownKeys(in: additionalMetadata)
+        if !unknown.isEmpty {
+            // Legacy shim only; production paths must use typed context + resolver.
+        }
+        var context = SystemPromptLegacyMetadataAdapter.assemblyContext(
+            from: additionalMetadata,
+            userSystemPrompt: userSystemPrompt
+        )
+        if let user = userSystemPrompt {
+            context.userSystemPrompt = user
+        }
+        let contributions = SystemPromptLegacyMetadataAdapter.contributions(from: additionalMetadata)
+        let resolution = try SystemPromptContributionResolver.resolve(contributions: contributions)
+        return try await generateSystemPrompt(
+            context: context,
+            resolved: resolution.resolved,
+            stablePrefix: resolution.stablePrefix
+        )
+    }
+
+    private static func assemblePromptWithCacheBoundary(
+        sections: [SystemPromptSectionName: String],
+        includeDateTimePrefix: String,
+        providerStablePrefix: String?
+    ) -> String {
+        let stablePart = SystemPromptSectionName.stableAssemblyOrder.map { sections[$0] ?? "" }.joined()
+        var volatilePart = SystemPromptSectionName.volatileAssemblyOrder.map { sections[$0] ?? "" }.joined()
+        if !includeDateTimePrefix.isEmpty {
+            volatilePart = includeDateTimePrefix + volatilePart
+        }
+        var parts: [String] = []
+        if let prefix = providerStablePrefix?.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
+            parts.append(prefix)
+            parts.append(ProviderPromptContribution.cacheBoundaryMarker)
+        }
+        let trimmedStable = stablePart.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedStable.isEmpty {
+            parts.append(stablePart)
+        }
+        let trimmedVolatile = volatilePart.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedVolatile.isEmpty {
+            if !parts.isEmpty {
+                parts.append(ProviderPromptContribution.cacheBoundaryMarker)
+            }
+            parts.append(volatilePart)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     public enum PromptsConfigError: Error {
@@ -196,96 +293,10 @@ public struct SystemPrompt: Sendable {
         case skillLoaderNotFound
     }
 
-    /// Whether `options.includeAgentSkills` is enabled in PromptConfig (defaults to `true` if unset).
-    public static func loadIncludeAgentSkillsFromConfig() -> Bool {
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let optionsObject = jsonResult["options"] as? [String: Any],
-              let includeAgentSkills = optionsObject["includeAgentSkills"] as? Bool else {
-            return true
-        }
-        return includeAgentSkills
-    }
-
-    /// Whether `options.includeCurrentDateTime` is enabled in PromptConfig (defaults to `true` if unset).
-    public static func loadIncludeCurrentDateTimeFromConfig() -> Bool {
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let optionsObject = jsonResult["options"] as? [String: Any],
-              let includeCurrentDateTime = optionsObject["includeCurrentDateTime"] as? Bool else {
-            return true
-        }
-        return includeCurrentDateTime
-    }
-
-    /// Sub-agent self-awareness block from `lineagePromptSections.subAgent` in PromptConfig.json.
-    static func loadSubAgentContextTemplateFromConfig() -> String {
-        let fallback = """
-You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {{subAgentRootConversationID}}. Your conversation ID is {{subAgentConversationID}}. Parent conversation: {{subAgentParentConversationID}}. Work only within this sub-agent thread; do not switch conversations or assume the user's foreground selection.
-"""
-        guard let jsonData = PromptConfigBundleResource.data(),
-              let jsonResult = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
-              let sections = jsonResult["lineagePromptSections"] as? [String: Any],
-              let template = sections["subAgent"] as? String,
-              !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return fallback
-        }
-        return template
-    }
-
-    /// Loads the skills folder path from PromptConfig.json. Use when creating a SkillLoader with a root URL before SystemPrompt is initialized.
-    public static func loadSkillsFolderPathFromConfig() throws -> String? {
-        guard let jsonData = PromptConfigBundleResource.data() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-        guard let settingsObject = jsonResult["settings"] as? [String: Any] else {
-            return nil
-        }
-        return settingsObject["skillsFolderPath"] as? String
-    }
-
     private struct PromptConfigValues {
         let includeCurrentDateTime: Bool
         let includeAgentSkills: Bool
         let strictAgentHarnessPrompts: Bool
-    }
-
-    private static func loadConfigFromBundle() throws -> PromptConfigValues {
-        guard let jsonData = PromptConfigBundleResource.data() else {
-            throw PromptsConfigError.fileNotFound
-        }
-        guard let jsonResult: [String: Any] = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-
-        guard let optionsObject = jsonResult["options"] as? [String: Any] else {
-            throw PromptsConfigError.invalidJSON
-        }
-
-        var includeCurrentDateTime = true
-        var includeAgentSkills = true
-        var strictAgentHarnessPrompts = true
-
-        if let value = optionsObject["includeCurrentDateTime"] as? Bool {
-            includeCurrentDateTime = value
-        }
-        if let value = optionsObject["includeAgentSkills"] as? Bool {
-            includeAgentSkills = value
-        }
-
-        if let harness = jsonResult["agentHarness"] as? [String: Any],
-           let strict = harness["strictAgentHarnessPrompts"] as? Bool {
-            strictAgentHarnessPrompts = strict
-        }
-
-        return PromptConfigValues(
-            includeCurrentDateTime: includeCurrentDateTime,
-            includeAgentSkills: includeAgentSkills,
-            strictAgentHarnessPrompts: strictAgentHarnessPrompts
-        )
     }
 
     private static func makePromptTemplate(includeCurrentDateTime: Bool) -> String {
@@ -294,109 +305,61 @@ You are a sub-agent (depth {{subAgentDepth}}) delegated from root conversation {
             template += "Today is {{datetime}}.\n"
         }
         template += """
-{{sectionConversation}}{{sectionSubAgentContext}}{{sectionWorkflow}}{{sectionModeDirective}}{{sectionMemory}}{{sectionTools}}{{sectionSkills}}{{sectionTriggers}}{{sectionAdditionalRequirements}}
+{{sectionIdentity}}{{sectionCapabilities}}{{sectionConstraints}}{{sectionPersonality}}{{sectionModeDirective}}{{sectionMemory}}{{sectionSkills}}{{sectionToolGuidance}}{{sectionAttachments}}{{sectionExtraInstructions}}{{sectionDynamicAdditions}}
 """
         return template
     }
 
-    private enum SectionID: CaseIterable {
-        case conversation
-        case subAgentContext
-        case workflow
-        case modeDirective
-        case memory
-        case tools
-        case skills
-        case triggers
-        case additionalRequirements
+    static func dateString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d, yyyy"
+        return formatter.string(from: date)
     }
 
-    private func resolvedTemplateSections(
-        additionalMetadata: [String: String],
-        conversationID: String,
-        conversationStartDate: String,
-        workflowBlock: String,
-        userSystemPrompt: String,
+    static func finalSections(
+        assemblyContext: SystemPromptAssemblyContext,
+        resolved: ResolvedSystemPromptSections,
         skillsFolderPath: String,
         availableSkills: String,
-        activatedSkills: String
-    ) -> [SectionID: String] {
+        includeAgentSkills: Bool,
+        assemblyKind: SystemPromptAssemblyKind,
+        strictAgentHarnessPrompts: Bool
+    ) -> [SystemPromptSectionName: String] {
         var sections = defaultSections(
-            conversationID: conversationID,
-            conversationStartDate: conversationStartDate,
-            workflowBlock: workflowBlock,
-            userSystemPrompt: userSystemPrompt,
+            assemblyContext: assemblyContext,
             skillsFolderPath: skillsFolderPath,
             availableSkills: availableSkills,
-            activatedSkills: activatedSkills
+            includeAgentSkills: includeAgentSkills,
+            assemblyKind: assemblyKind,
+            strictAgentHarnessPrompts: strictAgentHarnessPrompts
         )
-        let suppressions = Set(
-            (additionalMetadata["modeSuppressSections"] ?? "")
-                .split(separator: ",")
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { !$0.isEmpty }
+
+        for section in resolved.suppressions where !SystemPromptSectionName.overrideProof.contains(section) {
+            sections[section] = ""
+        }
+
+        for (section, override) in resolved.sectionOverrides where !SystemPromptSectionName.overrideProof.contains(section) {
+            sections[section] = sectionOverrideBlock(section: section, body: override)
+        }
+
+        for (section, directive) in resolved.sectionDirectives where !SystemPromptSectionName.overrideProof.contains(section) {
+            let block = sectionDirectiveBlock(section: section, body: directive)
+            if let existing = sections[section]?.trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
+                sections[section] = existing + "\n\n" + block
+            } else {
+                sections[section] = block
+            }
+        }
+
+        applyMemorySection(
+            context: assemblyContext,
+            sections: &sections,
+            skipWhenMemoryContributionApplied: resolved.provenance[.memory] == .memory,
+            suppressions: resolved.suppressions
         )
-        let overrides = additionalMetadata
-            .compactMap { key, value -> (String, String)? in
-                guard key.hasPrefix("modeSectionOverride.") else { return nil }
-                return (String(key.dropFirst("modeSectionOverride.".count)).lowercased(), value)
-            }
-            .reduce(into: [String: String]()) { partial, pair in
-                partial[pair.0] = pair.1
-            }
-
-        for suppression in suppressions {
-            if let id = sectionID(for: suppression) {
-                sections[id] = ""
-            }
+        if !assemblyContext.includeToolGuidance {
+            sections[.toolGuidance] = ""
         }
-        for (rawSection, override) in overrides {
-            guard let id = sectionID(for: rawSection) else { continue }
-            sections[id] = """
----
-# \(displaySectionName(for: id))
-\(override)
-
-"""
-        }
-
-        if let directive = additionalMetadata["modeDirective"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !directive.isEmpty {
-            sections[.modeDirective] = """
----
-# Mode Directive
-\(directive)
-
-"""
-        } else {
-            sections[.modeDirective] = ""
-        }
-
-        let memoryMode = additionalMetadata["modeMemoryInjection"]?.lowercased() ?? "on"
-        switch memoryMode {
-        case "off":
-            sections[.memory] = ""
-        case "skills-only":
-            sections[.memory] = """
----
-# Memory
-Use retrieved memory context only when directly relevant to active skills and tool execution.
-
-"""
-        default:
-            sections[.memory] = """
----
-# Memory
-Use retrieved memory context when it helps maintain correctness and continuity.
-
-"""
-        }
-
-        let includeToolGuidance = (additionalMetadata["modeIncludeToolGuidance"] ?? "true").lowercased() != "false"
-        if !includeToolGuidance {
-            sections[.tools] = ""
-        }
-
         if !includeAgentSkills {
             sections[.skills] = ""
         }
@@ -404,31 +367,171 @@ Use retrieved memory context when it helps maintain correctness and continuity.
         return sections
     }
 
-    private func defaultSections(
-        conversationID: String,
-        conversationStartDate: String,
-        workflowBlock: String,
-        userSystemPrompt: String,
+    private static func sectionOverrideBlock(section: SystemPromptSectionName, body: String) -> String {
+        """
+---
+# \(section.displayTitle)
+\(body)
+
+"""
+    }
+
+    private static func sectionDirectiveBlock(section: SystemPromptSectionName, body: String) -> String {
+        """
+---
+# \(section.displayTitle)
+\(body)
+
+"""
+    }
+
+    private static func applyMemorySection(
+        context: SystemPromptAssemblyContext,
+        sections: inout [SystemPromptSectionName: String],
+        skipWhenMemoryContributionApplied: Bool,
+        suppressions: Set<SystemPromptSectionName> = []
+    ) {
+        if suppressions.contains(.memory) {
+            sections[.memory] = ""
+            return
+        }
+        if skipWhenMemoryContributionApplied {
+            let memoryMode = context.memoryInjectionMode.lowercased()
+            if memoryMode == "off" {
+                sections[.memory] = ""
+            } else if memoryMode == "skills-only", !context.includeAgentSkills {
+                sections[.memory] = ""
+            }
+            return
+        }
+        let memoryMode = context.memoryInjectionMode.lowercased()
+        let tier1 = context.tier1MemoryContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch memoryMode {
+        case "off":
+            sections[.memory] = ""
+        case "skills-only":
+            guard context.includeAgentSkills else {
+                sections[.memory] = ""
+                return
+            }
+            sections[.memory] = memorySectionText(
+                guidance: "Use retrieved memory context only when directly relevant to active skills and tool execution.",
+                tier1Content: tier1
+            )
+        default:
+            sections[.memory] = memorySectionText(
+                guidance: "Use retrieved memory context when it helps maintain correctness and continuity.",
+                tier1Content: tier1
+            )
+        }
+    }
+
+    static func memoryLayerSectionOverride(
+        memoryInjectionMode: String,
+        includeAgentSkills: Bool,
+        tier1Content: String
+    ) -> String? {
+        let tier1 = tier1Content.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch memoryInjectionMode.lowercased() {
+        case "off":
+            return nil
+        case "skills-only":
+            guard includeAgentSkills else { return nil }
+            return memorySectionBody(
+                guidance: "Use retrieved memory context only when directly relevant to active skills and tool execution.",
+                tier1Content: tier1
+            )
+        default:
+            return memorySectionBody(
+                guidance: "Use retrieved memory context when it helps maintain correctness and continuity.",
+                tier1Content: tier1
+            )
+        }
+    }
+
+    private static func memorySectionBody(guidance: String, tier1Content: String) -> String {
+        var body = guidance
+        if !tier1Content.isEmpty {
+            body += "\n\n<!-- provenance: engine:memory -->\n"
+            body += MemoryContextFencer.fence(tier1Content)
+        }
+        return body
+    }
+
+    private static func defaultSections(
+        assemblyContext: SystemPromptAssemblyContext,
         skillsFolderPath: String,
         availableSkills: String,
-        activatedSkills: String
-    ) -> [SectionID: String] {
-        var sections: [SectionID: String] = [
-            .conversation: """
+        includeAgentSkills: Bool,
+        assemblyKind: SystemPromptAssemblyKind,
+        strictAgentHarnessPrompts: Bool
+    ) -> [SystemPromptSectionName: String] {
+        var dynamicBody = ""
+        if let subAgent = assemblyContext.subAgentContextPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subAgent.isEmpty {
+            dynamicBody += """
+---
+# Sub-Agent Context
+\(subAgent)
+
+"""
+        }
+        var sections: [SystemPromptSectionName: String] = [
+            .identity: """
 ---
 # Conversation
-This conversation id is: \(conversationID)
-This conversation was started on: \(conversationStartDate)
+This conversation id is: \(assemblyContext.conversationID)
+This conversation was started on: \(assemblyContext.conversationStartDate)
 
 """,
-            .subAgentContext: "",
-            .tools: """
+            .capabilities: "",
+            .constraints: constraintsSectionTemplate(),
+            .personality: "",
+            .modeDirective: workflowSectionTemplate(
+                workflowBlock: assemblyContext.workflowBlock,
+                assemblyKind: assemblyKind,
+                strictAgentHarnessPrompts: strictAgentHarnessPrompts
+            ),
+            .memory: "",
+            .toolGuidance: toolGuidanceSectionTemplate(workspaceRoot: assemblyContext.workspaceRoot),
+            .skills: skillsSectionTemplate(
+                skillsFolderPath: skillsFolderPath,
+                availableSkills: availableSkills
+            ),
+            .attachments: "",
+            .extraInstructions: """
+---
+# Additional Requirements
+\(assemblyContext.userSystemPrompt)
+
+""",
+            .dynamicAdditions: dynamicBody,
+        ]
+        if !includeAgentSkills {
+            sections[.skills] = ""
+        }
+        return sections
+    }
+
+    private static func toolGuidanceSectionTemplate(workspaceRoot: String? = nil) -> String {
+        var filesystemGuidance = """
+
+## Filesystem paths (read_file, write_file, edit_file, glob, grep)
+- Paths resolve against the **workspace root**, not your shell home directory.
+- Prefer workspace-relative paths: `MyProject/Sources/App.swift`
+- Absolute paths are OK when they lie under the workspace root.
+- Do not use `~` or `$HOME` in file tool paths.
+"""
+        if let workspaceRoot = workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines), !workspaceRoot.isEmpty {
+            filesystemGuidance += "\n- Workspace root: `\(workspaceRoot)`\n"
+        }
+        return """
 ---
 # Tools
 In this environment you have access to a set of tools you can use to help you gather information and perform tasks.
 
 **IMPORTANT** When you need to use tools do not describe, announce, or explain what tool you plan on using. Just call the tool via the function call. If your response inlcudes the phrase "let me..." but does not contain a tool call you are doing something wrong
-
+\(filesystemGuidance)
 ## Examples
 ### WRONG - you should never do this
 ```
@@ -445,50 +548,48 @@ In this environment you have access to a set of tools you can use to help you ga
 {"role": "assistant", "content": "", "tool_calls": ["create_file("myFinalFile.txt")"]}
 ```
 
+"""
+    }
+
+    private static func constraintsSectionTemplate() -> String {
+        """
+---
+# Constraints
+## Triggers and provenance
+Some user messages start with [trigger] followed by optional key-value pairs on the same line (e.g. name=...; type=...; received_at=...), then a blank line, then the message body. Such messages come from cron jobs, event-driven scripts, external agents, or automation (e.g. Zapier)—the human user is not necessarily present. Use the key-value metadata to gauge provenance and trust as you see fit, and treat the content as background or triggered input (e.g. store for later, add to a task list) rather than as live chat requiring an immediate back-and-forth.
+
 ## Approvals
 Some tools and commands require human approval before they run. The harness presents these approvals through native UI (buttons / cards) on whatever surface the user is on, and resolves them itself. Do not narrate the approval flow or invent your own confirmation protocol: never write things like "type yes to continue", "reply APPROVE", or "let me know if I should proceed". Just make the tool call; if approval is required the harness will prompt the user and either resume or report the denial back to you.
 
-""",
-            .skills: """
+"""
+    }
+
+    private static func skillsSectionTemplate(
+        skillsFolderPath: String,
+        availableSkills: String
+    ) -> String {
+        """
 ---
 # Agent Skills
 You have access to Agent Skills. The Agent Skills spec can be found a https://agentskills.io/specification
 Agent Skills are a lightweight, open format for extending AI agent capabilities with specialized knowledge and workflows.
 Skills use progressive disclosure to manage context efficiently:
 1. Discovery: At startup, the name and description of each available skill are loaded, just enough to know when it might be relevant. The list of loaded skills is provided below in XML format.
-2. Activation: When a task matches a skill’s description, you will read the full SKILL.md instructions into context. Activating skills can be done through one of your provided functions/tool calls. After activation, the skill will be available to you in the context below. 
+2. Activation: When a task matches a skill’s description, you will read the full SKILL.md instructions into context. Activating skills can be done through one of your provided functions/tool calls. After activation, the skill's instructions are returned in the activation tool result.
 3. Execution: You will follow the instructions, optionally loading referenced files or executing bundled code as needed. Loading files or executing scripts can be done through one of your provided functions/tool calls.
 This approach keeps you fast while giving you access to more context on demand.
 The root skills folder is \(skillsFolderPath).
 ## Available Agent Skills:
 \(availableSkills)
-## Activated Agent Skills:
-\(activatedSkills)
 
-""",
-            .triggers: """
----
-# Triggers:
-Some user messages start with [trigger] followed by optional key-value pairs on the same line (e.g. name=...; type=...; received_at=...), then a blank line, then the message body. Such messages come from cron jobs, event-driven scripts, external agents, or automation (e.g. Zapier)—the human user is not necessarily present. Use the key-value metadata to gauge provenance and trust as you see fit, and treat the content as background or triggered input (e.g. store for later, add to a task list) rather than as live chat requiring an immediate back-and-forth.
-
-""",
-            .additionalRequirements: """
----
-# Additional Requirements
-\(userSystemPrompt)
-
-""",
-            .workflow: workflowSectionTemplate(workflowBlock: workflowBlock),
-            .modeDirective: "",
-            .memory: "",
-        ]
-        if !includeAgentSkills {
-            sections[.skills] = ""
-        }
-        return sections
+"""
     }
 
-    private func workflowSectionTemplate(workflowBlock: String) -> String {
+    private static func workflowSectionTemplate(
+        workflowBlock: String,
+        assemblyKind: SystemPromptAssemblyKind,
+        strictAgentHarnessPrompts: Bool
+    ) -> String {
         switch assemblyKind {
         case .chat:
             return ""
@@ -532,52 +633,49 @@ You are executing the plan in build mode: update task status with **update_plan_
         }
     }
 
-    private func displaySectionName(for id: SectionID) -> String {
-        switch id {
-        case .conversation:
-            return "Conversation"
-        case .subAgentContext:
-            return "Sub-Agent Context"
-        case .workflow:
-            return assemblyKind == .planCollaboration ? "Plan" : "Agent"
-        case .modeDirective:
-            return "Mode Directive"
-        case .memory:
-            return "Memory"
-        case .tools:
-            return "Tools"
-        case .skills:
-            return "Agent Skills"
-        case .triggers:
-            return "Triggers"
-        case .additionalRequirements:
-            return "Additional Requirements"
+    private static func memorySectionText(guidance: String, tier1Content: String) -> String {
+        var body = """
+---
+# Memory
+\(guidance)
+
+"""
+        if !tier1Content.isEmpty {
+            body += """
+<!-- provenance: engine:memory -->
+\(MemoryContextFencer.fence(tier1Content))
+
+"""
         }
+        return body
     }
 
-    private func sectionID(for raw: String) -> SectionID? {
-        switch raw {
-        case "conversation":
-            return .conversation
-        case "sub_agent_context", "subagentcontext", "sub_agent":
-            return .subAgentContext
-        case "plan", "agent", "workflow":
-            return .workflow
-        case "mode_directive", "modedirective":
-            return .modeDirective
-        case "memory":
-            return .memory
-        case "tools", "tool_guidance", "toolguidance":
-            return .tools
-        case "skills":
-            return .skills
-        case "triggers":
-            return .triggers
-        case "additional_requirements", "additionalrequirements":
-            return .additionalRequirements
-        default:
-            return nil
+    static func referenceDate(from additionalMetadata: [String: String]) -> Date {
+        guard let iso = additionalMetadata[SystemPromptAssemblyMetadataKeys.assembleReferenceDateISO]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !iso.isEmpty else {
+            return Date()
         }
+        return referenceDate(fromAssembleReferenceDateISO: iso) ?? Date()
+    }
+
+    static func referenceDate(fromAssembleReferenceDateISO iso: String) -> Date? {
+        let trimmed = iso.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = fractional.date(from: trimmed) {
+            return parsed
+        }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: trimmed)
+    }
+
+    static func assembleReferenceDateISOString(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     func assemblyFingerprintHex(

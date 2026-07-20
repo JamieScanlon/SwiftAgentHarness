@@ -44,6 +44,16 @@ struct DeterministicToolResultSummaryTests {
         #expect(line == "[read_file] read config.py (1200 chars)")
     }
 
+    @Test("read_attachment summary reports attachment id and char count")
+    func readAttachmentShape() {
+        let attachmentID = UUID()
+        let line = DeterministicToolResultSummary.line(
+            for: call("read_attachment", ["attachment_id": .string(attachmentID.uuidString)]),
+            result: result("hello")
+        )
+        #expect(line == "[read_attachment] read \(attachmentID.uuidString) (5 chars)")
+    }
+
     @Test("grep summary reports pattern and match count")
     func grepShape() {
         let line = DeterministicToolResultSummary.line(

@@ -157,7 +157,17 @@ public enum CoreCommandCatalog {
             row(
                 name: "verbose",
                 description: "Toggle verbose output for this turn or session.",
+                argumentHint: "[on|off]",
                 hiddenKeywords: "debug detail logs",
+                category: .directive,
+                bypassTier: .immediateUI,
+                kind: .directive
+            ),
+            row(
+                name: "trace",
+                description: "Toggle active-memory debug summary after replies.",
+                argumentHint: "[on|off]",
+                hiddenKeywords: "debug active-memory recall",
                 category: .directive,
                 bypassTier: .immediateUI,
                 kind: .directive

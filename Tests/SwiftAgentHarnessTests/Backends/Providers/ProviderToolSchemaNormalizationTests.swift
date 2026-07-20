@@ -165,11 +165,29 @@ struct ProviderToolSchemaNormalizationTests {
     }
 
     private func canonicalSchemaFingerprint(_ schema: JSON?) -> String? {
-        guard let schema,
-              let data = try? JSONEncoder().encode(schema) else {
-            return nil
+        guard let schema else { return nil }
+        return stableFingerprint(schema)
+    }
+
+    /// Order-independent fingerprint so Dictionary-backed JSON objects compare stably.
+    private func stableFingerprint(_ value: JSON) -> String {
+        switch value {
+        case .boolean(let b):
+            return b ? "true" : "false"
+        case .integer(let n):
+            return String(n)
+        case .double(let n):
+            return String(n)
+        case .string(let s):
+            return "\"\(s)\""
+        case .array(let items):
+            return "[" + items.map(stableFingerprint).joined(separator: ",") + "]"
+        case .object(let dict):
+            let pairs = dict.keys.sorted().map { key in
+                "\"\(key)\":\(stableFingerprint(dict[key]!))"
+            }
+            return "{" + pairs.joined(separator: ",") + "}"
         }
-        return String(data: data, encoding: .utf8)
     }
 
     @Test("ProviderRuntimeHooks resolves openAI strict profile from catalog compat")

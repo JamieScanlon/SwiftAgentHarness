@@ -259,4 +259,79 @@ struct WorkspacePathPolicyTests {
         #expect(path.hasSuffix("inside.txt"))
         #expect(FileManager.default.fileExists(atPath: path))
     }
+
+    @Test("expandShellPathPrefixes expands leading tilde")
+    func expandShellPathPrefixesTilde() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(PathPolicy.expandShellPathPrefixes("~/Projects/foo") == (home as NSString).appendingPathComponent("Projects/foo"))
+    }
+
+    @Test("expandShellPathPrefixes expands $HOME prefix")
+    func expandShellPathPrefixesDollarHome() {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(PathPolicy.expandShellPathPrefixes("$HOME/Projects/foo") == (home as NSString).appendingPathComponent("Projects/foo"))
+    }
+
+    @Test("expandShellPathPrefixes leaves plain relative paths unchanged")
+    func expandShellPathPrefixesPlainRelative() {
+        #expect(PathPolicy.expandShellPathPrefixes("FitnessApp/foo.swift") == "FitnessApp/foo.swift")
+    }
+
+    @Test("write resolves ~/Projects path when workspace is parent Projects directory")
+    func writeResolvesTildeProjectsPath() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let testID = UUID().uuidString
+        let projectsRoot = (home as NSString).appendingPathComponent("wsp-tilde-\(testID)/Projects")
+        let workspace = URL(fileURLWithPath: projectsRoot, isDirectory: true)
+        let memory = workspace.deletingLastPathComponent().appendingPathComponent("memory", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: memory, withIntermediateDirectories: true)
+
+        let raw = "~/wsp-tilde-\(testID)/Projects/MyApp/file.txt"
+        let path = try WorkspacePathPolicy.resolveWritablePath(
+            raw: raw,
+            workspaceRoot: workspace.path,
+            memoryDirectory: memory,
+            memoryWriteOnly: false
+        )
+        let expected = (projectsRoot as NSString).appendingPathComponent("MyApp/file.txt")
+        #expect(path == (expected as NSString).standardizingPath)
+        #expect(!path.contains("/~/"))
+    }
+
+    @Test("write rejects tilde path outside workspace")
+    func writeRejectsTildeOutsideWorkspace() throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace, fixture.memory, fixture.outside) }
+        #expect(throws: WorkspaceFilesystemError.outsideAllowedRoots) {
+            try WorkspacePathPolicy.resolveWritablePath(
+                raw: "~/.wsp-outside-\(UUID().uuidString)/secret.txt",
+                workspaceRoot: fixture.workspace.path,
+                memoryDirectory: fixture.memory,
+                memoryWriteOnly: false
+            )
+        }
+    }
+
+    @Test("write rejects relative path with literal tilde directory segment")
+    func writeRejectsLiteralTildeSegment() throws {
+        let fixture = try makeFixture()
+        defer { cleanup(fixture.workspace, fixture.memory, fixture.outside) }
+        do {
+            _ = try WorkspacePathPolicy.resolveWritablePath(
+                raw: "Projects/~/foo.txt",
+                workspaceRoot: fixture.workspace.path,
+                memoryDirectory: fixture.memory,
+                memoryWriteOnly: false
+            )
+            Issue.record("Expected invalidPathSyntax")
+        } catch let error as WorkspaceFilesystemError {
+            if case .invalidPathSyntax(let message) = error {
+                #expect(message.contains("literal '~'"))
+            } else {
+                Issue.record("Expected invalidPathSyntax, got \(error)")
+            }
+        }
+    }
 }

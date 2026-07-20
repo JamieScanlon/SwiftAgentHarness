@@ -19,7 +19,9 @@ struct ContextAssemblyRuntimeFacade {
         projectionPolicy: ContextEngineProjectionPolicyInput?,
         lastContextLimitTokens: Int?,
         lastPromptTokens: Int?,
-        lastContextCompactionLLMDateByConversationID: [UUID: Date]
+        lastModelRequestAtByConversationID: [UUID: Date],
+        lastContextCompactionLLMDateByConversationID: [UUID: Date],
+        workspacePolicy: HarnessWorkspacePolicy = .default
     ) async -> ContextEngineAssembleRequest {
         await persistenceDomain.makeContextEngineAssembleRequest(
             messages: messages,
@@ -34,8 +36,10 @@ struct ContextAssemblyRuntimeFacade {
             projectionPolicy: projectionPolicy,
             lastContextLimitTokens: lastContextLimitTokens,
             lastPromptTokens: lastPromptTokens,
+            lastModelRequestAtByConversationID: lastModelRequestAtByConversationID,
             lastContextCompactionLLMDateByConversationID: lastContextCompactionLLMDateByConversationID,
-            conversationTransformConfiguration: conversationTransformConfiguration
+            conversationTransformConfiguration: conversationTransformConfiguration,
+            workspacePolicy: workspacePolicy
         )
     }
 }

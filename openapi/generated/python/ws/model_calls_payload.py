@@ -52,6 +52,8 @@ class ModelCallAttemptRecord(BaseModel):
     promptCacheEstimatedCachedInputTokens: Optional[conint(ge=0)] = None
     promptCacheEstimatedCacheWriteTokens: Optional[conint(ge=0)] = None
     promptCacheEstimatedSavingsUSD: Optional[float] = None
+    promptCacheValuesAreProviderReported: Optional[bool] = None
+    promptCacheUnexpectedCacheWrite: Optional[bool] = None
     errorClass: Optional[str] = None
     errorCode: Optional[str] = None
     latencyMs: Optional[float] = None

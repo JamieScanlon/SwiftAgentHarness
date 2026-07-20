@@ -34,7 +34,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("Declared slot without registration throws slotUnavailable")
     func slotUnavailableWhenDeclaredButMissing() throws {
-        try ProviderTestSupport.withRegistryIsolation {
+        try ProviderTestManifestSupport.withRegistryIsolation {
             ProviderRegistry.resetForTesting()
             let manifest = ProviderManifest(
                 id: "partial",
@@ -62,14 +62,23 @@ struct ProviderSlotRegistrationTests {
 
     @Test("Undeclared slot registration is rejected")
     func undeclaredSlotRegistrationRejected() throws {
-        try ProviderTestSupport.withRegistryIsolation {
+        try ProviderTestManifestSupport.withRegistryIsolation {
             ProviderRegistry.resetForTesting()
             let manifest = try ProviderTestManifestSupport.loadManifest(for: "ollama")
             #expect(throws: ProviderManifestValidationError.self) {
                 try ProviderRegistry.register(
                     ProviderRegistration(
                         manifest: manifest,
-                        textInference: OllamaTextInferenceProvider(manifest: manifest),
+                        textInference: OllamaTextInferenceProvider(
+                            manifest: manifest,
+                            runtime: InferenceRuntimeConfig(
+                                providerID: manifest.id,
+                                label: manifest.label,
+                                adapterKind: .ollama,
+                                serverURL: InferenceRuntimeCatalogFixtures.ollamaServerURL,
+                                modelIDMap: [:]
+                            )
+                        ),
                         speech: StubSpeechProvider(manifest: manifest)
                     )
                 )
@@ -79,7 +88,7 @@ struct ProviderSlotRegistrationTests {
 
     @Test("Missing CLI backend registration is rejected when slot declared")
     func missingCLIBackendRegistrationRejected() throws {
-        try ProviderTestSupport.withRegistryIsolation {
+        try ProviderTestManifestSupport.withRegistryIsolation {
             ProviderRegistry.resetForTesting()
             let manifest = try ProviderTestManifestSupport.loadManifest(for: "openai")
             #expect(throws: ProviderManifestValidationError.self) {

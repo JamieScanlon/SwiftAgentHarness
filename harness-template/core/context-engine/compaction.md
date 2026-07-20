@@ -126,8 +126,9 @@ Without this framing, models will sometimes re-execute work the summary describe
 
 - The 5 most-recently-accessed files, **re-read fresh**, total budget ~50k tokens (5k per file). This is the most reliable way to keep file content in scope.
 - Invoked-skill bodies, total budget ~25k tokens (5k per skill).
+- Named H2/H3 sections from the nearest project `AGENTS.md` / `CLAUDE.md` (default: `Session Startup`, `Red Lines`; legacy fallback `Every Session`, `Safety`), total budget ~3k characters. Configurable via `reinjectionInstructionSectionNames`; set `reinjectionInstructionSectionsEnabled: false` to disable.
 - Any async-agent task statuses.
-- A plan-mode flag if you have one.
+- A plan-mode flag if you have one — and if a plan artifact exists, a plan reference attachment (path + content or digest) so the plan itself survives the boundary, not just the fact of being in plan mode (see [planning.md](../conversation-manager/planning.md)).
 - Recently-discovered tools / MCP delta announcements.
 
 The principle: structured task state belongs in dedicated messages where the model is forced to attend to it, not buried in a summary that may compress it lossily.
@@ -169,7 +170,11 @@ Whichever you choose, log the threshold breach and the savings of each compactio
 
 ### Pre-compaction memory flush
 
-Before the summarizer runs, run a **silent turn** that reminds the agent to dump important notes to its durable memory file(s) first. Durable state gets promoted before any text is summarized away.
+Before the summarizer runs, run a **silent turn** that reminds the agent to dump important notes to its durable memory file(s) first. Durable state gets promoted before any text is summarized away. Full handshake — soft-threshold + transcript-byte triggers, once-per-cycle and context-hash dedupe guards, enforced safety hints, plugin-owned flush plans, post-compaction restore steps — in [memory/memory-aware-compaction.md](../memory/memory-aware-compaction.md).
+
+Soft-threshold headroom (`softThresholdTokens`, default 8k) can flush **before** the hard proactive compaction trigger so the flush sub-agent is not competing with a critically full context. Soft band: flush-only; hard band: flush then summarize. See [memory-aware-compaction.md](../memory/memory-aware-compaction.md).
+
+Compaction and flush observability is checkpoint- and log-based today; plugin hooks are spec'd but not emitted — see [memory-aware-compaction.md § Observability (deferred)](../memory/memory-aware-compaction.md#observability-deferred) and the [extensibility assessment](../../cross-cutting/extensibility/README.md).
 
 ### Identifier preservation
 

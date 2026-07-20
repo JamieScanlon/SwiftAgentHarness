@@ -63,7 +63,7 @@ struct ContextAssemblyBoundaryTests {
             lastPromptTokens: nil,
             events: [],
             eventLogFrontier: 0,
-            lastLLMDateByConversationID: [:],
+            lastModelRequestAtByConversationID: [:], lastCompactionLLMDateByConversationID: [:],
             persistCompactionCheckpoint: true,
             allowProactiveCompactionTriggers: true,
             compactionLockAlreadyHeldByCaller: false,
@@ -112,7 +112,8 @@ struct ContextAssemblyBoundaryTests {
             projectionArtifact: nil,
             systemPromptCheckpoint: ContextSystemPromptAssemblyCheckpointPersistenceSpec(
                 conversationID: conversationID,
-                fingerprint: "ctx-assembly-test-fingerprint"
+                fingerprint: "ctx-assembly-test-fingerprint",
+                assembledPromptDigest: nil
             ),
             attachmentProjectionCheckpoint: ContextAttachmentProjectionCheckpointPersistenceSpec(
                 conversationID: conversationID,
@@ -230,6 +231,7 @@ struct ContextAssemblyBoundaryTests {
             projectionPolicy: nil,
             lastContextLimitTokens: nil,
             lastPromptTokens: nil,
+            lastModelRequestAtByConversationID: [:],
             lastContextCompactionLLMDateByConversationID: [:]
         )
         #expect(request.eventLogFrontier == 1)
@@ -263,7 +265,9 @@ struct ContextAssemblyBoundaryTests {
             projectionPolicy: nil,
             lastContextLimitTokens: nil,
             lastPromptTokens: nil,
+            lastModelRequestAtByConversationID: [:],
             lastContextCompactionLLMDateByConversationID: [:],
+            workspacePolicy: .default,
             logger: nil,
             performTransform: { input in
                 ContextTransformOutput(messages: input.messages, diagnostics: nil, messageProvenance: nil)

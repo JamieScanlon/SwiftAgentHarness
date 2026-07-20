@@ -26,7 +26,7 @@ public actor OrchestratorSessionRuntimeService {
     private let subAgentPool: any SubAgentPooling
     private let slashCommand: SlashCommandDispatchService
     private let toolData: ConversationToolDataService
-    private let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    private let toolSystemGateway: any ToolSystemGatewaying
     private var triggerDelegatedCompletionHandoff: TriggerDelegatedCompletionHandoff?
 
     init(
@@ -59,6 +59,7 @@ public actor OrchestratorSessionRuntimeService {
         self.subAgentPool = subAgentPool
         self.slashCommand = slashCommand
         self.toolData = toolData
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     private var logger: Logger? { deps.logger }
@@ -92,12 +93,9 @@ public actor OrchestratorSessionRuntimeService {
         for conversation: ModelConversation?,
         resolvedProfile: ResolvedModeProfile
     ) -> [String: String] {
-        guard let conversation else { return [:] }
-        return ContextSystemPromptModeSwitches.build(
-            conversation: conversation,
-            strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
-            resolvedProfile: resolvedProfile
-        ).metadata
+        _ = conversation
+        _ = resolvedProfile
+        return [:]
     }
 
     func makeResolvedThinkingConfig(
@@ -200,7 +198,6 @@ public actor OrchestratorSessionRuntimeService {
     }
 
     func generateFullSystemPrompt(conversationID: UUID?, withUserSystemPrompt userSystemPrompt: String?) async throws -> String {
-        let skillLoader = await skillActivation.skillLoader(for: conversationID)
         let conv: ModelConversation?
         if let conversationID {
             conv = await persistenceDomain.modelConversation(id: conversationID)
@@ -217,47 +214,118 @@ public actor OrchestratorSessionRuntimeService {
                 fallbackModeId: InteractionMode.chat.rawValue
             )).profile
         }
-        let modeCtx = ModePolicyContext(interactionMode: interactionMode, resolvedProfile: resolved)
-        let metadata = makeSystemPromptMetadata(for: conv, resolvedProfile: resolved)
-
-        do {
+        guard let conv else {
+            let modeCtx = ModePolicyContext(interactionMode: interactionMode, resolvedProfile: resolved)
+            let skillLoader = await skillActivation.skillLoader(for: conversationID)
+            let referenceDate = Date()
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            let context = SystemPromptAssemblyContext(
+                conversationID: "preview",
+                conversationStartDate: isoFormatter.string(from: referenceDate),
+                referenceDate: referenceDate,
+                userSystemPrompt: userSystemPrompt ?? ""
+            )
             let systemPrompt = try await SystemPrompt(
                 skillLoader: skillLoader,
                 logger: logger,
                 interactionMode: interactionMode,
                 assemblyKind: resolved.assemblyKind,
-                routingPolicyConversation: conv,
+                routingPolicyConversation: nil,
                 modePolicyContext: modeCtx
             )
-            let text = try await systemPrompt.generateSystemPrompt(
-                withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: metadata
-            )
-            if let conv {
-                do {
-                    try await persistSystemPromptAssemblyCheckpoint(conversation: conv, systemPrompt: systemPrompt, resolved: resolved)
-                } catch {
-                    logger?.warning("[OrchestratorSessionRuntimeService] system prompt assembly checkpoint (generateFullSystemPrompt): \(error)")
-                }
-            }
-            return text
-        } catch {
-            logger?.warning("[OrchestratorSessionRuntimeService] System prompt build failed, retrying without agent skills: \(error)")
-            let fallbackPrompt = try await SystemPrompt(
-                includeCurrentDateTime: nil,
-                includeAgentSkills: false,
-                skillLoader: skillLoader,
-                logger: logger,
-                interactionMode: interactionMode,
-                assemblyKind: resolved.assemblyKind,
-                routingPolicyConversation: conv,
-                modePolicyContext: modeCtx
-            )
-            return try await fallbackPrompt.generateSystemPrompt(
-                withUserSystemPrompt: userSystemPrompt,
-                additionalMetadata: metadata
+            return try await systemPrompt.generateSystemPrompt(
+                context: context,
+                resolved: ResolvedSystemPromptSections(),
+                stablePrefix: nil
             )
         }
+
+        var providerContribution: SystemPromptContribution?
+        if let entry = await deps.registryEntryProvider?(conv.model.id),
+           let binding = entry.primaryBinding,
+           let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+            providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+        }
+        let routingNames = ConversationRoutingPolicyNames.names(for: conv)
+        let policy = ContextEngineSystemPromptAssemblyPolicyInput(
+            resolvedModeProfile: resolved,
+            strictAgentHarnessPrompts: deps.agentHarness.strictAgentHarnessPrompts,
+            includeAgentSkills: resolved.context.includeSkills ?? deps.configurationSet.promptAssembly.includeAgentSkills,
+            includeDateTime: deps.configurationSet.promptAssembly.includeCurrentDateTime,
+            toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
+            routingPolicyTools: routingNames.tools,
+            routingPolicySkills: routingNames.skills,
+            providerContribution: providerContribution
+        )
+        let referenceDate = Date()
+        let memoryBlocks: MemorySystemPromptBlocks?
+        let memoryGeneration: Int?
+        if let defaultEngine = deps.contextEngine as? DefaultContextEngine,
+           let memoryService = defaultEngine.memoryService,
+           let blocks = await memoryService.systemPromptBlocks(conversationID: conv.id) {
+            memoryBlocks = blocks
+            memoryGeneration = await memoryService.currentSnapshotGeneration(conversationID: conv.id)
+        } else {
+            memoryBlocks = nil
+            memoryGeneration = nil
+        }
+        let modeMemoryInjection = ContextSystemPromptModeSwitches.build(
+            conversation: conv,
+            strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
+            resolvedProfile: policy.resolvedModeProfile,
+            referenceDate: referenceDate
+        ).memoryInjectionMode
+        let bundle = SystemPromptAssemblyContributionCollector.collect(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: userSystemPrompt,
+            memoryBlocks: memoryBlocks,
+            memorySnapshotGeneration: memoryGeneration,
+            modeMemoryInjection: modeMemoryInjection,
+            engineDynamicAddition: nil,
+            referenceDate: referenceDate
+        )
+
+        let renderer = DefaultSystemPromptAssemblyRenderer(
+            skillLoaderProvider: { [skillActivation] conversationID in
+                await skillActivation.skillLoader(for: conversationID)
+            },
+            logger: logger
+        )
+        let text = try await renderer.render(
+            conversation: conv,
+            policy: policy,
+            userSystemPrompt: userSystemPrompt,
+            assemblyContext: bundle.assemblyContext,
+            contributions: bundle.contributions,
+            referenceDate: referenceDate,
+            fullOverrideText: bundle.fullOverrideText
+        )
+        do {
+            let fingerprint = SystemPromptAssemblyFingerprint.hexDigest(
+                resolved: resolved,
+                strictAgentHarnessPrompts: policy.strictAgentHarnessPrompts,
+                includeAgentSkills: policy.includeAgentSkills,
+                includeDateTime: policy.includeDateTime,
+                toolPolicySignature: policy.toolPolicySignature,
+                routingPolicyTools: policy.routingPolicyTools,
+                routingPolicySkills: policy.routingPolicySkills,
+                memorySnapshotGeneration: bundle.memorySlice.snapshotGeneration,
+                workspaceSectionContent: bundle.memorySlice.workspaceContent,
+                memoryTier1SectionContent: bundle.memorySlice.tier1Content,
+                providerContributionSignature: bundle.providerContributionSignature,
+                systemPromptFullOverride: conv.systemPromptFullOverride
+            )
+            try await persistenceDomain.persistSystemPromptAssemblyCheckpointIfNeededAsync(
+                conversationID: conv.id,
+                fingerprint: fingerprint,
+                assembledPromptDigest: SystemPromptDispatchCodec.sha256Digest(of: text)
+            )
+        } catch {
+            logger?.warning("[OrchestratorSessionRuntimeService] system prompt assembly checkpoint (generateFullSystemPrompt): \(error)")
+        }
+        return text
     }
 
     func adoptPersistedNewConversationSelection(_ conversation: ModelConversation) async throws {
@@ -368,8 +436,8 @@ public actor OrchestratorSessionRuntimeService {
         } else {
             orchestrator = nil
         }
+        // Do not call orchestrator.shutdown() — managers are session-owned / shared.
         if let orchestrator {
-            defer { Task { await orchestrator.shutdown() } }
             return await OrchestrationToolCatalog.registryEntriesForListing(
                 orchestrator: orchestrator,
                 dataProvider: toolData,
@@ -383,34 +451,6 @@ public actor OrchestratorSessionRuntimeService {
             logger: logger,
             executionEnvironmentAdapter: SandboxToolExecutionEnvironmentAdapter()
         )
-    }
-
-    private func persistSystemPromptAssemblyCheckpoint(
-        conversation: ModelConversation,
-        systemPrompt: SystemPrompt,
-        resolved: ResolvedModeProfile
-    ) async throws {
-        let routingNames = routingPolicyNames(for: conversation)
-        let fingerprint = systemPrompt.assemblyFingerprintHex(
-            resolved: resolved,
-            toolPolicySignature: deps.toolPolicy.stableAllowlistSignature(),
-            routingPolicyTools: routingNames.tools,
-            routingPolicySkills: routingNames.skills
-        )
-        try await persistenceDomain.persistSystemPromptAssemblyCheckpointIfNeededAsync(
-            conversationID: conversation.id,
-            fingerprint: fingerprint
-        )
-    }
-
-    private func routingPolicyNames(for conversation: ModelConversation) -> (tools: [String], skills: [String]) {
-        guard let policy = conversation.routingPrefs?.explicitToolPolicy else {
-            return ([], [])
-        }
-        switch policy {
-        case .allowlist(let tools, let skills), .denylist(let tools, let skills):
-            return (tools.sorted(), skills.sorted())
-        }
     }
 
     private func stringMetadataValue(conversation: ModelConversation, key: String) -> String? {

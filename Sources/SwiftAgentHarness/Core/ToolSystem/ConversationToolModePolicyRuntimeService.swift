@@ -15,7 +15,7 @@ actor ConversationToolModePolicyRuntimeService {
     private let subAgentPool: any SubAgentPooling
     nonisolated(unsafe) private var toolData: ConversationToolDataService!
     private let selection: ConversationSelectionAccessing
-    private let toolSystemGateway: any ToolSystemGatewaying = DefaultToolSystemGateway()
+    private let toolSystemGateway: any ToolSystemGatewaying
 
     init(
         deps: ConversationRuntimeDependencies,
@@ -35,6 +35,7 @@ actor ConversationToolModePolicyRuntimeService {
         self.toolApproval = toolApproval
         self.subAgentPool = subAgentPool
         self.selection = selection
+        self.toolSystemGateway = DefaultToolSystemGateway(visibilityGrants: deps.visibilityGrants)
     }
 
     nonisolated func installToolData(_ toolData: ConversationToolDataService) {
@@ -96,8 +97,8 @@ actor ConversationToolModePolicyRuntimeService {
             model: conversation.model,
             conversation: conversation
         )
+        // Do not call orchestrator.shutdown() — managers are session-owned / shared.
         if let orchestrator {
-            defer { Task { await orchestrator.shutdown() } }
             return await OrchestrationToolCatalog.registryEntriesForListing(
                 orchestrator: orchestrator,
                 dataProvider: installedToolData,
@@ -139,7 +140,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
         guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID) else {
             throw ConversationServiceError.conversationNotFound
         }
-        guard SystemPrompt.loadIncludeAgentSkillsFromConfig() else { return [] }
+        guard deps.configurationSet.promptAssembly.includeAgentSkills else { return [] }
         guard let skillLoader = await skillActivation.skillLoader(for: conversationID) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await modePolicyContext(for: conversation)
@@ -154,7 +155,7 @@ extension ConversationToolModePolicyRuntimeService: ConversationToolModePolicyOw
     }
 
     func listAvailableSkillsForAPI() async throws -> [AvailableSkillInfo] {
-        guard SystemPrompt.loadIncludeAgentSkillsFromConfig() else { return [] }
+        guard deps.configurationSet.promptAssembly.includeAgentSkills else { return [] }
         guard let skillLoader = await skillActivation.skillLoader(for: nil) else { return [] }
         let all = try await skillLoader.loadMetadata()
         let policyCtx = await defaultSessionModePolicyContext()

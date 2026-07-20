@@ -12,7 +12,8 @@ enum MemorySubAgentSpawnWiring {
               let memoryService = defaultEngine.memoryService else {
             return
         }
-        let config = MemoryConfigurationLoader.loadFromPromptConfigBundle(logger: deps.logger)
+        let config = deps.configurationSet.memory
+        let ranked = deps.rankedRegistryEntriesProvider
         let port = MemorySubAgentSpawnAdapter.makePort(
             spawnSubAgent: { parentID, request, model in
                 try await subAgentSpawnService.spawnSubAgentViaPool(
@@ -23,24 +24,36 @@ enum MemorySubAgentSpawnWiring {
                 )
             },
             sendMessageAndRun: { childID, prompt in
-                let response = try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
-                    prompt,
-                    images: [],
+                try await HarnessEmbeddedMutation.sendMessageAndDrain(
                     conversationID: childID,
-                    configuration: AgentRuntimeTurnConfiguration(enableTools: true)
+                    prompt: prompt,
+                    fallback: {
+                        let response = try await agentRuntime.serviceRuntimeSendMessageAndStreamResponse(
+                            prompt,
+                            images: [],
+                            conversationID: childID,
+                            configuration: AgentRuntimeTurnConfiguration(enableTools: true)
+                        )
+                        async let partialDrain: Void = {
+                            for await _ in response.partialContent {}
+                        }()
+                        async let stateDrain: Void = {
+                            for await _ in response.orchestrationState {}
+                        }()
+                        _ = await (partialDrain, stateDrain)
+                    }
                 )
-                async let partialDrain: Void = {
-                    for await _ in response.partialContent {}
-                }()
-                async let stateDrain: Void = {
-                    for await _ in response.orchestrationState {}
-                }()
-                _ = await (partialDrain, stateDrain)
             },
             cancelChildRun: { childID in
                 if let conversation = await persistenceDomain.modelConversation(id: childID),
                    let runID = conversation.currentRunID {
-                    await agentRuntime.cancelSubAgentRun(conversationID: childID, runID: runID)
+                    try? await HarnessEmbeddedMutation.cancelChildRun(
+                        conversationID: childID,
+                        runID: runID,
+                        fallback: {
+                            await agentRuntime.cancelSubAgentRun(conversationID: childID, runID: runID)
+                        }
+                    )
                 }
             },
             lastAssistantText: { childID in
@@ -54,8 +67,21 @@ enum MemorySubAgentSpawnWiring {
                       let memoryService = defaultEngine.memoryService else {
                     return []
                 }
-                let entries = await memoryService.manifestEntries(conversationID: conversationID)
-                return entries.map(MemoryManifestScanner.formatManifestLine)
+                return await memoryService.extractionManifestLines(conversationID: conversationID)
+            },
+            parentModel: { conversationID in
+                await persistenceDomain.modelConversation(id: conversationID)?.model
+            },
+            rankedRegistryEntries: { ref in
+                guard let ranked else { return [] }
+                return await ranked(ref)
+            },
+            resolveFlushPlan: { conversationID, manifestLines, middleTranscript in
+                await memoryService.resolveFlushPlan(
+                    conversationID: conversationID,
+                    manifestLines: manifestLines,
+                    middleTranscript: middleTranscript
+                )
             },
             config: config,
             logger: deps.logger

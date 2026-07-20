@@ -99,6 +99,7 @@ interface CompactionCheckpoint extends Checkpoint {
 interface MemoryInjectionSnapshot extends Checkpoint { hits: MemoryReference[]; memoryStoreVersion: string }
 interface ToolResultTrim extends Checkpoint { targetMessageId: string; trimmedView: ToolResultMessage }
 interface SystemPromptAssembly extends Checkpoint { atTurn: number; assembledPrompt: string }
+interface AttachmentDigest extends Checkpoint { attachmentId: string; contentHash: string; digest: ContentBlock[] }
 ```
 
 A few notes on the shape:
@@ -179,7 +180,7 @@ function latestValidCheckpoint<T extends Checkpoint>(
 }
 ```
 
-Each Checkpoint subtype has its own validity rule (compaction uses prefix-match; `ToolResultTrim` checks the target message still exists; `MemoryInjectionSnapshot` adds `memoryStoreVersion` match), but they share the shape: prefix/anchor check + config fingerprint.
+Each Checkpoint subtype has its own validity rule (compaction uses prefix-match; `ToolResultTrim` checks the target message still exists; `MemoryInjectionSnapshot` adds `memoryStoreVersion` match; `AttachmentDigest` checks content-hash match against the attachment's current bytes and has *no* prefix term — it depends on the artifact, not conversation position), but they share the shape: prefix/anchor check (where applicable) + config fingerprint.
 
 This factoring buys you five things lossy compaction (mutating raw history) can't:
 
@@ -220,7 +221,7 @@ A branch is created at a specific raw-message id (the branch point). The recomme
 Concretely:
 
 - **Inherit raw messages.** Copy `rawEvents[0..N]` from the parent to the branch (or implement as a shared-prefix reference if your storage supports it; semantically identical). Message ids stay stable.
-- **Inherit selectively for derived events.** A Checkpoint is inherited iff its coverage lies entirely within the inherited message prefix. A `CompactionCheckpoint` covering messages 1-30 is inherited if N ≥ 30. A checkpoint covering 1-50 is *not* inherited if N = 40. A `ToolResultTrim` targeting message m20 is inherited if N ≥ 20.
+- **Inherit selectively for derived events.** A Checkpoint is inherited iff its coverage lies entirely within the inherited message prefix. A `CompactionCheckpoint` covering messages 1-30 is inherited if N ≥ 30. A checkpoint covering 1-50 is *not* inherited if N = 40. A `ToolResultTrim` targeting message m20 is inherited if N ≥ 20. Position-independent checkpoints (`AttachmentDigest` — keyed on attachment content, no message coverage) are always inherited.
 - **Don't inherit pending state.** In-flight compactions in the parent at branch time aren't carried over. The branch starts with a clean compaction-lock state.
 - **`basedOnEventId` is rewritten if necessary.** If branch message ids are reassigned during inheritance, rewrite `basedOnEventId` accordingly. If you reference-share the prefix and ids stay stable, no rewrite needed.
 - **Config fingerprint propagates.** The branch's compaction config defaults to the parent's. If the user changes config in the branch, fingerprint mismatch invalidates inherited checkpoints automatically.
@@ -289,7 +290,7 @@ The Manager publishes a `branched` event on both the parent's and the new conver
 
 A first-class field on the conversation rather than a per-turn flag because switching mid-conversation is user-meaningful, history should reflect it, multi-client UIs need to render it, and sub-agents/branches need something to inherit. Per-turn settings belong in `runOptions`.
 
-The recommended treatment is **mode as an id into a `ModeRegistry` of `ModeProfile` records** rather than a hard-coded enum, so adding a mode is registering a profile (not editing every consuming layer). For the full design — profile shape, per-layer slices, system-prompt assembly under modes, transition hooks, sub-agent inheritance, and the cross-cutting anti-patterns — see [modes.md](./modes.md).
+The recommended treatment is **mode as an id into a `ModeRegistry` of `ModeProfile` records** rather than a hard-coded enum, so adding a mode is registering a profile (not editing every consuming layer). For the full design — profile shape, per-layer slices, system-prompt assembly under modes, transition hooks, sub-agent inheritance, and the cross-cutting anti-patterns — see [modes.md](./modes.md). Planning specifically decomposes into three independently-adoptable concerns (constraint regime, plan artifact, progress tracking) layered on the mode machinery — see [planning.md](./planning.md).
 
 ### Attached resources
 
@@ -434,7 +435,7 @@ Onto the Communication Layer:
 - **`conversation/{id}/state`** — full state snapshot on subscribe; events on every state change (mode, lifecycle, attachments, prompt overrides, routing changes, run-status transitions, budget changes). State changes are metadata; they don't appear in `rawEvents` or `derivedEvents`.
 - **`conversation/{id}/events`** — the live feed combining both persisted arrays *and* transient runtime progress, in arrival order. Three classes of envelope on this topic:
   - **Message envelopes** — appends to `rawEvents`. Concrete kinds: `InputMessage`, `AssistantMessage`, `ToolCallMessage`, `ToolResultMessage`. These are the history-rendering envelopes; what users see if they look at "the conversation."
-  - **Checkpoint envelopes** — appends to `derivedEvents`. Concrete kinds: `CompactionCheckpoint`, `MemoryInjectionSnapshot`, `ToolResultTrim`, `SystemPromptAssembly`. The Context Engine's work, visible to clients that subscribe; they don't change raw history.
+  - **Checkpoint envelopes** — appends to `derivedEvents`. Concrete kinds: `CompactionCheckpoint`, `MemoryInjectionSnapshot`, `ToolResultTrim`, `SystemPromptAssembly`, `AttachmentDigest`. The Context Engine's work, visible to clients that subscribe; they don't change raw history.
   - **Runtime progress envelopes** — emitted by the Runtime *during* an in-flight turn (token deltas, content blocks, tool-call lifecycle, sub-agent spawn/result). These are *not* persisted to either array; they're transient events tagged with their owning runId. The completed assistant message lands as a single `AssistantMessage` envelope at the end of the run; the deltas have already streamed.
   - Subscribers filter for the rendering they want (history view filters to Message envelopes; transparency view subscribes to Checkpoint envelopes too; live UI takes the full stream). The `read(id, { includeDerived: true })` control-plane variant returns both persisted arrays; this topic is the live feed.
 - **`conversations/registry`** — server-wide subscription to "what conversations exist for me" (filtered by account); events on create / archive / delete. Lower frequency.

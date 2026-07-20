@@ -58,9 +58,10 @@ struct HarnessACPClientDelegate: ACPClientDelegate {
             memoryDirectory: context.runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) },
             memoryWriteOnly: context.runtimeContext.memoryWriteOnly
         )
-        try MemoryContentScanner.validateWriteIfMemoryTarget(
+        try MemoryContentScanner.validateWriteIfSensitiveTarget(
             path: path,
             memoryDirectory: context.runtimeContext.memoryDirectory.map { URL(fileURLWithPath: $0) },
+            skillsDirectory: context.runtimeContext.skillsDirectory.map { URL(fileURLWithPath: $0) },
             content: request.content
         ).get()
         try await bridge.writeFile(path: request.path, content: Data(request.content.utf8))

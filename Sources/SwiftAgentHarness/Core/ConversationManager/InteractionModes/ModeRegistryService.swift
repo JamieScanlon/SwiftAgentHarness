@@ -31,7 +31,7 @@ public actor ModeRegistryService {
         if seedingBuiltIns {
             ModeProfileBuiltInCatalog.seed(into: &profiles)
         }
-        let loaded = modeProfileConfiguration ?? ModeProfileConfiguration.loadFromPromptConfigBundle()
+        let loaded = modeProfileConfiguration ?? .empty
         diagnostics.append(contentsOf: loaded.diagnostics)
         Self.mergeConfigurationProfiles(loaded.profiles, into: &profiles, diagnostics: &diagnostics)
         Self.loadAndMergeProjectProfiles(
@@ -50,7 +50,7 @@ public actor ModeRegistryService {
 
     /// Production registry wired to an operator-controlled project config directory.
     public static func makeForHost(
-        cwd: String = FileManager.default.currentDirectoryPath,
+        cwd: String,
         fileManager: FileManager = .default,
         logger: Logger? = nil,
         seedingBuiltIns: Bool = true,
@@ -265,23 +265,41 @@ public actor ModeRegistryService {
             ? ResolvedModeProfile.builtInSeedVersion
             : 0
 
+        let tools = Self.mergeToolsSlice(
+            parent: base.tools,
+            overlay: raw.tools,
+            profileID: raw.id,
+            diagnostics: &diagnostics
+        )
+        let isMachine = ConversationLineageInference.machineSubAgentModeProfileIDs.contains(raw.id)
+            || ConversationLineageInference.machineSubAgentModeProfileIDs.contains(base.id)
+        if isMachine, raw.allowsHostGrants == true {
+            diagnostics.append(
+                "modeProfiles[\(raw.id)] allowsHostGrants=true ignored: machine profiles cannot accept host visibility grants"
+            )
+        }
+        let hostGrants = ResolvedModeProfile.resolveAllowsHostGrants(
+            id: raw.id,
+            explicitOnThisRow: isMachine ? nil : raw.allowsHostGrants,
+            inherited: isMachine ? nil : (base.allowsHostGrants, base.allowsHostGrantsSource)
+        )
+        let resolvedHostGrants: (value: Bool, source: AllowsHostGrantsSource) =
+            isMachine ? (false, .machinePinned) : hostGrants
+
         return ResolvedModeProfile(
             id: raw.id,
             interactionMode: interactionMode,
             assemblyKind: assemblyKind,
             allowsProactiveCompactionTriggers: allowsCompaction,
             appliesAgentBuildOrchestratorHarness: appliesHarness,
+            allowsHostGrants: resolvedHostGrants.value,
+            allowsHostGrantsSource: resolvedHostGrants.source,
             builtInSeedVersion: seedVersion,
             semanticLayerTags: tags,
             label: label,
             profileDescription: profileDescription,
             symbol: symbol,
-            tools: Self.mergeToolsSlice(
-                parent: base.tools,
-                overlay: raw.tools,
-                profileID: raw.id,
-                diagnostics: &diagnostics
-            ),
+            tools: tools,
             skills: Self.mergeSkillsSlice(
                 parent: base.skills,
                 overlay: raw.skills,
@@ -322,9 +340,17 @@ public actor ModeRegistryService {
                 diagnostics: &diagnostics
             )
         }
+        if let extra = o.stringArray(for: "allow+"),
+           let currentAllow = allow,
+           !currentAllow.contains("*") {
+            allow = Array(Set(currentAllow + extra)).sorted()
+        }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
             deny = Array(Set(parent.deny + extra)).sorted()
+        }
+        if let extra = o.stringArray(for: "deny+") {
+            deny = Array(Set(deny + extra)).sorted()
         }
         var approval = parent.approvalPolicy
         if let raw = o.optionalString(for: "approvalPolicy"),
@@ -350,9 +376,17 @@ public actor ModeRegistryService {
                 diagnostics: &diagnostics
             )
         }
+        if let extra = o.stringArray(for: "allow+"),
+           let currentAllow = allow,
+           !currentAllow.contains("*") {
+            allow = Array(Set(currentAllow + extra)).sorted()
+        }
         var deny = parent.deny
         if let extra = o.stringArray(for: "deny") {
             deny = Array(Set(parent.deny + extra)).sorted()
+        }
+        if let extra = o.stringArray(for: "deny+") {
+            deny = Array(Set(deny + extra)).sorted()
         }
         return ModeProfileSkillsSlice(allow: allow, deny: deny)
     }
@@ -386,6 +420,9 @@ public actor ModeRegistryService {
         }
         if o.keys.contains("includeToolGuidance"), let b = o.optionalBool(for: "includeToolGuidance") {
             copy.includeToolGuidance = b
+        }
+        if o.keys.contains("omitWorkspaceConventions"), let b = o.optionalBool(for: "omitWorkspaceConventions") {
+            copy.omitWorkspaceConventions = b
         }
         return copy
     }
@@ -699,11 +736,18 @@ enum ModeProfileBuiltInCatalog {
     static func machineProfiles(seedVersion v: Int) -> [ResolvedModeProfile] {
         let disabledModel = ModeProfileModelSlice(thinkingConfig: .disabled)
         let denyAllSubAgents = ModeProfileSubAgentsSlice(allow: [])
-        let memoryFileTools = ModeProfileToolsSlice(allow: ["read_file", "write_file", "edit_file"], deny: [])
+        let memoryFileTools = ModeProfileToolsSlice(
+            allow: ["read_file", "read_attachment", "write_file", "edit_file"],
+            deny: []
+        )
         // Suppress (not just empty) the skills + tool-guidance prompt sections so the chat preamble carries no dead tokens.
         let leanMachineContext = ModeProfileContextSlice(includeSkills: false, includeToolGuidance: false)
 
-        func memoryChatProfile(id: String, tools: ModeProfileToolsSlice) -> ResolvedModeProfile {
+        func memoryChatProfile(
+            id: String,
+            tools: ModeProfileToolsSlice,
+            maxIterations: Int = 5
+        ) -> ResolvedModeProfile {
             ResolvedModeProfile(
                 id: id,
                 interactionMode: .chat,
@@ -714,7 +758,7 @@ enum ModeProfileBuiltInCatalog {
                 semanticLayerTags: [],
                 tools: tools,
                 context: leanMachineContext,
-                runtime: ModeProfileRuntimeSlice(maxIterations: 5),
+                runtime: ModeProfileRuntimeSlice(maxIterations: max(1, maxIterations)),
                 model: disabledModel,
                 subAgents: denyAllSubAgents
             )
@@ -739,7 +783,11 @@ enum ModeProfileBuiltInCatalog {
                 tools: ModeProfileToolsSlice(allow: ["memory_search", "memory_get"], deny: [])
             ),
             memoryChatProfile(id: "memory-extraction", tools: memoryFileTools),
-            memoryChatProfile(id: "memory-pre-compaction-flush", tools: memoryFileTools),
+            memoryChatProfile(
+                id: "memory-pre-compaction-flush",
+                tools: memoryFileTools,
+                maxIterations: MemoryConfiguration.default.preCompactionFlushMaxIterations
+            ),
             ResolvedModeProfile(
                 id: "trigger-delegate",
                 interactionMode: .agent,

@@ -16,6 +16,7 @@ protocol SessionProjectionAccessing: Sendable {
         contentHash: Int
     ) async -> SessionProjectionApplyOutcome
     func projectedMessages(for conversation: ModelConversation) async -> [Message]
+    func invalidateProjectionPublishState(conversationID: UUID) async
     func testing_seedProjectionPublishState(conversationID: UUID, frontierEventID: Int, contentHash: Int) async
     func testing_clearProjectionPublishState(conversationID: UUID) async
 }
@@ -87,6 +88,11 @@ final class SessionProjectionPortAdapter: SessionProjectionAccessing, Sendable {
         return await projectionService.projectedMessages(for: conversation)
     }
 
+    func invalidateProjectionPublishState(conversationID: UUID) async {
+        guard let projectionService = backing.projectionService else { return }
+        await projectionService.invalidateProjectionPublishState(conversationID: conversationID)
+    }
+
     func testing_seedProjectionPublishState(conversationID: UUID, frontierEventID: Int, contentHash: Int) async {
         guard let projectionService = backing.projectionService else { return }
         await projectionService.testing_seedProjectionPublishState(
@@ -97,7 +103,6 @@ final class SessionProjectionPortAdapter: SessionProjectionAccessing, Sendable {
     }
 
     func testing_clearProjectionPublishState(conversationID: UUID) async {
-        guard let projectionService = backing.projectionService else { return }
-        await projectionService.testing_clearProjectionPublishState(conversationID: conversationID)
+        await invalidateProjectionPublishState(conversationID: conversationID)
     }
 }

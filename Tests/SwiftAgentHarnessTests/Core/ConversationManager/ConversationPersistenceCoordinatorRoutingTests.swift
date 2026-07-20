@@ -549,4 +549,79 @@ struct ConversationPersistenceCoordinatorRoutingTests {
             Issue.record("Unexpected error: \(error)")
         }
     }
+
+    @Test func isolatedSpawnToolsAllowSetsChildRoutingExplicitToolPolicy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "sha-coord-subagent-tools-allow-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let local = try LocalHarnessSessionPersistence(root: root)
+        let container = try ConversationBulkMirrorTestSupport.makeContainer()
+        let model = ConversationBulkMirrorTestSupport.makeModel(modelName: "coord-subagent-tools-allow")
+        let modeRegistry = ModeRegistryTestSupport.makePort(seedingBuiltIns: true)
+        let chat = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: local,
+            modeRegistry: modeRegistry
+        )
+        let conversationAPI = await makeSplitConversationAdapter(runtimeSession: chat)
+
+        try await chat.createConversation(
+            with: model,
+            userSystemPrompt: "parent",
+            interactionMode: .chat
+        )
+        let parentConversationID = try #require(await chat.currentConversationID)
+        let toolsAllow = [
+            MemorySearchToolProvider.searchToolName,
+            MemorySearchToolProvider.getToolName,
+        ]
+        let childID = try await conversationAPI.apiSpawnSubAgent(
+            parentConversationID: parentConversationID,
+            request: SubAgentSpawnRequest(
+                context: .isolated,
+                taskDescription: "memory-active-recall",
+                interactionMode: "memory-active-recall",
+                toolsAllow: toolsAllow
+            ),
+            modelOverride: model
+        )
+        let child = try #require(await chat.listConversationInfo().first(where: { $0.id == childID }))
+        #expect(child.modeProfileID == "memory-active-recall")
+        guard case .allowlist(let tools, let skills)? = child.routingPrefs?.explicitToolPolicy else {
+            Issue.record("Expected child routingPrefs.explicitToolPolicy allowlist")
+            return
+        }
+        #expect(tools == toolsAllow)
+        #expect(skills.isEmpty)
+
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
+        let profile = try await registry.resolve(modeId: "memory-active-recall")
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
+        let candidates = ["memory_search", "memory_get", "write_file", "bash", "read_file"]
+        let entries = candidates.map {
+            ToolRegistryEntry(
+                definition: ToolDefinition(name: $0, description: "", parameters: [], type: .function),
+                source: .local
+            )
+        }
+        let modeCtx = ModePolicyContext(conversation: child, resolvedProfile: profile)
+        let effective = gateway.effectiveToolsForConversation(
+            entries: entries,
+            conversation: child,
+            modePolicyContext: modeCtx,
+            configuration: AgentRuntimeTurnConfiguration(
+                managerConfiguration: HarnessRuntimeSession.Configuration(enableTools: true, enableAgents: true)
+            ),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        let effectiveNames = Set(effective.map(\.name))
+        #expect(effectiveNames == Set(toolsAllow))
+        #expect(!effectiveNames.contains("write_file"))
+        #expect(!effectiveNames.contains("bash"))
+    }
 }

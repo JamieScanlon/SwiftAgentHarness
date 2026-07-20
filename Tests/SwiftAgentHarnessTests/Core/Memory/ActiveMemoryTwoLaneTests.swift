@@ -47,8 +47,10 @@ private struct SpyRunner: ActiveMemoryPreReplyRunning {
         userQuery: String?,
         lane: RecallLane,
         timeoutMs: Int,
-        maxSummaryChars: Int
+        maxSummaryChars: Int,
+        excludedSelectionKeys: Set<String>
     ) async -> String? {
+        let _ = (session, timeoutMs, maxSummaryChars, excludedSelectionKeys)
         await tracker.record(lane: lane, query: userQuery)
         return returnValue
     }
@@ -104,7 +106,8 @@ struct ActiveMemoryStandingLaneTests {
         struct BlockingRunner: ActiveMemoryPreReplyRunning {
             let tracker: RecallCallTracker
             let gate: AsyncStream<Void>
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
                 await tracker.record(lane: lane, query: userQuery)
                 // wait for unblock
                 for await _ in gate { break }
@@ -188,8 +191,9 @@ struct ActiveMemorySituationalLaneTests {
         var callMap: [String: String] = ["query-a": "result-a", "query-b": "result-b"]
         struct MapRunner: ActiveMemoryPreReplyRunning {
             let callMap: [String: String]
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
-                callMap[userQuery ?? ""]
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
+                return callMap[userQuery ?? ""]
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)
@@ -221,8 +225,9 @@ struct ActiveMemoryRecallCombinedTests {
     @Test("combined output places standing before situational")
     func standingBeforeSituational() async {
         struct LaneRunner: ActiveMemoryPreReplyRunning {
-            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int) async -> String? {
-                lane == .standing ? "standing-content" : "situational-content"
+            func blockingRecallSummary(session: MemorySessionContext, userQuery: String?, lane: RecallLane, timeoutMs: Int, maxSummaryChars: Int, excludedSelectionKeys: Set<String>) async -> String? {
+                let _ = excludedSelectionKeys
+                return lane == .standing ? "standing-content" : "situational-content"
             }
         }
         let service = ActiveMemoryPreReplyService(config: .default)
@@ -282,12 +287,33 @@ struct MemoryConfigurationTwoLaneTests {
     @Test("default config has expected two-lane values")
     func defaultTwoLaneValues() {
         let config = MemoryConfiguration.default
+        #expect(config.activeMemoryEnabled == true)
         #expect(config.activeMemoryStandingEnabled == true)
         #expect(config.activeMemoryStandingTTLMs == 3_600_000)
         #expect(config.activeMemoryStandingBudgetMs == 15_000)
         #expect(config.activeMemorySituationalEnabled == true)
         #expect(config.activeMemorySituationalTimeoutMs == 2_500)
         #expect(config.activeMemorySituationalTTLMs == 60_000)
+    }
+
+    @Test("active memory ships on; PromptConfig can opt out")
+    func activeMemoryOnByDefaultWithOptOut() {
+        #expect(MemoryConfiguration.default.activeMemoryEnabled == true)
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: [:]).activeMemoryEnabled == true
+        )
+        #expect(
+            MemoryConfigurationLoader.load(fromMemoryObject: ["activeMemoryEnabled": false])
+                .activeMemoryEnabled == false
+        )
+        let fromBundleKeys = MemoryConfigurationLoader.load(fromMemoryObject: [
+            "activeMemoryEnabled": true,
+            "activeMemoryStandingEnabled": true,
+            "activeMemorySituationalEnabled": true,
+        ])
+        #expect(fromBundleKeys.activeMemoryEnabled == true)
+        #expect(fromBundleKeys.activeMemoryStandingEnabled == true)
+        #expect(fromBundleKeys.activeMemorySituationalEnabled == true)
     }
 
     @Test("legacy activeMemoryTimeoutMs maps to situational timeout when new key absent")
@@ -303,6 +329,11 @@ struct MemoryConfigurationTwoLaneTests {
     @Test("activeMemoryTimeoutMs default lowered to 2500")
     func timeoutDefaultLowered() {
         #expect(MemoryConfiguration.default.activeMemoryTimeoutMs == 2_500)
+    }
+
+    @Test("activeMemoryMaxSummaryChars default is compact note budget")
+    func summaryCharsDefaultCompact() {
+        #expect(MemoryConfiguration.default.activeMemoryMaxSummaryChars == 220)
     }
 }
 
@@ -337,8 +368,13 @@ struct TurnLoopRecallNonFatalTests {
 
         let resolveCallCount = LockIsolated(0)
         let memoryPort = SessionRuntimeMemoryPort(
-            recallFn: { _, _ in nil },   // situational miss
-            prefetchFn: { _, _ in }
+            recallFn: { _, _, _, _ in
+                ActiveMemoryRecallOutcome.skipped(
+                    reason: "situational_miss",
+                    queryMode: .recent
+                )
+            },   // situational miss
+            prefetchFn: { _, _, _, _ in }
         )
         let modelPort = SessionRuntimeModelPort(
             ensureBoundFn: { conv, _ in

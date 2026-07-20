@@ -105,6 +105,8 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
     public var includeSkills: Bool?
     /// Reserved for future sectioned tool-guidance toggles (included in fingerprints today).
     public var includeToolGuidance: Bool?
+    /// When true, workspace instruction files are omitted from system prompt assembly (sub-agent scoping).
+    public var omitWorkspaceConventions: Bool?
 
     public init(
         compactionLevel: String? = nil,
@@ -113,7 +115,8 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
         suppressSections: [String] = [],
         memoryInjection: String? = nil,
         includeSkills: Bool? = nil,
-        includeToolGuidance: Bool? = nil
+        includeToolGuidance: Bool? = nil,
+        omitWorkspaceConventions: Bool? = nil
     ) {
         self.compactionLevel = compactionLevel
         self.modeDirective = modeDirective
@@ -122,6 +125,7 @@ public struct ModeProfileContextSlice: Sendable, Equatable {
         self.memoryInjection = memoryInjection
         self.includeSkills = includeSkills
         self.includeToolGuidance = includeToolGuidance
+        self.omitWorkspaceConventions = omitWorkspaceConventions
     }
 
     public static let neutral = ModeProfileContextSlice()
@@ -298,6 +302,16 @@ public struct ModeProfileTransitionHooksSlice: Sendable, Equatable {
 
 // MARK: - Resolved profile
 
+/// Provenance for ``ResolvedModeProfile/allowsHostGrants``.
+public enum AllowsHostGrantsSource: String, Sendable, Equatable {
+    /// Machine sub-agent profile; host grants never apply.
+    case machinePinned
+    /// Explicit `allowsHostGrants` on this profile row (or inherited from an explicit ancestor).
+    case explicit
+    /// Default `false` when the profile did not author opt-in and no explicit/machine ancestor applies.
+    case defaultFalse
+}
+
 /// Fully resolved mode profile (flattened ``extends`` chain).
 public struct ResolvedModeProfile: Sendable, Equatable {
     public static let builtInSeedVersion = 1
@@ -308,6 +322,12 @@ public struct ResolvedModeProfile: Sendable, Equatable {
     /// When false, proactive context-compaction triggers are suppressed for **initial** phase assembly (chat stays light).
     public var allowsProactiveCompactionTriggers: Bool
     public var appliesAgentBuildOrchestratorHarness: Bool
+    /// When `true` together with a registration-time ``ToolVisibilityGrant/grant(modes:)``, the host may
+    /// **co-author this mode's `tools.allow` list** (union matching tool names into mode-allow before evaluation).
+    /// This is not a separate intersecting policy scope. Default `false`; machine profiles force `false`.
+    public var allowsHostGrants: Bool
+    /// Why ``allowsHostGrants`` resolved the way it did (explain / coherence diagnostics).
+    public var allowsHostGrantsSource: AllowsHostGrantsSource
     public var builtInSeedVersion: Int
     /// Optional harness-facing tags for layered mode profiles (`modes.md` forward-compat); empty when omitted from config.
     public var semanticLayerTags: [String]
@@ -335,6 +355,8 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         assemblyKind: SystemPromptAssemblyKind,
         allowsProactiveCompactionTriggers: Bool,
         appliesAgentBuildOrchestratorHarness: Bool,
+        allowsHostGrants: Bool? = nil,
+        allowsHostGrantsSource: AllowsHostGrantsSource? = nil,
         builtInSeedVersion: Int,
         semanticLayerTags: [String],
         label: String? = nil,
@@ -353,11 +375,6 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         self.assemblyKind = assemblyKind
         self.allowsProactiveCompactionTriggers = allowsProactiveCompactionTriggers
         self.appliesAgentBuildOrchestratorHarness = appliesAgentBuildOrchestratorHarness
-        self.builtInSeedVersion = builtInSeedVersion
-        self.semanticLayerTags = semanticLayerTags
-        self.label = label
-        self.profileDescription = profileDescription
-        self.symbol = symbol
         self.tools = tools
         self.skills = skills
         self.context = context
@@ -365,5 +382,52 @@ public struct ResolvedModeProfile: Sendable, Equatable {
         self.model = model
         self.subAgents = subAgents
         self.hooks = hooks
+        if let allowsHostGrantsSource, let allowsHostGrants {
+            self.allowsHostGrants = allowsHostGrants
+            self.allowsHostGrantsSource = allowsHostGrantsSource
+        } else {
+            let resolved = Self.resolveAllowsHostGrants(
+                id: id,
+                explicitOnThisRow: allowsHostGrants,
+                inherited: nil
+            )
+            self.allowsHostGrants = resolved.value
+            self.allowsHostGrantsSource = allowsHostGrantsSource ?? resolved.source
+        }
+        if ConversationLineageInference.machineSubAgentModeProfileIDs.contains(id) {
+            self.allowsHostGrants = false
+            self.allowsHostGrantsSource = .machinePinned
+        }
+        self.builtInSeedVersion = builtInSeedVersion
+        self.semanticLayerTags = semanticLayerTags
+        self.label = label
+        self.profileDescription = profileDescription
+        self.symbol = symbol
+    }
+
+    /// Resolves ``allowsHostGrants`` / ``allowsHostGrantsSource`` after the tools slice is final.
+    ///
+    /// Opt-in is never derived from allow-list shape: only an explicit row value, an inherited
+    /// explicit/machine pin, or the machine-profile pin can set the flag. Otherwise default is `false`.
+    static func resolveAllowsHostGrants(
+        id: String,
+        explicitOnThisRow: Bool?,
+        inherited: (value: Bool, source: AllowsHostGrantsSource)?
+    ) -> (value: Bool, source: AllowsHostGrantsSource) {
+        if ConversationLineageInference.machineSubAgentModeProfileIDs.contains(id) {
+            return (false, .machinePinned)
+        }
+        if let explicitOnThisRow {
+            return (explicitOnThisRow, .explicit)
+        }
+        if let inherited {
+            switch inherited.source {
+            case .explicit, .machinePinned:
+                return inherited
+            case .defaultFalse:
+                return (false, .defaultFalse)
+            }
+        }
+        return (false, .defaultFalse)
     }
 }
