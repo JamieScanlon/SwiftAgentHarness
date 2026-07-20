@@ -76,4 +76,84 @@ struct RenderableMessageInvariantTests {
         #expect(!result.contains { $0.role == .tool })
         #expect(result.contains { $0.role == .user && $0.content == "please continue" })
     }
+
+    @Test("tool_response-wrapped user content is not a renderable user query")
+    func toolResponseWrapperIsNotRenderable() {
+        let wrapped = user("<tool_response>ok</tool_response>")
+        #expect(!RenderableMessageInvariant.isRenderableUserQuery(wrapped))
+        #expect(RenderableMessageInvariant.isToolResponseWrapper(wrapped.content))
+    }
+
+    @Test("sanitizeForDispatch repairs system+assistant+tool+assistant with no user turn")
+    func sanitizeRepairsMissingUserOnAssistantToolChain() {
+        let messages = [
+            system(),
+            assistant(toolCallID: "call-1"),
+            tool(toolCallID: "call-1"),
+            Message(id: UUID(), role: .assistant, content: "done", timestamp: Date(), toolCalls: []),
+        ]
+        let result = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: nil)
+        #expect(result.contains(where: RenderableMessageInvariant.isRenderableUserQuery))
+        #expect(result.contains { $0.role == .tool && $0.toolCallId == "call-1" })
+    }
+
+    @Test("sanitizeForDispatch promotes merged compaction summary to standalone user")
+    func sanitizePromotesMergedCompactionSummary() {
+        let framed = ContextCompactionSummaryMessageAssembler.referenceOnlyPrefix + "## Active Task\nfinish the workout"
+        let messages = [
+            system(),
+            Message(id: UUID(), role: .assistant, content: framed + "\n\nPartial reply", timestamp: Date(), toolCalls: []),
+            assistant(toolCallID: "call-2"),
+            tool(toolCallID: "call-2"),
+        ]
+        let result = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: nil)
+        let users = result.filter(RenderableMessageInvariant.isRenderableUserQuery)
+        #expect(users.count >= 1)
+        #expect(users[0].content.contains("REFERENCE ONLY"))
+        #expect(users[0].content.contains("## Active Task"))
+    }
+
+    @Test("sanitizeForDispatch injects Active Task text when no user and no framed summary")
+    func sanitizeInjectsActiveTaskAsLastResort() {
+        let messages = [
+            system(),
+            Message(
+                id: UUID(),
+                role: .assistant,
+                content: "## Active Task\nbuild the fitness app\n\n## Goal\nship MVP",
+                timestamp: Date(),
+                toolCalls: []
+            ),
+        ]
+        let result = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: nil)
+        let users = result.filter(RenderableMessageInvariant.isRenderableUserQuery)
+        #expect(users.count == 1)
+        #expect(users[0].content.contains("build the fitness app"))
+        #expect(HarnessInjectedMessageMetadata.isHarnessInjected(users[0]))
+    }
+
+    @Test("continuation-shaped array without user is repaired to a renderable user query")
+    func continuationShapedArrayGetsRenderableUser() {
+        // Mimics post-compaction continuation: no new appendInput user text.
+        let messages = [
+            system(),
+            assistant(toolCallID: "c1"),
+            tool(toolCallID: "c1", content: "tool out"),
+            Message(id: UUID(), role: .assistant, content: "thinking…", timestamp: Date(), toolCalls: []),
+        ]
+        let result = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: nil)
+        #expect(result.contains(where: RenderableMessageInvariant.isRenderableUserQuery))
+        #expect(!result.contains { $0.role == .user && RenderableMessageInvariant.isToolResponseWrapper($0.content) })
+    }
+
+    @Test("user that is only a tool_response wrapper triggers repair")
+    func onlyToolResponseUserTriggersRepair() {
+        let messages = [
+            system(),
+            user("<tool_response>result</tool_response>"),
+            Message(id: UUID(), role: .assistant, content: "ok", timestamp: Date(), toolCalls: []),
+        ]
+        let result = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: nil)
+        #expect(result.contains(where: RenderableMessageInvariant.isRenderableUserQuery))
+    }
 }

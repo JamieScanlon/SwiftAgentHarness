@@ -684,11 +684,6 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
             config: request.compactionConfig,
             modelContextLimitTokens: modelLimit
         )
-        if segments.lastUserPinSkipped, !segments.middle.isEmpty {
-            logger?.debug(
-                "[ContextEngine] last-user pin skipped (outside tail window) conversation=\(request.conversation.id)"
-            )
-        }
         let middle = segments.middle
         guard !middle.isEmpty else { return (nil, []) }
 

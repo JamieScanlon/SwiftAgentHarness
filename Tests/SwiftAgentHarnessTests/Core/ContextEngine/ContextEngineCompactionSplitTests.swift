@@ -325,8 +325,8 @@ struct ContextEngineCompactionSplitTests {
         #expect(segments.head.count < messages.count)
     }
 
-    @Test("early second user does not pin when outside natural tail window")
-    func earlySecondUserDoesNotPinWhenOutsideTailWindow() {
+    @Test("early second user is always pinned into tail even outside natural tail window")
+    func earlySecondUserIsPinnedWhenOutsideNaturalTailWindow() {
         let u2ID = UUID()
         var messages: [Message] = [
             Message(id: UUID(), role: .system, content: "sys", timestamp: Date(), toolCalls: []),
@@ -347,9 +347,8 @@ struct ContextEngineCompactionSplitTests {
             modelContextLimitTokens: 200_000
         )
         #expect(!segments.middle.isEmpty)
-        #expect(segments.middle.count > 10)
-        #expect(segments.lastUserPinSkipped)
-        #expect(segments.tail.first?.id != u2ID)
-        #expect(segments.tail.contains(where: { $0.content.hasPrefix("a7") || $0.content.hasPrefix("a75") }) || segments.tail.count >= config.tailMinMessageCount)
+        #expect(!segments.lastUserPinSkipped)
+        #expect(segments.tail.contains(where: { $0.id == u2ID }))
+        #expect(segments.tail.first?.id == u2ID)
     }
 }

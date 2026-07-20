@@ -50,4 +50,19 @@ struct ContextCompactionSummaryMessageAssemblerTests {
         #expect(persistence.content.contains("Summary body."))
         #expect(persistence.content.contains("Partial reply") == false)
     }
+
+    @Test("assistant-first tail with later user still merges and retains that user turn")
+    func assistantFirstTailWithLaterUserRetainsUser() throws {
+        let userID = UUID()
+        let tail = [
+            Message(id: UUID(), role: .assistant, content: "Partial reply", timestamp: Date(), toolCalls: []),
+            Message(id: userID, role: .user, content: "run-anchor prompt", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .assistant, content: "follow-up", timestamp: Date(), toolCalls: []),
+        ]
+        let assembled = ContextCompactionSummaryMessageAssembler.assemble(summaryBody: "Prior work.", tail: tail)
+        #expect(assembled.mergedIntoTail == true)
+        let mergedTail = try #require(assembled.mergedTail)
+        #expect(mergedTail.contains(where: { $0.id == userID && $0.content == "run-anchor prompt" }))
+        #expect(RenderableMessageInvariant.isRenderableUserQuery(mergedTail.first(where: { $0.id == userID })!))
+    }
 }

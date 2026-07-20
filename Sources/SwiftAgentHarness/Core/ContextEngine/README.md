@@ -82,7 +82,7 @@ The harness requires that **tool_use** / **tool_result** pairs are not split whe
 
 - Tail never starts with an orphaned `.tool` message; multi-call tool batches stay intact (fail-closed when IDs are missing).
 - Head/middle boundary receives the same tool-pair protection.
-- Latest user is pinned into tail only when that user is within the natural tail window (`naturalTailStart - tailMinMessageCount`); users deep in the compressible middle are not pinned.
+- Latest user after head is always pinned into the tail (run-anchor guarantee); the cut is pushed earlier when needed so the active task is never compacted away.
 - Successful compactions that save fewer prompt tokens than `compactionMinPromptTokenSavingsFraction` skip checkpoint persistence; consecutive low-savings runs open the same proactive compaction circuit as transform failures (`compactionCircuitBreakerMaxFailures`). Circuits apply to proactive auto-compaction only and are bypassed when `forceRunCompactionLLM` is set (reactive overflow retry). Manual `.slashCommand` / `.rest` compactions do not increment the auto low-savings counter; `.modelTool` does. The savings fraction compares symmetric char-per-token estimates; proactive trigger firing still prefers actual `lastPromptTokens`.
 
 Unit coverage: `ContextEngineCompactionSplitTests`, `ContextCompactionOutputLayoutTests`.
