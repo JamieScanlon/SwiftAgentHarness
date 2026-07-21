@@ -151,7 +151,7 @@ import Testing
         #expect(conversation?.state == .idle)
     }
 
-    @Test("replaceConversationInRegistry unions equal-count divergent tails")
+    @Test("replaceConversationInRegistry unions equal-count divergent tails under concurrentUnion")
     func replaceConversationUnionsDivergentEqualCountTails() async throws {
         let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
         let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
@@ -185,16 +185,61 @@ import Testing
         let msgC = Message(id: UUID(), role: .assistant, content: "C", timestamp: Date().addingTimeInterval(1))
         var withC = base
         withC.messages = staleBase + [msgC]
-        await domain.replaceConversationInRegistry(withC)
+        await domain.replaceConversationInRegistry(withC, transcript: .concurrentUnion)
 
         let msgD = Message(id: UUID(), role: .assistant, content: "D", timestamp: Date().addingTimeInterval(2))
         var withD = base
         withD.messages = staleBase + [msgD]
-        await domain.replaceConversationInRegistry(withD)
+        await domain.replaceConversationInRegistry(withD, transcript: .concurrentUnion)
 
         let conversation = await domain.modelConversation(id: conv.id)
         #expect(conversation?.messages.contains(where: { $0.id == msgC.id }) == true)
         #expect(conversation?.messages.contains(where: { $0.id == msgD.id }) == true)
+    }
+
+    @Test("authoritativeTip replace drops concurrentUnion extras not on tip snapshot")
+    func authoritativeTipReplaceDropsUnionExtras() async throws {
+        let container = try HarnessConversationTestFixtures.makeInMemoryContainer()
+        let domain = ConversationPersistenceDomain.makeForTesting(container: container, logger: nil)
+        let model = HarnessConversationTestFixtures.makeTestModel()
+        let conv = try await domain.createConversation(
+            with: model,
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        try await domain.resetConversationsFromCatalog(availableModels: [model])
+
+        let user = Message(id: UUID(), role: .user, content: "hello", timestamp: Date())
+        _ = try await domain.routingSaveMessage(
+            user,
+            for: conv.id,
+            resourceManager: nil,
+            logger: nil,
+            expectedPreviousTailHarnessMessageID: nil,
+            transcriptRunID: nil
+        )
+
+        guard let base = await domain.modelConversation(id: conv.id) else {
+            Issue.record("conversation missing")
+            return
+        }
+        let tipIDs = base.messages.map(\.id)
+        let orphan = Message(id: UUID(), role: .assistant, content: "orphan", timestamp: Date().addingTimeInterval(1))
+        var withOrphan = base
+        withOrphan.messages = base.messages + [orphan]
+        await domain.replaceConversationInRegistry(withOrphan, transcript: .concurrentUnion)
+        #expect(await domain.modelConversation(id: conv.id)?.messages.contains(where: { $0.id == orphan.id }) == true)
+
+        var tipOnly = base
+        tipOnly.messages = base.messages
+        await domain.replaceConversationInRegistry(tipOnly, transcript: .authoritativeTip)
+
+        let conversation = await domain.modelConversation(id: conv.id)
+        #expect(conversation?.messages.map(\.id) == tipIDs)
+        #expect(conversation?.messages.contains(where: { $0.id == orphan.id }) == false)
     }
 
     @Test("replaceConversationInRegistry keeps incoming-only message when existing is longer")

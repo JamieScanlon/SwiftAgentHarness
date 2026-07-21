@@ -1,7 +1,15 @@
 import Foundation
 import SwiftAgentKit
 
-/// Unions in-memory registry transcripts when concurrent writers race on ``ConversationManager/replaceConversationInRegistry(_:)``.
+/// How ``ConversationManager/replaceConversationInRegistry(_:transcript:)`` applies the incoming message array.
+enum RegistryTranscriptPolicy: Sendable {
+    /// Concurrent partial writers: preserve existing spine and append incoming-only IDs (see ``RegistryTranscriptMerge/union``).
+    case concurrentUnion
+    /// Incoming is an authoritative active-branch tip snapshot; replace registry messages wholesale.
+    case authoritativeTip
+}
+
+/// Unions in-memory registry transcripts when concurrent writers race on ``ConversationManager/replaceConversationInRegistry(_:transcript:)`` with ``RegistryTranscriptPolicy/concurrentUnion``.
 enum RegistryTranscriptMerge {
 
     /// Unions two in-memory transcripts by message ID.
@@ -9,6 +17,9 @@ enum RegistryTranscriptMerge {
     /// - Preserves existing order for shared IDs.
     /// - Incoming wins on same-ID conflicts (fresher snapshot fields, e.g. thumbs).
     /// - Appends incoming-only messages after the existing spine, ordered by timestamp.
+    ///
+    /// Do not use for authoritative tip reloads — that path must replace (see ``RegistryTranscriptPolicy/authoritativeTip``)
+    /// so missing older tip messages are not appended after a newer spine.
     static func union(existing: [Message], incoming: [Message]) -> [Message] {
         guard !existing.isEmpty else { return incoming }
         guard !incoming.isEmpty else { return existing }

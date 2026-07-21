@@ -571,10 +571,9 @@ extension AgentRuntimeSessionService {
                     expectedPreviousTailHarnessMessageID: nil,
                     transcriptRunID: runID
                 )
-                guard let conversation = await self.runtimeConversation(id: conversationID) else { return }
                 await self.messaging.refreshProjectedConversationMessages(
                     conversationID: conversationID,
-                    baseMessagesOverride: conversation.messages
+                    baseMessagesOverride: nil
                 )
                 await self.messaging.syncProjectionFromRegistry(conversationID: conversationID)
             },

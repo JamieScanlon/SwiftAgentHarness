@@ -246,7 +246,7 @@ public actor ConversationReplayService {
             if let source = await deps.persistenceDomain.modelConversation(id: sourceID) {
                 await messaging.refreshProjectedConversationMessages(
                     conversationID: sourceID,
-                    baseMessagesOverride: source.messages
+                    baseMessagesOverride: nil
                 )
                 await selection.touchCurrentMessagesIfSelected(conversationID: sourceID, conversation: source)
             }

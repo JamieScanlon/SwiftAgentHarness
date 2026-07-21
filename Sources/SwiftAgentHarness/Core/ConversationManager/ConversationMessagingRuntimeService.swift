@@ -153,11 +153,16 @@ actor ConversationMessagingRuntimeService {
         updatedConversation.messages.append(contentsOf: messages)
         await preserveLatestRuntimeState(conversationID: conversationID, conversation: &updatedConversation)
         await persistenceDomain.replaceConversationInRegistry(updatedConversation)
-        await appendEventsAndRefreshProjection(
-            conversationID: conversationID,
-            messages: messages,
-            baseMessagesOverride: updatedConversation.messages
-        )
+        // Journal append only — defer projection publish until after durable tip reload so tip-based
+        // refresh cannot publish a snapshot that omits the pending messages.
+        do {
+            try await persistenceDomain.routingAppendMessageJournalEntriesAsync(
+                conversationID: conversationID,
+                messages: messages
+            )
+        } catch {
+            logger?.error("[ConversationMessagingRuntimeService] raw journal append failed: \(error)")
+        }
         await persistenceDomain.persistToolResultTrimCheckpointIfNeededAsync(
             conversationID: conversationID,
             coveredMessageIDs: trimmedToolResultMessageIDs,
@@ -171,7 +176,6 @@ actor ConversationMessagingRuntimeService {
         )
         await preserveLatestRuntimeState(conversationID: conversationID, conversation: &updatedConversation)
         await persistenceDomain.replaceConversationInRegistry(updatedConversation)
-        await refreshProjectedConversationMessages(conversationID: conversationID)
 
         for message in messages {
             do {
@@ -183,8 +187,12 @@ actor ConversationMessagingRuntimeService {
                 logger?.error("[ConversationMessagingRuntimeService] Error saving message to cache: \(error)")
             }
         }
+        await persistenceDomain.reloadRegistryTranscriptFromActiveTip(conversationID: conversationID)
+        if let tipped = await persistenceDomain.modelConversation(id: conversationID) {
+            updatedConversation = tipped
+        }
         await preserveLatestRuntimeState(conversationID: conversationID, conversation: &updatedConversation)
-        await persistenceDomain.replaceConversationInRegistry(updatedConversation)
+        await persistenceDomain.replaceConversationInRegistry(updatedConversation, transcript: .authoritativeTip)
         await refreshProjectedConversationMessages(conversationID: conversationID)
         if metadataChanged {
             try? await persistConversationMetadataToCache(
@@ -235,15 +243,16 @@ actor ConversationMessagingRuntimeService {
     }
 
     /// Clears publish frontier, truncates registry messages to the active prefix, then refreshes/publishes projection.
+    /// `baseMessagesOverride` is retained for call-site compatibility; tip lineage is used when available.
     func publishPrunedProjectionAfterRewind(
         conversation: ModelConversation,
-        baseMessagesOverride: [Message]
+        baseMessagesOverride _: [Message]
     ) async {
         await sessionProjection.invalidateProjectionPublishState(conversationID: conversation.id)
         await persistenceDomain.applyRegistryTranscriptTruncation(conversation)
         await refreshProjectedConversationMessages(
             conversationID: conversation.id,
-            baseMessagesOverride: baseMessagesOverride
+            baseMessagesOverride: nil
         )
     }
 
@@ -255,11 +264,16 @@ actor ConversationMessagingRuntimeService {
             return
         }
         let startedAt = Date()
+        // Tip lineage is authoritative for UI publish. Override is only a fallback when tip base is empty
+        // (same semantics as transcriptBaseMessages), so a scrambled registry spine cannot poison projection.
+        let tipBase = await persistenceDomain.transcriptBaseMessages(for: conversation)
         let baseMessages: [Message]
-        if let baseMessagesOverride {
+        if !tipBase.isEmpty {
+            baseMessages = tipBase
+        } else if let baseMessagesOverride, !baseMessagesOverride.isEmpty {
             baseMessages = baseMessagesOverride
         } else {
-            baseMessages = await persistenceDomain.transcriptBaseMessages(for: conversation)
+            baseMessages = tipBase
         }
         let projection = await persistenceDomain.projectUIMessagesWithMetrics(
             conversationID: conversationID,
