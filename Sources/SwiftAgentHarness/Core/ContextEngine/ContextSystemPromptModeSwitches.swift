@@ -135,15 +135,25 @@ enum ContextSystemPromptModeSwitches {
         case .chat:
             return ""
         case .plan:
-            return """
+            let path = AgentPlanStore.planPathString(for: conversation.id)
+            let existingPlan = AgentPlanStore.readPlanText(for: conversation.id)
+            var block = """
 ### Plan workflow
-Research and create the plan file via tools. Use **create_plan** and **edit_plan** with a `tasks` JSON array; optional **overview**, **goal**, and **notes** fill `# Plan`, `## Goal`, and `## Notes`. Use **add_plan_task** / **delete_plan_task** to add or remove individual tasks (parsed and rewritten like **edit_plan**, but scoped to one line). Task lines use `[ ]` not-started, `[~]` in-progress, `[/]` complete, `[x]` blocked, each with `id:<uuid>`. Use **get_plan** to read.
+Research and create the plan file via tools. Use **create_plan** and **edit_plan** with a `tasks` JSON array; optional **overview**, **goal**, and **notes** fill `# Plan`, `## Goal`, and `## Notes`. Use **add_plan_task** / **delete_plan_task** to add or remove individual tasks (parsed and rewritten like **edit_plan**, but scoped to one line). Task lines use `[ ]` not-started, `[~]` in-progress, `[x]` complete, `[!]` blocked, each with `id:<uuid>`. Use **get_plan** to read. The canonical plan path is `\(path)`.
 
 **Context and motivation:** Turn the **first user message** and follow-up answers into durable plan content—not only tasks. Capture why the work matters, constraints, and **operational context**: repo or project path, important file or resource locations, links to documentation, environment variable **names** (not secret values), and anything the build agent will need later. Ask clarifying questions when needed, then fold answers into **overview**, **goal**, or **notes** so the plan stays the single source of truth.
 
-Refine until the user switches to Agent (build) mode in the app. When planning is complete and you are waiting for the user, call **finish** (or **ask_user** when you need structured input). Do **not** call **exit_plan_mode** — the user switches build mode in the app.
+When the plan is ready for implementation, call **exit_plan_mode** — that call *is* the plan approval request. Do **not** ask about plan approval via free text or **ask_user**; use **ask_user** only for requirement clarification.
 **IMPORTANT** DO NOT start execution work during this phase! Your only job is to plan using the plan tools (not raw shell edits to plan.md).
 """
+            if existingPlan != nil {
+                block += """
+
+
+**Re-entry — existing plan.md:** A plan artifact already exists at `\(path)`. Read it first with **get_plan**. If the current request is a *different* task (even a related one), overwrite with **create_plan** / **edit_plan**. If it is explicitly a continuation, revise in place and prune stale sections. Either way, **edit the artifact before calling exit_plan_mode** — do not re-approve a stale plan unchanged.
+"""
+            }
+            return block
         case .agent:
             let path = AgentPlanStore.planPathString(for: conversation.id)
             let summaryLine: String
@@ -154,14 +164,14 @@ Refine until the user switches to Agent (build) mode in the app. When planning i
             }
             var block = """
 ### Build workflow
-The canonical plan file is at `\(path)`. Use **get_plan** before large changes. Execute work until every task line is complete (`[/]`). Use **update_plan_task** to keep task status accurate (full **create_plan** / **edit_plan** rewrites and task list mutations are for **plan** mode). **Context is intentionally limited:** save anything you must remember later with **add_plan_note** under `## Notes` (paths, doc URLs, commands, env var **names**—never raw tokens or secret values)—otherwise it will be lost as the thread is trimmed.
+The canonical plan file is at `\(path)`. Use **get_plan** before large changes. Execute work until every task line is complete (`[x]`). Use **update_plan_task** to keep task status accurate (full **create_plan** / **edit_plan** rewrites and task list mutations are denied in this mode). **Context is intentionally limited:** save anything you must remember later with **add_plan_note** under `## Notes` (paths, doc URLs, commands, env var **names**—never raw tokens or secret values)—otherwise it will be lost as the thread is trimmed.
 **IMPORTANT** Keep plan.md truthful using the plan tools—downstream automation depends on it.
 **Progress:** \(summaryLine)
 """
             if strictAgentHarnessPrompts {
                 block += """
 
-**Control loop:** Observe the thread and plan state → pick the next tool call → execute. If every task is `[/]` with none blocked, call **declare_agent_build_complete** once. Otherwise keep using tools; avoid conversational filler.
+**Control loop:** Observe the thread and plan state → pick the next tool call → execute. If every task is `[x]` with none blocked (`[!]`), call **declare_agent_build_complete** once. Otherwise keep using tools; avoid conversational filler.
 """
             }
             return block

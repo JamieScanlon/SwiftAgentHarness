@@ -169,7 +169,7 @@ Unlike preview, this endpoint **mutates server state**: a successful run writes 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/conversations/:id/plan` | **200** `{"markdown":<String>}` when readable. Invalid `:id` → **400** + error JSON. Missing/unreadable plan → **404** + error JSON. |
+| GET | `/api/conversations/:id/plan` | **200** `{markdown, exists, overview, goal, notes, tasks, counts, inProgressTaskId}` when readable. Invalid `:id` → **400** + error JSON. Missing/unreadable plan → **404** + error JSON. |
 | GET | `/api/conversations/:id/slash-commands` | **200** `[SlashCommandAutocompleteEntry]` for the conversation context. |
 
 ### Conversation control, runs, and artifacts

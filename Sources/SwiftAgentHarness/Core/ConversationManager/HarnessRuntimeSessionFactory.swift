@@ -337,6 +337,17 @@ public enum HarnessRuntimeSessionFactory {
         orchestrator.install(service: orchestratorSessionRuntimeService)
         orchestratorRuntimeService.installModePolicy(orchestratorSessionRuntimeService)
         orchestratorRuntimeService.installSessionCollaborator(orchestratorSessionRuntimeService)
+        toolApprovalRuntimeService.installPlanExitApprovalPostResolve {
+            conversationID, runID, status, reason, toolCallId, binding in
+            await orchestratorSessionRuntimeService.handlePlanExitApprovalPostResolve(
+                conversationID: conversationID,
+                runID: runID,
+                status: status,
+                reason: reason,
+                toolCallId: toolCallId,
+                binding: binding
+            )
+        }
         Task {
             await orchestrationCore.setOrchestratorTeardownHandler { [orchestratorRuntimeService] orchestrator in
                 await orchestratorRuntimeService.releasePooledOrchestrator(orchestrator)

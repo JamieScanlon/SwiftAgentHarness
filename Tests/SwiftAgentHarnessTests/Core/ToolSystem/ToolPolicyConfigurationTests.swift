@@ -13,6 +13,29 @@ struct ToolPolicyConfigurationTests {
         #expect(policy.toolCallWatchdogIntervalSeconds == 20)
         #expect(policy.onToolTimeout == .continue)
         #expect(policy.mcpReconnectOnToolTimeout == false)
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.enterPlanModeToolName) == false)
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.exitPlanModeToolName) == false)
+    }
+
+    @Test("default policy ask-gates enter_plan_mode and exit_plan_mode")
+    func defaultPolicyGatesModeTransitionTools() {
+        let policy = ToolPolicyConfiguration()
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.enterPlanModeToolName))
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.exitPlanModeToolName))
+        #expect(policy.requiresApproval(name: "bash") == false)
+    }
+
+    @Test("PromptConfig toolPolicy always unions mode-transition ask tools")
+    func promptConfigUnionsModeTransitionApproval() {
+        let root: [String: Any] = [
+            "toolPolicy": [
+                "requireApproval": ["bash"],
+            ] as [String: Any],
+        ]
+        let policy = ToolPolicyConfiguration.load(fromPromptConfigRoot: root)
+        #expect(policy.requiresApproval(name: "bash"))
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.enterPlanModeToolName))
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.exitPlanModeToolName))
     }
 
     @Test("approval timeout floors positive values and preserves nil disable")

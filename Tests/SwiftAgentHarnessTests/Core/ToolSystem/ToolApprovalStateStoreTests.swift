@@ -22,6 +22,27 @@ struct ToolApprovalStateStoreTests {
         ToolCallApprovalBinding.from(toolName: toolName, arguments: args)
     }
 
+    @Test("registerPendingApproval records toolCallId for later rewrite")
+    func recordsToolCallId() async {
+        let store = ToolApprovalStateStore()
+        let conversationID = UUID()
+        let runID = UUID()
+        let callBinding = binding("exit_plan_mode")
+        _ = await store.registerPendingApproval(
+            conversationID: conversationID,
+            runID: runID,
+            binding: callBinding,
+            spec: makeSpec(timeoutMs: 60_000_000),
+            toolCallId: "call-xyz"
+        )
+        let recorded = await store.recordedToolCallId(
+            conversationID: conversationID,
+            runID: runID,
+            binding: callBinding
+        )
+        #expect(recorded == "call-xyz")
+    }
+
     @Test("waitForResolution resumes when approval is granted")
     func waitForResolutionResumesOnApprove() async throws {
         let store = ToolApprovalStateStore()

@@ -80,6 +80,20 @@ struct RunLaneResolverTests {
         #expect(context.originSurface == "pending_completion_resume")
     }
 
+    @Test("plan exit denial resume resolves to main lane")
+    func planExitDenialResumeResolvesToMain() {
+        let runID = UUID()
+        let context = RunLaneResolver.resolve(
+            RunLaneOriginContext(
+                sessionKey: "session:a",
+                runID: runID,
+                origin: .planExitDenialResume
+            )
+        )
+        #expect(context.globalLane == .main)
+        #expect(context.originSurface == "plan_exit_denial_resume")
+    }
+
     @Test("runLaneOrigin maps origin surface strings")
     func runLaneOriginFromOriginSurface() {
         #expect(RunLaneResolver.runLaneOrigin(originSurface: nil) == .interactive)

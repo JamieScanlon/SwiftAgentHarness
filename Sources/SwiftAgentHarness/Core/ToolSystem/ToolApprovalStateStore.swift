@@ -105,6 +105,8 @@ actor ToolApprovalStateStore {
     private var resolutions: [ToolApprovalStateKey: ToolApprovalResolution] = [:]
     private var specs: [ToolApprovalStateKey: ToolApprovalContractSpec] = [:]
     private var keyByID: [String: ToolApprovalStateKey] = [:]
+    /// Optional tool-call id recorded when the pending approval was registered from a live call.
+    private var toolCallIDs: [ToolApprovalStateKey: String] = [:]
 
     init(coordinator: ApprovalCoordinator = ApprovalCoordinator()) {
         self.coordinator = coordinator
@@ -274,7 +276,8 @@ actor ToolApprovalStateStore {
         binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute = .user,
         requestedAt: Date = Date(),
-        spec: ToolApprovalContractSpec
+        spec: ToolApprovalContractSpec,
+        toolCallId: String? = nil
     ) async -> Bool {
         let key = ToolApprovalStateKey(
             conversationID: conversationID,
@@ -298,6 +301,9 @@ actor ToolApprovalStateStore {
         guard registered else { return false }
         specs[key] = spec
         keyByID[key.coordinatorID] = key
+        if let toolCallId, !toolCallId.isEmpty {
+            toolCallIDs[key] = toolCallId
+        }
         resolutions[key] = ToolApprovalResolution(
             status: .pending,
             decidedAt: requestedAt,
@@ -307,6 +313,30 @@ actor ToolApprovalStateStore {
             decision: nil
         )
         return true
+    }
+
+    func recordedToolCallId(
+        conversationID: UUID,
+        runID: UUID?,
+        binding: ToolCallApprovalBinding,
+        route: ToolApprovalRoute = .user
+    ) -> String? {
+        let scoped = ToolApprovalStateKey(
+            conversationID: conversationID,
+            runID: runID,
+            binding: binding,
+            route: route
+        )
+        if let id = toolCallIDs[scoped] {
+            return id
+        }
+        let conversationWide = ToolApprovalStateKey(
+            conversationID: conversationID,
+            runID: nil,
+            binding: binding,
+            route: route
+        )
+        return toolCallIDs[conversationWide]
     }
 
     func consumeTimedOutApprovals(

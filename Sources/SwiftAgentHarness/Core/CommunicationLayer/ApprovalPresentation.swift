@@ -22,6 +22,14 @@ public struct ApprovalButton: Codable, Sendable, Equatable {
         self.style = style
     }
 
+    /// Plan-exit approval choices: approve once or request revision (deny). No allow-always.
+    public static func planExitDecisionButtons() -> [ApprovalButton] {
+        [
+            ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Approve", style: .primary),
+            ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Request revision", style: .danger),
+        ]
+    }
+
     /// The canonical allow-once / allow-always / deny button set every approval
     /// uses unless a classifier supplies its own choices.
     public static func standardDecisionButtons() -> [ApprovalButton] {

@@ -14,8 +14,8 @@ struct PlanMarkdownParserTests {
         let md = """
         [ ] id:\(a.uuidString) - not started
         [~] id:\(b.uuidString) - in progress
-        [/] id:\(c.uuidString) - done
-        [x] id:\(d.uuidString) - blocked
+        [x] id:\(c.uuidString) - done
+        [!] id:\(d.uuidString) - blocked
         """
         let tasks = PlanMarkdownParser.parseTaskLines(in: md)
         #expect(tasks.count == 4)
@@ -23,6 +23,43 @@ struct PlanMarkdownParserTests {
         #expect(tasks[1] == PlanTaskInput(id: b, description: "in progress", status: .inProgress))
         #expect(tasks[2] == PlanTaskInput(id: c, description: "done", status: .complete))
         #expect(tasks[3] == PlanTaskInput(id: d, description: "blocked", status: .blocked))
+    }
+
+    @Test("parseTaskLines accepts legacy [/] as complete")
+    func parsesLegacySlashComplete() {
+        let id = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        let md = "[/] id:\(id.uuidString) - legacy done"
+        let tasks = PlanMarkdownParser.parseTaskLines(in: md)
+        #expect(tasks == [PlanTaskInput(id: id, description: "legacy done", status: .complete)])
+    }
+
+    @Test("migrateLegacyMarkersIfNeeded rewrites [/] and old [x]-blocked to new markers")
+    func migrateLegacyVocabulary() {
+        let done = UUID(uuidString: "66666666-6666-6666-6666-666666666666")!
+        let blocked = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+        let md = """
+        # Plan
+        Ov
+
+        ## Goal
+        G
+
+        ## Notes
+        N
+
+        ## Tasks
+        [/] id:\(done.uuidString) - done
+        [x] id:\(blocked.uuidString) - blocked
+        """
+        #expect(PlanMarkdownParser.usesLegacyCompleteMarker(md))
+        let migrated = PlanMarkdownParser.migrateLegacyMarkersIfNeeded(md)
+        #expect(!PlanMarkdownParser.usesLegacyCompleteMarker(migrated))
+        let doc = PlanMarkdownParser.parseDocument(migrated)
+        #expect(doc.tasks.count == 2)
+        #expect(doc.tasks[0] == PlanTaskInput(id: done, description: "done", status: .complete))
+        #expect(doc.tasks[1] == PlanTaskInput(id: blocked, description: "blocked", status: .blocked))
+        #expect(migrated.contains("[x] id:\(done.uuidString)"))
+        #expect(migrated.contains("[!] id:\(blocked.uuidString)"))
     }
 
     @Test("parseTaskLines handles list bullet prefix")
@@ -45,7 +82,7 @@ struct PlanMarkdownParserTests {
     @Test("parseTaskLines accepts uppercase UUID in file")
     func uppercaseUUID() {
         let canonical = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-        let md = "[/] id:\(canonical.uppercased()) - done"
+        let md = "[x] id:\(canonical.uppercased()) - done"
         let tasks = PlanMarkdownParser.parseTaskLines(in: md)
         #expect(tasks.count == 1)
         #expect(tasks[0].id == UUID(uuidString: canonical.lowercased()))

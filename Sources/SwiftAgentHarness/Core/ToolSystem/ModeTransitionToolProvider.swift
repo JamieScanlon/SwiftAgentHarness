@@ -23,6 +23,7 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let exitPlanModeToolName = "exit_plan_mode"
 
     private let dataProvider: ModeTransitionDataProviding
+    private let resolveConversationID: @Sendable () async -> UUID?
     private let logger: Logger?
 
     public var name: String { "ModeTransition" }
@@ -33,8 +34,15 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
         ]
     }
 
-    public init(dataProvider: ModeTransitionDataProviding, logger: Logger? = nil) {
+    public init(
+        dataProvider: ModeTransitionDataProviding,
+        resolveConversationID: @escaping @Sendable () async -> UUID? = {
+            ConversationScope.resolvedConversationID()
+        },
+        logger: Logger? = nil
+    ) {
         self.dataProvider = dataProvider
+        self.resolveConversationID = resolveConversationID
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .custom(subsystem: "SwiftAgentHarness", component: "ModeTransitionToolProvider")
         )
@@ -44,17 +52,14 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
         [
             ToolDefinition(
                 name: Self.enterPlanModeToolName,
-                description: "Transition the conversation into plan mode.",
-                parameters: [
-                    .init(name: "conversation_id", description: "Conversation UUID", type: "string", required: true),
-                ],
+                description: "Request user consent to enter plan mode for the active conversation. Calling this tool is the approval request; do not ask in free text. Mode transitions the user initiates in the app do not need this tool.",
+                parameters: [],
                 type: .function
             ),
             ToolDefinition(
                 name: Self.exitPlanModeToolName,
-                description: "Exit plan mode into agent mode by default. Optional target_mode can be `agent` or `chat`.",
+                description: "Request approval to exit plan mode and begin implementation (default target: agent). Calling this tool IS the plan approval request — do NOT ask about plan approval via text or ask_user; use ask_user only for requirement clarification. Optional target_mode can be `agent` or `chat`.",
                 parameters: [
-                    .init(name: "conversation_id", description: "Conversation UUID", type: "string", required: true),
                     .init(name: "target_mode", description: "Optional mode to transition to: `agent` or `chat`.", type: "string", required: false),
                 ],
                 type: .function
@@ -74,7 +79,10 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
     }
 
     private func executeEnterPlanMode(_ toolCall: ToolCall) async throws -> ToolResult {
-        let (conversationID, conversationIDString) = try parseConversationID(toolCall)
+        guard let conversationID = await resolveConversationID() else {
+            return toolError(toolCall, "No active conversation")
+        }
+        let conversationIDString = conversationID.uuidString
         guard let conversation = await dataProvider.getConversation(id: conversationID) else {
             return toolError(toolCall, "Conversation not found: \(conversationIDString)")
         }
@@ -109,7 +117,10 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
     }
 
     private func executeExitPlanMode(_ toolCall: ToolCall) async throws -> ToolResult {
-        let (conversationID, conversationIDString) = try parseConversationID(toolCall)
+        guard let conversationID = await resolveConversationID() else {
+            return toolError(toolCall, "No active conversation")
+        }
+        let conversationIDString = conversationID.uuidString
         guard await dataProvider.getConversation(id: conversationID) != nil else {
             return toolError(toolCall, "Conversation not found: \(conversationIDString)")
         }
@@ -148,16 +159,6 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
         }
     }
 
-    private func parseConversationID(_ toolCall: ToolCall) throws -> (UUID, String) {
-        guard let conversationIDString = extractString(from: toolCall.arguments, key: "conversation_id") else {
-            throw Error.missingParameter("conversation_id")
-        }
-        guard let conversationID = UUID(uuidString: conversationIDString) else {
-            throw Error.invalidParameter("conversation_id")
-        }
-        return (conversationID, conversationIDString)
-    }
-
     private func extractString(from arguments: JSON, key: String) -> String? {
         guard case .object(let dict) = arguments,
               let value = dict[key],
@@ -181,8 +182,5 @@ public struct ModeTransitionToolProvider: ToolProvider, ToolDescriptorHinting {
 extension ModeTransitionToolProvider {
     enum Error: Swift.Error, Sendable {
         case unknownTool(String)
-        case missingParameter(String)
-        case invalidParameter(String)
     }
 }
-

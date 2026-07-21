@@ -11,6 +11,7 @@ public enum RunLaneOriginKind: Sendable, Equatable {
     case trigger(TriggerSource)
     case subagentSpawn
     case pendingCompletionResume
+    case planExitDenialResume
 }
 
 public struct RunLaneOriginContext: Sendable, Equatable {
@@ -97,7 +98,7 @@ enum RunLaneResolver {
             return .subagent
         case .trigger(.cron):
             return .cron
-        case .interactive, .pendingCompletionResume, .trigger:
+        case .interactive, .pendingCompletionResume, .planExitDenialResume, .trigger:
             return .main
         }
     }
@@ -112,6 +113,8 @@ enum RunLaneResolver {
             return "subagent"
         case .pendingCompletionResume:
             return "pending_completion_resume"
+        case .planExitDenialResume:
+            return "plan_exit_denial_resume"
         }
     }
 }

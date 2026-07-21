@@ -877,6 +877,64 @@ struct APILayerConversationsRouteTests {
         }
     }
 
+    @Test("GET /api/conversations/:id/plan returns structured tasks and counts")
+    func conversationPlanStructuredResponse() async throws {
+        let container = try APILayerRESTRouteTestSupport.makeContainer()
+        let runtimeSession = APILayerRESTRouteTestSupport.makeChatManager(container: container)
+        let model = APILayerRESTRouteTestSupport.makeTestModel()
+        let modelProvider = APILayerRESTStubModelProvider(models: [model])
+        let api = APILayer(port: 0)
+
+        try await withApp { app in
+            await api.configureRoutesForTesting(app: app, runtimeSession: runtimeSession, modelProvider: modelProvider)
+
+            let createJSON = #"{"modelRef":"\#(model.id.uuidString)","userSystemPrompt":"sys"}"#
+            var createdConversationID: String = ""
+
+            try await app.testing().test(.POST, "/api/conversations", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.body = .init(string: createJSON)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                createdConversationID = (body?["conversationID"] as? String) ?? ""
+                #expect(createdConversationID.isEmpty == false)
+            })
+
+            let conversationID = try #require(UUID(uuidString: createdConversationID))
+            let taskID = UUID()
+            try AgentPlanStore.ensureConversationDirectory(for: conversationID)
+            let markdown = AgentPlanToolProvider.renderPlanMarkdown(
+                overview: "Overview body",
+                goal: "Goal body",
+                notes: "Notes body",
+                tasks: [
+                    PlanTaskInput(id: taskID, description: "Do the thing", status: .inProgress),
+                ]
+            )
+            try markdown.write(to: AgentPlanStore.planURL(for: conversationID), atomically: true, encoding: .utf8)
+
+            try await app.testing().test(.GET, "/api/conversations/\(createdConversationID)/plan") { res async throws in
+                #expect(res.status == .ok)
+                let body = try JSONSerialization.jsonObject(with: Data(res.body.readableBytesView)) as? [String: Any]
+                #expect(body?["exists"] as? Bool == true)
+                #expect(body?["overview"] as? String == "Overview body")
+                #expect(body?["goal"] as? String == "Goal body")
+                #expect(body?["notes"] as? String == "Notes body")
+                #expect(body?["inProgressTaskId"] as? String == taskID.uuidString)
+                let tasks = body?["tasks"] as? [[String: Any]]
+                #expect(tasks?.count == 1)
+                #expect(tasks?.first?["status"] as? String == "in-progress")
+                let counts = body?["counts"] as? [String: Any]
+                #expect(counts?["inProgress"] as? Int == 1)
+                #expect(counts?["total"] as? Int == 1)
+                #expect((body?["markdown"] as? String)?.contains(taskID.uuidString) == true)
+            }
+
+            #expect(AgentPlanStore.removeConversationDirectory(for: conversationID))
+        }
+    }
+
     @Test("POST /api/conversations returns badRequest error when model not found")
     func conversationCreateUnknownModel() async throws {
         let conversation = ProtocolOnlyConversationGatewayStub()

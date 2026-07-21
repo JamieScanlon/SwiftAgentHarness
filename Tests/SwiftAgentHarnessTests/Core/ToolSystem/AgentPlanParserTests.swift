@@ -11,8 +11,17 @@ struct AgentPlanParserTests {
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "Just notes\n\nNo task lines.") == false)
     }
 
-    @Test("Open [ ] with some [/] still emits")
+    @Test("Open [ ] with some [x] complete still emits")
     func openWithSomeDoneEmits() {
+        let md = """
+        - [ ] First
+        - [x] Done
+        """
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == true)
+    }
+
+    @Test("Legacy [/] complete still counts as done")
+    func legacySlashCompleteStillEmitsWithOpen() {
         let md = """
         - [ ] First
         - [/] Done
@@ -20,25 +29,25 @@ struct AgentPlanParserTests {
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == true)
     }
 
-    @Test("[x] blocks ephemeral continuation")
+    @Test("[!] blocks ephemeral continuation")
     func blockedDoesNotEmit() {
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [x] Fix this") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [!] Fix this") == false)
     }
 
-    @Test("[x] mixed with [ ] still does not emit")
+    @Test("[!] mixed with [ ] still does not emit")
     func anyBlockedStopsEmit() {
         let md = """
         - [ ] Todo
-        - [x] Blocked
+        - [!] Blocked
         """
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == false)
     }
 
-    @Test("All [/] does not emit")
-    func allSlashDoesNotEmit() {
+    @Test("All [x] complete does not emit")
+    func allCompleteDoesNotEmit() {
         let md = """
-        - [/] A
-        - [/] B
+        - [x] A
+        - [x] B
         """
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == false)
     }
@@ -58,47 +67,47 @@ struct AgentPlanParserTests {
     @Test("Asterisk bullets parse like dashes")
     func asteriskBullets() {
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "* [ ] todo") == true)
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "* [/] done") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "* [x] done") == false)
     }
 
     @Test("Bare bracket task lines (no - or * prefix) are recognized")
     func bareBracketTasks() {
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[ ] todo") == true)
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[x] blocked") == false)
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[/] done only") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[!] blocked") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[x] done only") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "[/] legacy done only") == false)
     }
 
-    @Test("Sample plan with [x] and [/] does not emit (blocked markers present)")
+    @Test("Sample plan with [!] blocked does not emit")
     func samplePlanWithBlockedDoesNotEmit() {
         let md = """
         # Discord Communication Bot - Project Plan
 
         ## Phase 1: Setup and Configuration
-        [x] Verify environment variables are correct
+        [!] Verify environment variables are correct
         [x] Install dependencies (completed ✓)
-        [/] Start bot server with tunneling (server running on port 3000, localtunnel set up)
-        [/] Capture ngrok public URL (got https://icy-teams-walk.loca.lt via localtunnel)
+        [x] Start bot server with tunneling (server running on port 3000, localtunnel set up)
 
         ## Phase 2: Discord Registration
         [ ] Register slash commands with Discord
         [ ] Add bot to Discord server via invite link
-        [ ] Verify bot appears in Discord
         """
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == false)
     }
 
-    @Test("Only [ ] and [/] without [x] still emits when [ ] remains")
+    @Test("Only [ ] and [x] without [!] still emits when [ ] remains")
     func openItemsWithoutBlockerEmits() {
         let md = """
-        - [/] Done step
+        - [x] Done step
         - [ ] Still todo
         """
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == true)
     }
 
-    @Test("[X] uppercase blocks like [x]")
-    func uppercaseXBlocks() {
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [X] Blocked") == false)
+    @Test("[X] uppercase is complete like [x]")
+    func uppercaseXIsComplete() {
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [X] Done") == false)
+        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [X] Done") == false)
     }
 
     @Test("Only unchecked [ ] lines with no done or blocked still emits")
@@ -113,24 +122,24 @@ struct AgentPlanParserTests {
     @Test("Indented and spaced task lines still parse")
     func indentedAndInnerWhitespace() {
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "  - [ ] Indented") == true)
-        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [ x ] spaces around x blocks") == false)
+        #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: "- [ x ] spaces around x is complete") == false)
     }
 
-    @Test("hasBlockedTaskLine mirrors [x] detection")
+    @Test("hasBlockedTaskLine mirrors [!] detection")
     func hasBlockedTaskLine() {
         #expect(AgentPlanParser.hasBlockedTaskLine(in: "") == false)
         #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [ ] Open") == false)
-        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [x] Blocked") == true)
-        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [X] Blocked") == true)
-        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [ ] A\n- [/] B") == false)
-        #expect(AgentPlanParser.hasBlockedTaskLine(in: "Some text\n[x] bare blocked") == true)
+        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [!] Blocked") == true)
+        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [x] Complete") == false)
+        #expect(AgentPlanParser.hasBlockedTaskLine(in: "- [ ] A\n- [x] B") == false)
+        #expect(AgentPlanParser.hasBlockedTaskLine(in: "Some text\n[!] bare blocked") == true)
     }
 
-    @Test("Only [x] and [/] with no open task line does not emit")
+    @Test("Only [!] and [x] with no open task line does not emit")
     func blockedAndDoneOnlyDoesNotEmit() {
         let md = """
-        - [/] Finished
-        - [x] Waiting on user
+        - [x] Finished
+        - [!] Waiting on user
         """
         #expect(AgentPlanParser.shouldEmitEphemeralAgentBuildContinuation(in: md) == false)
     }
@@ -150,8 +159,8 @@ struct AgentPlanParserTests {
         let md = """
         - [ ] Open
         - [~] Doing
-        - [/] Done
-        - [x] Blocked
+        - [x] Done
+        - [!] Blocked
         """
         let s = AgentPlanParser.planProgressSummaryLine(in: md)
         #expect(s.contains("open: 1"))
@@ -173,11 +182,12 @@ struct AgentPlanParserTests {
         #expect(t.contains("truncated"))
     }
 
-    @Test("isPlanFullyComplete true only when all task lines are [/] and at least one exists")
+    @Test("isPlanFullyComplete true only when all task lines are [x] (or legacy [/]) and at least one exists")
     func fullyComplete() {
         #expect(AgentPlanParser.isPlanFullyComplete(in: "") == false)
         #expect(AgentPlanParser.isPlanFullyComplete(in: "- [ ] Open") == false)
-        #expect(AgentPlanParser.isPlanFullyComplete(in: "- [/] A\n- [x] B") == false)
+        #expect(AgentPlanParser.isPlanFullyComplete(in: "- [x] A\n- [!] B") == false)
+        #expect(AgentPlanParser.isPlanFullyComplete(in: "- [x] A\n- [x] B") == true)
         #expect(AgentPlanParser.isPlanFullyComplete(in: "- [/] A\n- [/] B") == true)
     }
 }
@@ -204,3 +214,4 @@ struct AgentPlanStoreTests {
         #expect(AgentPlanStore.removeConversationDirectory(for: id))
     }
 }
+

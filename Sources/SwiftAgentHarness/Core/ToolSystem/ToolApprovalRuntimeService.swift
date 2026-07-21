@@ -7,6 +7,16 @@ actor ToolApprovalRuntimeService {
     private let topics: ConversationTopicPublicationPort
     private let tenancyPolicy: TenancyPolicySettings
     nonisolated(unsafe) private var subAgentSpawnService: SubAgentSpawnService!
+    /// Optional post-resolution hook for plan-exit park path (rewrite pending tool results + resume).
+    nonisolated(unsafe) private var planExitApprovalPostResolve:
+        (@Sendable (
+            _ conversationID: UUID,
+            _ runID: UUID?,
+            _ status: ToolApprovalResolutionStatus,
+            _ reason: String?,
+            _ toolCallId: String?,
+            _ binding: ToolCallApprovalBinding
+        ) async -> Void)?
     private let stateStore = ToolApprovalStateStore()
     private let permissionRules: any PermissionRuleStore
 
@@ -80,6 +90,20 @@ actor ToolApprovalRuntimeService {
         self.subAgentSpawnService = subAgentSpawnService
     }
 
+    nonisolated func installPlanExitApprovalPostResolve(
+        _ handler: @escaping @Sendable (
+            _ conversationID: UUID,
+            _ runID: UUID?,
+            _ status: ToolApprovalResolutionStatus,
+            _ reason: String?,
+            _ toolCallId: String?,
+            _ binding: ToolCallApprovalBinding
+        ) async -> Void
+    ) {
+        precondition(self.planExitApprovalPostResolve == nil, "planExitApprovalPostResolve already installed")
+        self.planExitApprovalPostResolve = handler
+    }
+
     private var installedSubAgentSpawnService: SubAgentSpawnService {
         guard let subAgentSpawnService else {
             preconditionFailure("SubAgentSpawnService not installed; HarnessRuntimeSessionFactory incomplete")
@@ -136,6 +160,10 @@ actor ToolApprovalRuntimeService {
         isElevated: Bool,
         arguments: JSON? = nil
     ) -> ToolApprovalContractSpec {
+        let canonicalName = ToolNamePolicyNormalization.canonical(toolName)
+        if canonicalName == ModeTransitionToolProvider.exitPlanModeToolName {
+            return planExitApprovalContractSpec(route: route, arguments: arguments)
+        }
         let severity = isElevated
             ? deps.toolPolicy.approvalElevatedSeverityDefault
             : deps.toolPolicy.approvalSeverityDefault
@@ -154,6 +182,41 @@ actor ToolApprovalRuntimeService {
         let presentation = ApprovalPresentation.standard(
             title: title,
             context: contextLines
+        )
+        return ToolApprovalContractSpec(
+            title: title,
+            description: description,
+            severity: severity,
+            timeoutMs: deps.toolPolicy.approvalTimeoutMilliseconds,
+            timeoutBehavior: deps.toolPolicy.approvalTimeoutBehavior,
+            presentation: presentation
+        )
+    }
+
+    private nonisolated func planExitApprovalContractSpec(
+        route: ToolApprovalRoute,
+        arguments: JSON?
+    ) -> ToolApprovalContractSpec {
+        let severity = deps.toolPolicy.approvalSeverityDefault
+        let title = "Plan Approval Required"
+        var description = "Approve exiting plan mode to begin implementation (route: \(route.rawValue))."
+        var contextLines = [
+            "Tool: \(ModeTransitionToolProvider.exitPlanModeToolName)",
+            "Route: \(route.rawValue)  Severity: \(severity)",
+            "Approve to leave plan mode and implement; request revision to stay in plan and revise plan.md.",
+        ]
+        if let arguments {
+            let binding = ToolCallApprovalBinding.from(
+                toolName: ModeTransitionToolProvider.exitPlanModeToolName,
+                arguments: arguments
+            )
+            description += " Arguments fingerprint: \(binding.argumentsFingerprint.prefix(12))…"
+            contextLines.append("Arguments: \(Self.argumentsSummary(arguments))")
+        }
+        let presentation = ApprovalPresentation.standard(
+            title: title,
+            context: contextLines,
+            buttons: ApprovalButton.planExitDecisionButtons()
         )
         return ToolApprovalContractSpec(
             title: title,
@@ -209,7 +272,8 @@ actor ToolApprovalRuntimeService {
                 route: route,
                 isElevated: isElevated,
                 arguments: call.arguments
-            )
+            ),
+            toolCallId: call.id
         )
     }
 
@@ -336,6 +400,12 @@ actor ToolApprovalRuntimeService {
         approvalSpec: ToolApprovalContractSpec? = nil,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter? = nil
     ) async {
+        let toolCallId = await stateStore.recordedToolCallId(
+            conversationID: conversationID,
+            runID: runID,
+            binding: binding,
+            route: route
+        )
         await stateStore.setResolution(
             conversationID: conversationID,
             runID: runID,
@@ -366,7 +436,7 @@ actor ToolApprovalRuntimeService {
                         iteration: iteration,
                         modelID: modelID,
                         toolName: binding.toolName,
-                        toolCallID: nil,
+                        toolCallID: toolCallId,
                         approvalState: approvalState,
                         policyReason: policyReason,
                         approvalSource: source,
@@ -385,30 +455,39 @@ actor ToolApprovalRuntimeService {
                 conversationID: conversationID,
                 runID: runID
             )
-            return
+        } else {
+            let payload = RuntimeLifecycleEventPayload(
+                name: .toolApprovalResolved,
+                conversationID: conversationID,
+                runID: runID,
+                iteration: iteration,
+                modelID: modelID,
+                toolName: binding.toolName,
+                approvalState: approvalState,
+                policyReason: policyReason,
+                approvalSource: source,
+                approvalReason: reason,
+                approvalRoute: route,
+                approvalTitle: approvalSpec?.title,
+                approvalDescription: approvalSpec?.description,
+                approvalSeverity: approvalSpec?.severity,
+                approvalTimeoutMs: approvalSpec?.timeoutMs,
+                approvalTimeoutBehavior: approvalSpec?.timeoutBehavior.rawValue,
+                approvalResolutionKind: kind.rawValue,
+                approvalPresentation: approvalSpec?.presentation,
+                toolCallID: toolCallId,
+                source: publicationSource
+            )
+            await topics.publishRuntimeLifecycleWithFanout(payload)
         }
-        let payload = RuntimeLifecycleEventPayload(
-            name: .toolApprovalResolved,
-            conversationID: conversationID,
-            runID: runID,
-            iteration: iteration,
-            modelID: modelID,
-            toolName: binding.toolName,
-            approvalState: approvalState,
-            policyReason: policyReason,
-            approvalSource: source,
-            approvalReason: reason,
-            approvalRoute: route,
-            approvalTitle: approvalSpec?.title,
-            approvalDescription: approvalSpec?.description,
-            approvalSeverity: approvalSpec?.severity,
-            approvalTimeoutMs: approvalSpec?.timeoutMs,
-            approvalTimeoutBehavior: approvalSpec?.timeoutBehavior.rawValue,
-            approvalResolutionKind: kind.rawValue,
-            approvalPresentation: approvalSpec?.presentation,
-            source: publicationSource
-        )
-        await topics.publishRuntimeLifecycleWithFanout(payload)
+
+        if ToolNamePolicyNormalization.canonical(binding.toolName)
+            == ModeTransitionToolProvider.exitPlanModeToolName,
+           status == .approved || status == .denied,
+           let handler = planExitApprovalPostResolve
+        {
+            await handler(conversationID, runID, status, reason, toolCallId, binding)
+        }
     }
 
     private nonisolated static func argumentsSummary(_ arguments: JSON) -> String {

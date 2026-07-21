@@ -6,6 +6,16 @@ import Testing
 
 @Suite("Mode transition tools")
 struct ModeTransitionToolProviderTests {
+    private func makeProvider(
+        dataProvider: ModeTransitionDataProviding,
+        conversationID: UUID
+    ) -> ModeTransitionToolProvider {
+        ModeTransitionToolProvider(
+            dataProvider: dataProvider,
+            resolveConversationID: { conversationID }
+        )
+    }
+
     @Test("enter_plan_mode transitions conversation to plan")
     func enterPlanModeTransitionsConversation() async throws {
         let mock = MockModeTransitionDataProvider()
@@ -16,10 +26,10 @@ struct ModeTransitionToolProviderTests {
             systemPrompt: "sys",
             interactionMode: .chat
         )
-        let provider = ModeTransitionToolProvider(dataProvider: mock)
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationID)
         let call = ToolCall(
             name: ModeTransitionToolProvider.enterPlanModeToolName,
-            arguments: .object(["conversation_id": .string(conversationID.uuidString)]),
+            arguments: .object([:]),
             id: "tc-1"
         )
         let result = try await provider.executeTool(call)
@@ -38,11 +48,10 @@ struct ModeTransitionToolProviderTests {
             systemPrompt: "sys",
             interactionMode: .plan
         )
-        let provider = ModeTransitionToolProvider(dataProvider: mock)
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationID)
         let call = ToolCall(
             name: ModeTransitionToolProvider.exitPlanModeToolName,
             arguments: .object([
-                "conversation_id": .string(conversationID.uuidString),
                 "target_mode": .string("chat"),
             ]),
             id: "tc-2"
@@ -64,10 +73,10 @@ struct ModeTransitionToolProviderTests {
             interactionMode: .chat
         )
         mock.error = NSError(domain: "mode.transition.tests", code: 42, userInfo: [NSLocalizedDescriptionKey: "mode_change_run_in_progress"])
-        let provider = ModeTransitionToolProvider(dataProvider: mock)
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationID)
         let call = ToolCall(
             name: ModeTransitionToolProvider.enterPlanModeToolName,
-            arguments: .object(["conversation_id": .string(conversationID.uuidString)]),
+            arguments: .object([:]),
             id: "tc-3"
         )
         let result = try await provider.executeTool(call)
@@ -78,10 +87,10 @@ struct ModeTransitionToolProviderTests {
     @Test("enter_plan_mode returns not found when data provider denies cross-owner access")
     func enterPlanModeCrossOwnerDenied() async throws {
         let mock = MockModeTransitionDataProvider()
-        let ownerA = UUID()
-        let ownerB = UUID()
         let conversationA = UUID()
         let conversationB = UUID()
+        let ownerA = UUID()
+        let ownerB = UUID()
         mock.conversations[conversationA] = ModelConversation(
             id: conversationA,
             model: .testModel(),
@@ -96,17 +105,12 @@ struct ModeTransitionToolProviderTests {
             interactionMode: .chat,
             ownerAccountID: ownerB
         )
-        let provider = ModeTransitionToolProvider(dataProvider: mock)
-        let scope = ConversationScope(
-            selfID: conversationA,
-            parentID: nil,
-            rootID: conversationA,
-            lineageKind: .root,
-            origin: .user
-        )
+        // Resolver incorrectly points at B while scope is A — tenancy still denies via data provider.
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationB)
+        let scope = mock.conversations[conversationA]!.conversationScope()
         let call = ToolCall(
             name: ModeTransitionToolProvider.enterPlanModeToolName,
-            arguments: .object(["conversation_id": .string(conversationB.uuidString)]),
+            arguments: .object([:]),
             id: "tc-cross-owner"
         )
         let result = try await ConversationScope.withCurrent(scope) {
@@ -115,6 +119,36 @@ struct ModeTransitionToolProviderTests {
         #expect(result.success == false)
         #expect(result.error?.contains("Conversation not found") == true)
         #expect(mock.transitions.isEmpty)
+    }
+
+    @Test("ignores leftover model-supplied conversation_id argument")
+    func ignoresModelSuppliedConversationID() async throws {
+        let mock = MockModeTransitionDataProvider()
+        let conversationA = UUID()
+        let conversationB = UUID()
+        mock.conversations[conversationA] = ModelConversation(
+            id: conversationA,
+            model: .testModel(),
+            systemPrompt: "sys",
+            interactionMode: .chat
+        )
+        mock.conversations[conversationB] = ModelConversation(
+            id: conversationB,
+            model: .testModel(),
+            systemPrompt: "sys",
+            interactionMode: .chat
+        )
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationA)
+        let call = ToolCall(
+            name: ModeTransitionToolProvider.enterPlanModeToolName,
+            arguments: .object(["conversation_id": .string(conversationB.uuidString)]),
+            id: "tc-ignore"
+        )
+        let result = try await provider.executeTool(call)
+        #expect(result.success)
+        #expect(mock.transitions.count == 1)
+        #expect(mock.transitions[0].conversationID == conversationA)
+        #expect(mock.transitions[0].mode == .plan)
     }
 
     @Test("deferred mode transition returns scheduled message")
@@ -128,15 +162,66 @@ struct ModeTransitionToolProviderTests {
             interactionMode: .plan
         )
         mock.transitionResult = .deferredUntilRunCompletes
-        let provider = ModeTransitionToolProvider(dataProvider: mock)
+        let provider = makeProvider(dataProvider: mock, conversationID: conversationID)
         let call = ToolCall(
             name: ModeTransitionToolProvider.exitPlanModeToolName,
-            arguments: .object(["conversation_id": .string(conversationID.uuidString)]),
+            arguments: .object([:]),
             id: "tc-4"
         )
         let result = try await provider.executeTool(call)
         #expect(result.success)
         #expect(result.content.contains("scheduled"))
+    }
+
+    @Test("enter and exit tool descriptions state they are approval requests")
+    func modeTransitionDescriptionsAreApprovalRequests() async throws {
+        let provider = ModeTransitionToolProvider(dataProvider: MockModeTransitionDataProvider())
+        let tools = await provider.availableTools()
+        let enter = try #require(tools.first { $0.name == ModeTransitionToolProvider.enterPlanModeToolName })
+        let exit = try #require(tools.first { $0.name == ModeTransitionToolProvider.exitPlanModeToolName })
+        #expect(enter.description.lowercased().contains("consent") || enter.description.lowercased().contains("approval"))
+        #expect(exit.description.lowercased().contains("approval request"))
+        #expect(enter.parameters.isEmpty)
+        #expect(exit.parameters.contains(where: { $0.name == "target_mode" }))
+        #expect(!exit.parameters.contains(where: { $0.name == "conversation_id" }))
+    }
+
+    @Test("default tool policy blocks exit_plan_mode until approval is granted")
+    func defaultPolicyBlocksExitUntilApproved() async throws {
+        let plan = try await ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            modeProfileConfiguration: .empty
+        ).resolve(modeId: InteractionMode.plan.rawValue)
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: .testModel(),
+            systemPrompt: "sys",
+            interactionMode: .plan,
+            modeProfileID: plan.id
+        )
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(
+                name: ModeTransitionToolProvider.exitPlanModeToolName,
+                description: "",
+                parameters: [],
+                type: .function
+            ),
+            source: .local
+        )
+        let gateway = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore())
+        let policy = ToolPolicyConfiguration()
+        let decision = gateway.evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: ModePolicyContext(interactionMode: .plan, resolvedProfile: plan),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: policy,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.allowed == false)
+        #expect(decision.blockReason == .approvalRequired)
+        #expect(policy.requiresApproval(name: ModeTransitionToolProvider.exitPlanModeToolName))
     }
 }
 

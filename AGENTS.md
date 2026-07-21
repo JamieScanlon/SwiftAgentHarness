@@ -10,6 +10,10 @@
 
 - The `harness-template` folder contains a thoroughly researched spec that should be considered locked and read-only. The goal of this project it to produce a faithfully spec-aligned implementation of the contents of the Harness Template. Should and spec related inconsistancies, issues, or bugs be found, you are to summarize them in a document for further review.
 
+## Deferred planning work
+
+- **Plan artifact recovery tiers** (`planning.md` lifecycle invariant 4) are deferred until a remote/ephemeral execution backend lands. Today the source of truth is local `~/.swiftAgentHarness/conversations/<id>/plan.md`. Do not implement journal snapshots / exit-tool recovery / compaction-attachment restore until that backend exists; see `docs/PLANNING_CONSTRAINT_REGIME_SPEC_NOTES.md`.
+
 ## Testing Requirements
 
 - All new code must include tests.

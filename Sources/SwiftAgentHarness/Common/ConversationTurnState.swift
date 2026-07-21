@@ -49,9 +49,9 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
     public var remainingContextTokens: Int?
     /// Last reported prompt (input) token count from the provider, when known.
     public var promptTokens: Int?
-    /// When `true`, plan.md contains at least one blocked task (`[x]`); auto-continue pauses until the plan is updated.
+    /// When `true`, plan.md contains at least one blocked task (`[!]`); auto-continue pauses until the plan is updated.
     public var planHasBlockedTasks: Bool
-    /// When `true`, plan.md has task lines and every task is complete (`[/]`) with none blocked—auto-continue has no remaining work.
+    /// When `true`, plan.md has task lines and every task is complete (`[x]`) with none blocked—auto-continue has no remaining work.
     public var planAllTasksComplete: Bool
     /// Monotonic generation from SwiftAgentKit’s ``OrchestrationSnapshotEvent/generation`` when the snapshot came from ``orchestrationSnapshotUpdates``; `nil` for legacy payloads or auxiliary server emits (e.g. context token refresh). Clients may ignore stale frames when both sides carry a generation.
     public var orchestrationGeneration: UInt64?

@@ -133,10 +133,16 @@ public struct ToolPolicyConfiguration: Sendable {
     /// When true, attempt a single MCP client reconnect after tool timeout via Kit `MCPManager.reconnectClient(named:)`.
     public let mcpReconnectOnToolTimeout: Bool
 
+    /// Mode-transition tools that are ask-classified by default (`planning.md`).
+    public static let modeTransitionApprovalRequiredToolNames: Set<String> = [
+        ModeTransitionToolProvider.enterPlanModeToolName,
+        ModeTransitionToolProvider.exitPlanModeToolName,
+    ]
+
     init(
         sensitiveToolNames: Set<String> = [],
         escalationRequiredToolNames: Set<String> = [],
-        approvalRequiredToolNames: Set<String> = [],
+        approvalRequiredToolNames: Set<String> = modeTransitionApprovalRequiredToolNames,
         elevatedToolNames: Set<String> = [],
         perCallElevatedToolNames: Set<String> = [],
         elevatedAllowFrom: ElevatedAllowlist = .cliDefault,
@@ -558,7 +564,7 @@ public struct ToolPolicyConfiguration: Sendable {
                 ((toolPolicy["requireApproval"] as? [String])
                     ?? (toolPolicy["approvalRequired"] as? [String])
                     ?? []).map(ToolPolicyRulesCache.preserveTokenForStorage)
-            )
+            ).union(modeTransitionApprovalRequiredToolNames)
         )
         let parsedElevated = Self.parseElevatedBlock(toolPolicy["elevated"])
         let subAgentHostingPolicyConfiguration = SubAgentHostingPolicyConfiguration.fromPromptConfigRoot(json)

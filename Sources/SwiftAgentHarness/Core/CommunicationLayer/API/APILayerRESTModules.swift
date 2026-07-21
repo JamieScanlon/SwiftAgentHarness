@@ -395,6 +395,25 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
 
     private struct ConversationPlanResponse: Content {
         let markdown: String
+        let exists: Bool
+        let overview: String
+        let goal: String
+        let notes: String
+        let tasks: [PlanTaskInput]
+        let counts: PlanTaskCounts
+        let inProgressTaskId: UUID?
+
+        init(markdown: String) {
+            let snapshot = PlanWireSnapshot.from(markdown: markdown, exists: true)
+            self.markdown = markdown
+            self.exists = snapshot.exists
+            self.overview = snapshot.overview
+            self.goal = snapshot.goal
+            self.notes = snapshot.notes
+            self.tasks = snapshot.tasks
+            self.counts = snapshot.counts
+            self.inProgressTaskId = snapshot.inProgressTaskId
+        }
     }
 
     private struct PreviewContextCompactionRequest: Content {

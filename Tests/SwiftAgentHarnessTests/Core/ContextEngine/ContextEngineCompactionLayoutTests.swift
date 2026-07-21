@@ -124,7 +124,7 @@ struct ContextEngineCompactionLayoutTests {
         let reinjection = Message(
             id: reinjectionID,
             role: .system,
-            content: "[Context reinjection] A plan.md is active for this conversation; use get_plan before large changes.",
+            content: "[Context reinjection] A plan.md is active at /tmp/fake/plan.md; use get_plan before large changes.",
             timestamp: Date(),
             toolCalls: []
         )

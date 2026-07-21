@@ -674,9 +674,46 @@ enum ModeProfileBuiltInCatalog {
                 )
             )
         )
+        // Plan regime: research + plan artifact tools only; mutating exec/edit/spawn denied on the
+        // availability plane (planning.md constraint regime). Plan tools are the sole write path.
+        let planMutatingDeny = [
+            WorkspaceFilesystemToolProvider.bashToolName,
+            WorkspaceFilesystemToolProvider.writeFileToolName,
+            WorkspaceFilesystemToolProvider.editFileToolName,
+            WorkspaceFilesystemToolProvider.processToolName,
+            WorkspaceFilesystemToolProvider.processSendKeysToolName,
+            "spawn_sub_agent",
+            "Coding Agent",
+        ]
+        let planTools = ModeProfileToolsSlice(
+            allow: [
+                AgentPlanToolProvider.createPlanToolName,
+                AgentPlanToolProvider.editPlanToolName,
+                AgentPlanToolProvider.addPlanTaskToolName,
+                AgentPlanToolProvider.deletePlanTaskToolName,
+                AgentPlanToolProvider.getPlanToolName,
+                ModeTransitionToolProvider.exitPlanModeToolName,
+                "ask_user",
+                "think",
+                "finish",
+                WorkspaceFilesystemToolProvider.readFileToolName,
+                ConversationAttachmentToolProvider.readAttachmentToolName,
+                WorkspaceFilesystemToolProvider.globToolName,
+                WorkspaceFilesystemToolProvider.grepToolName,
+            ],
+            deny: planMutatingDeny,
+            approvalPolicy: nil
+        )
+        let agentPlanAuthoringDeny = [
+            AgentPlanToolProvider.createPlanToolName,
+            AgentPlanToolProvider.editPlanToolName,
+            AgentPlanToolProvider.addPlanTaskToolName,
+            AgentPlanToolProvider.deletePlanTaskToolName,
+            ModeTransitionToolProvider.exitPlanModeToolName,
+        ]
         let chatTools = ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
-        let planTools = ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
-        let agentTools = ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
+        let agentTools = ModeProfileToolsSlice(allow: ["*"], deny: agentPlanAuthoringDeny, approvalPolicy: nil)
+        let planSubAgents = ModeProfileSubAgentsSlice(allow: [], maxDepth: 0)
         let chatModel = ModeProfileModelSlice(thinkingConfig: .disabled)
         let planModel = ModeProfileModelSlice(thinkingConfig: .level(.high, budgetTokens: nil))
         let agentModel = ModeProfileModelSlice(thinkingConfig: .adaptive)
@@ -710,7 +747,7 @@ enum ModeProfileBuiltInCatalog {
                 tools: planTools,
                 runtime: planRuntime,
                 model: planModel,
-                subAgents: subSeed,
+                subAgents: planSubAgents,
                 hooks: transitionHooks
             ),
             ResolvedModeProfile(

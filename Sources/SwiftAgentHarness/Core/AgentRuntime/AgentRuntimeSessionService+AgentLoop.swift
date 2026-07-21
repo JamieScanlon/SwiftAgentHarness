@@ -476,10 +476,18 @@ extension AgentRuntimeSessionService {
                         spawnService: self.subAgentSpawnServiceForRuntime()
                     )
                 case .denied:
+                    let denyContent: String
+                    if ToolNamePolicyNormalization.canonical(toolName)
+                        == ModeTransitionToolProvider.exitPlanModeToolName
+                    {
+                        denyContent = PlanApprovalFeedback.deniedToolResultContent(reason: resolution.reason)
+                    } else {
+                        denyContent = "Tool dispatch denied."
+                    }
                     return .denied(
                         AgentLoopToolDispatch.toolResultMessage(
                             toolCallId: toolCallID,
-                            content: "Tool dispatch denied."
+                            content: denyContent
                         )
                     )
                 case .pending:

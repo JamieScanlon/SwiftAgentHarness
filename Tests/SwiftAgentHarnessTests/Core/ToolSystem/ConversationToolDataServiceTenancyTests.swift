@@ -185,15 +185,28 @@ struct ConversationToolDataServiceTenancyTests {
         }
     }
 
-    @Test("AgentPlanToolProvider get_plan denied for cross-owner conversation")
-    func planToolDeniesCrossOwner() async throws {
+    @Test("AgentPlanToolProvider get_plan binds active conversation and ignores cross-conversation id arg")
+    func planToolIgnoresCrossConversationIDArg() async throws {
         let ownerA = UUID()
         let ownerB = UUID()
         let convA = ConversationToolDataServiceTenancyTestSupport.makeConversation(ownerAccountID: ownerA)
         let convB = ConversationToolDataServiceTenancyTestSupport.makeConversation(ownerAccountID: ownerB)
+        defer {
+            _ = AgentPlanStore.removeConversationDirectory(for: convA.id)
+            _ = AgentPlanStore.removeConversationDirectory(for: convB.id)
+        }
+        try AgentPlanStore.ensureConversationDirectory(for: convB.id)
+        try "# Plan\n\nsecret-from-b\n".write(
+            to: AgentPlanStore.planURL(for: convB.id),
+            atomically: true,
+            encoding: .utf8
+        )
         let catalog = TenancyStubCatalog(conversations: [convA.id: convA, convB.id: convB])
         let service = ConversationToolDataServiceTenancyTestSupport.makeService(catalog: catalog)
-        let provider = AgentPlanToolProvider(dataProvider: service)
+        let provider = AgentPlanToolProvider(
+            dataProvider: service,
+            resolveConversationID: { ConversationScope.resolvedConversationID() }
+        )
         let scope = convA.conversationScope()
 
         let result = try await ConversationScope.withCurrent(scope) {
@@ -205,8 +218,8 @@ struct ConversationToolDataServiceTenancyTests {
                 )
             )
         }
-        #expect(result.success == false)
-        #expect(result.error?.contains("Conversation not found") == true)
+        #expect(result.success == true)
+        #expect(!result.content.contains("secret-from-b"))
     }
 
     @Test("nil owner scope preserves legacy passthrough")

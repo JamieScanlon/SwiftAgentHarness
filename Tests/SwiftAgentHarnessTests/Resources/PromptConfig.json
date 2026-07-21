@@ -15,7 +15,11 @@
   "toolPolicy": {
     "elevated": {
       "perCall": ["bash"]
-    }
+    },
+    "requireApproval": [
+      "enter_plan_mode",
+      "exit_plan_mode"
+    ]
   },
   "subAgentHostingPolicy": {
     "entries": {
@@ -44,15 +48,24 @@
           "ask_user",
           "think",
           "finish",
-          "bash",
           "read_file",
+          "read_attachment",
+          "glob",
+          "grep"
+        ],
+        "deny": [
+          "bash",
           "write_file",
           "edit_file",
-          "glob",
-          "grep",
           "process",
-          "process_send_keys"
+          "process_send_keys",
+          "spawn_sub_agent",
+          "Coding Agent"
         ]
+      },
+      "subAgents": {
+        "allow": [],
+        "maxDepth": 0
       }
     },
     {
@@ -97,7 +110,13 @@
           "RunAllTests",
           "XcodeRead",
           "GetTestList"
-
+        ],
+        "deny": [
+          "create_plan",
+          "edit_plan",
+          "add_plan_task",
+          "delete_plan_task",
+          "exit_plan_mode"
         ]
       },
       "runtime": {

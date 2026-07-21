@@ -1535,24 +1535,14 @@ final class ConversationManager {
     }
 
     private func copyConversationDirectoryIfNeeded(from sourceConversationID: UUID, to newConversationID: UUID) {
-        let sourceURL = AgentPlanStore.conversationDirectoryURL(for: sourceConversationID)
-        let destinationURL = AgentPlanStore.conversationDirectoryURL(for: newConversationID)
-        let fileManager = FileManager.default
-
-        guard fileManager.fileExists(atPath: sourceURL.path) else {
-            return
-        }
-
         do {
-            try fileManager.createDirectory(
-                at: destinationURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            _ = try AgentPlanStore.copyConversationDirectory(
+                from: sourceConversationID,
+                to: newConversationID
             )
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
-            }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
         } catch {
+            let sourceURL = AgentPlanStore.conversationDirectoryURL(for: sourceConversationID)
+            let destinationURL = AgentPlanStore.conversationDirectoryURL(for: newConversationID)
             logger?.warning(
                 "[ConversationManager] Failed to copy \(sourceURL.path) to \(destinationURL.path): \(error)"
             )
