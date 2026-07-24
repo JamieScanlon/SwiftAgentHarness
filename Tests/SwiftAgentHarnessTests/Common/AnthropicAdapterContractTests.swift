@@ -42,18 +42,19 @@ struct AnthropicAdapterContractTests {
         #expect(chunk.content.isEmpty)
     }
 
-    @Test("SSE parser maps message_delta cache usage tokens")
+    @Test("SSE parser maps message_delta cache usage tokens and stop_reason")
     func sseParserMessageDeltaCacheUsage() {
         let json = """
-        {"type":"message_delta","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":80,"cache_creation_input_tokens":20}}
+        {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":80,"cache_creation_input_tokens":20}}
         """
         let events = AnthropicSSEParser.events(fromJSONLine: json, eventName: nil)
         #expect(events.count == 1)
-        if case .messageDelta(let usage)? = events.first, let usage {
+        if case .messageDelta(let usage, let stopReason)? = events.first, let usage {
             #expect(usage.cacheReadInputTokens == 80)
             #expect(usage.cacheCreationInputTokens == 20)
             #expect(usage.normalizedUsage.cacheReadTokens == 80)
             #expect(usage.normalizedUsage.cacheWriteTokens == 20)
+            #expect(stopReason == "end_turn")
         } else {
             Issue.record("expected messageDelta with cache usage")
         }

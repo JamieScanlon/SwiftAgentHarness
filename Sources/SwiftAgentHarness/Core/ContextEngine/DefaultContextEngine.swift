@@ -1184,13 +1184,17 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             frontierEventID: frontierEventID
         )
         if let attachmentArtifact {
+            let sanitizationPolicy = policy.attachmentProjectionPolicy.map {
+                CatalogVisionImageProjector.SanitizationPolicy(from: $0)
+            } ?? .default
             projected = CatalogVisionImageProjector.apply(
                 messages: projected,
                 catalog: policy.attachmentCatalog,
                 effectiveDecisions: attachmentArtifact.decisions,
                 blobReader: policy.attachmentBlobReader,
                 conversationID: conversation.id,
-                modelSupportsVision: policy.modelSupportsVision ?? false
+                modelSupportsVision: policy.modelSupportsVision ?? false,
+                sanitizationPolicy: sanitizationPolicy
             )
         }
         let attachmentSectionContent = attachmentArtifact.flatMap {

@@ -178,6 +178,8 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         let fingerprintSource = [
             String(policy.inlineByteLimit),
             String(policy.summarizeByteLimit),
+            String(policy.imageInlineByteLimit),
+            String(policy.imageMaxPixelDimension),
             modelSupportsVision ? "1" : "0",
             recencyCanonical,
             String(accessWatermarkTurnIndex),

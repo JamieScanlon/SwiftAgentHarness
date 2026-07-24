@@ -170,5 +170,73 @@ struct AttachmentRecencyProjectionPolicyTests {
                 policy: policy
             ).disposition == .summarize
         )
+        #expect(
+            AttachmentRecencyProjectionPolicy.naturalDecision(
+                for: image,
+                modelSupportsVision: false,
+                policy: policy
+            ).reason == "vision_unsupported"
+        )
+    }
+
+    @Test("vision image over text inlineByteLimit stays inline under image budget")
+    func visionImageOverTextInlineLimitStaysInline() {
+        let defaultPolicy = ContextEngineAttachmentProjectionPolicyInput()
+        // ~1.3MB catalog size: exceeds text inlineByteLimit (256KB), under imageInlineByteLimit (5MB).
+        let photo = descriptor(kind: "image", byteSize: 1_370_000)
+        let decision = AttachmentRecencyProjectionPolicy.naturalDecision(
+            for: photo,
+            modelSupportsVision: true,
+            policy: defaultPolicy
+        )
+        #expect(decision.disposition == .inline)
+        #expect(decision.reason == "within_image_inline_budget")
+        #expect(decision.reason != "within_summary_budget")
+    }
+
+    @Test("text attachment still demotes at inlineByteLimit")
+    func textAttachmentStillUsesInlineByteLimit() {
+        let defaultPolicy = ContextEngineAttachmentProjectionPolicyInput()
+        let doc = descriptor(kind: "document", byteSize: 300_000)
+        let decision = AttachmentRecencyProjectionPolicy.naturalDecision(
+            for: doc,
+            modelSupportsVision: true,
+            policy: defaultPolicy
+        )
+        #expect(decision.disposition == .summarize)
+        #expect(decision.reason == "within_summary_budget")
+    }
+
+    @Test("vision image over imageInlineByteLimit but under summarize prefers sanitize-to-inline")
+    func visionImageSanitizeToInlineWhenOverImageBudget() {
+        let custom = ContextEngineAttachmentProjectionPolicyInput(
+            inlineByteLimit: 256_000,
+            summarizeByteLimit: 2_000_000,
+            imageInlineByteLimit: 100_000
+        )
+        let photo = descriptor(kind: "image", byteSize: 500_000)
+        let decision = AttachmentRecencyProjectionPolicy.naturalDecision(
+            for: photo,
+            modelSupportsVision: true,
+            policy: custom
+        )
+        #expect(decision.disposition == .inline)
+        #expect(decision.reason == "sanitize_to_inline_budget")
+    }
+
+    @Test("vision image over summarizeByteLimit is searchOnly")
+    func visionImageOverSummarizeIsSearchOnly() {
+        let custom = ContextEngineAttachmentProjectionPolicyInput(
+            summarizeByteLimit: 200_000,
+            imageInlineByteLimit: 100_000
+        )
+        let photo = descriptor(kind: "image", byteSize: 500_000)
+        let decision = AttachmentRecencyProjectionPolicy.naturalDecision(
+            for: photo,
+            modelSupportsVision: true,
+            policy: custom
+        )
+        #expect(decision.disposition == .searchOnly)
+        #expect(decision.reason == "over_budget")
     }
 }

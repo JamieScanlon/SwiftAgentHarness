@@ -5,7 +5,7 @@
 //  Members:
 //
 //  - ``FinishReason`` — canonical finish-reason vocabulary plus per-provider
-//    mappers (Ollama / OpenAI / LM Studio raw strings → `FinishReason`).
+//    mappers (Ollama / OpenAI / LM Studio / Anthropic raw strings → `FinishReason`).
 //  - ``ToolCallAccumulator`` — dedupes tool calls received via the three observed
 //    transport shapes (Ollama final-list dedupe on `done`, LM Studio + OpenAI
 //    index-keyed deltas, OpenAI name+args fragment fallback).
@@ -35,7 +35,7 @@ enum ProviderAdapterSupport {}
 /// Canonical finish-reason vocabulary surfaced on `LLMMetadata.finishReason`.
 ///
 /// Each adapter routes its provider-shaped raw string (Ollama: `done_reason`;
-/// OpenAI: `choice.finish_reason`; LM Studio: `choice.finish_reason`) through
+/// OpenAI / LM Studio: `choice.finish_reason`; Anthropic: `stop_reason`) through
 /// the matching `from*` mapper before storing the canonical raw value on
 /// `LLMMetadata`. Downstream consumers (`TransientErrorClassifier`,
 /// `HarnessRuntimeSession`, telemetry) see a stable vocabulary regardless of provider.
@@ -97,6 +97,19 @@ enum FinishReason: String, Sendable, Equatable {
         case "length": return .length
         case "tool_calls", "function_call": return .toolCalls
         case "content_filter": return .contentFilter
+        default: return .unknown
+        }
+    }
+
+    /// Maps Anthropic Messages `stop_reason` (`"end_turn"`, `"max_tokens"`,
+    /// `"stop_sequence"`, `"tool_use"`, `"refusal"`) to the canonical vocabulary.
+    static func fromAnthropic(_ raw: String?) -> FinishReason {
+        guard let raw, !raw.isEmpty else { return .unknown }
+        switch raw.lowercased() {
+        case "end_turn", "stop_sequence": return .stop
+        case "max_tokens": return .length
+        case "tool_use": return .toolCalls
+        case "refusal": return .contentFilter
         default: return .unknown
         }
     }

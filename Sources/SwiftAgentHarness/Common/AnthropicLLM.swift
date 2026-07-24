@@ -4,7 +4,10 @@ import Logging
 import SwiftAgentKit
 
 actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
-    private let apiURL: URL
+    typealias AuthProbeTransport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+
+    private let messagesURL: URL
+    private let modelsURL: URL
     private let apiKey: String
     private let model: String
     private let capabilities: [LLMCapability]
@@ -14,6 +17,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
     private let streamSource: any AnthropicStreamSourcing
     private let supportsEagerToolInputStreaming: Bool
     private let authProbePermissiveForEmptyToken: Bool
+    private let authProbeTransport: AuthProbeTransport?
 
     init(
         apiURL: URL,
@@ -25,9 +29,11 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         logger: Logger? = nil,
         streamSource: any AnthropicStreamSourcing = DefaultAnthropicStreamSource(),
         supportsEagerToolInputStreaming: Bool = true,
-        authProbePermissiveForEmptyToken: Bool = false
+        authProbePermissiveForEmptyToken: Bool = false,
+        authProbeTransport: AuthProbeTransport? = nil
     ) {
-        self.apiURL = apiURL
+        self.messagesURL = AnthropicEndpointURLs.messagesURL(from: apiURL)
+        self.modelsURL = AnthropicEndpointURLs.modelsURL(from: apiURL)
         self.apiKey = apiKey
         self.model = model
         self.capabilities = capabilities
@@ -37,11 +43,18 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         self.streamSource = streamSource
         self.supportsEagerToolInputStreaming = supportsEagerToolInputStreaming
         self.authProbePermissiveForEmptyToken = authProbePermissiveForEmptyToken
+        self.authProbeTransport = authProbeTransport
     }
 
     nonisolated func getModelName() -> String { model }
     nonisolated func getCapabilities() -> [LLMCapability] { capabilities }
     nonisolated func getRequestFeatures() -> ModelRequestFeatures { requestFeatures }
+
+    /// Test hook: resolved Messages API URL (no network).
+    nonisolated func testMessagesURL() -> URL { messagesURL }
+
+    /// Test hook: resolved Models API URL used by auth probe (no network).
+    nonisolated func testModelsURL() -> URL { modelsURL }
 
     func validateAuth() async -> Bool {
         let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -52,15 +65,14 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         if token.isEmpty {
             return false
         }
-        var request = URLRequest(url: apiURL)
+        var request = URLRequest(url: modelsURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return true }
-            switch http.statusCode {
+            let (_, response) = try await runAuthProbe(request: request)
+            switch response.statusCode {
             case 401, 403: return false
             default: return true
             }
@@ -92,7 +104,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                 do {
                     let body = try await self.buildRequestBody(messages: messages, config: config, stream: true)
                     let events = self.streamSource.messageStream(
-                        apiURL: self.apiURL,
+                        apiURL: self.messagesURL,
                         apiKey: self.apiKey,
                         requestBody: body,
                         logger: self.logger
@@ -100,6 +112,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                     var fullContent = ""
                     var accumulator = ToolCallAccumulator()
                     var usage: AnthropicUsage?
+                    var stopReasonRaw: String?
                     for try await event in events {
                         if Task.isCancelled {
                             emitter.finishCancelled()
@@ -114,6 +127,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         case .thinkingDelta(let text, let signature):
                             emitter.yield(.thinkingDelta(text, signature: signature), availableTools: config.availableTools)
                         case .toolCallStarted(let id, let name, let contentIndex):
+                            accumulator.ingestNameAndArgs(id: id, name: name, argumentsFragment: "")
                             emitter.yield(
                                 .toolCallStarted(id: id, name: name, contentIndex: contentIndex),
                                 availableTools: config.availableTools
@@ -124,7 +138,10 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                                 availableTools: config.availableTools
                             )
                             accumulator.ingestNameAndArgs(id: id, name: name, argumentsFragment: fragment)
-                        case .messageDelta(let u):
+                        case .messageDelta(let u, let stopReason):
+                            if let stopReason, !stopReason.isEmpty {
+                                stopReasonRaw = stopReason
+                            }
                             if let u {
                                 usage = u
                                 emitter.yield(
@@ -133,22 +150,27 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                                 )
                             }
                         case .error(let message):
-                            let llmError = AnthropicErrorMapping.apiError(message: message)
-                            emitter.yield(
-                                .error(NormalizedStreamError(
-                                    classification: DefaultProviderFailoverClassifier.classify(llmError),
-                                    message: message
-                                )),
-                                availableTools: config.availableTools
-                            )
+                            emitter.finishFailed(with: AnthropicErrorMapping.sseErrorEvent(message: message))
                             return
                         case .messageStop:
                             break
                         }
                     }
                     let toolCalls = accumulator.finalize()
-                    let stopReason: NormalizedStopReason = toolCalls.isEmpty ? .end : .toolUse
+                    let canonicalFinish = FinishReason.fromAnthropic(stopReasonRaw)
+                    let stopReason: NormalizedStopReason = {
+                        if stopReasonRaw != nil {
+                            return NormalizedStopReason(finishReason: canonicalFinish)
+                        }
+                        return toolCalls.isEmpty ? .end : .toolUse
+                    }()
                     emitter.yield(.stop(stopReason), availableTools: config.availableTools)
+                    let storedFinishReason: String = {
+                        if canonicalFinish == .unknown, let stopReasonRaw, !stopReasonRaw.isEmpty {
+                            return stopReasonRaw
+                        }
+                        return stopReason.finishReasonRawValue
+                    }()
                     let metadata = LLMTokenMetadataBuilder.build(
                         inputTokens: usage?.inputTokens,
                         outputTokens: usage?.outputTokens,
@@ -157,7 +179,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         cacheReadTokens: usage?.cacheReadInputTokens,
                         cacheWriteTokens: usage?.cacheCreationInputTokens,
                         usageIsProviderReported: usage != nil,
-                        finishReason: stopReason.finishReasonRawValue
+                        finishReason: storedFinishReason
                     )
                     emitter.finishSuccess(
                         content: fullContent,
@@ -176,8 +198,24 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
     }
 
+    /// Test hook: encodes a Messages request body for the given messages (no network).
+    func testEncodedRequestBody(from messages: [Message], config: LLMRequestConfig) async throws -> Data {
+        try await buildRequestBody(messages: messages, config: config, stream: false)
+    }
+
+    private func runAuthProbe(request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let authProbeTransport {
+            return try await authProbeTransport(request)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMError.networkError(URLError(.badServerResponse))
+        }
+        return (data, http)
+    }
+
     private func postRequest(body: Data) async throws -> Data {
-        var request = URLRequest(url: apiURL)
+        var request = URLRequest(url: messagesURL)
         request.httpMethod = "POST"
         request.httpBody = body
         request.timeoutInterval = 120
@@ -185,22 +223,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw LLMError.networkError(URLError(.badServerResponse))
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw LLMError.authenticationFailed
-        }
-        if http.statusCode == 429 {
-            throw LLMError.rateLimitExceeded
-        }
-        if http.statusCode >= 500 {
-            throw LLMError.networkError(URLError(.networkConnectionLost))
-        }
-        guard (200 ... 299).contains(http.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw AnthropicErrorMapping.apiError(message: message)
-        }
+        try AnthropicErrorMapping.validate(response, body: data)
         return data
     }
 
@@ -228,6 +251,13 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
         let usageJSON = json["usage"] as? [String: Any]
         let reportedUsage = CanonicalUsageExtraction.anthropicUsage(from: usageJSON)
+        let stopReasonRaw = json["stop_reason"] as? String
+        let canonicalFinish = FinishReason.fromAnthropic(stopReasonRaw)
+        let storedFinishReason: String? = {
+            guard let stopReasonRaw, !stopReasonRaw.isEmpty else { return nil }
+            if canonicalFinish == .unknown { return stopReasonRaw }
+            return canonicalFinish.rawValue
+        }()
         let metadata = LLMTokenMetadataBuilder.build(
             inputTokens: reportedUsage?.inputTokens,
             outputTokens: reportedUsage?.outputTokens,
@@ -235,7 +265,8 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             totalTokens: nil,
             cacheReadTokens: reportedUsage?.cacheReadTokens,
             cacheWriteTokens: reportedUsage?.cacheWriteTokens,
-            usageIsProviderReported: reportedUsage != nil
+            usageIsProviderReported: reportedUsage != nil,
+            finishReason: storedFinishReason
         )
         return LLMResponse(
             content: contentParts.joined(),
@@ -270,7 +301,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                 additionalParameters: config.additionalParameters
             )
         }
-        body["messages"] = try anthropicMessages(from: plan.resolvedMessages)
+        body["messages"] = try anthropicMessages(from: plan.resolvedMessages, config: config)
         if !config.availableTools.isEmpty {
             body["tools"] = config.availableTools.map { tool in
                 [
@@ -309,18 +340,21 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
     }
 
-    private func anthropicMessages(from messages: [Message]) throws -> [[String: Any]] {
-        messages.compactMap { message in
+    private func anthropicMessages(from messages: [Message], config: LLMRequestConfig) throws -> [[String: Any]] {
+        let dispositions = AttachmentProjectionDispatchCodec.extractDispositions(from: config.additionalParameters)
+        var encoded: [[String: Any]] = []
+        encoded.reserveCapacity(messages.count)
+        for message in messages {
             switch message.role {
             case .user:
-                return ["role": "user", "content": message.content]
+                encoded.append(try encodeUserMessage(message, dispositions: dispositions, config: config))
             case .assistant:
-                return ["role": "assistant", "content": message.content]
+                encoded.append(try encodeAssistantMessage(message))
             case .system:
-                return nil
+                continue
             case .tool:
-                guard let toolCallID = message.toolCallId else { return nil }
-                return [
+                guard let toolCallID = message.toolCallId else { continue }
+                encoded.append([
                     "role": "user",
                     "content": [
                         [
@@ -329,9 +363,77 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                             "content": message.content,
                         ] as [String: Any],
                     ],
-                ]
+                ])
             }
         }
+        return encoded
+    }
+
+    private func encodeUserMessage(
+        _ message: Message,
+        dispositions: [String: String],
+        config: LLMRequestConfig
+    ) throws -> [String: Any] {
+        let text = message.content + attachmentDispositionSuffix(
+            imageNames: message.images.map(\.name),
+            dispositions: dispositions,
+            additionalParameters: config.additionalParameters
+        )
+        let imageBlocks = AnthropicVisionContent.imageContentBlocks(
+            from: message.images,
+            dispositions: dispositions
+        )
+        if imageBlocks.isEmpty {
+            return ["role": "user", "content": text]
+        }
+        var parts: [[String: Any]] = [["type": "text", "text": text]]
+        parts.append(contentsOf: imageBlocks)
+        return ["role": "user", "content": parts]
+    }
+
+    private func encodeAssistantMessage(_ message: Message) throws -> [String: Any] {
+        if message.toolCalls.isEmpty {
+            return ["role": "assistant", "content": message.content]
+        }
+        var blocks: [[String: Any]] = []
+        if !message.content.isEmpty {
+            blocks.append(["type": "text", "text": message.content])
+        }
+        for toolCall in message.toolCalls {
+            let input = try toolCallArgumentsDictionary(toolCall.arguments)
+            blocks.append([
+                "type": "tool_use",
+                "id": toolCall.id ?? UUID().uuidString,
+                "name": toolCall.name,
+                "input": input,
+            ])
+        }
+        return ["role": "assistant", "content": blocks]
+    }
+
+    private func toolCallArgumentsDictionary(_ arguments: JSON) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(arguments)
+        let object = try JSONSerialization.jsonObject(with: data)
+        return (object as? [String: Any]) ?? [:]
+    }
+
+    nonisolated private func attachmentDispositionSuffix(
+        imageNames: [String],
+        dispositions: [String: String],
+        additionalParameters: JSON?
+    ) -> String {
+        if AttachmentProjectionDispatchCodec.hasMaterializedBlocks(in: additionalParameters) {
+            return ""
+        }
+        let projected = imageNames.compactMap { name -> String? in
+            guard let disposition = dispositions[name],
+                  disposition != ConversationAttachmentProjectionDisposition.inline.rawValue else {
+                return nil
+            }
+            return "\(name):\(disposition)"
+        }
+        guard !projected.isEmpty else { return "" }
+        return "\n\n[Attachment projection]\n" + projected.joined(separator: "\n")
     }
 
     private func extractThinkingPayload(from additionalParameters: JSON?) -> [String: Any]? {
@@ -385,7 +487,7 @@ enum AnthropicStreamEvent: Sendable {
     case thinkingBlockStarted(signature: String?)
     case toolCallStarted(id: String?, name: String?, contentIndex: Int?)
     case toolInputDelta(id: String?, name: String?, fragment: String)
-    case messageDelta(AnthropicUsage?)
+    case messageDelta(usage: AnthropicUsage?, stopReason: String?)
     case messageStop
     case error(String)
 }
@@ -453,24 +555,10 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse else {
-                        continuation.finish(throwing: LLMError.networkError(URLError(.badServerResponse)))
-                        return
-                    }
-                    if http.statusCode == 401 || http.statusCode == 403 {
-                        continuation.finish(throwing: LLMError.authenticationFailed)
-                        return
-                    }
-                    if http.statusCode == 429 {
-                        continuation.finish(throwing: LLMError.rateLimitExceeded)
-                        return
-                    }
-                    if http.statusCode >= 500 {
-                        continuation.finish(throwing: LLMError.networkError(URLError(.networkConnectionLost)))
-                        return
-                    }
-                    guard (200 ... 299).contains(http.statusCode) else {
-                        continuation.finish(throwing: AnthropicErrorMapping.apiError(message: "HTTP \(http.statusCode)"))
+                    do {
+                        try AnthropicErrorMapping.validate(response, body: nil)
+                    } catch {
+                        continuation.finish(throwing: error)
                         return
                     }
                     var eventName: String?
@@ -494,6 +582,8 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: CancellationError())
+                } catch let error as LLMError {
+                    continuation.finish(throwing: error)
                 } catch {
                     continuation.finish(throwing: LLMError.networkError(error))
                 }
@@ -543,10 +633,11 @@ enum AnthropicSSEParser {
                 return []
             }
         case "message_delta":
+            let stopReason = (object["delta"] as? [String: Any])?["stop_reason"] as? String
             if let usage = object["usage"] as? [String: Any] {
-                return [.messageDelta(AnthropicUsage(usageJSON: usage))]
+                return [.messageDelta(usage: AnthropicUsage(usageJSON: usage), stopReason: stopReason)]
             }
-            return [.messageDelta(nil)]
+            return [.messageDelta(usage: nil, stopReason: stopReason)]
         case "message_stop":
             return [.messageStop]
         case "error":
@@ -559,9 +650,43 @@ enum AnthropicSSEParser {
     }
 }
 
+/// Maps Anthropic HTTP status codes and SSE error events to typed ``LLMError``.
 enum AnthropicErrorMapping {
+    static func validate(_ response: URLResponse, body: Data?) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse("Non-HTTP response from Anthropic")
+        }
+        let status = http.statusCode
+        switch status {
+        case 200...299:
+            return
+        case 408, 504:
+            throw LLMError.timeout
+        case 429:
+            throw LLMError.rateLimitExceeded
+        case 401, 403:
+            throw LLMError.authenticationFailed
+        case 404:
+            throw LLMError.modelNotFound("Anthropic HTTP 404")
+        case 500...599:
+            throw LLMError.networkError(URLError(.badServerResponse))
+        default:
+            let message = body.flatMap { String(data: $0, encoding: .utf8) } ?? "HTTP \(status)"
+            throw LLMError.invalidRequest("Anthropic HTTP \(status): \(message)")
+        }
+    }
+
+    static func sseErrorEvent(message: String) -> LLMError {
+        .invalidResponse("Anthropic SSE error: \(message)")
+    }
+
     static func apiError(message: String) -> LLMError {
-        LLMError.networkError(NSError(domain: "AnthropicLLM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]))
+        .invalidResponse("Anthropic API error: \(message)")
+    }
+
+    static func map(_ raw: Error) -> LLMError {
+        if let llmError = raw as? LLMError { return llmError }
+        return .networkError(raw)
     }
 }
 

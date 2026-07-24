@@ -2,13 +2,37 @@ import Foundation
 import SwiftAgentKit
 
 enum CatalogVisionImageProjector {
+    struct SanitizationPolicy: Sendable {
+        let maxPixelDimension: Int
+        let maxBytes: Int
+
+        static let `default` = SanitizationPolicy(
+            maxPixelDimension: 1_200,
+            maxBytes: 5_000_000
+        )
+
+        init(maxPixelDimension: Int, maxBytes: Int) {
+            self.maxPixelDimension = max(0, maxPixelDimension)
+            self.maxBytes = max(0, maxBytes)
+        }
+
+        init(from policy: ContextEngineAttachmentProjectionPolicyInput) {
+            self.init(
+                maxPixelDimension: policy.imageMaxPixelDimension,
+                maxBytes: Int(clamping: policy.imageInlineByteLimit)
+            )
+        }
+    }
+
     static func apply(
         messages: [Message],
         catalog: [ConversationAttachmentDescriptor],
         effectiveDecisions: [ConversationAttachmentProjectionDecision],
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
-        modelSupportsVision: Bool
+        modelSupportsVision: Bool,
+        sanitizationPolicy: SanitizationPolicy = .default,
+        imageProcessor: ImageProcessing = DefaultImageProcessor()
     ) -> [Message] {
         guard !catalog.isEmpty else { return messages }
         let catalogByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
@@ -33,7 +57,9 @@ enum CatalogVisionImageProjector {
                 dispositionByName: dispositionByName,
                 blobReader: blobReader,
                 conversationID: conversationID,
-                modelSupportsVision: modelSupportsVision
+                modelSupportsVision: modelSupportsVision,
+                sanitizationPolicy: sanitizationPolicy,
+                imageProcessor: imageProcessor
             )
         }
     }
@@ -46,7 +72,9 @@ enum CatalogVisionImageProjector {
         dispositionByName: [String: ConversationAttachmentProjectionDisposition],
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
-        modelSupportsVision: Bool
+        modelSupportsVision: Bool,
+        sanitizationPolicy: SanitizationPolicy,
+        imageProcessor: ImageProcessing
     ) -> Message {
         guard !message.images.isEmpty else { return message }
         var copy = message
@@ -77,9 +105,25 @@ enum CatalogVisionImageProjector {
                     }
                 }
             }
-            if projected.imageData != nil || SessionBlobImageRef.parsePath(projected.path) != nil {
-                projectedImages.append(projected)
+            guard let rawData = projected.imageData else {
+                if SessionBlobImageRef.parsePath(projected.path) != nil {
+                    projectedImages.append(projected)
+                }
+                continue
             }
+            guard let sanitized = AttachmentVisionImageSanitizer.sanitize(
+                rawData,
+                maxPixelDimension: sanitizationPolicy.maxPixelDimension,
+                maxBytes: sanitizationPolicy.maxBytes,
+                processor: imageProcessor
+            ) else {
+                continue
+            }
+            projected.imageData = sanitized
+            if projected.thumbData == nil || projected.thumbData == rawData {
+                projected.thumbData = sanitized
+            }
+            projectedImages.append(projected)
         }
         copy.images = projectedImages
         return copy
