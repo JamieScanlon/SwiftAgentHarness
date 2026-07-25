@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import SwiftAgentKit
 
 enum CatalogVisionImageProjector {
@@ -32,7 +33,8 @@ enum CatalogVisionImageProjector {
         conversationID: UUID,
         modelSupportsVision: Bool,
         sanitizationPolicy: SanitizationPolicy = .default,
-        imageProcessor: ImageProcessing = DefaultImageProcessor()
+        imageProcessor: ImageProcessing = DefaultImageProcessor(),
+        logger: Logger? = nil
     ) -> [Message] {
         guard !catalog.isEmpty else { return messages }
         let catalogByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
@@ -48,6 +50,9 @@ enum CatalogVisionImageProjector {
         let dispositionByName = Dictionary(
             uniqueKeysWithValues: effectiveDecisions.map { ($0.attachmentName, $0.disposition) }
         )
+        let reasonByAttachmentID = Dictionary(
+            uniqueKeysWithValues: effectiveDecisions.map { ($0.attachmentID, $0.reason) }
+        )
         return messages.map { message in
             projectMessage(
                 message,
@@ -55,11 +60,13 @@ enum CatalogVisionImageProjector {
                 catalogByBlobID: catalogByBlobID,
                 dispositionByAttachmentID: dispositionByAttachmentID,
                 dispositionByName: dispositionByName,
+                reasonByAttachmentID: reasonByAttachmentID,
                 blobReader: blobReader,
                 conversationID: conversationID,
                 modelSupportsVision: modelSupportsVision,
                 sanitizationPolicy: sanitizationPolicy,
-                imageProcessor: imageProcessor
+                imageProcessor: imageProcessor,
+                logger: logger
             )
         }
     }
@@ -70,11 +77,13 @@ enum CatalogVisionImageProjector {
         catalogByBlobID: [String: ConversationAttachmentDescriptor],
         dispositionByAttachmentID: [UUID: ConversationAttachmentProjectionDisposition],
         dispositionByName: [String: ConversationAttachmentProjectionDisposition],
+        reasonByAttachmentID: [UUID: String],
         blobReader: AttachmentBlobReading?,
         conversationID: UUID,
         modelSupportsVision: Bool,
         sanitizationPolicy: SanitizationPolicy,
-        imageProcessor: ImageProcessing
+        imageProcessor: ImageProcessing,
+        logger: Logger?
     ) -> Message {
         guard !message.images.isEmpty else { return message }
         var copy = message
@@ -86,13 +95,26 @@ enum CatalogVisionImageProjector {
                 catalogByID: catalogByID,
                 catalogByBlobID: catalogByBlobID
             ) else {
+                logger?.debug(
+                    "[CatalogVisionImageProjector] dropping image name=\(image.name) reason=catalog_unresolved"
+                )
                 continue
             }
             let disposition = dispositionByAttachmentID[descriptor.id]
                 ?? dispositionByName[descriptor.name]
                 ?? dispositionByName[image.name]
                 ?? .inline
+            let decisionReason = reasonByAttachmentID[descriptor.id] ?? "unspecified"
             guard disposition == .inline, modelSupportsVision else {
+                let reason: String
+                if !modelSupportsVision {
+                    reason = "vision_unsupported"
+                } else {
+                    reason = "disposition=\(disposition.rawValue)|\(decisionReason)"
+                }
+                logger?.debug(
+                    "[CatalogVisionImageProjector] dropping image name=\(descriptor.name) reason=\(reason)"
+                )
                 continue
             }
             var projected = image
@@ -108,6 +130,10 @@ enum CatalogVisionImageProjector {
             guard let rawData = projected.imageData else {
                 if SessionBlobImageRef.parsePath(projected.path) != nil {
                     projectedImages.append(projected)
+                } else {
+                    logger?.debug(
+                        "[CatalogVisionImageProjector] dropping image name=\(descriptor.name) reason=missing_bytes"
+                    )
                 }
                 continue
             }
@@ -117,6 +143,9 @@ enum CatalogVisionImageProjector {
                 maxBytes: sanitizationPolicy.maxBytes,
                 processor: imageProcessor
             ) else {
+                logger?.debug(
+                    "[CatalogVisionImageProjector] dropping image name=\(descriptor.name) reason=sanitize_failed bytes=\(rawData.count)"
+                )
                 continue
             }
             projected.imageData = sanitized

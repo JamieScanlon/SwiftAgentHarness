@@ -17,6 +17,18 @@ enum SessionBlobMessageHydration {
         return messages.map { hydrateBlobImages(in: $0, harness: harness, conversationID: conversationID) }
     }
 
+    /// Restores `imageData` from blob refs using the CE attachment reader (post session-tree replay).
+    static func hydrateBlobImages(
+        in messages: [Message],
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> [Message] {
+        guard let blobReader else { return messages }
+        return messages.map { message in
+            hydrateBlobImages(in: message, blobReader: blobReader, conversationID: conversationID)
+        }
+    }
+
     static func hydrateBlobImages(
         in message: Message,
         harness: any HarnessSessionPersistence,
@@ -36,6 +48,43 @@ enum SessionBlobMessageHydration {
                 continue
             }
             if let data = try? harness.getBlob(blobId: blobId) {
+                var hydrated = image
+                hydrated.imageData = data
+                if hydrated.thumbData == nil {
+                    hydrated.thumbData = data
+                }
+                hydratedImages.append(hydrated)
+            } else {
+                placeholders.append(unavailableMarker(name: image.name))
+            }
+        }
+        copy.images = hydratedImages
+        if !placeholders.isEmpty {
+            let suffix = placeholders.joined(separator: "\n")
+            copy.content = copy.content.isEmpty ? suffix : copy.content + "\n" + suffix
+        }
+        return copy
+    }
+
+    private static func hydrateBlobImages(
+        in message: Message,
+        blobReader: AttachmentBlobReading,
+        conversationID: UUID
+    ) -> Message {
+        guard !message.images.isEmpty else { return message }
+        var copy = message
+        var placeholders: [String] = []
+        var hydratedImages: [Message.Image] = []
+        for image in message.images {
+            if image.imageData != nil {
+                hydratedImages.append(image)
+                continue
+            }
+            guard let blobId = SessionBlobImageRef.parsePath(image.path) else {
+                hydratedImages.append(image)
+                continue
+            }
+            if let data = try? blobReader.loadBytes(blobId, conversationID) {
                 var hydrated = image
                 hydrated.imageData = data
                 if hydrated.thumbData == nil {

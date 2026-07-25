@@ -508,6 +508,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             providerStablePrefix: providerStablePrefix
         )
         var lmStudioMessages: [LMStudioMessage] = []
+        var encodedImageURLPartCount = 0
         for message in plan.resolvedMessages {
             switch message.role {
             case .system:
@@ -529,6 +530,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     for image in visionImages {
                         guard let data = image.imageData else { continue }
                         parts.append(.imageURL(OpenAICompatibleVisionContent.dataURL(for: data)))
+                        encodedImageURLPartCount += 1
                     }
                     lmStudioMessages.append(LMStudioMessage(role: "user", content: .parts(parts)))
                 }
@@ -578,6 +580,14 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         if let tools = tools, !tools.isEmpty {
             logger?.debug("Tool definitions: \(tools.map { $0.function.name }.joined(separator: ", "))")
         }
+
+        OpenAICompatibleVisionContent.logWireDiagnostics(
+            adapter: "LMStudioLLM",
+            messages: plan.resolvedMessages,
+            dispositions: attachmentDispositions,
+            encodedImageURLPartCount: encodedImageURLPartCount,
+            logger: logger
+        )
         
         return LMStudioChatRequest(
             model: model,

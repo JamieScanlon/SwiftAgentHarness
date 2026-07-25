@@ -77,8 +77,13 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
     ) -> ContextEngineAttachmentProjectionArtifact? {
         guard let policy, policy.enabled, !catalog.isEmpty else { return nil }
         let supportsVision = modelSupportsVision ?? false
-        let accessIndex = AttachmentAccessIndexBuilder.build(messages: messages, catalog: catalog)
-        let naturalDecisions = catalog.map {
+        let sizedCatalog = catalogWithResolvedByteSizes(
+            catalog: catalog,
+            blobReader: blobReader,
+            conversationID: conversationID
+        )
+        let accessIndex = AttachmentAccessIndexBuilder.build(messages: messages, catalog: sizedCatalog)
+        let naturalDecisions = sizedCatalog.map {
             AttachmentRecencyProjectionPolicy.naturalDecision(
                 for: $0,
                 modelSupportsVision: supportsVision,
@@ -87,18 +92,18 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         }
         var targetDecisions = AttachmentRecencyProjectionPolicy.applyRecencyDemotion(
             decisions: naturalDecisions,
-            catalog: catalog,
+            catalog: sizedCatalog,
             accessIndex: accessIndex,
             recencyPolicy: policy.recencyPolicy
         )
         targetDecisions = AttachmentRecencyProjectionPolicy.applyPerKindInlineCaps(
             decisions: targetDecisions,
-            catalog: catalog,
+            catalog: sizedCatalog,
             accessIndex: accessIndex,
             recencyPolicy: policy.recencyPolicy
         )
         let coordinated = AttachmentRungCoordinator.coordinate(
-            catalog: catalog,
+            catalog: sizedCatalog,
             targetDecisions: targetDecisions,
             priorDecisions: priorAttachmentProjection?.decisions,
             naturalDecisions: naturalDecisions,
@@ -112,7 +117,7 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             inlineByteLimit: policy.inlineByteLimit
         )
         let digestCache = AttachmentDigestCacheResolver.resolve(
-            catalog: catalog,
+            catalog: sizedCatalog,
             decisions: effectiveDecisions,
             configuration: materializerConfiguration,
             modelSupportsVision: supportsVision,
@@ -123,7 +128,7 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
         )
         let materializedBlocks = AttachmentRepresentationMaterializer.materialize(
             decisions: effectiveDecisions,
-            catalog: catalog,
+            catalog: sizedCatalog,
             modelSupportsVision: supportsVision,
             blobReader: blobReader,
             conversationID: conversationID,
@@ -146,6 +151,27 @@ enum ContextEngineAttachmentProjectionPolicyHelper {
             accessWatermarkTurnIndex: accessIndex.currentTurnIndex,
             newDigestCheckpoints: digestCache.newDigestCheckpoints
         )
+    }
+
+    /// When catalog `byteSize` is missing, resolve from the blob store so vision images are not
+    /// demoted to `unknown_size` while bytes are still loadable.
+    private static func catalogWithResolvedByteSizes(
+        catalog: [ConversationAttachmentDescriptor],
+        blobReader: AttachmentBlobReading?,
+        conversationID: UUID
+    ) -> [ConversationAttachmentDescriptor] {
+        guard let blobReader else { return catalog }
+        return catalog.map { descriptor in
+            guard (descriptor.byteSize ?? 0) == 0,
+                  let blobId = descriptor.blobId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !blobId.isEmpty,
+                  let data = try? blobReader.loadBytes(blobId, conversationID) else {
+                return descriptor
+            }
+            var copy = descriptor
+            copy.byteSize = Int64(data.count)
+            return copy
+        }
     }
 
     private static func fingerprint(

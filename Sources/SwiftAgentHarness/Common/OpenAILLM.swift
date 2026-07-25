@@ -324,6 +324,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         )
         var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
         openAIMessages.reserveCapacity(plan.resolvedMessages.count)
+        var encodedImageURLPartCount = 0
         for message in plan.resolvedMessages {
             let text: String
             if message.role == .system {
@@ -351,6 +352,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                             url: OpenAICompatibleVisionContent.dataURL(for: data),
                             detail: .auto
                         ))))
+                        encodedImageURLPartCount += 1
                     }
                     openAIMessages.append(.user(.init(content: .contentParts(parts))))
                     continue
@@ -365,6 +367,13 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                 openAIMessages.append(param)
             }
         }
+        OpenAICompatibleVisionContent.logWireDiagnostics(
+            adapter: "OpenAILLM",
+            messages: plan.resolvedMessages,
+            dispositions: attachmentDispositions,
+            encodedImageURLPartCount: encodedImageURLPartCount,
+            logger: logger
+        )
         return openAIMessages
     }
 
