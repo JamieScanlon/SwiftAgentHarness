@@ -508,19 +508,32 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             providerStablePrefix: providerStablePrefix
         )
         var lmStudioMessages: [LMStudioMessage] = []
+        var encodedImageURLPartCount = 0
         for message in plan.resolvedMessages {
             switch message.role {
             case .system:
-                lmStudioMessages.append(LMStudioMessage(role: "system", content: message.content))
+                lmStudioMessages.append(LMStudioMessage(role: "system", content: .text(message.content)))
             case .user:
-                lmStudioMessages.append(LMStudioMessage(
-                    role: "user",
-                    content: message.content + attachmentDispositionSuffix(
-                        imageNames: message.images.map(\.name),
-                        dispositions: attachmentDispositions,
-                        additionalParameters: config.additionalParameters
-                    )
-                ))
+                let text = message.content + attachmentDispositionSuffix(
+                    imageNames: message.images.map(\.name),
+                    dispositions: attachmentDispositions,
+                    additionalParameters: config.additionalParameters
+                )
+                let visionImages = OpenAICompatibleVisionContent.inlineImagesWithData(
+                    from: message.images,
+                    dispositions: attachmentDispositions
+                )
+                if visionImages.isEmpty {
+                    lmStudioMessages.append(LMStudioMessage(role: "user", content: .text(text)))
+                } else {
+                    var parts: [LMStudioContentPart] = [.text(text)]
+                    for image in visionImages {
+                        guard let data = image.imageData else { continue }
+                        parts.append(.imageURL(OpenAICompatibleVisionContent.dataURL(for: data)))
+                        encodedImageURLPartCount += 1
+                    }
+                    lmStudioMessages.append(LMStudioMessage(role: "user", content: .parts(parts)))
+                }
             case .assistant:
                 let toolCalls: [LMStudioToolCall]? = message.toolCalls.isEmpty ? nil : message.toolCalls.map { toolCall in
                     self.convertToolCallToLMStudioFormat(toolCall)
@@ -530,15 +543,15 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                 }
                 lmStudioMessages.append(LMStudioMessage(
                     role: "assistant",
-                    content: message.content + attachmentDispositionSuffix(
+                    content: .text(message.content + attachmentDispositionSuffix(
                         imageNames: message.images.map(\.name),
                         dispositions: attachmentDispositions,
                         additionalParameters: config.additionalParameters
-                    ),
+                    )),
                     toolCalls: toolCalls
                 ))
             case .tool:
-                lmStudioMessages.append(LMStudioMessage(role: "tool", content: message.content, toolCallId: message.toolCallId))
+                lmStudioMessages.append(LMStudioMessage(role: "tool", content: .text(message.content), toolCallId: message.toolCallId))
             }
         }
         
@@ -567,6 +580,14 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         if let tools = tools, !tools.isEmpty {
             logger?.debug("Tool definitions: \(tools.map { $0.function.name }.joined(separator: ", "))")
         }
+
+        OpenAICompatibleVisionContent.logWireDiagnostics(
+            adapter: "LMStudioLLM",
+            messages: plan.resolvedMessages,
+            dispositions: attachmentDispositions,
+            encodedImageURLPartCount: encodedImageURLPartCount,
+            logger: logger
+        )
         
         return LMStudioChatRequest(
             model: model,
@@ -577,6 +598,12 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
             stream: stream,
             tools: tools
         )
+    }
+
+    /// Test hook: encodes a chat request body for the given messages (no network).
+    func testEncodedChatRequestBody(from messages: [Message], config: LLMRequestConfig) async throws -> Data {
+        let request = try await createLMStudioChatRequest(messages: messages, config: config, stream: false)
+        return try JSONEncoder().encode(request)
     }
 
     nonisolated private func applyRequestKnobs(to body: inout [String: Any], config: LLMRequestConfig) {
@@ -942,13 +969,83 @@ private struct LMStudioChatRequest: Codable {
     let tools: [LMStudioTool]?
 }
 
+private enum LMStudioMessageContent: Codable, Equatable, Sendable {
+    case text(String)
+    case parts([LMStudioContentPart])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            self = .text(string)
+            return
+        }
+        let parts = try container.decode([LMStudioContentPart].self)
+        self = .parts(parts)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .text(let string):
+            try container.encode(string)
+        case .parts(let parts):
+            try container.encode(parts)
+        }
+    }
+}
+
+private enum LMStudioContentPart: Codable, Equatable, Sendable {
+    case text(String)
+    case imageURL(String)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case imageURL = "image_url"
+    }
+
+    private struct ImageURLPayload: Codable, Equatable, Sendable {
+        let url: String
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "text":
+            self = .text(try container.decode(String.self, forKey: .text))
+        case "image_url":
+            let payload = try container.decode(ImageURLPayload.self, forKey: .imageURL)
+            self = .imageURL(payload.url)
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unsupported LM Studio content part type: \(type)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text(let text):
+            try container.encode("text", forKey: .type)
+            try container.encode(text, forKey: .text)
+        case .imageURL(let url):
+            try container.encode("image_url", forKey: .type)
+            try container.encode(ImageURLPayload(url: url), forKey: .imageURL)
+        }
+    }
+}
+
 private struct LMStudioMessage: Codable {
     let role: String
-    let content: String
+    let content: LMStudioMessageContent
     let toolCallId: String?
     let toolCalls: [LMStudioToolCall]?
     
-    init(role: String, content: String, toolCallId: String? = nil, toolCalls: [LMStudioToolCall]? = nil) {
+    init(role: String, content: LMStudioMessageContent, toolCallId: String? = nil, toolCalls: [LMStudioToolCall]? = nil) {
         self.role = role
         self.content = content
         self.toolCallId = toolCallId

@@ -1156,6 +1156,12 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
                 entries: entries,
                 fallbackMessages: projected
             )
+            // Transcript replay is ref-only; restore bytes before attachment projection.
+            projected = SessionBlobMessageHydration.hydrateBlobImages(
+                in: projected,
+                blobReader: policy.attachmentBlobReader,
+                conversationID: conversation.id
+            )
         }
         if policy.downgradeLowTrustContext, resolvedTrust == .lowTrust, let lastID = projected.last?.id {
             projected = projected.filter { message in
@@ -1184,13 +1190,18 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             frontierEventID: frontierEventID
         )
         if let attachmentArtifact {
+            let sanitizationPolicy = policy.attachmentProjectionPolicy.map {
+                CatalogVisionImageProjector.SanitizationPolicy(from: $0)
+            } ?? .default
             projected = CatalogVisionImageProjector.apply(
                 messages: projected,
                 catalog: policy.attachmentCatalog,
                 effectiveDecisions: attachmentArtifact.decisions,
                 blobReader: policy.attachmentBlobReader,
                 conversationID: conversation.id,
-                modelSupportsVision: policy.modelSupportsVision ?? false
+                modelSupportsVision: policy.modelSupportsVision ?? false,
+                sanitizationPolicy: sanitizationPolicy,
+                logger: logger
             )
         }
         let attachmentSectionContent = attachmentArtifact.flatMap {

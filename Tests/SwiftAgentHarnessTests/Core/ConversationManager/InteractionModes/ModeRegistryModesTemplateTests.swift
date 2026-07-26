@@ -100,12 +100,69 @@ struct ModeRegistryModesTemplateTests {
         #expect(plan.tools.allow?.contains("think") == true)
         #expect(plan.tools.allow?.contains("finish") == true)
         #expect(plan.tools.allow?.contains("declare_agent_build_complete") == false)
+        #expect(plan.tools.allow?.contains("bash") != true)
+        #expect(plan.tools.deny.contains("bash"))
+        #expect(plan.tools.deny.contains("write_file"))
+        #expect(plan.subAgents.allow == [])
+        #expect(plan.subAgents.maxDepth == 0)
         #expect(agent.tools.allow?.contains("add_plan_note") == true)
         #expect(agent.tools.allow?.contains("enter_plan_mode") == true)
         #expect(agent.tools.allow?.contains("think") == true)
         #expect(agent.tools.allow?.contains("finish") == true)
         #expect(agent.tools.allow?.contains("ask_user") == true)
+        #expect(agent.tools.deny.contains("create_plan"))
+        #expect(agent.tools.deny.contains("edit_plan"))
+        #expect(agent.tools.deny.contains("exit_plan_mode"))
         #expect(ToolNamePolicyNormalization.listContains(agent.tools.allow ?? [], name: "Coding Agent"))
+    }
+
+    @Test("built-in seeds without PromptConfig enforce plan deny and agent plan-authoring deny")
+    func builtInSeedsEnforceConstraintRegimeWithoutPromptConfig() async throws {
+        let registry = ModeRegistryTestSupport.makeService(
+            seedingBuiltIns: true,
+            modeProfileConfiguration: .empty
+        )
+        let plan = try await registry.resolve(modeId: InteractionMode.plan.rawValue)
+        let agent = try await registry.resolve(modeId: InteractionMode.agent.rawValue)
+        let policy = ToolPolicyConfiguration()
+        let planCtx = ModePolicyContext(interactionMode: .plan, resolvedProfile: plan)
+        let agentCtx = ModePolicyContext(interactionMode: .agent, resolvedProfile: agent)
+
+        for denied in [
+            WorkspaceFilesystemToolProvider.bashToolName,
+            WorkspaceFilesystemToolProvider.writeFileToolName,
+            WorkspaceFilesystemToolProvider.editFileToolName,
+            WorkspaceFilesystemToolProvider.processToolName,
+            WorkspaceFilesystemToolProvider.processSendKeysToolName,
+            "spawn_sub_agent",
+            "Coding Agent",
+        ] {
+            #expect(policy.isToolDenied(name: denied, context: planCtx), "plan should deny \(denied)")
+            #expect(policy.isToolAllowed(name: denied, context: planCtx) == false, "plan should not allow \(denied)")
+        }
+        for allowed in [
+            AgentPlanToolProvider.createPlanToolName,
+            AgentPlanToolProvider.editPlanToolName,
+            ModeTransitionToolProvider.exitPlanModeToolName,
+            WorkspaceFilesystemToolProvider.readFileToolName,
+            WorkspaceFilesystemToolProvider.globToolName,
+        ] {
+            #expect(policy.isToolDenied(name: allowed, context: planCtx) == false)
+            #expect(policy.isToolAllowed(name: allowed, context: planCtx))
+        }
+
+        for denied in [
+            AgentPlanToolProvider.createPlanToolName,
+            AgentPlanToolProvider.editPlanToolName,
+            AgentPlanToolProvider.addPlanTaskToolName,
+            AgentPlanToolProvider.deletePlanTaskToolName,
+            ModeTransitionToolProvider.exitPlanModeToolName,
+        ] {
+            #expect(policy.isToolDenied(name: denied, context: agentCtx), "agent should deny \(denied)")
+        }
+        #expect(policy.isToolAllowed(name: ModeTransitionToolProvider.enterPlanModeToolName, context: agentCtx))
+        #expect(plan.subAgents.allow == [])
+        #expect(plan.subAgents.maxDepth == 0)
     }
 
     @Test("built-in mode profiles seed canonical runtime slices")
@@ -134,28 +191,38 @@ struct ModeRegistryModesTemplateTests {
         #expect(agent.runtime.termination?.recovery?.maxAttempts == 2)
     }
 
-    @Test("bundled PromptConfig plan and agent profiles allow native workspace tools")
-    func bundledPromptConfigAllowsNativeWorkspaceTools() async throws {
+    @Test("bundled PromptConfig plan denies mutating workspace tools; agent keeps them")
+    func bundledPromptConfigPlanDeniesMutatingWorkspaceTools() async throws {
         let registry = ModeRegistryTestSupport.makeService(
             seedingBuiltIns: true,
             modeProfileConfiguration: try HarnessConversationTestFixtures.promptConfigFixture().modeProfiles
         )
         let plan = try await registry.resolve(modeId: InteractionMode.plan.rawValue)
         let agent = try await registry.resolve(modeId: InteractionMode.agent.rawValue)
-        let workspaceTools = [
+        let mutatingTools = [
             WorkspaceFilesystemToolProvider.bashToolName,
-            WorkspaceFilesystemToolProvider.readFileToolName,
             WorkspaceFilesystemToolProvider.writeFileToolName,
             WorkspaceFilesystemToolProvider.editFileToolName,
-            WorkspaceFilesystemToolProvider.globToolName,
-            WorkspaceFilesystemToolProvider.grepToolName,
             WorkspaceFilesystemToolProvider.processToolName,
             WorkspaceFilesystemToolProvider.processSendKeysToolName,
         ]
-        for tool in workspaceTools {
+        let researchTools = [
+            WorkspaceFilesystemToolProvider.readFileToolName,
+            WorkspaceFilesystemToolProvider.globToolName,
+            WorkspaceFilesystemToolProvider.grepToolName,
+        ]
+        for tool in mutatingTools {
+            #expect(plan.tools.allow?.contains(tool) != true, "plan must not allow \(tool)")
+            #expect(plan.tools.deny.contains(tool), "plan must deny \(tool)")
+            #expect(agent.tools.allow?.contains(tool) == true, "agent profile missing \(tool)")
+        }
+        for tool in researchTools {
             #expect(plan.tools.allow?.contains(tool) == true, "plan profile missing \(tool)")
             #expect(agent.tools.allow?.contains(tool) == true, "agent profile missing \(tool)")
         }
+        #expect(agent.tools.deny.contains("create_plan"))
+        #expect(agent.tools.deny.contains("edit_plan"))
+        #expect(agent.tools.deny.contains("exit_plan_mode"))
     }
 
     @Test("bundled PromptConfig agent profile overrides termination recovery maxAttempts")
@@ -242,14 +309,15 @@ struct ModeRegistryModesTemplateTests {
         #expect(try await registry.resolve(modeId: "cap-500").runtime.maxIterations == 500)
     }
 
-    @Test("built-in mode profiles seed permissive sub-agent allow-list")
+    @Test("built-in mode profiles seed sub-agent allow-list; plan denies spawn")
     func builtInProfilesSeedSubAgentAllowList() async throws {
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true)
         let chat = try await registry.resolve(modeId: InteractionMode.chat.rawValue)
         let plan = try await registry.resolve(modeId: InteractionMode.plan.rawValue)
         let agent = try await registry.resolve(modeId: InteractionMode.agent.rawValue)
         #expect(chat.subAgents.allow == ["*"])
-        #expect(plan.subAgents.allow == ["*"])
+        #expect(plan.subAgents.allow == [])
+        #expect(plan.subAgents.maxDepth == 0)
         #expect(agent.subAgents.allow == ["*"])
     }
 

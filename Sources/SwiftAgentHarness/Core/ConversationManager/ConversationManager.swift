@@ -266,7 +266,12 @@ final class ConversationManager {
     }
 
     /// In-memory row update (orchestrator + cache persistence run elsewhere in ``HarnessRuntimeSession``).
-    func replaceConversationInRegistry(_ conversation: ModelConversation) {
+    /// - Parameter transcript: ``.authoritativeTip`` replaces messages with the incoming tip snapshot;
+    ///   ``.concurrentUnion`` (default) merges concurrent partial writers via ``RegistryTranscriptMerge/union``.
+    func replaceConversationInRegistry(
+        _ conversation: ModelConversation,
+        transcript: RegistryTranscriptPolicy = .concurrentUnion
+    ) {
         logger?.info("Updating conversation \(conversation.id)")
         guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else {
             logger?.warning("Conversation \(conversation.id) NOT FOUND. Abourting")
@@ -274,25 +279,50 @@ final class ConversationManager {
         }
         var merged = conversation
         let existing = conversations[index]
-        let priorMessageCount = merged.messages.count
-        merged.messages = RegistryTranscriptMerge.union(
-            existing: existing.messages,
-            incoming: merged.messages
-        )
-        if merged.interactionMode == .agent,
-           merged.messages.count != priorMessageCount {
-            merged.turns = conversationTurns(messages: merged.messages)
-        }
-        if merged.messages.count > priorMessageCount,
-           let lastTimestamp = merged.messages.last?.timestamp {
-            merged.updatedAt = max(existing.updatedAt, merged.updatedAt, lastTimestamp)
+        let incomingMessageCount = merged.messages.count
+        switch transcript {
+        case .concurrentUnion:
+            merged.messages = RegistryTranscriptMerge.union(
+                existing: existing.messages,
+                incoming: merged.messages
+            )
+            if merged.interactionMode == .agent,
+               merged.messages.count != incomingMessageCount {
+                merged.turns = conversationTurns(messages: merged.messages)
+            }
+            if merged.messages.count > incomingMessageCount,
+               let lastTimestamp = merged.messages.last?.timestamp {
+                merged.updatedAt = max(existing.updatedAt, merged.updatedAt, lastTimestamp)
+            }
+        case .authoritativeTip:
+            if merged.interactionMode == .agent,
+               merged.messages.map(\.id) != existing.messages.map(\.id) {
+                merged.turns = conversationTurns(messages: merged.messages)
+            }
+            if let lastTimestamp = merged.messages.last?.timestamp {
+                merged.updatedAt = max(existing.updatedAt, merged.updatedAt, lastTimestamp)
+            }
         }
         merged.controlPlaneRevision = max(existing.controlPlaneRevision, merged.controlPlaneRevision)
         conversations.replaceSubrange(index..<index + 1, with: [merged])
     }
 
+    /// Reloads registry messages from the durable active-branch tip (``ConversationTranscriptLineage/activeMessages``).
+    func reloadRegistryTranscriptFromActiveTip(conversationID: UUID) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        guard let tip = try? ConversationTranscriptLineage.activeMessages(
+            conversationID: conversationID,
+            harness: harnessSessionPersistence
+        ), !tip.isEmpty else {
+            return
+        }
+        var updated = conversations[index]
+        updated.messages = tip
+        replaceConversationInRegistry(updated, transcript: .authoritativeTip)
+    }
+
     /// Applies an intentional in-memory transcript shortening (revert / rollback).
-    /// Unlike ``replaceConversationInRegistry(_:)``, does not restore a longer existing transcript.
+    /// Unlike ``replaceConversationInRegistry(_:transcript:)``, does not restore a longer existing transcript.
     func applyRegistryTranscriptTruncation(_ conversation: ModelConversation) {
         logger?.info("Truncating conversation transcript \(conversation.id)")
         guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else {
@@ -1535,24 +1565,14 @@ final class ConversationManager {
     }
 
     private func copyConversationDirectoryIfNeeded(from sourceConversationID: UUID, to newConversationID: UUID) {
-        let sourceURL = AgentPlanStore.conversationDirectoryURL(for: sourceConversationID)
-        let destinationURL = AgentPlanStore.conversationDirectoryURL(for: newConversationID)
-        let fileManager = FileManager.default
-
-        guard fileManager.fileExists(atPath: sourceURL.path) else {
-            return
-        }
-
         do {
-            try fileManager.createDirectory(
-                at: destinationURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            _ = try AgentPlanStore.copyConversationDirectory(
+                from: sourceConversationID,
+                to: newConversationID
             )
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
-            }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
         } catch {
+            let sourceURL = AgentPlanStore.conversationDirectoryURL(for: sourceConversationID)
+            let destinationURL = AgentPlanStore.conversationDirectoryURL(for: newConversationID)
             logger?.warning(
                 "[ConversationManager] Failed to copy \(sourceURL.path) to \(destinationURL.path): \(error)"
             )

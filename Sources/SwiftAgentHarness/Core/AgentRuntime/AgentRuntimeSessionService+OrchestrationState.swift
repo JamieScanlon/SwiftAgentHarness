@@ -118,7 +118,7 @@ extension AgentRuntimeSessionService {
                     await updateConversation(latestConversation)
                     await refreshProjectedConversationMessages(
                         conversationID: cid,
-                        baseMessagesOverride: latestConversation.messages
+                        baseMessagesOverride: nil
                     )
                     await touchCurrentMessagesIfSelected(conversationID: cid, conversation: latestConversation)
                 } else {

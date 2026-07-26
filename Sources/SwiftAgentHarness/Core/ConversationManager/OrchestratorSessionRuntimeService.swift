@@ -535,17 +535,98 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
     }
 
     private func resumeConversationAfterPendingCompletionIfNeeded(conversationID: UUID) async {
+        await resumeConversationAfterParkIfNeeded(
+            conversationID: conversationID,
+            allowedModes: [.agent],
+            origin: .pendingCompletionResume,
+            logLabel: "pending completion"
+        )
+    }
+
+    /// After stop-on-approval park, rewrite pending tool results and resume (deny) or apply exit (approve).
+    func handlePlanExitApprovalPostResolve(
+        conversationID: UUID,
+        runID: UUID?,
+        status: ToolApprovalResolutionStatus,
+        reason: String?,
+        toolCallId: String?,
+        binding: ToolCallApprovalBinding
+    ) async {
+        _ = (runID, binding)
+        switch status {
+        case .denied:
+            await rewritePendingApprovalToolResults(
+                conversationID: conversationID,
+                toolCallId: toolCallId,
+                content: PlanApprovalFeedback.deniedToolResultContent(reason: reason)
+            )
+            await resumeConversationAfterParkIfNeeded(
+                conversationID: conversationID,
+                allowedModes: [.plan],
+                origin: .planExitDenialResume,
+                logLabel: "plan exit denial"
+            )
+        case .approved:
+            let targetMode = InteractionMode.agent
+            do {
+                _ = try await toolData.transitionConversationMode(
+                    conversationID: conversationID,
+                    targetMode: targetMode,
+                    initiatedBy: "tool",
+                    reason: ModeTransitionToolProvider.exitPlanModeToolName
+                )
+            } catch {
+                logger?.warning(
+                    "[OrchestratorSessionRuntimeService] plan exit approve transition failed: \(error)"
+                )
+            }
+            await rewritePendingApprovalToolResults(
+                conversationID: conversationID,
+                toolCallId: toolCallId,
+                content: PlanApprovalFeedback.approvedAfterParkToolResultContent(targetMode: targetMode)
+            )
+        case .pending:
+            break
+        }
+    }
+
+    private func rewritePendingApprovalToolResults(
+        conversationID: UUID,
+        toolCallId: String?,
+        content: String
+    ) async {
+        guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else {
+            return
+        }
+        let pending = AgentLoopToolDispatch.approvalPendingToolResultContent
+        _ = pending
+        let rewritten = PlanExitApprovalTranscript.rewritingPendingApprovalToolResults(
+            in: conversation.messages,
+            toolCallId: toolCallId,
+            content: content
+        )
+        guard rewritten.changed else { return }
+        conversation.messages = rewritten.messages
+        await messaging.update(conversation: conversation)
+    }
+
+    private func resumeConversationAfterParkIfNeeded(
+        conversationID: UUID,
+        allowedModes: Set<InteractionMode>,
+        origin: RunLaneOriginKind,
+        logLabel: String
+    ) async {
         let runtimeLifecycle = await agentRuntime.lifecycleSnapshot(for: conversationID)
         guard runtimeLifecycle.generationTask == nil else { return }
         guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
-        guard conversation.interactionMode == .agent else { return }
+        guard allowedModes.contains(conversation.interactionMode) else { return }
         let runID = UUID()
         let sessionLaneKey = await selection.runtimeSessionLaneKey(conversationID: conversationID)
         let admissionContext = RunLaneResolver.resolve(
             RunLaneOriginContext(
                 sessionKey: sessionLaneKey,
                 runID: runID,
-                origin: .pendingCompletionResume
+                origin: origin
             )
         )
         if let admission = await deps.runtimeLaneCoordinator.tryAcquire(admissionContext) {
@@ -556,7 +637,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
                 activeRuntimeRunIDOverride: nil
             )
             logger?.warning(
-                "[OrchestratorSessionRuntimeService] pending completion resume skipped: lane admission failed \(admissionError)"
+                "[OrchestratorSessionRuntimeService] \(logLabel) resume skipped: lane admission failed \(admissionError)"
             )
             return
         }
@@ -575,14 +656,14 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
             conversation: conversation,
             model: conversation.model
         ) else {
-            logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
+            logger?.warning("[OrchestratorSessionRuntimeService] \(logLabel) resume skipped: orchestrator unavailable")
             await deps.runtimeLaneCoordinator.release(runID: runID)
             return
         }
         await agentRuntime.storeRunOrchestratorHandle(runID: runID, handle: acquisition.handle)
         await startOrchestratorStateListeners(for: conversationID)
         guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else {
-            logger?.warning("[OrchestratorSessionRuntimeService] pending completion resume skipped: orchestrator unavailable")
+            logger?.warning("[OrchestratorSessionRuntimeService] \(logLabel) resume skipped: orchestrator unavailable")
             await agentRuntime.releaseRunOrchestrator(runID: runID)
             await deps.runtimeLaneCoordinator.release(runID: runID)
             return

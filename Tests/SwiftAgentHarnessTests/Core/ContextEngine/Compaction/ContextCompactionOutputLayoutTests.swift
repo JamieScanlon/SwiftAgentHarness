@@ -129,6 +129,14 @@ struct ContextCompactionOutputLayoutTests {
 
     @Test("summarized output with reinjection stamps reinjected provenance and slice excludes reinjection for persistence")
     func summarizedOutputReinjectionProvenanceAndPersistenceSlice() async throws {
+        let conversationID = UUID()
+        defer { _ = AgentPlanStore.removeConversationDirectory(for: conversationID) }
+        try AgentPlanStore.ensureConversationDirectory(for: conversationID)
+        try "# Plan\n\nlayout reinjection\n".write(
+            to: AgentPlanStore.planURL(for: conversationID),
+            atomically: true,
+            encoding: .utf8
+        )
         let summaryID = UUID()
         let summary = Message(id: summaryID, role: .assistant, content: "## Active Task\nfinish", timestamp: Date(), toolCalls: [])
         var cfg = layoutTestConfig(reinjectionEnabled: true)
@@ -136,7 +144,7 @@ struct ContextCompactionOutputLayoutTests {
         let transformer = ContextCompactionTransformer(config: cfg, summarizer: StubLayoutSummarizer(output: [summary]))
         let transcript: [Message] = [
             Message(id: UUID(), role: .system, content: "s", timestamp: Date(), toolCalls: []),
-            Message(id: UUID(), role: .user, content: "u1 plan.md", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u1", timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .assistant, content: String(repeating: "m", count: 8_000), timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .assistant, content: "a2", timestamp: Date(), toolCalls: []),
@@ -145,7 +153,7 @@ struct ContextCompactionOutputLayoutTests {
         let output = try await transformer.transformContext(
             ContextTransformInput(
                 messages: transcript,
-                conversation: makeLayoutConversationMetadata(),
+                conversation: makeLayoutConversationMetadata(conversationID: conversationID),
                 phase: .initial,
                 effectiveContextLimitTokens: 2_500,
                 compactionCheckpointKind: nil,
@@ -177,6 +185,14 @@ struct ContextCompactionOutputLayoutTests {
 
     @Test("merged assistant-first tail with reinjection uses compactionPersistedMiddle for durable slice")
     func mergedTailReinjectionUsesPersistedMiddleForCheckpoint() async throws {
+        let conversationID = UUID()
+        defer { _ = AgentPlanStore.removeConversationDirectory(for: conversationID) }
+        try AgentPlanStore.ensureConversationDirectory(for: conversationID)
+        try "# Plan\n\nlayout reinjection\n".write(
+            to: AgentPlanStore.planURL(for: conversationID),
+            atomically: true,
+            encoding: .utf8
+        )
         let summary = Message(
             id: UUID(),
             role: .assistant,
@@ -190,7 +206,7 @@ struct ContextCompactionOutputLayoutTests {
         let transformer = ContextCompactionTransformer(config: cfg, summarizer: StubLayoutSummarizer(output: [summary]))
         let transcript: [Message] = [
             Message(id: UUID(), role: .system, content: "s", timestamp: Date(), toolCalls: []),
-            Message(id: UUID(), role: .user, content: "u1 plan.md", timestamp: Date(), toolCalls: []),
+            Message(id: UUID(), role: .user, content: "u1", timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .assistant, content: String(repeating: "m", count: 8_000), timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .user, content: "u2", timestamp: Date(), toolCalls: []),
             Message(id: UUID(), role: .assistant, content: "partial reply", timestamp: Date(), toolCalls: []),
@@ -199,7 +215,7 @@ struct ContextCompactionOutputLayoutTests {
         let output = try await transformer.transformContext(
             ContextTransformInput(
                 messages: transcript,
-                conversation: makeLayoutConversationMetadata(),
+                conversation: makeLayoutConversationMetadata(conversationID: conversationID),
                 phase: .initial,
                 effectiveContextLimitTokens: 2_500,
                 compactionCheckpointKind: nil,
@@ -268,9 +284,9 @@ private func layoutTestConfig(reinjectionEnabled: Bool = false) -> ContextCompac
     )
 }
 
-private func makeLayoutConversationMetadata() -> ConversationTransformMetadata {
+private func makeLayoutConversationMetadata(conversationID: UUID = UUID()) -> ConversationTransformMetadata {
     ConversationTransformMetadata(
-        conversationID: UUID(),
+        conversationID: conversationID,
         modelID: "layout",
         modelName: "layout",
         interactionMode: .agent,

@@ -510,7 +510,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             tail: tail,
             skills: input.compactionReinjectableSkills,
             instructionContext: input.compactionPostCompactionInstructionContext,
-            config: config
+            config: config,
+            conversationID: input.conversation.conversationID
         )
         return summarizedOutput(
             head: head,
@@ -550,7 +551,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             tail: tail,
             skills: input.compactionReinjectableSkills,
             instructionContext: input.compactionPostCompactionInstructionContext,
-            config: config
+            config: config,
+            conversationID: input.conversation.conversationID
         )
         return summarizedOutput(
             head: head,
@@ -615,7 +617,8 @@ public struct ContextCompactionTransformer: ConversationTransforming {
             tail: tail,
             skills: input.compactionReinjectableSkills,
             instructionContext: input.compactionPostCompactionInstructionContext,
-            config: config
+            config: config,
+            conversationID: input.conversation.conversationID
         )
         return summarizedOutput(
             head: head,

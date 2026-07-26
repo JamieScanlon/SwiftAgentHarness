@@ -65,11 +65,14 @@ enum ContextEngineProjectionPolicyBuilder {
         let routingNames = ConversationRoutingPolicyNames.names(for: conversation)
         var providerContribution: SystemPromptContribution?
         var providerEligibility: ProviderCacheTTLEligibility = .none
-        if let entry = await deps.registryEntryProvider?(conversation.model.id),
-           let binding = entry.primaryBinding {
-            providerEligibility = ProviderRuntimeHooks.cacheTtlEligibility(binding: binding)
-            if let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
-                providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+        var registrySupportsVision: Bool?
+        if let entry = await deps.registryEntryProvider?(conversation.model.id) {
+            registrySupportsVision = entry.capabilities.contains(.vision)
+            if let binding = entry.primaryBinding {
+                providerEligibility = ProviderRuntimeHooks.cacheTtlEligibility(binding: binding)
+                if let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
+                    providerContribution = ProviderPromptContribution.systemPromptContribution(from: wire)
+                }
             }
         }
         let promptPolicy = ContextEngineSystemPromptAssemblyPolicyInput(
@@ -101,7 +104,8 @@ enum ContextEngineProjectionPolicyBuilder {
             downgradeLowTrustContext: deps.trustPolicyConfiguration.shouldDowngradeContext(for: .lowTrust),
             deterministicAttachmentHygiene: hygiene,
             attachmentCatalog: conversation.attachmentsCatalog,
-            modelSupportsVision: conversation.model.capabilities.contains(.vision),
+            modelSupportsVision: registrySupportsVision
+                ?? conversation.model.capabilities.contains(.vision),
             systemPromptAssemblyPolicy: promptPolicy,
             attachmentProjectionPolicy: ContextEngineAttachmentProjectionPolicyInput(),
             attachmentBlobReader: blobReader,

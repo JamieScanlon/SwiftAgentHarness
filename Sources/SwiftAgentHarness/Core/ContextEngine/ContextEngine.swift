@@ -180,17 +180,24 @@ public struct ContextEngineAttachmentProjectionPolicyInput: Sendable {
     let enabled: Bool
     let inlineByteLimit: Int64
     let summarizeByteLimit: Int64
+    /// Per-image inline ceiling after sanitization (vision models). Defaults match tool-result caps.
+    let imageInlineByteLimit: Int64
+    let imageMaxPixelDimension: Int
     let recencyPolicy: ContextEngineAttachmentRecencyPolicyInput
 
     init(
         enabled: Bool = true,
         inlineByteLimit: Int64 = 256_000,
         summarizeByteLimit: Int64 = 2_000_000,
+        imageInlineByteLimit: Int64 = 5_000_000,
+        imageMaxPixelDimension: Int = 1_200,
         recencyPolicy: ContextEngineAttachmentRecencyPolicyInput = .default
     ) {
         self.enabled = enabled
         self.inlineByteLimit = inlineByteLimit
         self.summarizeByteLimit = summarizeByteLimit
+        self.imageInlineByteLimit = max(0, imageInlineByteLimit)
+        self.imageMaxPixelDimension = max(0, imageMaxPixelDimension)
         self.recencyPolicy = recencyPolicy
     }
 }

@@ -324,6 +324,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         )
         var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
         openAIMessages.reserveCapacity(plan.resolvedMessages.count)
+        var encodedImageURLPartCount = 0
         for message in plan.resolvedMessages {
             let text: String
             if message.role == .system {
@@ -335,8 +336,30 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     additionalParameters: config.additionalParameters
                 )
             }
+            let role = ChatQuery.ChatCompletionMessageParam.Role(rawValue: message.role.rawValue) ?? .user
+            if role == .user {
+                let visionImages = OpenAICompatibleVisionContent.inlineImagesWithData(
+                    from: message.images,
+                    dispositions: attachmentDispositions
+                )
+                if !visionImages.isEmpty {
+                    var parts: [ChatQuery.ChatCompletionMessageParam.UserMessageParam.Content.ContentPart] = [
+                        .text(.init(text: text))
+                    ]
+                    for image in visionImages {
+                        guard let data = image.imageData else { continue }
+                        parts.append(.image(.init(imageUrl: .init(
+                            url: OpenAICompatibleVisionContent.dataURL(for: data),
+                            detail: .auto
+                        ))))
+                        encodedImageURLPartCount += 1
+                    }
+                    openAIMessages.append(.user(.init(content: .contentParts(parts))))
+                    continue
+                }
+            }
             if let param = ChatQuery.ChatCompletionMessageParam(
-                role: ChatQuery.ChatCompletionMessageParam.Role(rawValue: message.role.rawValue) ?? .user,
+                role: role,
                 content: text,
                 toolCalls: message.toolCalls.map({ $0.toOpenAIToolCall() }),
                 toolCallId: message.toolCallId
@@ -344,7 +367,20 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                 openAIMessages.append(param)
             }
         }
+        OpenAICompatibleVisionContent.logWireDiagnostics(
+            adapter: "OpenAILLM",
+            messages: plan.resolvedMessages,
+            dispositions: attachmentDispositions,
+            encodedImageURLPartCount: encodedImageURLPartCount,
+            logger: logger
+        )
         return openAIMessages
+    }
+
+    /// Test hook: encodes chat messages for the given request (no network).
+    func testEncodedChatMessagesJSON(from messages: [Message], config: LLMRequestConfig) async throws -> Data {
+        let params = try await openAIChatCompletionMessageParams(from: messages, config: config)
+        return try JSONEncoder().encode(params)
     }
 
     nonisolated private func extractSystemPromptMetadata(from additionalParameters: JSON?) -> [String: String] {

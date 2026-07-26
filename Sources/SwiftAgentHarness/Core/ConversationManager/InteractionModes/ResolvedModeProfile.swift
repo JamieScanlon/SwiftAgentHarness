@@ -314,7 +314,7 @@ public enum AllowsHostGrantsSource: String, Sendable, Equatable {
 
 /// Fully resolved mode profile (flattened ``extends`` chain).
 public struct ResolvedModeProfile: Sendable, Equatable {
-    public static let builtInSeedVersion = 1
+    public static let builtInSeedVersion = 2
 
     public var id: String
     public var interactionMode: InteractionMode

@@ -103,4 +103,51 @@ struct ToolApprovalRuntimeServiceTests {
         #expect(merged.preApprovedToolNames.contains("store_tool") == false)
         #expect(merged.preApprovedCallBindings.contains(onceBinding))
     }
+
+    @Test("exit_plan_mode approval contract uses Approve / Request revision presentation")
+    func exitPlanModePresentation() async throws {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let deps = makeDependencies(container: container)
+        let services = HarnessRuntimeSessionFactory.makeServices(
+            deps: deps,
+            persistenceDomain: deps.persistenceDomain
+        )
+        let service = services.toolApprovalRuntimeService
+        let spec = await service.approvalContractSpec(
+            toolName: ModeTransitionToolProvider.exitPlanModeToolName,
+            route: .user,
+            isElevated: false,
+            arguments: .object([:])
+        )
+        #expect(spec.title == "Plan Approval Required")
+        let buttons = spec.presentation?.buttons ?? []
+        #expect(buttons.map(\.id) == [
+            ApprovalDecision.allowOnce.rawValue,
+            ApprovalDecision.deny.rawValue,
+        ])
+        #expect(buttons.map(\.label) == ["Approve", "Request revision"])
+        #expect(buttons.contains(where: { $0.id == ApprovalDecision.allowAlways.rawValue }) == false)
+    }
+
+    @Test("generic tool approval contract keeps standard Allow once / Always / Deny buttons")
+    func genericToolPresentationUnchanged() async throws {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let deps = makeDependencies(container: container)
+        let services = HarnessRuntimeSessionFactory.makeServices(
+            deps: deps,
+            persistenceDomain: deps.persistenceDomain
+        )
+        let service = services.toolApprovalRuntimeService
+        let spec = await service.approvalContractSpec(
+            toolName: "bash",
+            route: .user,
+            isElevated: false
+        )
+        #expect(spec.title == "Tool Approval Required")
+        #expect(spec.presentation?.buttons.map(\.id) == [
+            ApprovalDecision.allowOnce.rawValue,
+            ApprovalDecision.allowAlways.rawValue,
+            ApprovalDecision.deny.rawValue,
+        ])
+    }
 }

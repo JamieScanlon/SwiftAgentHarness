@@ -46,6 +46,43 @@ public enum AgentPlanStore {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
+    /// Copies the conversation artifact directory (including `plan.md`) to a new conversation id.
+    /// Used on fork/split so the child gets a fresh key with copied content (`planning.md` lifecycle invariant 2).
+    /// - Returns: `true` when a copy was performed; `false` when the source directory is missing.
+    /// - Throws: when the source exists but the copy fails.
+    @discardableResult
+    public static func copyConversationDirectory(from sourceConversationID: UUID, to destinationConversationID: UUID) throws -> Bool {
+        let sourceURL = conversationDirectoryURL(for: sourceConversationID)
+        let destinationURL = conversationDirectoryURL(for: destinationConversationID)
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return false
+        }
+
+        try fileManager.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        return true
+    }
+
+    /// Raw `plan.md` contents when the file exists and is readable; otherwise `nil`.
+    public static func readPlanText(for conversationID: UUID) -> String? {
+        let url = planURL(for: conversationID)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return text
+    }
+
     /// `true` when the agent build loop should inject the ephemeral “continue” user line (see ``AgentPlanParser``).
     /// Missing or unreadable file ⇒ **false**.
     public static func shouldEmitEphemeralAgentBuildContinuation(for conversationID: UUID) -> Bool {
@@ -69,18 +106,6 @@ public enum AgentPlanStore {
         }
         return AgentPlanParser.evaluateEphemeralAgentBuildContinuation(in: text)
     }
-
-    /// Raw `plan.md` contents when the file exists and is readable; otherwise `nil`.
-    public static func readPlanText(for conversationID: UUID) -> String? {
-        let url = planURL(for: conversationID)
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-        return text
-    }
 }
 
 /// Result of evaluating whether the harness should inject an ephemeral “continue” user line for agent build.
@@ -95,21 +120,31 @@ public struct EphemeralAgentBuildContinuationDecision: Sendable, Equatable {
     }
 }
 
-/// Parses markdown task lines for continuation heuristics: `- [ ]`, `* [ ]`, bare `[ ]`, and `[/]`, `[x]`, `[~]`.
+/// Parses markdown task lines for continuation heuristics: `- [ ]`, `* [ ]`, bare `[ ]`, and `[x]`, `[!]`, `[~]`.
+/// Complete is `[x]` (or legacy `[/]`); blocked is `[!]`.
 public enum AgentPlanParser {
     private static let taskLineRegex = try! NSRegularExpression(
         pattern: #"^\s*(?:[-*]\s+)?\[([^\]]+)\]"#,
         options: [.anchorsMatchLines]
     )
 
-    /// Ephemeral build continuation when there is active work: at least one task not done (`[/]`) and not blocked (`[x]`),
+    private static func isCompleteMarker(_ inner: String) -> Bool {
+        let t = inner.trimmingCharacters(in: .whitespaces)
+        return t.lowercased() == "x" || t == "/"
+    }
+
+    private static func isBlockedMarker(_ inner: String) -> Bool {
+        inner.trimmingCharacters(in: .whitespaces) == "!"
+    }
+
+    /// Ephemeral build continuation when there is active work: at least one task not done (`[x]` / legacy `[/]`) and not blocked (`[!]`),
     /// and **no** blocked line. `[~]` (in progress) and `[ ]` (not started) count as needing continuation.
-    /// Any `[x]` anywhere in the plan stops the agent build loop until the user resolves it.
+    /// Any `[!]` anywhere in the plan stops the agent build loop until the user resolves it.
     public static func shouldEmitEphemeralAgentBuildContinuation(in markdown: String) -> Bool {
         evaluateEphemeralAgentBuildContinuation(in: markdown).shouldEmit
     }
 
-    /// Rules: need at least one checkbox task line; no `[x]` anywhere; at least one non-done, non-blocked task.
+    /// Rules: need at least one checkbox task line; no `[!]` anywhere; at least one non-done, non-blocked task.
     public static func evaluateEphemeralAgentBuildContinuation(in markdown: String) -> EphemeralAgentBuildContinuationDecision {
         let ns = markdown as NSString
         let range = NSRange(location: 0, length: ns.length)
@@ -124,11 +159,11 @@ public enum AgentPlanParser {
         var hasBlocked = false
         var hasOpen = false
         for m in matches where m.numberOfRanges >= 2 {
-            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            if inner == "/" {
+            let inner = ns.substring(with: m.range(at: 1))
+            if isCompleteMarker(inner) {
                 continue
             }
-            if inner.lowercased() == "x" {
+            if isBlockedMarker(inner) {
                 hasBlocked = true
                 continue
             }
@@ -137,26 +172,26 @@ public enum AgentPlanParser {
         if hasBlocked {
             return EphemeralAgentBuildContinuationDecision(
                 shouldEmit: false,
-                reasonIfNotEmit: "plan contains at least one blocked [x] task line (clear or re-mark before auto-continue)"
+                reasonIfNotEmit: "plan contains at least one blocked [!] task line (clear or re-mark before auto-continue)"
             )
         }
         if !hasOpen {
             return EphemeralAgentBuildContinuationDecision(
                 shouldEmit: false,
-                reasonIfNotEmit: "no open or in-progress tasks (all lines are complete [/] only)"
+                reasonIfNotEmit: "no open or in-progress tasks (all lines are complete [x] only)"
             )
         }
         return EphemeralAgentBuildContinuationDecision(shouldEmit: true, reasonIfNotEmit: nil)
     }
 
-    /// `true` when any checkbox task line uses the blocked marker `[x]` (same rules as ``evaluateEphemeralAgentBuildContinuation``).
+    /// `true` when any checkbox task line uses the blocked marker `[!]` (same rules as ``evaluateEphemeralAgentBuildContinuation``).
     public static func hasBlockedTaskLine(in markdown: String) -> Bool {
         let ns = markdown as NSString
         let range = NSRange(location: 0, length: ns.length)
         let matches = taskLineRegex.matches(in: markdown, options: [], range: range)
         for m in matches where m.numberOfRanges >= 2 {
-            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            if inner.lowercased() == "x" {
+            let inner = ns.substring(with: m.range(at: 1))
+            if isBlockedMarker(inner) {
                 return true
             }
         }
@@ -176,10 +211,10 @@ public enum AgentPlanParser {
         var done = 0
         var blocked = 0
         for m in matches where m.numberOfRanges >= 2 {
-            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces).lowercased()
-            if inner == "/" {
+            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            if isCompleteMarker(inner) {
                 done += 1
-            } else if inner == "x" {
+            } else if isBlockedMarker(inner) {
                 blocked += 1
             } else if inner == "~" {
                 inProgress += 1
@@ -202,7 +237,7 @@ public enum AgentPlanParser {
         return String(markdown[..<end]) + "\n\n…(plan excerpt truncated for context limit)"
     }
 
-    /// `true` when `plan.md` has at least one task line and every task line is complete (`[/]`), with no blocked (`[x]`) lines.
+    /// `true` when `plan.md` has at least one task line and every task line is complete (`[x]` or legacy `[/]`), with no blocked (`[!]`) lines.
     public static func isPlanFullyComplete(in markdown: String) -> Bool {
         let ns = markdown as NSString
         let range = NSRange(location: 0, length: ns.length)
@@ -211,11 +246,11 @@ public enum AgentPlanParser {
             return false
         }
         for m in matches where m.numberOfRanges >= 2 {
-            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            if inner.lowercased() == "x" {
+            let inner = ns.substring(with: m.range(at: 1))
+            if isBlockedMarker(inner) {
                 return false
             }
-            if inner != "/" {
+            if !isCompleteMarker(inner) {
                 return false
             }
         }

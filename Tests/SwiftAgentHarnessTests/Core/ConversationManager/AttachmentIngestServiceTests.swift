@@ -165,14 +165,19 @@ struct AttachmentIngestServiceTests {
 
 @Suite("Catalog vision image projector")
 struct CatalogVisionImageProjectorTests {
-    private func descriptor(id: UUID = UUID(), name: String = "shot.png", blobId: String) -> ConversationAttachmentDescriptor {
+    private func descriptor(
+        id: UUID = UUID(),
+        name: String = "shot.png",
+        blobId: String,
+        byteSize: Int64 = 6
+    ) -> ConversationAttachmentDescriptor {
         ConversationAttachmentDescriptor(
             id: id,
             blobId: blobId,
             kind: "image",
             name: name,
             mimeType: "image/png",
-            byteSize: 6
+            byteSize: byteSize
         )
     }
 
@@ -267,5 +272,110 @@ struct CatalogVisionImageProjectorTests {
             modelSupportsVision: false
         )
         #expect(projected[0].images.isEmpty)
+    }
+
+    @Test("oversized vision blob stays on projected message as sanitized imageData")
+    func oversizedVisionBlobKeepsSanitizedImageData() throws {
+        let original = Data(repeating: 0xAB, count: 1_370_000)
+        let sanitized = Data("sanitized-pixels".utf8)
+        let harness = InMemoryHarnessSessionPersistence()
+        let conversationID = UUID()
+        let blobRef = try harness.putBlob(
+            data: original,
+            durability: .durable,
+            originalName: "photo.jpg",
+            mimeType: "image/jpeg",
+            trust: AttachmentInputTrust.directUserEntry.rawValue,
+            ttlSeconds: nil,
+            lane: .inbound
+        )
+        let attachment = descriptor(
+            name: "photo.jpg",
+            blobId: blobRef.id,
+            byteSize: Int64(original.count)
+        )
+        let message = Message(
+            id: UUID(),
+            role: .user,
+            content: "see photo",
+            timestamp: Date(),
+            images: [Message.Image(name: attachment.name, path: SessionBlobImageRef.path(for: blobRef.id))],
+            toolCalls: []
+        )
+        let processor = VisionProjectorMockImageProcessor(
+            scaleResult: sanitized,
+            scaleToFileSizeResult: sanitized
+        )
+        let projected = CatalogVisionImageProjector.apply(
+            messages: [message],
+            catalog: [attachment],
+            effectiveDecisions: [decision(for: attachment, disposition: .inline)],
+            blobReader: AttachmentBlobReading.harness(harness, conversationID: conversationID),
+            conversationID: conversationID,
+            modelSupportsVision: true,
+            sanitizationPolicy: .init(maxPixelDimension: 1_200, maxBytes: 256_000),
+            imageProcessor: processor
+        )
+        #expect(projected[0].images.count == 1)
+        #expect(projected[0].images[0].imageData == sanitized)
+        #expect(projected[0].images[0].imageData?.count ?? 0 <= 256_000)
+    }
+
+    @Test("sanitize failure omits image from projection")
+    func sanitizeFailureOmitsImage() throws {
+        let original = Data(repeating: 0xCD, count: 400_000)
+        let harness = InMemoryHarnessSessionPersistence()
+        let conversationID = UUID()
+        let blobRef = try harness.putBlob(
+            data: original,
+            durability: .durable,
+            originalName: "bad.jpg",
+            mimeType: "image/jpeg",
+            trust: AttachmentInputTrust.directUserEntry.rawValue,
+            ttlSeconds: nil,
+            lane: .inbound
+        )
+        let attachment = descriptor(name: "bad.jpg", blobId: blobRef.id, byteSize: Int64(original.count))
+        let message = Message(
+            id: UUID(),
+            role: .user,
+            content: "see photo",
+            timestamp: Date(),
+            images: [Message.Image(name: attachment.name, path: SessionBlobImageRef.path(for: blobRef.id))],
+            toolCalls: []
+        )
+        let projected = CatalogVisionImageProjector.apply(
+            messages: [message],
+            catalog: [attachment],
+            effectiveDecisions: [decision(for: attachment, disposition: .inline)],
+            blobReader: AttachmentBlobReading.harness(harness, conversationID: conversationID),
+            conversationID: conversationID,
+            modelSupportsVision: true,
+            sanitizationPolicy: .init(maxPixelDimension: 1_200, maxBytes: 256_000),
+            imageProcessor: VisionProjectorMockImageProcessor(
+                scaleResult: .some(nil),
+                scaleToFileSizeResult: nil
+            )
+        )
+        #expect(projected[0].images.isEmpty)
+    }
+}
+
+private struct VisionProjectorMockImageProcessor: ImageProcessing {
+    var scaleResult: Data??
+    var scaleToFileSizeResult: Data?
+
+    func generateThumbnail(from data: Data, maxPixelSize: Int) -> Data? { data }
+
+    func scaleImage(_ data: Data, maxPixelDimension: Int) -> Data? {
+        if let explicit = scaleResult {
+            return explicit
+        }
+        return data
+    }
+
+    func scaleImageToFileSize(_ data: Data, maxFileSize: Int) -> Data? {
+        if let explicit = scaleToFileSizeResult { return explicit }
+        return data.count <= maxFileSize ? data : nil
     }
 }

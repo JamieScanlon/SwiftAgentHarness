@@ -616,6 +616,8 @@ final class ConversationPersistenceStack {
         )
         try harness.appendMirroredTranscriptEntry(conversationID: conversationID, entry: entry)
         conversationManager.appendPersistedMessageToRegistry(persistedMessage, conversationID: conversationID)
+        // Align registry to tip lineage so concurrent union cannot append missing older tip rows after a newer spine.
+        conversationManager.reloadRegistryTranscriptFromActiveTip(conversationID: conversationID)
         return persistedMessage
     }
 

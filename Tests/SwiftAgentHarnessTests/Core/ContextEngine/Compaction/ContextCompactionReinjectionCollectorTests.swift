@@ -217,6 +217,56 @@ struct ContextCompactionReinjectionCollectorTests {
         )
         #expect(out.contains { $0.content.contains("post-compaction instruction refresh") } == false)
     }
+
+    // MARK: - Plan presence (file-backed)
+
+    @Test("plan reinjection emits path when plan.md exists on disk")
+    func planReinjectionWhenFileExists() throws {
+        let conversationID = UUID()
+        defer { _ = AgentPlanStore.removeConversationDirectory(for: conversationID) }
+        try AgentPlanStore.ensureConversationDirectory(for: conversationID)
+        try "# Plan\n\nhello\n".write(
+            to: AgentPlanStore.planURL(for: conversationID),
+            atomically: true,
+            encoding: .utf8
+        )
+        let path = AgentPlanStore.planPathString(for: conversationID)
+        let out = ContextCompactionReinjectionCollector.collectMessages(
+            head: [],
+            middle: [Message(id: UUID(), role: .user, content: "no plan markers", timestamp: Date())],
+            tail: [],
+            skills: [],
+            instructionContext: nil,
+            config: config(),
+            conversationID: conversationID
+        )
+        let planMsg = out.first { $0.content.contains("plan.md is active") }
+        #expect(planMsg != nil)
+        #expect(planMsg?.content.contains(path) == true)
+        #expect(planMsg?.content.contains("get_plan") == true)
+    }
+
+    @Test("plan reinjection skips transcript mentions when plan.md is absent")
+    func planReinjectionIgnoresSubstringWithoutFile() {
+        let conversationID = UUID()
+        let out = ContextCompactionReinjectionCollector.collectMessages(
+            head: [],
+            middle: [
+                Message(
+                    id: UUID(),
+                    role: .user,
+                    content: "please discuss plan.md and create_plan / get_plan",
+                    timestamp: Date()
+                ),
+            ],
+            tail: [],
+            skills: [],
+            instructionContext: nil,
+            config: config(),
+            conversationID: conversationID
+        )
+        #expect(out.contains(where: { $0.content.contains("plan.md is active") }) == false)
+    }
 }
 
 @Suite("Compaction persistence size guard (CR-F)")

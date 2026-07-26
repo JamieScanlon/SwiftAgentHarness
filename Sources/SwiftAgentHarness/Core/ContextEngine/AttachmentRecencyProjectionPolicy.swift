@@ -14,6 +14,22 @@ enum AttachmentRecencyProjectionPolicy {
         if isImage, !modelSupportsVision {
             disposition = .summarize
             reason = "vision_unsupported"
+        } else if isImage, modelSupportsVision {
+            // Vision images use the image-specific budget; raw catalog size must not
+            // demote past the text inlineByteLimit before sanitization can fit them.
+            if byteSize == 0 {
+                disposition = .summarize
+                reason = "unknown_size"
+            } else if byteSize <= policy.imageInlineByteLimit {
+                disposition = .inline
+                reason = "within_image_inline_budget"
+            } else if byteSize <= policy.summarizeByteLimit {
+                disposition = .inline
+                reason = "sanitize_to_inline_budget"
+            } else {
+                disposition = .searchOnly
+                reason = "over_budget"
+            }
         } else if byteSize > 0, byteSize <= policy.inlineByteLimit {
             disposition = .inline
             reason = "within_inline_budget"

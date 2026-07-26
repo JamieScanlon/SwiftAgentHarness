@@ -4,8 +4,8 @@
 //  This file documents the behavior every `LLMProtocol` implementation MUST honor. It is the named seam
 //  between the SwiftAgentKit `StreamResult<LLMResponse, LLMResponse>` envelope and
 //  the per-provider transports (Ollama NDJSON, OpenAI client, LM Studio SSE). Today
-//  the contract is honored by `OllamaLLM`, `OpenAILLM`, and `LMStudioLLM` via the
-//  helpers in `ProviderAdapterSupport.swift`.
+//  the contract is honored by `OllamaLLM`, `OpenAILLM`, `LMStudioLLM`, and
+//  `AnthropicLLM` via the helpers in `ProviderAdapterSupport.swift`.
 //
 //  Alignment status:
 //  - Internal `NormalizedEvent` seam is now the canonical adapter boundary contract.
@@ -73,5 +73,5 @@ import Foundation
 /// real behavior lives in:
 ///
 /// - `ProviderAdapterSupport` (helpers the contract depends on),
-/// - `OllamaLLM`, `OpenAILLM`, `LMStudioLLM` (the conforming adapters).
+/// - `OllamaLLM`, `OpenAILLM`, `LMStudioLLM`, `AnthropicLLM` (the conforming adapters).
 enum AdapterContract {}

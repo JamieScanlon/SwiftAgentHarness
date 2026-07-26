@@ -14,11 +14,12 @@ enum ContextCompactionReinjectionCollector: Sendable {
         tail: [Message],
         skills: [ReinjectableSkill],
         instructionContext: String?,
-        config: ContextCompactionConfiguration
+        config: ContextCompactionConfiguration,
+        conversationID: UUID? = nil
     ) -> [Message] {
         guard config.compactionReinjectionEnabled else { return [] }
         var out: [Message] = []
-        if let planLine = planPresenceLine(head: head, middle: middle, tail: tail) {
+        if let planLine = planPresenceLine(conversationID: conversationID) {
             out.append(planLine)
         }
         if let asyncLine = asyncTaskStatusLine(head: head, middle: middle, tail: tail) {
@@ -181,15 +182,18 @@ The following paths were recently accessed. Re-read with tools if exact content 
 
     // MARK: - Plan / async status
 
-    private static func planPresenceLine(head: [Message], middle: [Message], tail: [Message]) -> Message? {
-        let combined = (head + middle + tail).map(\.content).joined(separator: "\n").lowercased()
-        guard combined.contains("plan.md") || combined.contains("create_plan") || combined.contains("get_plan") else {
+    /// Emits a plan reference when `plan.md` exists on disk for the conversation (not transcript heuristics).
+    private static func planPresenceLine(conversationID: UUID?) -> Message? {
+        guard let conversationID,
+              AgentPlanStore.readPlanText(for: conversationID) != nil
+        else {
             return nil
         }
+        let path = AgentPlanStore.planPathString(for: conversationID)
         return Message(
             id: UUID(),
             role: .system,
-            content: "[Context reinjection] A plan.md is active for this conversation; use get_plan before large changes.",
+            content: "[Context reinjection] A plan.md is active at \(path); use get_plan before large changes.",
             timestamp: Date(),
             toolCalls: []
         )

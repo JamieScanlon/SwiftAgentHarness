@@ -69,6 +69,24 @@ struct FinishReasonMappingTests {
         #expect(FinishReason.fromLMStudio("provider-specific") == .unknown)
     }
 
+    // MARK: - fromAnthropic
+
+    @Test("fromAnthropic maps known raw values to canonical cases")
+    func fromAnthropicKnown() {
+        #expect(FinishReason.fromAnthropic("end_turn") == .stop)
+        #expect(FinishReason.fromAnthropic("stop_sequence") == .stop)
+        #expect(FinishReason.fromAnthropic("max_tokens") == .length)
+        #expect(FinishReason.fromAnthropic("tool_use") == .toolCalls)
+        #expect(FinishReason.fromAnthropic("refusal") == .contentFilter)
+    }
+
+    @Test("fromAnthropic returns .unknown for nil / empty / unrecognized raw")
+    func fromAnthropicUnknown() {
+        #expect(FinishReason.fromAnthropic(nil) == .unknown)
+        #expect(FinishReason.fromAnthropic("") == .unknown)
+        #expect(FinishReason.fromAnthropic("custom") == .unknown)
+    }
+
     // MARK: - rawValue stability (downstream consumers depend on these strings)
 
     @Test("canonical raw values match the documented vocabulary")

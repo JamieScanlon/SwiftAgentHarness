@@ -34,6 +34,17 @@ struct ApprovalPresentationTests {
         #expect(presentation.buttons.first?.id == "allowOnce")
     }
 
+    @Test("plan exit decision buttons are Approve and Request revision only")
+    func planExitButtons() {
+        let buttons = ApprovalButton.planExitDecisionButtons()
+        #expect(buttons.map(\.id) == [
+            ApprovalDecision.allowOnce.rawValue,
+            ApprovalDecision.deny.rawValue,
+        ])
+        #expect(buttons.map(\.label) == ["Approve", "Request revision"])
+        #expect(buttons.contains(where: { $0.id == ApprovalDecision.allowAlways.rawValue }) == false)
+    }
+
     @Test("standard decision buttons map to the unified vocabulary")
     func standardButtons() {
         let ids = ApprovalButton.standardDecisionButtons().map(\.id)

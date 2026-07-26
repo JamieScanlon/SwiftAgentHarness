@@ -56,8 +56,15 @@ extension ConversationPersistenceDomain {
         stack.conversationManager.firstConversation(excluding: conversationID)
     }
 
-    func replaceConversationInRegistry(_ conversation: ModelConversation) {
-        stack.conversationManager.replaceConversationInRegistry(conversation)
+    func replaceConversationInRegistry(
+        _ conversation: ModelConversation,
+        transcript: RegistryTranscriptPolicy = .concurrentUnion
+    ) {
+        stack.conversationManager.replaceConversationInRegistry(conversation, transcript: transcript)
+    }
+
+    func reloadRegistryTranscriptFromActiveTip(conversationID: UUID) {
+        stack.conversationManager.reloadRegistryTranscriptFromActiveTip(conversationID: conversationID)
     }
 
     func applyRegistryTranscriptTruncation(_ conversation: ModelConversation) {

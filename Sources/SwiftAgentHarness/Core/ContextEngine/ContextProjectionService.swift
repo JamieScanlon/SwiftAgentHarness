@@ -263,7 +263,10 @@ actor ContextProjectionService {
         gatingOverride: ContextCompactionGatingOptions? = nil
     ) async -> [Message] {
         guard projectionContext.enableContextTransform else {
-            return messages
+            return await deps.persistenceDomain.hydrateBlobImages(
+                in: messages,
+                conversationID: conversation.id
+            )
         }
         let compactionCfg = deps.conversationTransformConfiguration.contextCompaction
         let bypassCircuit = gatingOverride?.forceRunCompactionLLM == true
@@ -274,7 +277,10 @@ actor ContextProjectionService {
             deps.logger?.warning(
                 "[ContextProjectionService] auto-compaction circuit open for \(conversation.id) after \(compactionCfg.compactionCircuitBreakerMaxFailures) failures"
             )
-            return messages
+            return await deps.persistenceDomain.hydrateBlobImages(
+                in: messages,
+                conversationID: conversation.id
+            )
         }
         if compactionCfg.enabled,
            !bypassCircuit,
@@ -283,7 +289,10 @@ actor ContextProjectionService {
             deps.logger?.warning(
                 "[ContextProjectionService] auto-compaction circuit open for \(conversation.id) after \(compactionCfg.compactionCircuitBreakerMaxFailures) low-savings compactions"
             )
-            return messages
+            return await deps.persistenceDomain.hydrateBlobImages(
+                in: messages,
+                conversationID: conversation.id
+            )
         }
         if bypassCircuit,
            compactionCfg.enabled,
@@ -332,8 +341,10 @@ actor ContextProjectionService {
             let assembleRequest = pipelineOutput.assembleRequest
             if result.transformFailed {
                 consecutiveCompactionFailuresByConversationID[conversation.id, default: 0] += 1
-                deps.logger?.warning("[ContextProjectionService] transformContext failed; using original payload")
-                return messages
+                deps.logger?.warning(
+                    "[ContextProjectionService] transformContext failed; using projected payload (hydrated when available)"
+                )
+                return result.messages
             }
             consecutiveCompactionFailuresByConversationID[conversation.id] = 0
             if result.compactionLowSavings {
@@ -418,9 +429,13 @@ actor ContextProjectionService {
         let messages = conversation.messages
         let projectionContext = await makeProjectionContext(conversation: conversation, configuration: nil)
         guard projectionContext.enableContextTransform else {
+            let hydrated = await deps.persistenceDomain.hydrateBlobImages(
+                in: messages,
+                conversationID: conversation.id
+            )
             return ContextModelContextPreviewResult(
                 originalMessages: messages,
-                projectedMessages: messages,
+                projectedMessages: hydrated,
                 passthroughReason: "context_transform_disabled",
                 transformFailed: false
             )

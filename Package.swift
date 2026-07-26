@@ -20,7 +20,7 @@ let package = Package(
     ],
     dependencies: [
         // Pinned to Package.resolved revision so SPM can resolve transitive prerelease deps (swift-sdk).
-        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "950c91d3ff26ded0cb7da9e293023299d360a7a0"),
+        .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "d8383b47fb1e3d433be17be3f341db5dbe8cf62b"),
         // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.24.0"),
         // .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", revision: "59f20badfafea33a71150445e6e1e55f273eca93"),
         .package(url: "https://github.com/JamieScanlon/OllamaKit.git", from: "1.0.8"),

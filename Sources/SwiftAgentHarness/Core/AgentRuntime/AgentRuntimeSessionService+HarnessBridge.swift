@@ -172,7 +172,7 @@ extension AgentRuntimeSessionService {
         await messaging.appendMessagesToConversation(messages, conversationID: conversationID)
     }
 
-    func refreshProjectedConversationMessages(conversationID: UUID, baseMessagesOverride: [Message]) async {
+    func refreshProjectedConversationMessages(conversationID: UUID, baseMessagesOverride: [Message]? = nil) async {
         await messaging.refreshProjectedConversationMessages(
             conversationID: conversationID,
             baseMessagesOverride: baseMessagesOverride

@@ -592,9 +592,16 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        let planConv = activeConversation
         providers.append(
             AgentPlanToolProvider(
                 dataProvider: toolData,
+                resolveConversationID: {
+                    if let scope = ConversationScope.current {
+                        return scope.selfID
+                    }
+                    return planConv?.id
+                },
                 logger: logger
             )
         )
@@ -619,9 +626,16 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        let modeConv = activeConversation
         providers.append(
             ModeTransitionToolProvider(
                 dataProvider: toolData,
+                resolveConversationID: {
+                    if let scope = ConversationScope.current {
+                        return scope.selfID
+                    }
+                    return modeConv?.id
+                },
                 logger: logger
             )
         )

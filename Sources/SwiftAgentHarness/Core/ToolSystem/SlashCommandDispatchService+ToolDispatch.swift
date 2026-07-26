@@ -422,9 +422,18 @@ extension SlashCommandDispatchService {
                 argumentProvenance: argumentProvenance
             )
         case .denied, .pending:
+            let denyContent: String
+            if ToolNamePolicyNormalization.canonical(toolName)
+                == ModeTransitionToolProvider.exitPlanModeToolName,
+               resolution.status == .denied
+            {
+                denyContent = PlanApprovalFeedback.deniedToolResultContent(reason: resolution.reason)
+            } else {
+                denyContent = "Tool dispatch denied."
+            }
             return try await deliverSyntheticSlashAssistantResponse(
                 conversationID: conversationID,
-                content: "Tool dispatch denied."
+                content: denyContent
             )
         }
     }

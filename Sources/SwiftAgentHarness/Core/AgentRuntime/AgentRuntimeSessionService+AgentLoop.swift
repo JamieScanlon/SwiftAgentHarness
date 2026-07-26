@@ -476,10 +476,18 @@ extension AgentRuntimeSessionService {
                         spawnService: self.subAgentSpawnServiceForRuntime()
                     )
                 case .denied:
+                    let denyContent: String
+                    if ToolNamePolicyNormalization.canonical(toolName)
+                        == ModeTransitionToolProvider.exitPlanModeToolName
+                    {
+                        denyContent = PlanApprovalFeedback.deniedToolResultContent(reason: resolution.reason)
+                    } else {
+                        denyContent = "Tool dispatch denied."
+                    }
                     return .denied(
                         AgentLoopToolDispatch.toolResultMessage(
                             toolCallId: toolCallID,
-                            content: "Tool dispatch denied."
+                            content: denyContent
                         )
                     )
                 case .pending:
@@ -563,10 +571,9 @@ extension AgentRuntimeSessionService {
                     expectedPreviousTailHarnessMessageID: nil,
                     transcriptRunID: runID
                 )
-                guard let conversation = await self.runtimeConversation(id: conversationID) else { return }
                 await self.messaging.refreshProjectedConversationMessages(
                     conversationID: conversationID,
-                    baseMessagesOverride: conversation.messages
+                    baseMessagesOverride: nil
                 )
                 await self.messaging.syncProjectionFromRegistry(conversationID: conversationID)
             },
