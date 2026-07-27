@@ -1,52 +1,17 @@
 import Foundation
 
 /// Outbound slot: render portable presentations and deliver to the platform wire.
-public protocol ChannelOutboundAdapting: Sendable {
-    var presentationCapabilities: ChannelPresentationCapabilities { get }
-    func renderPresentation(_ presentation: MessagePresentation) -> ChannelRenderedPayload
+///
+/// Refines the shared ``SurfacePresentationRendering`` contract — the rendering half is
+/// common to every surface — and adds the channel-specific delivery half, which needs a
+/// chat/thread target no other surface has.
+public protocol ChannelOutboundAdapting: SurfacePresentationRendering {
     func sendPayload(_ payload: ChannelRenderedPayload, target: ChannelDeliveryTarget) async -> ChannelSendResult
-    var textChunkLimit: Int { get }
 }
 
-public struct ChannelPresentationCapabilities: Sendable, Equatable {
-    public var supported: Bool
-    public var buttons: Bool
-    public var selects: Bool
-    public var context: Bool
-    public var divider: Bool
-
-    public init(supported: Bool, buttons: Bool, selects: Bool, context: Bool, divider: Bool) {
-        self.supported = supported
-        self.buttons = buttons
-        self.selects = selects
-        self.context = context
-        self.divider = divider
-    }
-
-    public static let mockRich = ChannelPresentationCapabilities(
-        supported: true,
-        buttons: true,
-        selects: false,
-        context: true,
-        divider: true
-    )
-}
-
-public struct ChannelRenderedPayload: Sendable, Equatable {
-    public var text: String
-    public var richPresentation: ChannelOutboundRichPresentation?
-    public var approvalCard: ChannelOutboundApprovalCard?
-
-    public init(
-        text: String,
-        approvalCard: ChannelOutboundApprovalCard? = nil,
-        richPresentation: ChannelOutboundRichPresentation? = nil
-    ) {
-        self.text = text
-        self.approvalCard = approvalCard
-        self.richPresentation = richPresentation
-    }
-}
+/// Channel-first names retained as aliases of the shared surface vocabulary.
+public typealias ChannelPresentationCapabilities = SurfacePresentationCapabilities
+public typealias ChannelRenderedPayload = SurfaceRenderedPayload
 
 public struct ChannelDeliveryTarget: Sendable, Equatable {
     public var chatId: String
@@ -86,9 +51,7 @@ public protocol ChannelApprovalCapabilityAdapting: Sendable {
 }
 
 /// Optional media params for the shared `message` tool schema.
-public protocol ChannelMessageToolDescribing: Sendable {
-    func describeMessageTool() -> [MessageToolActionSchema]
-}
+public protocol ChannelMessageToolDescribing: SurfaceMessageToolDescribing {}
 
 public struct ChannelSurfaceMeta: Sendable, Equatable {
     public var platformIdentity: String
@@ -132,5 +95,47 @@ public struct ChannelSurfacePlugin: Sendable {
         self.approvalCapability = approvalCapability
         self.messageToolDescriptor = messageToolDescriptor
         self.streamingCapabilities = streamingCapabilities
+    }
+}
+
+
+// MARK: - Uniform surface contract
+
+/// Satisfies the shared ``SurfacePlugin`` contract without changing a single stored
+/// property.
+///
+/// Extraction by conformance rather than restructuring: the channel surface is working
+/// code with tests behind it, and reshaping its record to fit a newly-minted protocol
+/// would risk a regression to buy nothing the computed accessors below don't already
+/// deliver. `threading` and `heartbeat` stay off the shared contract deliberately — a
+/// terminal has no honest implementation of either.
+extension ChannelSurfacePlugin: SurfacePlugin {
+    public var surfaceID: String { id.rawValue }
+
+    public var surfaceMeta: SurfaceMeta {
+        SurfaceMeta(displayName: meta.platformIdentity, kindRaw: meta.transportKindRaw)
+    }
+
+    public var surfaceCapabilities: SurfaceCapabilities {
+        SurfaceCapabilities(
+            richPresentation: outbound.presentationCapabilities.supported,
+            nativeApprovalCards: capabilities.nativeApprovalCards,
+            // All three rungs come from `supportedGranularities`, which states what the
+            // surface *can* do. Mixing the configured `granularity` with the separate
+            // `ChannelCapabilities` flags let a plugin report token and block streaming
+            // simultaneously — an incoherent record for anyone switching on the rung.
+            tokenStreaming: streamingCapabilities.supportedGranularities.contains(.tokenDelta),
+            blockStreaming: streamingCapabilities.supportedGranularities.contains(.block),
+            previewStreaming: streamingCapabilities.supportedGranularities.contains(.previewEdit),
+            mediaAttachments: capabilities.mediaAttachments,
+            threading: capabilities.threading,
+            typingIndicators: capabilities.typingIndicators
+        )
+    }
+
+    public var presentationRenderer: any SurfacePresentationRendering { outbound }
+
+    public var surfaceMessageToolDescriptor: (any SurfaceMessageToolDescribing)? {
+        messageToolDescriptor
     }
 }

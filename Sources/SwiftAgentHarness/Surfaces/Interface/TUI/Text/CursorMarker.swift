@@ -25,27 +25,22 @@ public enum CursorMarker: Sendable {
         return nil
     }
 
+    /// Splits `line` at the given visible column, never inside an escape sequence.
+    ///
+    /// Delegates escape skipping to ``ANSIWidth/skipEscape(in:from:)`` rather than
+    /// running a bespoke state machine. The previous hand-rolled version treated only
+    /// `m`, `\` and `BEL` as terminators, so a `CSI 2K` in the line left it stuck in
+    /// escape mode for the remainder (marker pinned to end of line) and an OSC-8 URL
+    /// containing the letter `m` exited escape mode early (URL characters counted as
+    /// visible). Either way the hardware cursor landed in the wrong column.
     private static func splitAtVisibleColumn(_ line: String, column: Int) -> (String, String) {
         var visible = 0
         var index = line.startIndex
-        var activeEscape = false
-        var escapeBuffer = ""
 
         while index < line.endIndex {
             let ch = line[index]
             if ch == "\u{1B}" {
-                activeEscape = true
-                escapeBuffer = String(ch)
-                index = line.index(after: index)
-                continue
-            }
-            if activeEscape {
-                escapeBuffer.append(ch)
-                if ch == "m" || ch == "\\" || ch == "\u{7}" {
-                    activeEscape = false
-                    escapeBuffer = ""
-                }
-                index = line.index(after: index)
+                index = ANSIWidth.skipEscape(in: line, from: index)
                 continue
             }
             let charWidth = ANSIWidth.characterWidth(ch)

@@ -1,28 +1,16 @@
 import Foundation
 
+/// Thin alias onto the shared filter.
+///
+/// The degradation rule (text floor always, native blocks only where declared) is a
+/// property of the surface contract, not of channels — keeping a second copy here is how
+/// the two surfaces drift apart.
 enum ChannelPresentationRenderer {
     static func render(
         _ presentation: MessagePresentation,
         capabilities: ChannelPresentationCapabilities
     ) -> ChannelRenderedPayload {
-        let fallback = presentation.textFallback()
-        guard capabilities.supported else {
-            return ChannelRenderedPayload(text: fallback, approvalCard: nil)
-        }
-        let blocks = nativeBlocks(from: presentation.blocks, capabilities: capabilities)
-        let hasRichContent = !blocks.isEmpty || presentation.title != nil || presentation.tone != nil
-        guard hasRichContent else {
-            return ChannelRenderedPayload(text: fallback, approvalCard: nil)
-        }
-        return ChannelRenderedPayload(
-            text: fallback,
-            approvalCard: nil,
-            richPresentation: ChannelOutboundRichPresentation(
-                title: presentation.title,
-                tone: presentation.tone,
-                blocks: blocks
-            )
-        )
+        SurfacePresentationFilter.render(presentation, capabilities: capabilities)
     }
 
     static func textFallback(from presentation: MessagePresentation) -> String {
@@ -33,20 +21,7 @@ enum ChannelPresentationRenderer {
         from blocks: [MessageBlock],
         capabilities: ChannelPresentationCapabilities
     ) -> [MessageBlock] {
-        blocks.compactMap { block in
-            switch block {
-            case .text:
-                return block
-            case .context:
-                return capabilities.context ? block : nil
-            case .divider:
-                return capabilities.divider ? block : nil
-            case .buttons:
-                return capabilities.buttons ? block : nil
-            case .select:
-                return capabilities.selects ? block : nil
-            }
-        }
+        SurfacePresentationFilter.nativeBlocks(from: blocks, capabilities: capabilities)
     }
 }
 

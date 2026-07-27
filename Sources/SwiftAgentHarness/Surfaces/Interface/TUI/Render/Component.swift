@@ -17,14 +17,27 @@ public enum TUIComponentError: Error, Equatable, Sendable {
 }
 
 public enum TUIComponentRender {
+    /// Renders `component` and enforces the line ≤ width invariant the renderer relies on.
+    ///
+    /// Single implementation, shared with ``ANSIStyle/ensureWidthBound(_:width:context:)``
+    /// so container components can enforce the same bound on their children's output
+    /// instead of trusting it.
     public static func render(_ component: any TUIComponent, width: Int, context: String) -> [String] {
-        let lines = component.render(width: width)
-        for (index, line) in lines.enumerated() {
-            let visible = ANSIWidth.visibleWidth(of: CursorMarker.strip(from: line))
-            if visible > width {
-                preconditionFailure("Component '\(context)' line \(index) exceeds width \(width): visible=\(visible)")
-            }
+        ANSIStyle.ensureWidthBound(component.render(width: width), width: width, context: context)
+    }
+
+    /// Renders a child inside a container, clamping any over-wide line to `width`
+    /// rather than trapping.
+    ///
+    /// Containers own their children's geometry, so a child that overshoots is a layout
+    /// bug the container can absorb — and absorbing it is strictly better than aborting
+    /// a process that has the user's terminal in raw mode.
+    public static func renderClamped(_ component: any TUIComponent, width: Int) -> [String] {
+        guard width > 0 else { return [] }
+        return component.render(width: width).map { line in
+            ANSIWidth.visibleWidth(of: CursorMarker.strip(from: line)) > width
+                ? ANSITruncate.truncate(line, toWidth: width)
+                : line
         }
-        return lines
     }
 }

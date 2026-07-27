@@ -3,29 +3,30 @@ import Foundation
 /// Applies streaming surface sink semantics to a transcript owned by the TUI app actor.
 public enum TUIStreamingSurfaceSinkLogic {
     public static func sendTokenDelta(_ text: String, to transcript: TranscriptListComponent) {
+        let sanitized = TUITextSanitizer.sanitizeMultiline(text)
         if let view = transcript.activeStreamingView() {
-            view.appendToken(text)
-            if let index = transcript.messages.firstIndex(where: { $0.id == view.message.id }) {
-                transcript.messages[index].isStreaming = true
-            }
+            view.appendToken(sanitized)
+            transcript.syncMessage(from: view)
         } else {
             let message = TUIMessage(role: .assistant, content: "", isStreaming: true)
             transcript.appendMessage(message)
-            transcript.activeStreamingView()?.appendToken(text)
+            if let view = transcript.activeStreamingView() {
+                view.appendToken(sanitized)
+                transcript.syncMessage(from: view)
+            }
         }
         transcript.invalidate()
     }
 
     public static func sendFinal(_ payload: StreamingFinalPayload, to transcript: TranscriptListComponent) {
+        let sanitized = TUITextSanitizer.sanitizeMultiline(payload.text)
         if let view = transcript.activeStreamingView() {
             view.streamingTail = ""
-            view.message.content = payload.text
+            view.message.content = sanitized
             view.message.isStreaming = false
-            if let index = transcript.messages.firstIndex(where: { $0.id == view.message.id }) {
-                transcript.messages[index] = view.message
-            }
-        } else if !payload.text.isEmpty {
-            transcript.appendMessage(TUIMessage(role: .assistant, content: payload.text))
+            transcript.syncMessage(from: view)
+        } else if !sanitized.isEmpty {
+            transcript.appendMessage(TUIMessage(role: .assistant, content: sanitized))
         }
         transcript.invalidate()
     }
@@ -34,10 +35,21 @@ public enum TUIStreamingSurfaceSinkLogic {
         if let view = transcript.activeStreamingView() {
             view.appendToken(notice.marker)
             view.commitStreaming()
-            if let index = transcript.messages.firstIndex(where: { $0.id == view.message.id }) {
-                transcript.messages[index] = view.message
-            }
+            transcript.syncMessage(from: view)
         }
+        transcript.invalidate()
+    }
+
+    /// Commits a resolved preview into the transcript.
+    ///
+    /// Must write the view's mutated message back: `commitStreaming()` clears
+    /// `isStreaming` on the view's *value copy* only, so without the write-back
+    /// `activeStreamingView()` keeps returning the finished message and the next turn's
+    /// tokens land on the previous reply.
+    public static func commitPreview(to transcript: TranscriptListComponent) {
+        guard let view = transcript.activeStreamingView() else { return }
+        view.commitStreaming()
+        transcript.syncMessage(from: view)
         transcript.invalidate()
     }
 }
@@ -48,6 +60,7 @@ public actor TUIStreamingSurfaceSink: StreamingSurfaceSink {
 
     public enum TranscriptMutation: Sendable {
         case tokenDelta(String)
+        case reasoningDelta(String)
         case final(StreamingFinalPayload)
         case cancellation(CancellationNotice)
         case previewCommit
@@ -59,6 +72,12 @@ public actor TUIStreamingSurfaceSink: StreamingSurfaceSink {
 
     public func sendTokenDelta(_ text: String) async {
         await transcriptHandler(.tokenDelta(text))
+    }
+
+    /// Routed through the engine like every other stream, so reasoning inherits the same
+    /// pacing, coalescing and cancellation semantics as assistant text.
+    public func sendReasoningDelta(_ text: String) async {
+        await transcriptHandler(.reasoningDelta(text))
     }
 
     public func sendBlock(_ text: String) async {
