@@ -549,7 +549,7 @@ with a diagnostic.
 | `modelRef` | String | no | `nil` | Model the child runs on, resolved through the Model Pool. Omit to inherit the parent conversation's model (what all three built-ins do). A *present but unresolvable* ref fails the delegate call with a clear message rather than silently falling back. |
 | `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
 | `longRunning` | Bool | no | `false` | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
-| `runTimeoutSeconds` | Number | no | `300` | Wall-clock budget for the child run (clamped to `3600`). On expiry the child is cancelled and the parent gets an explicit timeout result. |
+| `runTimeoutSeconds` | Number | no | `300` | Wall-clock budget for the child run, clamped to `5…3600`. On expiry the child is cancelled and the parent gets an explicit timeout result. The floor exists because a shorter timeout can fire before the child has registered a run, leaving the cancel with nothing to stop and the run orphaned. |
 | `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
 
 ```json
@@ -580,6 +580,9 @@ allowlist is what survives prompt injection reaching the delegate through its `i
 - `description` (string, optional) — a short 3-5 word label used for the child's topic and for
   lifecycle/progress display. Without it the agent's config key is used, and the full brief would
   otherwise become the child's topic.
+- `run_in_background` (boolean, optional) — overrides `longRunning` for this one call, so the model
+  can wait on a normally-backgrounded agent or background a normally-synchronous one. Omitted means
+  the agent's configured mode applies; a malformed value is ignored rather than read as `false`.
 
 **Background delivery.** With `longRunning: true` the delegate call returns
 `Delegate '<name>' is running in the background (handle: <tool-call-id>)` plus an explicit

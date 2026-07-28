@@ -91,6 +91,11 @@ public struct LocalAgentDefinition: Sendable, Equatable {
 public struct LocalAgentConfiguration: Sendable, Equatable {
     public static let defaultRunTimeoutSeconds: TimeInterval = 300
     public static let maximumRunTimeoutSeconds: TimeInterval = 3600
+    /// Floor for operator-supplied timeouts. Below this, a timeout can fire before the child has
+    /// registered a run, so the cancel finds nothing to stop and the run is orphaned — it completes
+    /// with nobody reading it. Lane accounting stays correct either way; this stops the window being
+    /// configurable at all.
+    public static let minimumRunTimeoutSeconds: TimeInterval = 5
 
     public var definitionsByToolName: [String: LocalAgentDefinition]
     /// Human-readable rejection reasons, one per skipped entry. Surfaced by the composition root.
@@ -196,7 +201,7 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                     diagnostics.append("localAgents['\(configKey)']: 'runTimeoutSeconds' must be a positive number")
                     continue
                 }
-                runTimeoutSeconds = min(seconds, maximumRunTimeoutSeconds)
+                runTimeoutSeconds = min(max(seconds, minimumRunTimeoutSeconds), maximumRunTimeoutSeconds)
             }
 
             claimedBy[toolName] = configKey

@@ -53,7 +53,8 @@ extension SubAgentSpawnService {
             modelOverride = resolved
         }
         let label = Self.delegateTaskLabel(from: call.arguments) ?? definition.displayName
-        let runInBackground = definition.longRunning
+        // The agent's configured delivery mode is the default; the model may override per call.
+        let runInBackground = Self.delegateRunInBackground(from: call.arguments) ?? definition.longRunning
         let toolCallID = call.id ?? lifecycleID
 
         let childID: UUID
@@ -341,7 +342,26 @@ extension SubAgentSpawnService {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Per-call delivery-mode override. `nil` leaves the agent's configured default in force.
+    static func delegateRunInBackground(from arguments: JSON) -> Bool? {
+        guard case .object(let object) = arguments else { return nil }
+        switch object[Self.runInBackgroundArgumentName] {
+        case .boolean(let value):
+            return value
+        case .string(let raw):
+            // Some providers stringify booleans on the wire.
+            switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true": return true
+            case "false": return false
+            default: return nil
+            }
+        default:
+            return nil
+        }
+    }
+
     static var instructionsArgumentName: String { InProcessLocalAgentToolProvider.instructionsParameterName }
+    static var runInBackgroundArgumentName: String { InProcessLocalAgentToolProvider.runInBackgroundParameterName }
     static var taskLabelArgumentName: String { InProcessLocalAgentToolProvider.descriptionParameterName }
 }
 

@@ -187,6 +187,18 @@ struct LocalAgentConfigurationTests {
         #expect(configuredOnly(["Coding Agent": entry]).isEmpty)
     }
 
+    @Test("runTimeoutSeconds is clamped up to the minimum")
+    func clampsTimeoutToFloor() {
+        var entry = validEntry
+        entry["runTimeoutSeconds"] = 0.05
+        let configured = configuredOnly(["Coding Agent": entry])
+        // Below the floor a timeout can fire before the child registers a run, leaving it orphaned.
+        #expect(
+            configured["delegate_coding_agent"]?.runTimeoutSeconds
+                == LocalAgentConfiguration.minimumRunTimeoutSeconds
+        )
+    }
+
     @Test("runTimeoutSeconds is clamped to the maximum")
     func clampsTimeout() {
         var entry = validEntry

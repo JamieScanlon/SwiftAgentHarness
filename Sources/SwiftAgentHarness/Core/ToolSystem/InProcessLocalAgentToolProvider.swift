@@ -14,6 +14,8 @@ public struct InProcessLocalAgentToolProvider: ToolProvider, ToolDescriptorHinti
     public static let instructionsParameterName = "instructions"
     /// Short label used for the child's topic and for lifecycle/UI rows.
     public static let descriptionParameterName = "description"
+    /// Per-call override of the agent's configured delivery mode.
+    public static let runInBackgroundParameterName = "run_in_background"
 
     private let definitions: [LocalAgentDefinition]
     private let logger: Logger?
@@ -59,6 +61,14 @@ file path, constraint, and success criterion it needs.
                         name: Self.descriptionParameterName,
                         description: "Short 3-5 word label for this delegation, used for progress display.",
                         type: "string",
+                        required: false
+                    ),
+                    .init(
+                        name: Self.runInBackgroundParameterName,
+                        description: definition.longRunning
+                            ? "Set false to wait for the delegate instead of receiving its result later. Defaults to true for this agent."
+                            : "Set true to receive the result as a later message instead of waiting. Defaults to false for this agent.",
+                        type: "boolean",
                         required: false
                     ),
                 ],

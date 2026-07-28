@@ -117,6 +117,29 @@ struct LocalAgentDelegateDispatchTests {
         #expect(SubAgentSpawnService.delegateInstructions(from: .object([:])) == "")
     }
 
+    // MARK: - Per-call delivery-mode override
+
+    @Test("run_in_background is read as a boolean override")
+    func readsRunInBackgroundOverride() {
+        #expect(
+            SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .boolean(true)])) == true
+        )
+        #expect(
+            SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .boolean(false)])) == false
+        )
+    }
+
+    @Test("Stringified booleans are accepted, anything else leaves the agent default in force")
+    func tolerantRunInBackgroundParsing() {
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .string("true")])) == true)
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .string("False")])) == false)
+        // A nil result means "no override", never a silent false.
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .object([:])) == nil)
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .double(1)])) == nil)
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .object(["run_in_background": .string("yes")])) == nil)
+        #expect(SubAgentSpawnService.delegateRunInBackground(from: .string("not an object")) == nil)
+    }
+
     @Test("The provider's parameter names match what the spawn service reads back")
     func argumentNamesMatchProviderSchema() {
         #expect(SubAgentSpawnService.instructionsArgumentName == "instructions")
@@ -128,6 +151,10 @@ struct LocalAgentDelegateDispatchTests {
         #expect(
             SubAgentSpawnService.taskLabelArgumentName
                 == InProcessLocalAgentToolProvider.descriptionParameterName
+        )
+        #expect(
+            SubAgentSpawnService.runInBackgroundArgumentName
+                == InProcessLocalAgentToolProvider.runInBackgroundParameterName
         )
     }
 }

@@ -143,10 +143,18 @@ struct InProcessLocalAgentIntegrationTests {
         }
     }
 
-    private func call(instructions: String, description: String? = nil, id: String) -> ToolCallRequest {
+    private func call(
+        instructions: String,
+        description: String? = nil,
+        runInBackground: Bool? = nil,
+        id: String
+    ) -> ToolCallRequest {
         var arguments: [String: JSON] = ["instructions": .string(instructions)]
         if let description {
             arguments["description"] = .string(description)
+        }
+        if let runInBackground {
+            arguments["run_in_background"] = .boolean(runInBackground)
         }
         return ToolCallRequest(id: id, name: Self.toolName, arguments: .object(arguments))
     }
@@ -506,6 +514,55 @@ struct InProcessLocalAgentIntegrationTests {
         let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
         #expect(Set(snapshot.entries.map(\.lifecycleID)) == ["call-0", "call-1"])
         #expect(await recorder.childConversationIDs.count == 2)
+    }
+
+    @Test("A per-call run_in_background:true backgrounds a synchronous agent")
+    func perCallOverrideBackgroundsSyncAgent() async throws {
+        let definition = makeDefinition(longRunning: false)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", runInBackground: true, id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .pendingHandle = outcome else {
+            Issue.record("expected the per-call override to background the run, got \(outcome)")
+            return
+        }
+    }
+
+    @Test("A per-call run_in_background:false makes a background agent wait")
+    func perCallOverrideBlocksBackgroundAgent() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Waited.")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", runInBackground: false, id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected the per-call override to block, got \(outcome)")
+            return
+        }
+        #expect(message.content == "Waited.")
     }
 
     // MARK: - Routing from the model turn

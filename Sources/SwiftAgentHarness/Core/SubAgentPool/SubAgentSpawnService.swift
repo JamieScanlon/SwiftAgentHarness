@@ -854,6 +854,39 @@ public actor SubAgentSpawnService {
         )
     }
 
+    /// Closes out a sub-agent invocation when its spawned child's run reaches a terminal state,
+    /// which is what releases the run-lane slot.
+    ///
+    /// The lane bounds *running* sub-agents, so it has to be tied to the child's run rather than to
+    /// a caller remembering to write a terminal lifecycle row. Only the model-turn delegate and the
+    /// remote transports ever made that transition; Memory (recall, extraction, pre-compaction
+    /// flush), Triggers, and the REST spawn ingress drive the child themselves and never did — so
+    /// their lanes were held for the life of the process and eventually wedged every delegate with
+    /// `global_subagent_lane_capacity_reached`.
+    func finishSubAgentLifecycleForEndedChildRun(
+        childConversationID: UUID,
+        terminalReason: ConversationRunTerminalReason?
+    ) async {
+        let entries = subAgentLifecycleState.activeEntries(childConversationID: childConversationID)
+        guard !entries.isEmpty else { return }
+        let failed: Bool = switch terminalReason?.category {
+        case .failure, .externalCancellation: true
+        case .naturalStop, .boundedStop, nil: false
+        }
+        for var entry in entries {
+            entry.phase = failed ? .failed : .done
+            if failed, entry.error == nil {
+                entry.error = terminalReason?.detail ?? terminalReason?.category.rawValue ?? "sub_agent_run_ended"
+            }
+            entry.updatedAt = Date()
+            await upsertSubAgentLifecycleEntry(
+                parentConversationID: entry.parentConversationID,
+                entry: entry
+            )
+            await publishSubAgentLifecycleIfConfigured(parentConversationID: entry.parentConversationID)
+        }
+    }
+
     func upsertSubAgentLifecycleEntry(
         parentConversationID: UUID,
         entry: SubAgentLifecycleEntryPayload

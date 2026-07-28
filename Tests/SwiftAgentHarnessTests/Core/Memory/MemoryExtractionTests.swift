@@ -564,6 +564,7 @@ struct MemorySubAgentSpawnAdapterTests {
                 await capture.recordRun(prompt)
             },
             cancelChildRun: { _ in },
+            finishChildRunLifecycle: { _ in },
             lastAssistantText: { _ in nil },
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
@@ -622,6 +623,7 @@ struct MemorySubAgentSpawnAdapterTests {
             },
             sendMessageAndRun: { _, _ in },
             cancelChildRun: { _ in },
+            finishChildRunLifecycle: { _ in },
             lastAssistantText: { _ in "NONE" },
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
@@ -681,6 +683,7 @@ struct MemorySubAgentSpawnAdapterTests {
             },
             sendMessageAndRun: { _, _ in },
             cancelChildRun: { _ in },
+            finishChildRunLifecycle: { _ in },
             lastAssistantText: { _ in "NONE" },
             manifestLines: { _ in [] },
             parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
@@ -725,6 +728,114 @@ struct MemorySubAgentSpawnAdapterTests {
         #expect(prompt.contains("skill_workshop"))
         #expect(prompt.contains("## User vs project tier (write routing)"))
         #expect(prompt.contains("user/MEMORY.md"))
+    }
+
+    @Test("Recall timeout closes out child lifecycle even when cancel is a no-op")
+    func recallTimeoutClosesOutLifecycleWhenCancelIsNoOp() async {
+        // Cancelling the drain Task does not cancel generationTask / fire afterTurn. If cancelChildRun
+        // is also a no-op (e.g. missing currentRunID), the adapter must still finish the lifecycle so
+        // the sub-agent run-lane is released.
+        let childID = UUID()
+        let closeOut = MemoryTimeoutCloseOutCapture()
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, _, _ in childID },
+            sendMessageAndRun: { _, _ in
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            },
+            cancelChildRun: { id in
+                await closeOut.recordCancel(id)
+            },
+            finishChildRunLifecycle: { id in
+                await closeOut.recordFinish(id)
+            },
+            lastAssistantText: { _ in nil },
+            manifestLines: { _ in [] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { _, _, _ in nil },
+            config: .default,
+            logger: nil
+        )
+
+        let summary = await port.spawnBlockingRecall(
+            UUID(),
+            "preferences?",
+            .standing,
+            30,
+            200,
+            []
+        )
+
+        #expect(summary == nil)
+        #expect(await closeOut.cancelledChildID == childID)
+        #expect(await closeOut.finishedChildID == childID)
+    }
+
+    @Test("Pre-compaction flush timeout closes out child lifecycle even when cancel is a no-op")
+    func flushTimeoutClosesOutLifecycleWhenCancelIsNoOp() async {
+        let childID = UUID()
+        let closeOut = MemoryTimeoutCloseOutCapture()
+        let session = MemorySessionContext(
+            conversationID: UUID(),
+            cwd: "/tmp",
+            canonicalGitRoot: nil,
+            memoryDirectory: URL(fileURLWithPath: "/tmp/memory")
+        )
+        let config = MemoryConfiguration.default
+        let port = MemorySubAgentSpawnAdapter.makePort(
+            spawnSubAgent: { _, _, _ in childID },
+            sendMessageAndRun: { _, _ in
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            },
+            cancelChildRun: { id in
+                await closeOut.recordCancel(id)
+            },
+            finishChildRunLifecycle: { id in
+                await closeOut.recordFinish(id)
+            },
+            lastAssistantText: { _ in nil },
+            manifestLines: { _ in ["MEMORY.md"] },
+            parentModel: { _ in MemorySubAgentSpawnAdapter.fixtureToolsCapableLocalModel() },
+            rankedRegistryEntries: { _ in [] },
+            resolveFlushPlan: { conversationID, manifest, transcript in
+                _ = conversationID
+                return FileStoreMemoryFlushPlanResolver(config: config, logger: nil)
+                    .resolveFlushPlan(
+                        manifestLines: manifest,
+                        middleTranscript: transcript,
+                        session: session,
+                        store: AgentMemoryStore(memoryDirectory: URL(fileURLWithPath: "/tmp/memory"))
+                    )
+            },
+            config: config,
+            logger: nil
+        )
+
+        let flushed = await port.spawnBlockingPreCompactionFlush(
+            session.conversationID,
+            [
+                Message(id: UUID(), role: .user, content: "remember this for later", timestamp: Date()),
+                Message(id: UUID(), role: .assistant, content: "ok", timestamp: Date()),
+            ],
+            30
+        )
+
+        #expect(flushed == false)
+        #expect(await closeOut.cancelledChildID == childID)
+        #expect(await closeOut.finishedChildID == childID)
+    }
+}
+
+private actor MemoryTimeoutCloseOutCapture {
+    private(set) var cancelledChildID: UUID?
+    private(set) var finishedChildID: UUID?
+
+    func recordCancel(_ id: UUID) {
+        cancelledChildID = id
+    }
+
+    func recordFinish(_ id: UUID) {
+        finishedChildID = id
     }
 }
 

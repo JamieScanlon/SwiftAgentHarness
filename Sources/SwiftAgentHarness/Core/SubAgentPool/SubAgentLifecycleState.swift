@@ -31,6 +31,17 @@ struct SubAgentLifecycleState {
         entriesByParentConversationID.values.flatMap { $0 }
     }
 
+    /// Non-terminal invocations whose spawned child is `childConversationID`.
+    ///
+    /// `awaitingApproval` is deliberately excluded: a paused invocation is expected to resume, so
+    /// ending its lane on a turn boundary would under-count concurrency rather than leak it.
+    func activeEntries(childConversationID: UUID) -> [SubAgentLifecycleEntryPayload] {
+        let active: Set<SubAgentLifecyclePhase> = [.queued, .dispatching, .running, .completing]
+        return allEntries().filter {
+            $0.childConversationID == childConversationID && active.contains($0.phase)
+        }
+    }
+
     func startedAt(lifecycleID: String) -> Date? {
         startedAtByLifecycleID[lifecycleID]
     }

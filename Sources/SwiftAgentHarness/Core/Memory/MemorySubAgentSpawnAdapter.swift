@@ -14,6 +14,9 @@ enum MemorySubAgentSpawnAdapter {
         spawnSubAgent: @escaping @Sendable (UUID, SubAgentSpawnRequest, Model?) async throws -> UUID,
         sendMessageAndRun: @escaping @Sendable (UUID, String) async throws -> Void,
         cancelChildRun: @escaping @Sendable (UUID) async -> Void,
+        /// Releases the sub-agent run-lane when the child never reaches a natural afterTurn
+        /// (timeout / cancelled mid-drain). Idempotent with `afterTurn` → finish when both fire.
+        finishChildRunLifecycle: @escaping @Sendable (UUID) async -> Void,
         lastAssistantText: @escaping @Sendable (UUID) async -> String?,
         manifestLines: @escaping @Sendable (UUID) async -> [String],
         parentModel: @escaping @Sendable (UUID) async -> Model?,
@@ -65,8 +68,12 @@ enum MemorySubAgentSpawnAdapter {
                     try await sendMessageAndRun(childID, userPromptText)
                 }
                 if completed == false {
-                    logger?.debug("[ActiveMemory] timed out; cancelling child run")
-                    await cancelChildRun(childID)
+                    logger?.debug("[ActiveMemory] timed out or cancelled mid-drain; closing out child")
+                    await closeOutTimedOutChild(
+                        childID: childID,
+                        cancelChildRun: cancelChildRun,
+                        finishChildRunLifecycle: finishChildRunLifecycle
+                    )
                     return nil
                 }
                 guard let raw = await lastAssistantText(childID) else {
@@ -121,6 +128,11 @@ enum MemorySubAgentSpawnAdapter {
                         try await sendMessageAndRun(childID, forkUserPrompt)
                     } catch {
                         logger?.debug("[MemoryExtractor] background run failed: \(error)")
+                        await closeOutTimedOutChild(
+                            childID: childID,
+                            cancelChildRun: cancelChildRun,
+                            finishChildRunLifecycle: finishChildRunLifecycle
+                        )
                     }
                 }
             },
@@ -166,13 +178,29 @@ enum MemorySubAgentSpawnAdapter {
                     try await sendMessageAndRun(childID, forkUserPrompt)
                 }
                 if completed == false {
-                    logger?.debug("[PreCompactionMemoryFlush] timed out; cancelling child run")
-                    await cancelChildRun(childID)
+                    logger?.debug("[PreCompactionMemoryFlush] timed out or cancelled mid-drain; closing out child")
+                    await closeOutTimedOutChild(
+                        childID: childID,
+                        cancelChildRun: cancelChildRun,
+                        finishChildRunLifecycle: finishChildRunLifecycle
+                    )
                     return false
                 }
                 return true
             }
         )
+    }
+
+    /// Drain-task cancellation alone does not stop the unstructured `generationTask` or fire
+    /// `afterTurnContextEngineLifecycle`. Cancel the child run, then always finish the lifecycle
+    /// so the run-lane is released even when cancel is a no-op (missing `currentRunID`).
+    private static func closeOutTimedOutChild(
+        childID: UUID,
+        cancelChildRun: @escaping @Sendable (UUID) async -> Void,
+        finishChildRunLifecycle: @escaping @Sendable (UUID) async -> Void
+    ) async {
+        await cancelChildRun(childID)
+        await finishChildRunLifecycle(childID)
     }
 
     /// Fixture helper for tests that need a tools-capable local model (not used on the spawn path).
