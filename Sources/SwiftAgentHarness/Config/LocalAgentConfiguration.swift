@@ -51,8 +51,9 @@ public struct LocalAgentDefinition: Sendable, Equatable {
     /// Mode profile assigned to the spawned child. Existence is verified against the mode registry
     /// at provider-install time; an unresolvable id means the delegate is not published at all.
     public var modeProfileID: String
-    /// Model reference the child runs on.
-    public var modelRef: String
+    /// Model the child runs on. `nil` inherits the parent conversation's model — the template's
+    /// `model: 'inherit'`, and the only portable default in a model-agnostic harness.
+    public var modelRef: String?
     /// Closed-world tool allow list applied to the child. `nil` defers to the child's mode profile.
     public var toolsAllow: [String]?
     /// Reserved for push-based completion delivery. The in-process path is synchronous today and
@@ -68,7 +69,7 @@ public struct LocalAgentDefinition: Sendable, Equatable {
         displayName: String,
         description: String,
         modeProfileID: String,
-        modelRef: String,
+        modelRef: String? = nil,
         toolsAllow: [String]? = nil,
         longRunning: Bool = false,
         runTimeoutSeconds: TimeInterval = LocalAgentConfiguration.defaultRunTimeoutSeconds,
@@ -95,7 +96,15 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
     /// Human-readable rejection reasons, one per skipped entry. Surfaced by the composition root.
     public var diagnostics: [String]
 
+    /// Explicitly no local agents. Distinct from the default, which seeds the built-in roles.
     public static let empty = LocalAgentConfiguration(definitionsByToolName: [:], diagnostics: [])
+
+    /// The built-in delegate roles, seeded whenever the harness is not told otherwise.
+    public static let builtInDefaults = LocalAgentConfiguration(
+        definitionsByToolName: Dictionary(
+            uniqueKeysWithValues: LocalAgentBuiltInCatalog.all().map { ($0.toolName, $0) }
+        )
+    )
 
     public init(definitionsByToolName: [String: LocalAgentDefinition], diagnostics: [String] = []) {
         self.definitionsByToolName = definitionsByToolName
@@ -117,16 +126,18 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
 
     public static func load(from document: PromptConfigDocument, logger: Logger? = nil) -> LocalAgentConfiguration {
         guard let json = document.foundationRoot() else {
-            return .empty
+            return .builtInDefaults
         }
         return fromPromptConfigRoot(json, logger: logger)
     }
 
+    /// Built-ins seed the registry; a config row whose slugified key matches a built-in tool name
+    /// replaces it outright, mirroring how `modeProfiles` overlays built-in profiles by id.
     static func fromPromptConfigRoot(_ json: [String: Any], logger: Logger? = nil) -> LocalAgentConfiguration {
         guard let raw = json["localAgents"] as? [String: Any] else {
-            return .empty
+            return .builtInDefaults
         }
-        var definitions: [String: LocalAgentDefinition] = [:]
+        var definitions = builtInDefaults.definitionsByToolName
         var diagnostics: [String] = []
         var claimedBy: [String: String] = [:]
 
@@ -139,7 +150,7 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                 diagnostics.append("localAgents['\(configKey)']: name has no usable ASCII slug")
                 continue
             }
-            if let owner = claimedBy[toolName] {
+            if let owner = claimedBy[toolName] {  // two config keys slugifying to one tool name
                 diagnostics.append(
                     "localAgents['\(configKey)']: tool name '\(toolName)' already claimed by '\(owner)'"
                 )
@@ -153,10 +164,7 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                 diagnostics.append("localAgents['\(configKey)']: missing or empty 'modeProfileId'")
                 continue
             }
-            guard let modelRef = nonEmptyString(entry["modelRef"]) else {
-                diagnostics.append("localAgents['\(configKey)']: missing or empty 'modelRef'")
-                continue
-            }
+            let modelRef = nonEmptyString(entry["modelRef"])
 
             // Fail closed: a present-but-malformed allow list must never widen to "all tools".
             var toolsAllow: [String]?

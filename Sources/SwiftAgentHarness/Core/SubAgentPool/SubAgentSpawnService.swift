@@ -13,12 +13,15 @@ public actor SubAgentSpawnService {
     private let orchestrator: OrchestratorSessionPort
     private let startup: ConversationStartupService
     private let lifecycle: any ConversationLifecycleServicing
-    private let completionService: SubAgentCompletionRuntimeService
+    let completionService: SubAgentCompletionRuntimeService
     private let contextProjection: ContextProjectionService
 
     nonisolated let subAgentPool: any SubAgentPooling
     private var subAgentLifecycleState = SubAgentLifecycleState()
-    /// Blocking child-run dispatch used by in-process delegates; installed at composition time.
+    /// Blocking child-run dispatch used by in-process delegates.
+    ///
+    /// Supplied at construction so there is no window in which a delegate call can find it unset,
+    /// and no late install that could overwrite a host or test override.
     private(set) var localAgentChildRunPort: LocalAgentChildRunPort?
     private let subAgentDelegateEventTranslator = SubAgentDelegateEventTranslator()
     private lazy var subAgentRunScheduler: any SubAgentRunScheduling = RuntimeLaneSubAgentRunScheduler(
@@ -39,7 +42,8 @@ public actor SubAgentSpawnService {
         orchestrator: OrchestratorSessionPort,
         startup: ConversationStartupService,
         lifecycle: any ConversationLifecycleServicing,
-        contextProjection: ContextProjectionService
+        contextProjection: ContextProjectionService,
+        localAgentChildRunPort: LocalAgentChildRunPort? = nil
     ) {
         self.deps = deps
         self.subAgentPool = subAgentPool
@@ -52,6 +56,7 @@ public actor SubAgentSpawnService {
         self.startup = startup
         self.lifecycle = lifecycle
         self.contextProjection = contextProjection
+        self.localAgentChildRunPort = localAgentChildRunPort
     }
 
     func conversationTopicPublisherConfigured() async -> Bool {
@@ -62,6 +67,9 @@ public actor SubAgentSpawnService {
         await startup.subAgentLifecyclePublisherForRuntime() != nil
     }
 
+    /// Replaces the child-run dispatch supplied at construction. Intended for hosts substituting a
+    /// different runtime and for tests scripting a child run; always ordered after construction, so
+    /// it cannot race the composition-root default.
     func installLocalAgentChildRunPort(_ port: @escaping LocalAgentChildRunPort) {
         localAgentChildRunPort = port
     }

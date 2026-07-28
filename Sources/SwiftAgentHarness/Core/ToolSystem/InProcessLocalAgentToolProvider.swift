@@ -101,12 +101,22 @@ file path, constraint, and success criterion it needs.
     }
 
     static func toolDescription(for definition: LocalAgentDefinition) -> String {
-        """
+        let delivery = definition.longRunning
+            ? """
+            This delegate runs in the background: the call returns a handle immediately and the \
+            result arrives as a separate message later. Do not poll or check on its progress, and \
+            never guess at its result — continue with other work until the result arrives.
+            """
+            : """
+            This delegate runs to completion before the call returns, so its final report is this \
+            tool's result.
+            """
+        return """
         \(definition.description)
 
         Delegates to the "\(definition.displayName)" agent, which runs in its own isolated \
-        conversation and returns its final report as this tool's result. Put the full brief in \
-        `instructions` — the delegate cannot see this conversation.
+        conversation. Put the full brief in `instructions` — the delegate cannot see this \
+        conversation. \(delivery)
         """
     }
 

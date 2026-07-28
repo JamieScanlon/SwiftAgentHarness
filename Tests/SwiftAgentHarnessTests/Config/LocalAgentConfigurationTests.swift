@@ -8,6 +8,12 @@ struct LocalAgentConfigurationTests {
         LocalAgentConfiguration.fromPromptConfigRoot(["localAgents": localAgents])
     }
 
+    /// Config-authored rows only, with the seeded built-ins removed.
+    private func configuredOnly(_ localAgents: [String: Any]) -> [String: LocalAgentDefinition] {
+        let builtInNames = Set(LocalAgentConfiguration.builtInDefaults.definitionsByToolName.keys)
+        return load(localAgents).definitionsByToolName.filter { !builtInNames.contains($0.key) }
+    }
+
     private var validEntry: [String: Any] {
         [
             "description": "In-process coding delegate for repo read/write and shell work.",
@@ -68,11 +74,31 @@ struct LocalAgentConfigurationTests {
         #expect(definition?.maxRecursionDepth == 1)
     }
 
-    @Test("Absent localAgents yields the empty configuration")
-    func absentSectionIsEmpty() {
+    @Test("Absent localAgents seeds the built-in roles")
+    func absentSectionSeedsBuiltIns() {
         let config = LocalAgentConfiguration.fromPromptConfigRoot([:])
-        #expect(config.isEmpty)
         #expect(config.diagnostics.isEmpty)
+        #expect(
+            Set(config.definitionsByToolName.keys)
+                == ["delegate_explore", "delegate_plan", "delegate_general_purpose"]
+        )
+    }
+
+    @Test("A config row replaces the built-in it collides with")
+    func configRowOverlaysBuiltIn() {
+        let config = load([
+            "Explore": [
+                "description": "House rules explore.",
+                "modeProfileId": "coding-agent",
+                "modelRef": "qwen/qwen3-coder-30b",
+            ],
+        ])
+        let explore = config.definition(forToolName: "delegate_explore")
+        #expect(explore?.description == "House rules explore.")
+        #expect(explore?.modeProfileID == "coding-agent")
+        // The other built-ins survive the overlay.
+        #expect(config.definition(forToolName: "delegate_plan") != nil)
+        #expect(config.definitionsByToolName.count == 3)
     }
 
     @Test("Definitions are ordered deterministically by tool name")
@@ -82,7 +108,9 @@ struct LocalAgentConfigurationTests {
             "Alpha": validEntry,
             "Mid": validEntry,
         ])
-        #expect(config.definitions.map(\.toolName) == ["delegate_alpha", "delegate_mid", "delegate_zeta"])
+        let configured = configuredOnly(["Zeta": validEntry, "Alpha": validEntry, "Mid": validEntry])
+        #expect(configured.keys.sorted() == ["delegate_alpha", "delegate_mid", "delegate_zeta"])
+        #expect(config.definitions.map(\.toolName) == config.definitions.map(\.toolName).sorted())
     }
 
     // MARK: - Rejections (each must skip the entry, never widen it)
@@ -92,7 +120,7 @@ struct LocalAgentConfigurationTests {
         var entry = validEntry
         entry["description"] = ""
         let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(config.definition(forToolName: "delegate_coding_agent") == nil)
         #expect(config.diagnostics.count == 1)
     }
 
@@ -100,16 +128,25 @@ struct LocalAgentConfigurationTests {
     func rejectsMissingModeProfileID() {
         var entry = validEntry
         entry.removeValue(forKey: "modeProfileId")
-        let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(configuredOnly(["Coding Agent": entry]).isEmpty)
     }
 
-    @Test("Missing modelRef is rejected")
-    func rejectsMissingModelRef() {
+    @Test("Missing modelRef means inherit the parent model, not rejection")
+    func missingModelRefInherits() {
         var entry = validEntry
         entry.removeValue(forKey: "modelRef")
-        let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        let configured = configuredOnly(["Coding Agent": entry])
+        #expect(configured["delegate_coding_agent"]?.modelRef == nil)
+    }
+
+    @Test("Every built-in inherits the parent model and cannot delegate further")
+    func builtInsInheritAndStayFlat() {
+        for definition in LocalAgentConfiguration.builtInDefaults.definitions {
+            #expect(definition.modelRef == nil)
+            #expect(definition.longRunning == false)
+            #expect(definition.maxRecursionDepth == 1)
+            #expect(definition.description.isEmpty == false)
+        }
     }
 
     @Test("A non-array toolsAllow fails closed rather than widening to all tools")
@@ -117,7 +154,7 @@ struct LocalAgentConfigurationTests {
         var entry = validEntry
         entry["toolsAllow"] = "read_file"
         let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(config.definition(forToolName: "delegate_coding_agent") == nil)
         #expect(config.diagnostics.first?.contains("toolsAllow") == true)
     }
 
@@ -125,8 +162,7 @@ struct LocalAgentConfigurationTests {
     func rejectsMalformedToolsAllowElement() {
         var entry = validEntry
         entry["toolsAllow"] = ["read_file", 7]
-        let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(configuredOnly(["Coding Agent": entry]).isEmpty)
     }
 
     @Test("An empty toolsAllow array is preserved as a closed world")
@@ -141,16 +177,14 @@ struct LocalAgentConfigurationTests {
     func rejectsNegativeDepth() {
         var entry = validEntry
         entry["maxRecursionDepth"] = -1
-        let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(configuredOnly(["Coding Agent": entry]).isEmpty)
     }
 
     @Test("A non-positive runTimeoutSeconds is rejected")
     func rejectsNonPositiveTimeout() {
         var entry = validEntry
         entry["runTimeoutSeconds"] = 0
-        let config = load(["Coding Agent": entry])
-        #expect(config.isEmpty)
+        #expect(configuredOnly(["Coding Agent": entry]).isEmpty)
     }
 
     @Test("runTimeoutSeconds is clamped to the maximum")
@@ -166,8 +200,7 @@ struct LocalAgentConfigurationTests {
 
     @Test("A non-object entry is rejected")
     func rejectsNonObjectEntry() {
-        let config = load(["Coding Agent": "nope"])
-        #expect(config.isEmpty)
+        #expect(configuredOnly(["Coding Agent": "nope"]).isEmpty)
     }
 
     @Test("Colliding slugs keep the first key in sorted order and diagnose the loser")
@@ -177,7 +210,6 @@ struct LocalAgentConfigurationTests {
             "coding agent": validEntry,
             "Coding-Agent": validEntry,
         ])
-        #expect(config.definitionsByToolName.count == 1)
         #expect(config.definition(forToolName: "delegate_coding_agent")?.displayName == "Coding Agent")
         #expect(config.diagnostics.count == 2)
     }
@@ -185,13 +217,13 @@ struct LocalAgentConfigurationTests {
     @Test("One malformed entry does not suppress a sibling")
     func skipsOnlyTheMalformedEntry() {
         var broken = validEntry
-        broken.removeValue(forKey: "modelRef")
+        broken["description"] = ""
         let config = load([
             "Coding Agent": validEntry,
             "Broken Agent": broken,
         ])
-        #expect(config.definitionsByToolName.count == 1)
         #expect(config.definition(forToolName: "delegate_coding_agent") != nil)
+        #expect(config.definition(forToolName: "delegate_broken_agent") == nil)
         #expect(config.diagnostics.count == 1)
     }
 
@@ -224,7 +256,7 @@ struct LocalAgentConfigurationTests {
 
     @Test("HarnessConfigurationSet exposes the section and defaults it to empty")
     func exposedOnConfigurationSet() {
-        #expect(HarnessConfigurationSet.lockedDownBaseline.localAgents.isEmpty)
+        #expect(HarnessConfigurationSet.lockedDownBaseline.localAgents.definitions.count == 3)
         let built = HarnessConfigurationSet.Builder()
             .withLocalAgents(
                 LocalAgentConfiguration(definitionsByToolName: [

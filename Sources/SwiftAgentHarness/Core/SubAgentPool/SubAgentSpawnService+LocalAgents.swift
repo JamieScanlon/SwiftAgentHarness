@@ -39,15 +39,22 @@ extension SubAgentSpawnService {
                 )
             )
         }
-        guard let model = await resolveLocalAgentModel(definition) else {
-            return .denied(
-                AgentLoopToolDispatch.toolResultMessage(
-                    toolCallId: call.id,
-                    content: "Tool dispatch denied: delegate '\(definition.displayName)' model '\(definition.modelRef)' did not resolve."
+        // A nil override leaves `performSpawn` to inherit the parent conversation's model.
+        var modelOverride: Model?
+        if let modelRef = definition.modelRef {
+            guard let resolved = await resolveLocalAgentModel(modelRef) else {
+                return .denied(
+                    AgentLoopToolDispatch.toolResultMessage(
+                        toolCallId: call.id,
+                        content: "Tool dispatch denied: delegate '\(definition.displayName)' model '\(modelRef)' did not resolve."
+                    )
                 )
-            )
+            }
+            modelOverride = resolved
         }
         let label = Self.delegateTaskLabel(from: call.arguments) ?? definition.displayName
+        let runInBackground = definition.longRunning
+        let toolCallID = call.id ?? lifecycleID
 
         let childID: UUID
         do {
@@ -66,7 +73,7 @@ extension SubAgentSpawnService {
                     prompt: instructions,
                     subagentType: SubAgentTransportKind.inProcess.rawValue,
                     agentID: toolEntry.name,
-                    runInBackground: false,
+                    runInBackground: runInBackground,
                     topic: label,
                     interactionMode: definition.modeProfileID,
                     toolsAllow: definition.toolsAllow
@@ -81,13 +88,20 @@ extension SubAgentSpawnService {
             )
             // One prepared launch, one lifecycle row keyed by tool-call id, one run-lane
             // acquisition that the terminal upsert below releases.
+            var prepared = preparedLaunch
+            if runInBackground {
+                // `planLaunch` derives the async handle from `agentID` — the delegate tool name —
+                // which collides across concurrent calls to the same agent. Key it to this tool
+                // call so completion announcements correlate to the right invocation.
+                prepared.launchPlan.asyncHandleID = lifecycleID
+            }
             childID = try await performSpawn(
                 parentConversationID: conversationID,
                 parentConversation: parentConversation,
                 parentProfile: parentProfile,
                 parentDepth: parentDepth,
-                preparedLaunch: preparedLaunch,
-                modelOverride: model,
+                preparedLaunch: prepared,
+                modelOverride: modelOverride,
                 lifecycleIDOverride: lifecycleID,
                 adoptChildSelection: false
             )
@@ -108,6 +122,40 @@ extension SubAgentSpawnService {
             )
         }
 
+        guard !runInBackground else {
+            // Push-based delivery: hand the model a handle now and announce completion into the
+            // parent conversation later, through the same pipeline the remote transports use.
+            Task { [weak self] in
+                guard let self else { return }
+                let outcome = await self.runLocalAgentChild(
+                    childConversationID: childID,
+                    prompt: instructions,
+                    timeoutSeconds: definition.runTimeoutSeconds
+                )
+                await self.finishLocalAgentLifecycle(
+                    lifecycleID: lifecycleID,
+                    parentConversationID: conversationID,
+                    childConversationID: childID,
+                    delegateToolName: toolEntry.name,
+                    toolCallID: toolCallID,
+                    outcome: outcome
+                )
+                await self.announceLocalAgentCompletion(
+                    outcome: outcome,
+                    displayName: definition.displayName,
+                    parentConversationID: conversationID,
+                    lifecycleID: lifecycleID,
+                    toolCallID: toolCallID
+                )
+            }
+            return .pendingHandle(
+                AgentLoopToolDispatch.toolResultMessage(
+                    toolCallId: call.id,
+                    content: Self.pendingHandleContent(displayName: definition.displayName, handleID: lifecycleID)
+                )
+            )
+        }
+
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: instructions,
@@ -118,7 +166,7 @@ extension SubAgentSpawnService {
             parentConversationID: conversationID,
             childConversationID: childID,
             delegateToolName: toolEntry.name,
-            toolCallID: call.id,
+            toolCallID: toolCallID,
             outcome: outcome
         )
         return .completed(
@@ -126,6 +174,36 @@ extension SubAgentSpawnService {
                 toolCallId: call.id,
                 content: Self.toolResultContent(for: outcome, displayName: definition.displayName)
             )
+        )
+    }
+
+    /// Routes a finished background delegate into the shared completion-announce pipeline, which
+    /// owns idempotency (`tryBeginDelivery`), the durable announce marker, tool-message append,
+    /// runtime + sub-agent lifecycle publication, and retry with a bounded fallback.
+    private func announceLocalAgentCompletion(
+        outcome: LocalAgentRunOutcome,
+        displayName: String,
+        parentConversationID: UUID,
+        lifecycleID: String,
+        toolCallID: String
+    ) async {
+        let announce = CompletionAnnouncePayload(
+            delegateHandleID: lifecycleID,
+            toolCallID: toolCallID,
+            // The tool call lives on the parent, so the tool result must land there — not on the
+            // child conversation the delegate ran in.
+            conversationID: parentConversationID,
+            parentConversationID: await deps.persistenceDomain
+                .modelConversation(id: parentConversationID)?.parentConversationID,
+            lifecycleID: lifecycleID,
+            status: outcome.isSuccess ? .done : .failed,
+            completedAt: Date(),
+            source: "subAgentPool.localAgent",
+            error: Self.lifecycleError(for: outcome)
+        )
+        await completionService.ingestCompletionAnnouncementForAPI(
+            announce,
+            toolMessageContent: Self.toolResultContent(for: outcome, displayName: displayName)
         )
     }
 
@@ -194,8 +272,8 @@ extension SubAgentSpawnService {
         return conversation.messages.last(where: { $0.role == .assistant })?.content
     }
 
-    private func resolveLocalAgentModel(_ definition: LocalAgentDefinition) async -> Model? {
-        guard let reference = ModelReference.parse(definition.modelRef),
+    private func resolveLocalAgentModel(_ modelRef: String) async -> Model? {
+        guard let reference = ModelReference.parse(modelRef),
               let ranked = deps.rankedRegistryEntriesProvider else {
             return nil
         }
@@ -227,6 +305,15 @@ extension SubAgentSpawnService {
         )
         await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: entry)
         await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
+    }
+
+    static func pendingHandleContent(displayName: String, handleID: String) -> String {
+        """
+        Delegate '\(displayName)' is running in the background (handle: \(handleID)).
+        Its result arrives as a separate message when it finishes. Do not sleep, poll, or check on \
+        its progress, and do not guess at what it will return — continue with other work or reply \
+        to the user in the meantime.
+        """
     }
 
     static func toolResultContent(for outcome: LocalAgentRunOutcome, displayName: String) -> String {

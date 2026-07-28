@@ -37,7 +37,7 @@ public struct HarnessConfigurationSet: Sendable {
         modelPoolFailover: .specDefaults,
         modelPoolProviderPreference: .specDefaults,
         subAgentCustomEndpoint: .empty,
-        localAgents: .empty
+        localAgents: .builtInDefaults
     )
 
     public init(
@@ -56,7 +56,7 @@ public struct HarnessConfigurationSet: Sendable {
         modelPoolFailover: ModelPoolFailoverConfiguration,
         modelPoolProviderPreference: ModelPoolProviderPreferenceConfiguration,
         subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration,
-        localAgents: LocalAgentConfiguration = .empty
+        localAgents: LocalAgentConfiguration = .builtInDefaults
     ) {
         self.promptAssembly = promptAssembly
         self.agentHarness = agentHarness

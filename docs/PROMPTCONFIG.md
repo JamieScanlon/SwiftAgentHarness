@@ -521,6 +521,21 @@ Map of agent name → definition. Each entry publishes an **in-process sub-agent
 delegate tool. The model calls it like any other tool; the harness spawns an isolated child
 conversation, runs it to completion, and returns the child's final report as the tool result.
 
+**Built-in roles ship enabled.** Three delegate agents are seeded whether or not this section is
+present, each paired with a built-in mode profile that carries its capability grant:
+
+| Tool | Mode profile | Tools | Purpose |
+|---|---|---|---|
+| `delegate_explore` | `subagent-explore` | `read_file`, `read_attachment`, `glob`, `grep` | Fast read-only search. Omits workspace conventions and skills to stay cheap. |
+| `delegate_plan` | `subagent-plan` | same read-only set | Architecture and planning; reports approach, risks, and a "Critical Files for Implementation" section. |
+| `delegate_general_purpose` | `subagent-general` | `*` minus `delegate_*` | A self-contained task in its own context window. |
+
+All three inherit the parent conversation's model, run synchronously, and deny sub-agent spawning
+(flat delegation, `maxRecursionDepth: 1`). **Read-only is enforced at dispatch, not by prompt** —
+`bash` is withheld from explore and plan because redirects and heredocs would otherwise make
+write-prevention prompt-enforced only. A `localAgents` row whose slugified key matches a built-in
+tool name replaces that built-in outright; the others survive.
+
 **Tool naming.** The config key is slugified into a `delegate_`-prefixed tool name — `"Coding Agent"`
 becomes `delegate_coding_agent`. The prefix is what classifies the tool as a delegate throughout the
 harness (routing, result formatting, compaction protection), so it is added automatically. Two keys
@@ -531,9 +546,9 @@ with a diagnostic.
 |---|---|---|---|---|
 | `description` | String | **yes** | — | Model-facing description of what this agent does. Prompt text — see the tool-description convention in `AGENTS.md`. |
 | `modeProfileId` | String | **yes** | — | Mode profile assigned to the spawned child. Must resolve against `modeProfiles`; an unknown id means the delegate is **not published at all** (fail closed, logged at error). |
-| `modelRef` | String | **yes** | — | Model the child runs on. Resolved through the Model Pool; an unresolvable ref fails the delegate call with a clear message rather than silently inheriting the parent's model. |
+| `modelRef` | String | no | `nil` | Model the child runs on, resolved through the Model Pool. Omit to inherit the parent conversation's model (what all three built-ins do). A *present but unresolvable* ref fails the delegate call with a clear message rather than silently falling back. |
 | `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
-| `longRunning` | Bool | no | `false` | Reserved for push-based completion delivery. In-process delegates are synchronous today; `true` is accepted but does not yet change behavior. |
+| `longRunning` | Bool | no | `false` | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
 | `runTimeoutSeconds` | Number | no | `300` | Wall-clock budget for the child run (clamped to `3600`). On expiry the child is cancelled and the parent gets an explicit timeout result. |
 | `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
 
@@ -565,6 +580,13 @@ allowlist is what survives prompt injection reaching the delegate through its `i
 - `description` (string, optional) — a short 3-5 word label used for the child's topic and for
   lifecycle/progress display. Without it the agent's config key is used, and the full brief would
   otherwise become the child's topic.
+
+**Background delivery.** With `longRunning: true` the delegate call returns
+`Delegate '<name>' is running in the background (handle: <tool-call-id>)` plus an explicit
+do-not-poll instruction, and the completion is announced later as a `tool` message on the parent
+conversation keyed to the original tool-call id. The handle is the tool-call id rather than the
+agent id, so concurrent calls to one agent do not collide. Announce idempotency, the durable
+announce marker, retry and the bounded fallback are all owned by the shared completion pipeline.
 
 **Test coverage.** Unit tests cover config parsing, tool registration and delegate classification,
 status derivation, result bounding, depth folding and argument mapping.

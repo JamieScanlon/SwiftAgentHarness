@@ -71,6 +71,22 @@ struct InProcessLocalAgentToolProviderTests {
         #expect(description.contains("cannot see this conversation"))
     }
 
+    @Test("Delivery mode is stated in the description so the model knows whether to wait")
+    func describesDeliveryMode() async {
+        let sync = InProcessLocalAgentToolProvider(definitions: [makeDefinition()])
+        let syncDescription = await sync.availableTools()[0].description
+        #expect(syncDescription.contains("runs to completion before the call returns"))
+        #expect(syncDescription.contains("Do not poll") == false)
+
+        var background = makeDefinition()
+        background.longRunning = true
+        let async = InProcessLocalAgentToolProvider(definitions: [background])
+        let asyncDescription = await async.availableTools()[0].description
+        #expect(asyncDescription.contains("returns a handle immediately"))
+        #expect(asyncDescription.contains("Do not poll"))
+        #expect(asyncDescription.contains("never guess at its result"))
+    }
+
     @Test("An empty definition set publishes nothing")
     func publishesNothingWhenEmpty() async {
         let provider = InProcessLocalAgentToolProvider(definitions: [])
