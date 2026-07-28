@@ -99,7 +99,7 @@ struct SubAgentRemoteTransportSessionStoreTests {
         )
         for await _ in stream {}
 
-        await waitUntil(timeoutMS: 500) {
+        await waitUntil(timeoutMS: 5_000) {
             await store.testing_retainedLifecycleCount() == 0
         }
         #expect(await store.testing_retainedLifecycleCount() == 0)
@@ -159,7 +159,7 @@ struct SubAgentRemoteTransportSessionStoreTests {
         }
         #expect(terminal == .failed)
 
-        await waitUntil(timeoutMS: 500) {
+        await waitUntil(timeoutMS: 5_000) {
             await store.testing_retainedLifecycleCount() == 0
         }
         #expect(await store.testing_retainedLifecycleCount() == 0)

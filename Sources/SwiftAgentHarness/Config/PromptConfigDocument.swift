@@ -23,6 +23,7 @@ public struct PromptConfigDocument: Sendable {
         "skillWorkshop",
         "lineagePromptSections",
         "subAgentCustomEndpoints",
+        "localAgents",
     ]
 
     /// EasyJSON root (always an object for a successful parse).
@@ -75,6 +76,7 @@ public struct PromptConfigDocument: Sendable {
     public var skillWorkshop: JSON? { objectValue(for: "skillWorkshop") }
     public var lineagePromptSections: JSON? { objectValue(for: "lineagePromptSections") }
     public var subAgentCustomEndpoints: JSON? { objectValue(for: "subAgentCustomEndpoints") }
+    public var localAgents: JSON? { objectValue(for: "localAgents") }
 
     // MARK: - Foundation bridge for existing section parsers
 

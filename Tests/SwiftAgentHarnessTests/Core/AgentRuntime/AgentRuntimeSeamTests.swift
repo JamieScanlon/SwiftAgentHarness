@@ -178,7 +178,7 @@ private struct RequestPurposeRecordingLLMFactory: ModelLLMFactoring {
     }
 }
 
-@Suite("Agent Runtime seam and contract")
+@Suite("Agent Runtime seam and contract", .serialized)
 struct AgentRuntimeSeamTests {
     private func makeContainer() throws -> ModelContainer {
                 return try HarnessTestModelContainer.makeInMemory()
@@ -192,16 +192,6 @@ struct AgentRuntimeSeamTests {
             capabilities: [.completion],
             modelProtocol: .openAIAPI
         )
-    }
-
-    private func waitUntil(_ predicate: @escaping () async -> Bool, timeoutMS: Int = 3000) async {
-        let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
-        while Date() < deadline {
-            if await predicate() {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 40_000_000)
-        }
     }
 
     @Test("streaming task uses injected runtime executeTurn single terminal path")
@@ -222,16 +212,8 @@ struct AgentRuntimeSeamTests {
 
         let stream = try await manager.sendMessageAndStreamResponse("hello seam", images: [], conversationID: conversationID)
         let runID = try #require(stream.runID)
-        // Keep parity with production clients that observe orchestration snapshots.
-        _ = stream.orchestrationState
-
-        await waitUntil({
-            let runs = await manager.listRunsForAPI(
-                conversationID: conversationID,
-                filter: ConversationRunListFilter(limit: 5)
-            ).runs
-            return runs.first(where: { $0.id == runID })?.outcome == .completed
-        })
+        await awaitStreamingRunSettled(manager, response: stream, timeoutMS: 30_000)
+        _ = await drainChatStreamUnchecked(stream)
 
         let executeCalls = await recorder.executeTurnCalls
         let runTurnCalls = await recorder.runTurnCalls

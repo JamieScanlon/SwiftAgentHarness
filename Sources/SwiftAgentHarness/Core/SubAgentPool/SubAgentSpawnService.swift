@@ -5,9 +5,9 @@ import SwiftAgentKitOrchestrator
 
 /// Sub-agent spawn, lifecycle tracking, and runtime coordination (Slice 4 migration).
 public actor SubAgentSpawnService {
-    private let deps: ConversationRuntimeDependencies
-    private let orchestratorRuntime: any SubAgentOrchestratorRuntimeServicing
-    private let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping
+    let deps: ConversationRuntimeDependencies
+    let orchestratorRuntime: any SubAgentOrchestratorRuntimeServicing
+    let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping
     private let topics: ConversationTopicPublicationPort
     private let messaging: ConversationMessagingPort
     private let orchestrator: OrchestratorSessionPort
@@ -18,6 +18,8 @@ public actor SubAgentSpawnService {
 
     nonisolated let subAgentPool: any SubAgentPooling
     private var subAgentLifecycleState = SubAgentLifecycleState()
+    /// Blocking child-run dispatch used by in-process delegates; installed at composition time.
+    private(set) var localAgentChildRunPort: LocalAgentChildRunPort?
     private let subAgentDelegateEventTranslator = SubAgentDelegateEventTranslator()
     private lazy var subAgentRunScheduler: any SubAgentRunScheduling = RuntimeLaneSubAgentRunScheduler(
         runtimeLaneCoordinator: deps.runtimeLaneCoordinator
@@ -60,6 +62,10 @@ public actor SubAgentSpawnService {
         await startup.subAgentLifecyclePublisherForRuntime() != nil
     }
 
+    func installLocalAgentChildRunPort(_ port: @escaping LocalAgentChildRunPort) {
+        localAgentChildRunPort = port
+    }
+
     func installACPPermissionCoordinator(toolApproval: ToolApprovalRuntimeService) async {
         await SubAgentACPPermissionCoordinator.shared.configure(
             emitEvent: { [weak self] event in
@@ -79,7 +85,7 @@ public actor SubAgentSpawnService {
         )
     }
 
-    private var subAgentExecutionCoordinator: SubAgentExecutionCoordinator {
+    var subAgentExecutionCoordinator: SubAgentExecutionCoordinator {
         SubAgentExecutionCoordinator(subAgentPool: subAgentPool)
     }
 
@@ -108,8 +114,37 @@ public actor SubAgentSpawnService {
             modeProfileMaxDepth: parentProfile.subAgents.maxDepth,
             parentDepth: parentDepth
         )
+        return try await performSpawn(
+            parentConversationID: parentConversationID,
+            parentConversation: parentConversation,
+            parentProfile: parentProfile,
+            parentDepth: parentDepth,
+            preparedLaunch: preparedLaunch,
+            modelOverride: modelOverride
+        )
+    }
+
+    /// Shared spawn execution for every caller that has already prepared a launch.
+    ///
+    /// `lifecycleIDOverride` lets a caller that already owns a lifecycle row — the model-turn
+    /// delegate path, whose row is keyed by tool-call id — reuse it, so one delegate invocation
+    /// yields one lifecycle entry and one run-lane acquisition that terminal transitions release.
+    ///
+    /// `adoptChildSelection` must be `false` whenever the parent is mid-turn: adopting the child
+    /// repoints the session's selected conversation away from the still-running parent.
+    func performSpawn(
+        parentConversationID: UUID,
+        parentConversation: ModelConversation,
+        parentProfile: ResolvedModeProfile,
+        parentDepth: Int,
+        preparedLaunch: SubAgentPreparedLaunch,
+        modelOverride: Model?,
+        lifecycleIDOverride: String? = nil,
+        adoptChildSelection: Bool = true
+    ) async throws -> UUID {
         let launchPlan = preparedLaunch.launchPlan
-        let lifecycleID = launchPlan.asyncHandleID
+        let lifecycleID = lifecycleIDOverride
+            ?? launchPlan.asyncHandleID
             ?? "spawn-\(parentConversationID.uuidString)-\(UUID().uuidString)"
         let rootConversationID = await subAgentRootConversationID(for: parentConversationID)
         let lifecyclePathSegments = await assignSubAgentPathSegments(
@@ -406,7 +441,7 @@ public actor SubAgentSpawnService {
                 await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: running)
                 await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
             }
-            if !launchPlan.request.runInBackground {
+            if adoptChildSelection, !launchPlan.request.runInBackground {
                 try? await orchestrator.adoptPersistedNewConversationSelection(newConv)
             }
             runLaneHandoffCommitted = true
@@ -414,7 +449,7 @@ public actor SubAgentSpawnService {
         }
     }
 
-    private func cancelChildRunForSubAgent(childConversationID: UUID) async {
+    func cancelChildRunForSubAgent(childConversationID: UUID) async {
         if let conversation = await deps.persistenceDomain.modelConversation(id: childConversationID),
            let runID = conversation.currentRunID {
             await agentRuntime.cancelSubAgentRun(conversationID: childConversationID, runID: runID)
@@ -1006,7 +1041,7 @@ public actor SubAgentSpawnService {
         return (.agent, Self.defaultMachineSpawnModeProfileID)
     }
 
-    private func resolvedModeProfile(for conversation: ModelConversation) async -> ResolvedModeProfile {
+    func resolvedModeProfile(for conversation: ModelConversation) async -> ResolvedModeProfile {
         (await deps.modeRegistry.resolveReportingFallback(
             modeId: conversation.modeProfileID ?? conversation.interactionMode.rawValue,
             logger: deps.logger,
@@ -1014,7 +1049,7 @@ public actor SubAgentSpawnService {
         )).profile
     }
 
-    private func conversationDepth(conversationID: UUID) async -> Int {
+    func conversationDepth(conversationID: UUID) async -> Int {
         var depth = 0
         var cursor = await deps.persistenceDomain.modelConversation(id: conversationID)?.parentConversationID
         var visited: Set<UUID> = [conversationID]
@@ -1147,12 +1182,31 @@ public actor SubAgentSpawnService {
                 )
             )
         }
-        let instructions = delegateInstructions(from: call.arguments)
+        if let definition = localAgentDefinition(forToolName: toolEntry.name) {
+            return await invokeInProcessLocalAgent(
+                call: call,
+                conversationID: conversationID,
+                parentConversation: parentConversation,
+                toolEntry: toolEntry,
+                definition: definition
+            )
+        }
+        if SubAgentTransportKind.resolve(for: toolEntry) == .inProcess {
+            // In-process delegates require a matching `localAgents` definition. Deny before
+            // prepareLaunch so the model sees a specific reason instead of a catalog miss.
+            return .denied(
+                AgentLoopToolDispatch.toolResultMessage(
+                    toolCallId: call.id,
+                    content: "Tool dispatch denied: '\(call.name)' is an in-process delegate with no matching localAgents definition."
+                )
+            )
+        }
+        let instructions = Self.delegateInstructions(from: call.arguments)
         let lifecycleID = call.id ?? "model-\(conversationID.uuidString)-\(UUID().uuidString)"
         let launchRequest = SubAgentLaunchRequest(
             context: .isolated,
             taskDescription: instructions,
-            subagentType: resolvedTransportKind(for: toolEntry).rawValue,
+            subagentType: SubAgentTransportKind.resolve(for: toolEntry).rawValue,
             runInBackground: false,
             agentID: call.name,
             permissionAlreadyGranted: true
@@ -1206,10 +1260,12 @@ public actor SubAgentSpawnService {
                 await applySubAgentDelegateEvent(event)
             }
             guard case let .remoteStarted(correlation) = transportResult.outcome else {
+                // In-process delegates are denied earlier, so the only way to land here is the
+                // Pool's no-adapter fallback in `invokeSubAgent`.
                 return .denied(
                     AgentLoopToolDispatch.toolResultMessage(
                         toolCallId: call.id,
-                        content: "In-process delegate model-turn dispatch is not supported yet."
+                        content: "Tool dispatch denied: no transport adapter resolved for '\(call.name)'."
                     )
                 )
             }
@@ -1281,19 +1337,12 @@ public actor SubAgentSpawnService {
         }
     }
 
-    private func delegateInstructions(from arguments: JSON) -> String {
+    static func delegateInstructions(from arguments: JSON) -> String {
         guard case .object(let object) = arguments,
               case .string(let instructions) = object["instructions"] else {
             return ""
         }
         return instructions
-    }
-
-    private func resolvedTransportKind(for entry: ToolRegistryEntry) -> SubAgentTransportKind {
-        if entry.transportKind == .a2a || entry.source == .a2a { return .a2a }
-        let adapterKind = SubAgentTransportKind(rawOrAlias: entry.executionEnvironment.adapterID)
-        if adapterKind != .unknown { return adapterKind }
-        return .inProcess
     }
 
     private func seedModelTurnLifecycle(

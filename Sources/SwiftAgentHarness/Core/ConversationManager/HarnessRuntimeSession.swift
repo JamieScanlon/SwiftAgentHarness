@@ -683,6 +683,7 @@ public actor HarnessRuntimeSession {
         derivedEventStore: (any DerivedEventStore)? = nil,
         harnessSessionPersistenceOverride: (any HarnessSessionPersistence)? = nil,
         modeRegistry: (any ModeRegistryAccessing)? = nil,
+        localAgents: LocalAgentConfiguration = .empty,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         workspacePolicy: HarnessWorkspacePolicy = HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true)
@@ -703,7 +704,8 @@ public actor HarnessRuntimeSession {
             toolPolicy: toolPolicy,
             trustPolicy: trustPolicyConfiguration,
             thinkingPolicy: thinkingPolicyConfiguration,
-            conversationTransforms: conversationTransformConfiguration
+            conversationTransforms: conversationTransformConfiguration,
+            localAgents: localAgents
         )
         self.init(
             persistenceDomain: domain,

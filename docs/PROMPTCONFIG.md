@@ -514,6 +514,66 @@ Map of delegate tool name → HTTP endpoint binding. Entries with an invalid `ur
 | `authHeaderValue` | String | no | `nil` | Auth header value. Alternative: `authHeaderValueEnv` names an environment variable to read the value from. |
 | `timeoutSeconds` | Number | no | `120` | Request timeout. |
 
+
+## `localAgents`
+
+Map of agent name → definition. Each entry publishes an **in-process sub-agent** to the model as a
+delegate tool. The model calls it like any other tool; the harness spawns an isolated child
+conversation, runs it to completion, and returns the child's final report as the tool result.
+
+**Tool naming.** The config key is slugified into a `delegate_`-prefixed tool name — `"Coding Agent"`
+becomes `delegate_coding_agent`. The prefix is what classifies the tool as a delegate throughout the
+harness (routing, result formatting, compaction protection), so it is added automatically. Two keys
+that slugify to the same name are a conflict: the first in sorted order wins and the rest are skipped
+with a diagnostic.
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `description` | String | **yes** | — | Model-facing description of what this agent does. Prompt text — see the tool-description convention in `AGENTS.md`. |
+| `modeProfileId` | String | **yes** | — | Mode profile assigned to the spawned child. Must resolve against `modeProfiles`; an unknown id means the delegate is **not published at all** (fail closed, logged at error). |
+| `modelRef` | String | **yes** | — | Model the child runs on. Resolved through the Model Pool; an unresolvable ref fails the delegate call with a clear message rather than silently inheriting the parent's model. |
+| `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
+| `longRunning` | Bool | no | `false` | Reserved for push-based completion delivery. In-process delegates are synchronous today; `true` is accepted but does not yet change behavior. |
+| `runTimeoutSeconds` | Number | no | `300` | Wall-clock budget for the child run (clamped to `3600`). On expiry the child is cancelled and the parent gets an explicit timeout result. |
+| `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
+
+```json
+{
+  "localAgents": {
+    "Coding Agent": {
+      "description": "In-process coding delegate for repo read/write and shell work.",
+      "modeProfileId": "coding-agent",
+      "modelRef": "qwen/qwen3-coder-30b",
+      "toolsAllow": ["read_file", "write_file", "bash"],
+      "longRunning": false,
+      "runTimeoutSeconds": 300,
+      "maxRecursionDepth": 1
+    }
+  }
+}
+```
+
+**Capability assignment is the load-bearing control.** The child never inherits the parent's tool
+approvals or allow-list. Derive the agent's mode profile from `subagent-minimal` and enumerate
+`toolsAllow` — prompt-level instructions in the profile's `modeDirective` are advisory; the
+allowlist is what survives prompt injection reaching the delegate through its `instructions`.
+
+**Generated tool schema.** Each delegate tool takes:
+
+- `instructions` (string, required) — the full task brief. The child starts from a fresh
+  conversation with no knowledge of the parent's transcript.
+- `description` (string, optional) — a short 3-5 word label used for the child's topic and for
+  lifecycle/progress display. Without it the agent's config key is used, and the full brief would
+  otherwise become the child's topic.
+
+**Test coverage.** Unit tests cover config parsing, tool registration and delegate classification,
+status derivation, result bounding, depth folding and argument mapping.
+`InProcessLocalAgentIntegrationTests` covers the end-to-end path with a scripted child run: one
+lifecycle row per delegate call keyed by tool-call id, run-lane released on terminal, the selected
+conversation unchanged across a delegate call, `toolsAllow` reaching the child's
+`routingPrefs.explicitToolPolicy`, `longRunning: false` taking the synchronous path, and the
+unresolvable-model / empty-instructions / no-reply / timeout failure modes.
+
 ---
 
 ## Interaction with host-registered tools (MCP)

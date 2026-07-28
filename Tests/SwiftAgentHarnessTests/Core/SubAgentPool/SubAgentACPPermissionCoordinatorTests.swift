@@ -5,6 +5,20 @@ import Testing
 
 @Suite("ACP permission coordinator", .serialized)
 struct SubAgentACPPermissionCoordinatorTests {
+    private func waitUntil(
+        _ predicate: @escaping () async -> Bool,
+        timeoutMS: Int = 5_000
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1_000.0)
+        while Date() < deadline {
+            if await predicate() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
     private func permissionRequest(requestID: String = "perm-1") -> ACPRequestPermissionRequest {
         ACPRequestPermissionRequest(
             sessionId: "session-1",
@@ -67,7 +81,9 @@ struct SubAgentACPPermissionCoordinatorTests {
                 policy: .askUser
             )
         }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await waitUntil({
+            await coordinator.testing_hasPendingWait(lifecycleID: lifecycleID)
+        }))
         await coordinator.applyResolution(
             lifecycleID: lifecycleID,
             requestID: "perm-1",
@@ -132,7 +148,10 @@ struct SubAgentACPPermissionCoordinatorTests {
                 policy: .askUser
             )
         }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        let parked = await waitUntil({
+            await coordinator.testing_hasPendingWait(lifecycleID: lifecycleID)
+        }, timeoutMS: 5_000)
+        #expect(parked)
         _ = await sessionStore.cancel(
             SubAgentTransportCancellationRequest(
                 lifecycleID: lifecycleID,
@@ -142,6 +161,55 @@ struct SubAgentACPPermissionCoordinatorTests {
             )
         )
         let response = await waitTask.value
+        #expect(response.outcome == .cancelled)
+    }
+
+    @Test("cancel before wait parks still cancels without hanging")
+    func cancelBeforeWaitParksStillCancels() async {
+        let coordinator = SubAgentACPPermissionCoordinator()
+        let sessionStore = SubAgentRemoteTransportSessionStore()
+        let lifecycleID = "lifecycle-cancel-before-park-\(UUID().uuidString.lowercased())"
+        let parentConversationID = UUID()
+        let correlation = SubAgentTransportInvocationCorrelation(
+            lifecycleID: lifecycleID,
+            transportKind: .acpStdio,
+            sessionHandleID: "agent-1",
+            completionHandleID: nil
+        )
+        let session = RemoteTransportSession(
+            correlation: correlation,
+            parentConversationID: parentConversationID,
+            delegateToolName: "delegate_acp",
+            defaultTrustLevel: SubAgentTrustLevel.unknownParty.rawValue,
+            permissionPolicy: SubAgentPermissionPolicy.askUser.rawValue,
+            status: .running,
+            executionStarted: true
+        )
+        _ = await sessionStore.register(
+            session: session,
+            initialEvent: SubAgentDelegateEvent(
+                lifecycleID: lifecycleID,
+                parentConversationID: parentConversationID,
+                phase: .running,
+                updatedAt: Date()
+            )
+        )
+        await coordinator.configure(
+            sessionStore: sessionStore,
+            emitEvent: { _ in },
+            registerPendingApproval: { _, _, _, _, _, _ in }
+        )
+        await coordinator.cancelWaits(lifecycleID: lifecycleID)
+        let response = await coordinator.waitForResolution(
+            lifecycleID: lifecycleID,
+            parentConversationID: parentConversationID,
+            runID: UUID(),
+            delegateToolName: "delegate_acp",
+            defaultTrustLevel: SubAgentTrustLevel.unknownParty.rawValue,
+            permissionPolicy: SubAgentPermissionPolicy.askUser.rawValue,
+            request: permissionRequest(requestID: "perm-cancel-before-park"),
+            policy: .askUser
+        )
         #expect(response.outcome == .cancelled)
     }
 
@@ -192,7 +260,9 @@ struct SubAgentACPPermissionCoordinatorTests {
                 policy: .askUser
             )
         }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await waitUntil({
+            await coordinator.testing_hasPendingWait(lifecycleID: lifecycleID)
+        }))
         await coordinator.cancelWaits(lifecycleID: lifecycleID)
         let response = await waitTask.value
         #expect(response.outcome == .cancelled)

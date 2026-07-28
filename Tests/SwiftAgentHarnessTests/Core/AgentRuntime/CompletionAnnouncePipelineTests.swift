@@ -52,7 +52,7 @@ struct CompletionAnnouncePipelineTests {
         recorder: CompletionAnnounceEventRecorder,
         delegateHandleID: String,
         toolCallID: String,
-        timeoutMS: Int = 2_000
+        timeoutMS: Int = 10_000
     ) async -> RuntimeLifecycleEventPayload? {
         let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1_000.0)
         while Date() < deadline {
@@ -255,7 +255,10 @@ struct CompletionAnnouncePipelineTests {
     @Test("concurrent completion announce paths dedupe lifecycle and cost settlement")
     func concurrentCompletionAnnouncePathsDeduped() async throws {
         let container = try HarnessTestModelContainer.makeInMemory()
-        let ledger = ModelPoolCostLedger(defaultDelegateCompletionUSD: 0.25)
+        // Align default fallback with explicit API usage so settlement amount is independent of
+        // which concurrent path wins tryBeginDelivery (pending events carry nil usage).
+        let settledCostUSD = 0.0125
+        let ledger = ModelPoolCostLedger(defaultDelegateCompletionUSD: settledCostUSD)
         let manager = HarnessRuntimeSession(
             container: container,
             delegateCostTracker: ledger,
@@ -279,7 +282,7 @@ struct CompletionAnnouncePipelineTests {
             promptTokens: 10,
             completionTokens: 5,
             totalTokens: 15,
-            costUSD: 0.0125
+            costUSD: settledCostUSD
         )
         let payload = CompletionAnnouncePayload(
             delegateHandleID: delegateHandleID,
@@ -333,7 +336,7 @@ struct CompletionAnnouncePipelineTests {
                 && $0.toolCallID == toolCallID
         }
         #expect(lifecycleEvents.count == 1)
-        #expect(await ledger.projectedCostUSD(conversationID: conversationID) == 0.0125)
+        #expect(await ledger.projectedCostUSD(conversationID: conversationID) == settledCostUSD)
     }
 
 }

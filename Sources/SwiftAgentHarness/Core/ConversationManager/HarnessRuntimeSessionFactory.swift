@@ -392,6 +392,29 @@ public enum HarnessRuntimeSessionFactory {
                 agentRuntime: agentRuntimeSessionService
             )
         }
+        Task {
+            await subAgentSpawnService.installLocalAgentChildRunPort { childID, prompt in
+                try await HarnessEmbeddedMutation.sendMessageAndDrain(
+                    conversationID: childID,
+                    prompt: prompt,
+                    fallback: {
+                        let response = try await agentRuntimeSessionService.serviceRuntimeSendMessageAndStreamResponse(
+                            prompt,
+                            images: [],
+                            conversationID: childID,
+                            configuration: AgentRuntimeTurnConfiguration(enableTools: true)
+                        )
+                        async let partialDrain: Void = {
+                            for await _ in response.partialContent {}
+                        }()
+                        async let stateDrain: Void = {
+                            for await _ in response.orchestrationState {}
+                        }()
+                        _ = await (partialDrain, stateDrain)
+                    }
+                )
+            }
+        }
         return Services(
             orchestrator: orchestrator,
             selection: selection,

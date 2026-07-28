@@ -28,6 +28,9 @@ actor SubAgentACPPermissionCoordinator {
     }
 
     private var waitsByKey: [String: PendingWait] = [:]
+    /// Lifecycles cancelled before (or while) a wait parks. Prevents hang when
+    /// `SubAgentRemoteTransportSessionStore.cancel` races ahead of continuation registration.
+    private var cancelledLifecycleIDs: Set<String> = []
     private var sessionStore: SubAgentRemoteTransportSessionStore = .shared
     private var emitEvent: (@Sendable (SubAgentDelegateEvent) async -> Void)?
     private var registerPendingApproval: (
@@ -75,6 +78,11 @@ actor SubAgentACPPermissionCoordinator {
             return ACPRequestPermissionResponse(outcome: .cancelled)
         }
 
+        if cancelledLifecycleIDs.contains(lifecycleID) {
+            cancelledLifecycleIDs.remove(lifecycleID)
+            return ACPRequestPermissionResponse(outcome: .cancelled)
+        }
+
         let requestID = request.toolCall.toolCallId
         let route: ToolApprovalRoute = policy == .askParent ? .parent : .user
         let approvalToolName = SubAgentACPPermissionToolName.make(lifecycleID: lifecycleID, requestID: requestID)
@@ -109,8 +117,18 @@ actor SubAgentACPPermissionCoordinator {
             delegateToolName
         )
 
+        if cancelledLifecycleIDs.contains(lifecycleID) {
+            cancelledLifecycleIDs.remove(lifecycleID)
+            return ACPRequestPermissionResponse(outcome: .cancelled)
+        }
+
         let key = waitKey(lifecycleID: lifecycleID, requestID: requestID)
         return await withCheckedContinuation { continuation in
+            if cancelledLifecycleIDs.contains(lifecycleID) {
+                cancelledLifecycleIDs.remove(lifecycleID)
+                continuation.resume(returning: ACPRequestPermissionResponse(outcome: .cancelled))
+                return
+            }
             waitsByKey[key] = PendingWait(
                 lifecycleID: lifecycleID,
                 requestID: requestID,
@@ -152,11 +170,18 @@ actor SubAgentACPPermissionCoordinator {
     }
 
     func cancelWaits(lifecycleID: String) {
+        cancelledLifecycleIDs.insert(lifecycleID)
         let prefix = "\(lifecycleID)|"
         for key in waitsByKey.keys where key.hasPrefix(prefix) {
             guard let pending = waitsByKey.removeValue(forKey: key) else { continue }
             pending.continuation.resume(returning: ACPRequestPermissionResponse(outcome: .cancelled))
         }
+    }
+
+    /// Test seam: true once a permission wait has parked a continuation for `lifecycleID`.
+    func testing_hasPendingWait(lifecycleID: String) -> Bool {
+        let prefix = "\(lifecycleID)|"
+        return waitsByKey.keys.contains { $0.hasPrefix(prefix) }
     }
 
     private func waitKey(lifecycleID: String, requestID: String) -> String {
