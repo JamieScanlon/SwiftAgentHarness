@@ -36,6 +36,21 @@ public enum ConversationLLMRequestPhase: String, Codable, Sendable, Equatable {
     case cancelled
 }
 
+/// Union of delegate (sub-agent) activity beneath a conversation, for UI and wire protocol.
+///
+/// Independent of the parent's own turn phases: a parent that has finished its turn can still have
+/// running children, which is exactly the case this exists to make visible.
+public enum ConversationSubAgentActivityPhase: String, Codable, Sendable, Equatable {
+    /// No delegate beneath this conversation is doing anything.
+    case idle
+    /// At least one delegate is queued, dispatching, running, or completing.
+    case working
+    /// At least one delegate is blocked on an approval. Takes precedence over ``working`` because
+    /// it is the only one of the three that needs the *user* to act — reporting a mixed set as
+    /// `working` would hide the fact that the agent is waiting on them, not the other way round.
+    case awaitingApproval
+}
+
 /// Combined orchestration snapshot for one user send (LLM instance + per-call request + agentic tool loop).
 public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
     public var llmRuntimePhase: ConversationLLMRuntimePhase
@@ -59,6 +74,10 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
     public var harness: HarnessOrchestrationSupplement?
     /// Identifier for the current user send / streaming orchestration run when known (`nil` when idle).
     public var currentRunID: UUID?
+    /// Union of delegate activity beneath this conversation. Reported independently of the parent's
+    /// own phases, so an idle parent waiting on a background delegate is not indistinguishable from
+    /// a finished turn.
+    public var subAgentActivityPhase: ConversationSubAgentActivityPhase
 
     public init(
         llmRuntimePhase: ConversationLLMRuntimePhase = .idleReady,
@@ -72,7 +91,8 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
         planAllTasksComplete: Bool = false,
         orchestrationGeneration: UInt64? = nil,
         harness: HarnessOrchestrationSupplement? = nil,
-        currentRunID: UUID? = nil
+        currentRunID: UUID? = nil,
+        subAgentActivityPhase: ConversationSubAgentActivityPhase = .idle
     ) {
         self.llmRuntimePhase = llmRuntimePhase
         self.llmRuntimeFailureDetail = llmRuntimeFailureDetail
@@ -86,6 +106,7 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
         self.orchestrationGeneration = orchestrationGeneration
         self.harness = harness
         self.currentRunID = currentRunID
+        self.subAgentActivityPhase = subAgentActivityPhase
     }
 
     /// Backward-compatible decode for payloads without LLM runtime fields.
@@ -103,6 +124,11 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
         orchestrationGeneration = try c.decodeIfPresent(UInt64.self, forKey: .orchestrationGeneration)
         harness = try c.decodeIfPresent(HarnessOrchestrationSupplement.self, forKey: .harness)
         currentRunID = try c.decodeIfPresent(UUID.self, forKey: .currentRunID)
+        // Decoded through its raw string rather than as the enum: the synthesized `RawRepresentable`
+        // decode *throws* on an unrecognized case, and that throw would fail this whole snapshot —
+        // so a client on an older build would lose every status field the day a case is added here.
+        subAgentActivityPhase = (try c.decodeIfPresent(String.self, forKey: .subAgentActivityPhase))
+            .flatMap(ConversationSubAgentActivityPhase.init(rawValue:)) ?? .idle
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -119,6 +145,7 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
         try c.encodeIfPresent(orchestrationGeneration, forKey: .orchestrationGeneration)
         try c.encodeIfPresent(harness, forKey: .harness)
         try c.encodeIfPresent(currentRunID, forKey: .currentRunID)
+        try c.encode(subAgentActivityPhase, forKey: .subAgentActivityPhase)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -128,6 +155,7 @@ public struct ConversationOrchestrationState: Codable, Sendable, Equatable {
         case orchestrationGeneration
         case harness
         case currentRunID
+        case subAgentActivityPhase
     }
 }
 
@@ -142,9 +170,14 @@ extension ConversationOrchestrationState {
             && planHasBlockedTasks == other.planHasBlockedTasks
             && planAllTasksComplete == other.planAllTasksComplete
             && harness == other.harness
+            && subAgentActivityPhase == other.subAgentActivityPhase
     }
 
     /// Rough ordering for LLM / request / agentic phases when deciding whether a wire snapshot regressed mid-turn.
+    ///
+    /// ``subAgentActivityPhase`` is deliberately absent: it is an independent axis that moves on its
+    /// own schedule, so folding it in would let a delegate finishing mid-turn look like the parent's
+    /// turn had regressed and freeze the parent's phases.
     public var wireOrchestrationActivityRank: Int {
         var rank = 0
         switch llmRuntimePhase {

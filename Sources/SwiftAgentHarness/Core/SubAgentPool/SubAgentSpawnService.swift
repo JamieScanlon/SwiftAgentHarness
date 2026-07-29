@@ -7,7 +7,7 @@ import SwiftAgentKitOrchestrator
 public actor SubAgentSpawnService {
     let deps: ConversationRuntimeDependencies
     let orchestratorRuntime: any SubAgentOrchestratorRuntimeServicing
-    let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping
+    let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping & AgentRuntimeSubAgentActivityPublishing
     private let topics: ConversationTopicPublicationPort
     private let messaging: ConversationMessagingPort
     let orchestrator: OrchestratorSessionPort
@@ -36,7 +36,7 @@ public actor SubAgentSpawnService {
         subAgentPool: any SubAgentPooling,
         completionService: SubAgentCompletionRuntimeService,
         orchestratorRuntime: any SubAgentOrchestratorRuntimeServicing,
-        agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping,
+        agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping & AgentRuntimeSubAgentActivityPublishing,
         topics: ConversationTopicPublicationPort,
         messaging: ConversationMessagingPort,
         orchestrator: OrchestratorSessionPort,
@@ -897,6 +897,22 @@ public actor SubAgentSpawnService {
         }
         subAgentLifecycleState.upsert(parentConversationID: parentConversationID, entry: entry)
         await releaseSubAgentLaneSlotIfTerminal(entry)
+        await refreshSubAgentActivityStatus(parentConversationID: parentConversationID)
+    }
+
+    /// Hung off the single upsert funnel rather than the nine `publishSubAgentLifecycleIfConfigured`
+    /// call sites, for the reason DEF-023 taught: a consequence attached to call sites is a
+    /// consequence some path will skip.
+    private func refreshSubAgentActivityStatus(parentConversationID: UUID) async {
+        let ancestors = subAgentLifecycleState.ancestorConversationIDs(of: parentConversationID)
+        for conversationID in [parentConversationID] + ancestors {
+            await agentRuntime.refreshSubAgentActivityOnConversationStateTopic(conversationID: conversationID)
+        }
+    }
+
+    /// Union of delegate activity beneath `conversationID`, for the parent's orchestration snapshot.
+    func subAgentActivityPhase(conversationID: UUID) -> ConversationSubAgentActivityPhase {
+        subAgentLifecycleState.subAgentActivityPhase(conversationID: conversationID)
     }
 
     private func releaseSubAgentLaneSlotIfTerminal(_ entry: SubAgentLifecycleEntryPayload) async {

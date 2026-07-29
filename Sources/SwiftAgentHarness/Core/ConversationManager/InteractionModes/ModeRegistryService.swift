@@ -445,6 +445,17 @@ public actor ModeRegistryService {
         if o.keys.contains("stopOnApprovalRequest"), let b = o.optionalBool(for: "stopOnApprovalRequest") {
             copy.stopOnApprovalRequest = b
         }
+        if o.keys.contains("resumesOnDelegateCompletion") {
+            if let b = o.optionalBool(for: "resumesOnDelegateCompletion") {
+                copy.resumesOnDelegateCompletion = b
+            } else {
+                // Silently ignoring a typed-wrong value would look like the knob is off, which is
+                // also what the historical default looks like for every non-agent mode.
+                diagnostics.append(
+                    "modeProfiles[\(profileID)].runtime.resumesOnDelegateCompletion must be a boolean"
+                )
+            }
+        }
         if let terminationOverlay = o["termination"]?.objectFields {
             copy.termination = mergeTerminationSlice(
                 parent: copy.termination,

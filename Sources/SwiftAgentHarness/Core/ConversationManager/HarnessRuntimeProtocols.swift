@@ -174,6 +174,12 @@ protocol AgentRuntimeRunControlling: Sendable {
     ) async -> ConversationRunInfo?
 }
 
+/// Lets the Sub-Agent Pool tell the Agent Runtime that a conversation's delegate activity moved, so
+/// the status reaches subscribers of a conversation that has no live turn to ride along with.
+protocol AgentRuntimeSubAgentActivityPublishing: Sendable {
+    func refreshSubAgentActivityOnConversationStateTopic(conversationID: UUID) async
+}
+
 protocol AgentRuntimeResidualStateReading: Sendable {
     func lastOrchestrationEmissionConversationID() async -> UUID?
 }

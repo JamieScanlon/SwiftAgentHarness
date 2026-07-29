@@ -764,6 +764,8 @@ extension AgentRuntimeSessionService: AgentRuntimeOrchestrationEmitting {}
 
 extension AgentRuntimeSessionService: AgentRuntimeRunControlling {}
 
+extension AgentRuntimeSessionService: AgentRuntimeSubAgentActivityPublishing {}
+
 extension AgentRuntimeSessionService: AgentRuntimeResidualStateReading {}
 
 extension AgentRuntimeSessionService: AgentRuntimeTokenSnapshotting {}

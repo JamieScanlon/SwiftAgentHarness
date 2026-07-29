@@ -255,6 +255,7 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 |---|---|---|
 | `maxIterations` | Int | Per-turn loop iteration cap (min 1; non-numeric value clears an inherited cap). Built-ins: plan = 8, chat/agent = uncapped. |
 | `stopOnApprovalRequest` | Bool | Pause the loop when a tool requests approval. Built-ins: `true` for plan. |
+| `resumesOnDelegateCompletion` | Bool | Whether an **idle** conversation in this mode starts a turn when an asynchronous delegate completes (wake-on-idle). Unset on every built-in; when unset the harness falls back to the historical rule — agent-mode conversations wake, chat and plan do not. Set `true` on a chat-derived profile to have it wake for background delegate results, or `false` on an agent-derived one to leave the result on the transcript for the next user turn. A completion landing **mid-turn** is always picked up by the running turn regardless of this value; this only decides whether an idle conversation is woken. |
 | `termination.policy` | String | `"bare-message"` (turn ends on plain assistant text; built-in chat) or `"terminal-tool"` (turn ends only via a terminal tool; built-in plan/agent). |
 | `termination.recovery.strategy` | String | `"forced-tool-choice"` or `"behavioral-fallback"`. |
 | `termination.recovery.rollbackStalledTurn` | Bool | Roll back the stalled turn before retrying. |
