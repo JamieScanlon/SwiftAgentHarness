@@ -700,34 +700,30 @@ public actor SubAgentSpawnService {
                 sessionHandleID: restoredSessionHandleID,
                 completionHandleID: restoredCompletionHandleID
             )
-            let phase: SubAgentLifecyclePhase = if conversation.currentRunID != nil {
-                .running
-            } else if handleID != nil {
-                .completing
-            } else {
-                .done
-            }
+            // Nothing is in flight at startup: the process has only just come up, so no restored
+            // child has a live runtime invocation and none may hold a run-lane slot.
+            //
+            // The previous derivation inferred an active phase from persisted metadata — a stamped
+            // `subAgentAsyncHandleID` became `.completing` and re-acquired a lane. But that handle
+            // records "was spawned in background", not "is running", and is never cleared, so every
+            // background child ever spawned re-took a lane on every boot and never released it:
+            // the orphan pass below skips them (they finished cleanly, no marker) and no live run
+            // remains whose end could release them. Eight such children wedged all delegation.
+            //
+            // Genuine interruptions are recovered from durable `run_orphaned` markers by
+            // `publishOrphanedSubAgentNotificationsAfterStartup`, which runs after this rebuild and
+            // transitions those children to `.orphaned` — terminal, and parent-notified.
             let entry = SubAgentLifecycleEntryPayload(
                 lifecycleID: lifecycleRaw,
                 parentConversationID: parentConversationID,
                 childConversationID: conversation.id,
                 delegateToolName: delegateToolName,
                 asyncHandleID: handleID,
-                phase: phase,
+                phase: .done,
                 approvalRoute: await approvalRouteForConversation(conversationID: parentConversationID),
                 updatedAt: conversation.updatedAt
             )
-            let parentRunID = await deps.persistenceDomain.modelConversation(id: parentConversationID)?.currentRunID
-            let restoredEntry = await reacquireSubAgentLaneSlotIfActive(
-                parentConversationID: parentConversationID,
-                parentRunID: parentRunID,
-                lifecycleID: lifecycleRaw,
-                entry: entry
-            )
-            await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: restoredEntry)
-            if restoredEntry.phase == .failed {
-                await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
-            }
+            await upsertSubAgentLifecycleEntry(parentConversationID: parentConversationID, entry: entry)
         }
         await publishOrphanedSubAgentNotificationsAfterStartup()
     }
@@ -909,32 +905,6 @@ public actor SubAgentSpawnService {
             await subAgentInvocationLifecycleCoordinator.endInvocation(lifecycleID: entry.lifecycleID)
         default:
             break
-        }
-    }
-
-    private func reacquireSubAgentLaneSlotIfActive(
-        parentConversationID: UUID,
-        parentRunID: UUID?,
-        lifecycleID: String,
-        entry: SubAgentLifecycleEntryPayload
-    ) async -> SubAgentLifecycleEntryPayload {
-        let activePhases: Set<SubAgentLifecyclePhase> = [.running, .awaitingApproval, .completing]
-        guard activePhases.contains(entry.phase) else { return entry }
-        do {
-            _ = try await subAgentInvocationLifecycleCoordinator.beginInvocation(
-                reservation: SubAgentRunReservation(
-                    parentConversationID: parentConversationID,
-                    parentRunID: parentRunID,
-                    lifecycleID: lifecycleID
-                )
-            )
-            return entry
-        } catch {
-            var failed = entry
-            failed.phase = .failed
-            failed.error = "lane_admission_failed"
-            failed.updatedAt = Date()
-            return failed
         }
     }
 

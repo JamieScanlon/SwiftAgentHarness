@@ -30,6 +30,39 @@ struct SubAgentLaneReleaseOnChildRunEndTests {
         return state
     }
 
+    // MARK: - Startup must not re-admit finished children
+
+    @Test("A restored child is terminal, so it holds no lane")
+    func restoredChildrenAreTerminal() {
+        // Startup rebuilds lifecycle rows as `.done`. Anything else re-admits children that
+        // finished long ago: `subAgentAsyncHandleID` records "was spawned in background", not "is
+        // running", and is never cleared, so a phase inferred from it is permanently wrong.
+        let child = UUID()
+        let restored = entry(
+            lifecycleID: "restored-1",
+            parentConversationID: UUID(),
+            childConversationID: child,
+            phase: .done
+        )
+        #expect(state([restored]).activeEntries(childConversationID: child).isEmpty)
+    }
+
+    @Test("Terminal phases release rather than reserve")
+    func terminalPhasesRelease() {
+        // The phases startup can produce — `.done` from the rebuild, `.orphaned` from the marker
+        // pass that follows it — are both in the release set.
+        for phase in [SubAgentLifecyclePhase.done, .orphaned, .failed] {
+            let child = UUID()
+            let state = state([entry(
+                lifecycleID: "l-1",
+                parentConversationID: UUID(),
+                childConversationID: child,
+                phase: phase
+            )])
+            #expect(state.activeEntries(childConversationID: child).isEmpty, "\(phase) must not hold a lane")
+        }
+    }
+
     @Test("A running child's invocation is found by its child conversation id")
     func findsRunningInvocation() {
         let parent = UUID()
