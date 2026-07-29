@@ -1,4 +1,5 @@
 import Foundation
+import SwiftAgentKit
 
 actor SubAgentCompletionService {
     private let completionAnnounceStore = CompletionAnnounceStateStore()
@@ -27,8 +28,13 @@ actor SubAgentCompletionService {
         await completionAnnounceStore.markDelivered(announce)
     }
 
-    func markPending(_ announce: CompletionAnnouncePayload) async {
-        await completionAnnounceStore.markPending(announce)
+    func markPending(_ announce: CompletionAnnouncePayload, notification: Message? = nil) async {
+        await completionAnnounceStore.markPending(announce, notification: notification)
+    }
+
+    /// The payload a previous attempt failed to append, if any.
+    func pendingNotification(announceID: UUID) async -> Message? {
+        await completionAnnounceStore.pendingNotification(announceID: announceID)
     }
 
     func clearPending(announceID: UUID) async {
@@ -59,6 +65,11 @@ actor SubAgentCompletionService {
             return mapped
         }
         return nil
+    }
+
+    /// Resumes a persisted retry budget after a restart.
+    func restoreRetryCount(_ count: Int, for announceID: UUID) async {
+        await completionAnnounceStore.restoreRetryCount(count, for: announceID)
     }
 
     @discardableResult

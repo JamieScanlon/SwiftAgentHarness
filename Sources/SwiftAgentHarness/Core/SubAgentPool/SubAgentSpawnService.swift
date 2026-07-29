@@ -10,7 +10,7 @@ public actor SubAgentSpawnService {
     let agentRuntime: any AgentRuntimeOrchestratorBinding & AgentRuntimeRunControlling & AgentRuntimeLaneErrorMapping
     private let topics: ConversationTopicPublicationPort
     private let messaging: ConversationMessagingPort
-    private let orchestrator: OrchestratorSessionPort
+    let orchestrator: OrchestratorSessionPort
     private let startup: ConversationStartupService
     private let lifecycle: any ConversationLifecycleServicing
     let completionService: SubAgentCompletionRuntimeService

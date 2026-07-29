@@ -33,6 +33,8 @@ protocol OrchestratorSessionPort: Sendable {
     func listSubAgentRegistryEntriesForAPI(conversationID: UUID) async throws -> [SubAgentRegistryEntry]
     func listSubAgentRegistryEntriesForAPI() async throws -> [SubAgentRegistryEntry]
     func snapshotOrchestrationState(for conversationID: UUID) async -> ConversationOrchestrationState?
+    /// Starts a parent turn after a delegate completion, but only if that conversation is idle.
+    func resumeAfterDelegateCompletionIfIdle(conversationID: UUID) async
 }
 
 /// Forwards ``OrchestratorSessionPort`` calls to ``OrchestratorSessionRuntimeService``.
@@ -168,6 +170,11 @@ final class OrchestratorSessionPortAdapter: OrchestratorSessionPort, Sendable {
     func adoptPersistedNewConversationSelection(_ conversation: ModelConversation) async throws {
         guard let orchestratorService = backing.orchestratorService else { throw ConversationServiceError.failedToInitialize }
         try await orchestratorService.adoptPersistedNewConversationSelection(conversation)
+    }
+
+    func resumeAfterDelegateCompletionIfIdle(conversationID: UUID) async {
+        guard let orchestratorService = backing.orchestratorService else { return }
+        await orchestratorService.resumeAfterDelegateCompletionIfIdle(conversationID: conversationID)
     }
 
     func runTransitionHookIDs(_ hookIDs: [String], context: ModeTransitionContext) async throws {

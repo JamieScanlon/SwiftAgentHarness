@@ -391,6 +391,55 @@ struct InProcessLocalAgentIntegrationTests {
         #expect(message.content.contains("Do not sleep, poll"))
     }
 
+    @Test("The completion survives the pending-handle tool row already on the transcript")
+    func completionSurvivesPendingHandleRow() async throws {
+        // The real turn loop persists the pending-handle result as a `tool` row keyed to the same
+        // tool-call id before the delegate finishes. Calling the service directly skips that, which
+        // is exactly why the duplicate-tool-result guard silently swallowed every background result
+        // in production while these tests passed. Plant the row on the durable tip (not just the
+        // in-memory registry) — append/reload paths read from tip and would otherwise drop a
+        // registry-only seed.
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "The real answer.")
+        )
+        box.value = session
+
+        _ = try await session.saveMessageToCache(
+            Message(
+                id: UUID(),
+                role: .tool,
+                content: "Delegate 'Test Agent' is running in the background (handle: call-1).",
+                timestamp: Date(),
+                toolCallId: "call-1"
+            ),
+            for: parent.id
+        )
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let landed = await waitFor {
+            let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
+            return conversation?.messages.contains { $0.content.contains("The real answer.") } ?? false
+        }
+        #expect(landed)
+        let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
+        // The result must not arrive as a second tool_result against the same tool_use.
+        #expect(conversation.messages.filter { $0.role == .tool && $0.toolCallId == "call-1" }.count == 1)
+        let notification = try #require(conversation.messages.last { $0.content.contains("The real answer.") })
+        #expect(notification.role != .tool)
+        #expect(notification.content.contains("<task-notification>"))
+    }
+
     @Test("A background delegate announces its result into the parent conversation")
     func backgroundAnnouncesCompletion() async throws {
         let definition = makeDefinition(longRunning: true)
@@ -412,12 +461,13 @@ struct InProcessLocalAgentIntegrationTests {
 
         let delivered = await waitFor {
             let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
-            return conversation?.messages.contains { $0.role == .tool && $0.toolCallId == "call-1" } ?? false
+            return conversation?.messages.contains { $0.content.contains("Background done.") } ?? false
         }
         #expect(delivered)
         let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
-        let toolMessage = try #require(conversation.messages.last { $0.role == .tool && $0.toolCallId == "call-1" })
-        #expect(toolMessage.content == "Background done.")
+        let notification = try #require(conversation.messages.last { $0.content.contains("Background done.") })
+        #expect(notification.role != .tool)
+        #expect(notification.content.contains("<status>completed</status>"))
     }
 
     @Test("A background delegate reaches a terminal lifecycle phase and releases its lane")
@@ -470,12 +520,12 @@ struct InProcessLocalAgentIntegrationTests {
 
         let delivered = await waitFor {
             let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
-            return conversation?.messages.contains { $0.role == .tool && $0.toolCallId == "call-1" } ?? false
+            return conversation?.messages.contains { $0.content.contains("<task-notification>") } ?? false
         }
         #expect(delivered)
         let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
-        let toolMessage = try #require(conversation.messages.last { $0.role == .tool && $0.toolCallId == "call-1" })
-        #expect(toolMessage.content.contains("failed"))
+        let notification = try #require(conversation.messages.last { $0.content.contains("<task-notification>") })
+        #expect(notification.content.contains("<status>failed</status>"))
         let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
         #expect(snapshot.entries.first?.phase == .failed)
     }
@@ -507,8 +557,9 @@ struct InProcessLocalAgentIntegrationTests {
             guard let conversation = await session.persistenceDomain.modelConversation(id: parent.id) else {
                 return false
             }
-            let ids = Set(conversation.messages.filter { $0.role == .tool }.compactMap(\.toolCallId))
-            return ids.isSuperset(of: ["call-0", "call-1"])
+            let bodies = conversation.messages.map(\.content)
+            return bodies.contains { $0.contains("<tool-call-id>call-0</tool-call-id>") }
+                && bodies.contains { $0.contains("<tool-call-id>call-1</tool-call-id>") }
         }
         #expect(bothDelivered)
         let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)

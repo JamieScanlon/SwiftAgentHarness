@@ -188,6 +188,12 @@ extension SubAgentSpawnService {
         lifecycleID: String,
         toolCallID: String
     ) async {
+        let notification = await makeLocalAgentCompletionNotification(
+            outcome: outcome,
+            displayName: displayName,
+            parentConversationID: parentConversationID,
+            toolCallID: toolCallID
+        )
         let announce = CompletionAnnouncePayload(
             delegateHandleID: lifecycleID,
             toolCallID: toolCallID,
@@ -202,10 +208,63 @@ extension SubAgentSpawnService {
             source: "subAgentPool.localAgent",
             error: Self.lifecycleError(for: outcome)
         )
-        await completionService.ingestCompletionAnnouncementForAPI(
-            announce,
-            toolMessageContent: Self.toolResultContent(for: outcome, displayName: displayName)
+        await completionService.ingestCompletionAnnouncement(announce, notification: notification)
+        // Wake-on-idle: no-ops while a turn is running, so a completion landing mid-turn is picked
+        // up by that turn rather than racing it.
+        await orchestrator.resumeAfterDelegateCompletionIfIdle(conversationID: parentConversationID)
+    }
+
+    /// The completion arrives as an ordinary later-turn message, never a second `tool_result` — the
+    /// delegate's tool call was already answered by its pending handle.
+    private func makeLocalAgentCompletionNotification(
+        outcome: LocalAgentRunOutcome,
+        displayName: String,
+        parentConversationID: UUID,
+        toolCallID: String
+    ) async -> Message {
+        let tail = await deps.persistenceDomain.modelConversation(id: parentConversationID)?.messages.last
+        return Message(
+            id: UUID(),
+            role: Self.completionNotificationRole(followingTailRole: tail?.role),
+            content: Self.completionNotificationBody(
+                outcome: outcome,
+                displayName: displayName,
+                toolCallID: toolCallID
+            ),
+            timestamp: Date()
         )
+    }
+
+    /// Providers reject two consecutive same-role messages, so the notification yields to the tail.
+    static func completionNotificationRole(followingTailRole: MessageRole?) -> MessageRole {
+        followingTailRole == .user ? .assistant : .user
+    }
+
+    static func completionNotificationBody(
+        outcome: LocalAgentRunOutcome,
+        displayName: String,
+        toolCallID: String
+    ) -> String {
+        let status: String = switch outcome {
+        case .completed: "completed"
+        case .failed: "failed"
+        case .timedOut: "timed out"
+        case .cancelled: "cancelled"
+        }
+        return """
+        <task-notification>
+        <source>subagent</source>
+        <agent>\(displayName)</agent>
+        <tool-call-id>\(toolCallID)</tool-call-id>
+        <status>\(status)</status>
+        <result>
+        \(Self.toolResultContent(for: outcome, displayName: displayName))
+        </result>
+        </task-notification>
+
+        This is the delegate result you were waiting for. Relay what matters to the user in your own \
+        voice — do not repeat this block verbatim or mention its internal fields.
+        """
     }
 
     /// Drives the child run to completion under a wall-clock budget, cancelling the child if the

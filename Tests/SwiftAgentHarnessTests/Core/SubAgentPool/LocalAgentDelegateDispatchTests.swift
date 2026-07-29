@@ -76,6 +76,41 @@ struct LocalAgentDelegateDispatchTests {
         #expect(SubAgentSpawnService.trimmingTrailingWhitespace("") == "")
     }
 
+    // MARK: - Completion notification shape
+
+    @Test("The notification yields role to the transcript tail")
+    func notificationAvoidsConsecutiveSameRole() {
+        // Two consecutive user messages are rejected by most providers.
+        #expect(SubAgentSpawnService.completionNotificationRole(followingTailRole: .user) == .assistant)
+        #expect(SubAgentSpawnService.completionNotificationRole(followingTailRole: .assistant) == .user)
+        #expect(SubAgentSpawnService.completionNotificationRole(followingTailRole: .tool) == .user)
+        #expect(SubAgentSpawnService.completionNotificationRole(followingTailRole: nil) == .user)
+    }
+
+    @Test("The notification carries a runtime-derived status and the delegate's report")
+    func notificationBodyShape() {
+        let body = SubAgentSpawnService.completionNotificationBody(
+            outcome: .completed("Found it in Parser.swift."),
+            displayName: "Explore",
+            toolCallID: "call-7"
+        )
+        #expect(body.contains("<status>completed</status>"))
+        #expect(body.contains("<tool-call-id>call-7</tool-call-id>"))
+        #expect(body.contains("Found it in Parser.swift."))
+        // The agent must relay in its own voice rather than echo the envelope.
+        #expect(body.contains("do not repeat this block verbatim"))
+    }
+
+    @Test("Non-completions are reported as such, not as a silent empty result")
+    func notificationStatusForFailures() {
+        #expect(SubAgentSpawnService.completionNotificationBody(outcome: .failed("boom"), displayName: "X", toolCallID: "c")
+            .contains("<status>failed</status>"))
+        #expect(SubAgentSpawnService.completionNotificationBody(outcome: .timedOut(30), displayName: "X", toolCallID: "c")
+            .contains("<status>timed out</status>"))
+        #expect(SubAgentSpawnService.completionNotificationBody(outcome: .cancelled, displayName: "X", toolCallID: "c")
+            .contains("<status>cancelled</status>"))
+    }
+
     // MARK: - Depth folding
 
     @Test("Per-agent and mode-profile depth caps fold to the tighter of the two")

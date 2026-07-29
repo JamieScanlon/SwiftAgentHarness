@@ -534,6 +534,13 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         await resumeConversationAfterPendingCompletionIfNeeded(conversationID: event.conversationID)
     }
 
+    /// Wake-on-idle for an async delegate completion. Reuses the pending-completion park/resume
+    /// path, which already no-ops when a generation task is in flight — so a completion landing
+    /// mid-turn is picked up by the running turn instead of racing it.
+    func resumeAfterDelegateCompletionIfIdle(conversationID: UUID) async {
+        await resumeConversationAfterPendingCompletionIfNeeded(conversationID: conversationID)
+    }
+
     private func resumeConversationAfterPendingCompletionIfNeeded(conversationID: UUID) async {
         await resumeConversationAfterParkIfNeeded(
             conversationID: conversationID,

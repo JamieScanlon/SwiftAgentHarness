@@ -144,6 +144,51 @@ struct ToolUsageSummaryEventPayload: Codable, Sendable {
     let createdAt: Date
 }
 
+/// The announcement content a delivery attempt failed to append, narrowed to the fields an
+/// announcement message actually carries. Persisted alongside the announce event so a retry that
+/// resumes after a process restart has something to re-append, rather than only being able to
+/// re-publish the lifecycle event and settle at `fallback`.
+struct CompletionAnnounceNotificationPayload: Codable, Sendable {
+    let messageID: UUID
+    let role: String
+    let content: String
+    let timestamp: Date
+    let toolCallID: String?
+    let responseFormat: String?
+    /// Carried rather than dropped: trust classification decides how the re-appended content is
+    /// treated, so losing it would change the meaning of the recovered message.
+    let inputTrustRaw: String?
+
+    /// Fails when the message carries fields this payload cannot represent, so a lossy copy is
+    /// never persisted in place of the real one. Such a payload stays in-memory only, which is the
+    /// behaviour that applied to every payload before this type existed.
+    init?(message: Message) {
+        guard message.images.isEmpty, message.toolCalls.isEmpty else { return nil }
+        self.messageID = message.id
+        self.role = message.role.rawValue
+        self.content = message.content
+        self.timestamp = message.timestamp
+        self.toolCallID = message.toolCallId
+        self.responseFormat = message.responseFormat
+        self.inputTrustRaw = message.inputTrustRaw
+    }
+
+    /// Nil when the persisted role no longer decodes, rather than silently substituting one — the
+    /// role decides which side of the transcript the announcement lands on.
+    var message: Message? {
+        guard let messageRole = MessageRole(rawValue: role) else { return nil }
+        return Message(
+            id: messageID,
+            role: messageRole,
+            content: content,
+            timestamp: timestamp,
+            toolCallId: toolCallID,
+            responseFormat: responseFormat,
+            inputTrustRaw: inputTrustRaw
+        )
+    }
+}
+
 struct CompletionAnnounceEventPayload: Codable, Sendable {
     let announce: CompletionAnnouncePayload
     let runtimePublished: Bool
@@ -151,7 +196,28 @@ struct CompletionAnnounceEventPayload: Codable, Sendable {
     let retryCount: Int
     /// `pending`, `delivered`, or `fallback`.
     let deliveryState: String
+    /// Retained only while the content is the unresolved half of a `pending` announcement. Rows
+    /// written before this field existed decode as nil, which is the pre-existing behaviour.
+    let pendingNotification: CompletionAnnounceNotificationPayload?
     let createdAt: Date
+
+    init(
+        announce: CompletionAnnouncePayload,
+        runtimePublished: Bool,
+        subagentPublished: Bool,
+        retryCount: Int,
+        deliveryState: String,
+        pendingNotification: CompletionAnnounceNotificationPayload? = nil,
+        createdAt: Date
+    ) {
+        self.announce = announce
+        self.runtimePublished = runtimePublished
+        self.subagentPublished = subagentPublished
+        self.retryCount = retryCount
+        self.deliveryState = deliveryState
+        self.pendingNotification = pendingNotification
+        self.createdAt = createdAt
+    }
 }
 
 struct InteractionModeChangedEventPayload: Codable, Sendable, Equatable {
