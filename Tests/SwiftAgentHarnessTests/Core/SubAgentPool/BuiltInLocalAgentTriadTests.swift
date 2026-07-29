@@ -130,7 +130,8 @@ struct BuiltInLocalAgentTriadTests {
         let tools = await provider.availableTools()
         #expect(tools.count == 3)
         #expect(tools.allSatisfy { $0.name.hasPrefix("delegate_") })
-        // Synchronous roles must not carry the background do-not-poll language.
-        #expect(tools.allSatisfy { $0.description.contains("runs to completion before the call returns") })
+        // All three ship background, so every description must carry the do-not-poll rule.
+        #expect(tools.allSatisfy { $0.description.contains("returns a handle immediately") })
+        #expect(tools.allSatisfy { $0.description.contains("Do not poll") })
     }
 }

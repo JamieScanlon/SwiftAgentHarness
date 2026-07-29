@@ -326,7 +326,9 @@ extension SubAgentSpawnService {
         case .failed(let message):
             return "Delegate '\(displayName)' failed: \(message)"
         case .timedOut(let seconds):
-            return "Delegate '\(displayName)' exceeded its \(Int(seconds))s budget and was cancelled."
+            // Name the setting: a bare "300s timeout" is indistinguishable from the tool-call
+            // timeout, which fails for an entirely different reason and has a different fix.
+            return "Delegate '\(displayName)' exceeded its runTimeoutSeconds budget of \(Int(seconds))s and was cancelled."
         case .cancelled:
             return "Delegate '\(displayName)' was cancelled."
         }
@@ -378,7 +380,7 @@ extension SubAgentSpawnService {
         switch outcome {
         case .completed: nil
         case .failed(let message): message
-        case .timedOut(let seconds): "delegate run exceeded \(Int(seconds))s budget"
+        case .timedOut(let seconds): "delegate run exceeded runTimeoutSeconds budget of \(Int(seconds))s"
         case .cancelled: "delegate run cancelled"
         }
     }

@@ -56,6 +56,7 @@ struct LocalAgentConfigurationTests {
         #expect(definition?.toolsAllow == nil)
         #expect(definition?.longRunning == false)
         #expect(definition?.runTimeoutSeconds == LocalAgentConfiguration.defaultRunTimeoutSeconds)
+        #expect(LocalAgentConfiguration.defaultRunTimeoutSeconds < 300, "sync budget must fail inside the tool-call timeout")
         #expect(definition?.maxRecursionDepth == nil)
     }
 
@@ -139,14 +140,40 @@ struct LocalAgentConfigurationTests {
         #expect(configured["delegate_coding_agent"]?.modelRef == nil)
     }
 
-    @Test("Every built-in inherits the parent model and cannot delegate further")
+    @Test("Every built-in inherits the parent model, runs background, and cannot delegate further")
     func builtInsInheritAndStayFlat() {
         for definition in LocalAgentConfiguration.builtInDefaults.definitions {
             #expect(definition.modelRef == nil)
-            #expect(definition.longRunning == false)
+            // Synchronous built-ins would block the tool call for their whole run and trip its
+            // timeout on any non-trivial exploration.
+            #expect(definition.longRunning)
+            #expect(definition.runTimeoutSeconds == LocalAgentConfiguration.backgroundDefaultRunTimeoutSeconds)
             #expect(definition.maxRecursionDepth == 1)
             #expect(definition.description.isEmpty == false)
         }
+    }
+
+    @Test("An unpinned budget follows the agent's delivery mode")
+    func defaultBudgetFollowsDeliveryMode() {
+        var entry = validEntry
+        entry["longRunning"] = true
+        #expect(
+            configuredOnly(["Coding Agent": entry])["delegate_coding_agent"]?.runTimeoutSeconds
+                == LocalAgentConfiguration.backgroundDefaultRunTimeoutSeconds
+        )
+        entry["longRunning"] = false
+        #expect(
+            configuredOnly(["Coding Agent": entry])["delegate_coding_agent"]?.runTimeoutSeconds
+                == LocalAgentConfiguration.defaultRunTimeoutSeconds
+        )
+    }
+
+    @Test("An explicit budget wins over the delivery-mode default")
+    func explicitBudgetOverridesDeliveryModeDefault() {
+        var entry = validEntry
+        entry["longRunning"] = true
+        entry["runTimeoutSeconds"] = 60
+        #expect(configuredOnly(["Coding Agent": entry])["delegate_coding_agent"]?.runTimeoutSeconds == 60)
     }
 
     @Test("A non-array toolsAllow fails closed rather than widening to all tools")

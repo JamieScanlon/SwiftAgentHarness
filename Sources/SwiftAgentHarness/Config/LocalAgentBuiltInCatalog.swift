@@ -15,6 +15,10 @@ enum LocalAgentBuiltInCatalog {
     /// itself spawn (its mode profile denies sub-agents outright).
     private static let flatSpawnDepth = 1
 
+    /// All three ship background. A synchronous delegate blocks the tool call for its whole run, so
+    /// any non-trivial exploration or plan trips the tool-call timeout; push-based delivery removes
+    /// that ceiling. The model can still wait on one per call via `run_in_background: false`.
+
     static func all() -> [LocalAgentDefinition] {
         [
             LocalAgentDefinition(
@@ -27,7 +31,7 @@ Cannot modify anything.
 """,
                 modeProfileID: "subagent-explore",
                 modelRef: nil,
-                longRunning: false,
+                longRunning: true,
                 maxRecursionDepth: flatSpawnDepth
             ),
             LocalAgentDefinition(
@@ -39,7 +43,7 @@ returns an approach, trade-offs, risks, and the critical files to change. Cannot
 """,
                 modeProfileID: "subagent-plan",
                 modelRef: nil,
-                longRunning: false,
+                longRunning: true,
                 maxRecursionDepth: flatSpawnDepth
             ),
             LocalAgentDefinition(
@@ -52,7 +56,7 @@ surface but cannot delegate further.
 """,
                 modeProfileID: "subagent-general",
                 modelRef: nil,
-                longRunning: false,
+                longRunning: true,
                 maxRecursionDepth: flatSpawnDepth
             ),
         ]

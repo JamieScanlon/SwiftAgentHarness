@@ -530,8 +530,10 @@ present, each paired with a built-in mode profile that carries its capability gr
 | `delegate_plan` | `subagent-plan` | same read-only set | Architecture and planning; reports approach, risks, and a "Critical Files for Implementation" section. |
 | `delegate_general_purpose` | `subagent-general` | `*` minus `delegate_*` | A self-contained task in its own context window. |
 
-All three inherit the parent conversation's model, run synchronously, and deny sub-agent spawning
-(flat delegation, `maxRecursionDepth: 1`). **Read-only is enforced at dispatch, not by prompt** —
+All three inherit the parent conversation's model, **run in the background**, and deny sub-agent
+spawning (flat delegation, `maxRecursionDepth: 1`). Background is the default because a synchronous
+delegate blocks the tool call for its entire run, so any non-trivial exploration or plan trips the
+tool-call timeout; the model can still wait on one per call with `run_in_background: false`. **Read-only is enforced at dispatch, not by prompt** —
 `bash` is withheld from explore and plan because redirects and heredocs would otherwise make
 write-prevention prompt-enforced only. A `localAgents` row whose slugified key matches a built-in
 tool name replaces that built-in outright; the others survive.
@@ -548,8 +550,8 @@ with a diagnostic.
 | `modeProfileId` | String | **yes** | — | Mode profile assigned to the spawned child. Must resolve against `modeProfiles`; an unknown id means the delegate is **not published at all** (fail closed, logged at error). |
 | `modelRef` | String | no | `nil` | Model the child runs on, resolved through the Model Pool. Omit to inherit the parent conversation's model (what all three built-ins do). A *present but unresolvable* ref fails the delegate call with a clear message rather than silently falling back. |
 | `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
-| `longRunning` | Bool | no | `false` | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
-| `runTimeoutSeconds` | Number | no | `300` | Wall-clock budget for the child run, clamped to `5…3600`. On expiry the child is cancelled and the parent gets an explicit timeout result. The floor exists because a shorter timeout can fire before the child has registered a run, leaving the cancel with nothing to stop and the run orphaned. |
+| `longRunning` | Bool | no | `false` (built-ins: `true`) | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
+| `runTimeoutSeconds` | Number | no | `240` sync / `1800` background | Wall-clock budget for the child run, clamped to `5…3600`. Omit it and the budget follows the agent's delivery mode. The synchronous default sits **below the 300s tool-call timeout** on purpose: a synchronous delegate blocks the tool call for its whole run, so a longer budget means the tool call dies first and you get a generic tool timeout instead of the delegate's own message. Background runs block nothing, so they get room to work. The `5`s floor exists because a shorter timeout can fire before the child has registered a run, leaving the cancel with nothing to stop and the run orphaned. |
 | `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
 
 ```json
@@ -583,6 +585,13 @@ allowlist is what survives prompt injection reaching the delegate through its `i
 - `run_in_background` (boolean, optional) — overrides `longRunning` for this one call, so the model
   can wait on a normally-backgrounded agent or background a normally-synchronous one. Omitted means
   the agent's configured mode applies; a malformed value is ignored rather than read as `false`.
+
+**Two different timeouts, two different fixes.** A delegate that runs too long can fail in two
+unrelated ways. `runTimeoutSeconds` is the harness's own budget — its message names the setting
+(`exceeded its runTimeoutSeconds budget of Ns`) so the log tells you which knob to turn. The
+tool-call timeout is separate and applies only to *synchronous* delegates, because those hold the
+tool call open for the whole run; the fix for that one is `longRunning: true`, not a larger budget.
+Raising `runTimeoutSeconds` above the tool-call timeout on a synchronous agent achieves nothing.
 
 **Background delivery.** With `longRunning: true` the delegate call returns
 `Delegate '<name>' is running in the background (handle: <tool-call-id>)` plus an explicit

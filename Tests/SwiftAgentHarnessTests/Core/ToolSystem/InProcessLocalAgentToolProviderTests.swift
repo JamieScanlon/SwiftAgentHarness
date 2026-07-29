@@ -50,16 +50,19 @@ struct InProcessLocalAgentToolProviderTests {
         #expect(tools.allSatisfy { $0.type == .function })
     }
 
-    @Test("Schema is required instructions plus optional description")
-    func exposesInstructionsAndDescription() async {
+    @Test("Schema is required instructions plus optional description and run_in_background")
+    func exposesInstructionsDescriptionAndRunInBackground() async {
         let provider = InProcessLocalAgentToolProvider(definitions: [makeDefinition()])
         let parameters = await provider.availableTools()[0].parameters
-        #expect(parameters.map(\.name).sorted() == ["description", "instructions"])
+        #expect(parameters.map(\.name).sorted() == ["description", "instructions", "run_in_background"])
         let instructions = parameters.first { $0.name == "instructions" }
         let description = parameters.first { $0.name == "description" }
+        let runInBackground = parameters.first { $0.name == "run_in_background" }
         #expect(instructions?.required == true)
         #expect(instructions?.type == "string")
         #expect(description?.required == false)
+        #expect(runInBackground?.required == false)
+        #expect(runInBackground?.type == "boolean")
     }
 
     @Test("Tool description names the agent and warns that the delegate has no shared context")

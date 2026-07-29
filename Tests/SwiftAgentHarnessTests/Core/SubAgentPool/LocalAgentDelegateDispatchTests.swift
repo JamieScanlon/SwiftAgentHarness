@@ -27,7 +27,7 @@ struct LocalAgentDelegateDispatchTests {
     @Test("Lifecycle error text is present exactly for non-completions")
     func lifecycleErrorText() {
         #expect(SubAgentSpawnService.lifecycleError(for: .completed("ok")) == nil)
-        #expect(SubAgentSpawnService.lifecycleError(for: .timedOut(30)) == "delegate run exceeded 30s budget")
+        #expect(SubAgentSpawnService.lifecycleError(for: .timedOut(30)) == "delegate run exceeded runTimeoutSeconds budget of 30s")
         #expect(SubAgentSpawnService.lifecycleError(for: .cancelled) == "delegate run cancelled")
     }
 
@@ -57,6 +57,9 @@ struct LocalAgentDelegateDispatchTests {
         )
         let timedOut = SubAgentSpawnService.toolResultContent(for: .timedOut(45), displayName: "Coding Agent")
         #expect(timedOut.contains("45s"))
+        // The message must name the setting; "300s timeout" alone reads as the tool-call timeout,
+        // which fails for a different reason and has a different fix.
+        #expect(timedOut.contains("runTimeoutSeconds"))
         #expect(SubAgentSpawnService.toolResultContent(for: .cancelled, displayName: "Coding Agent").contains("cancelled"))
     }
 

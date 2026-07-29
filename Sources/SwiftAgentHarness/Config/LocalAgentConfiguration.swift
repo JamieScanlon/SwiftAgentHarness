@@ -72,7 +72,7 @@ public struct LocalAgentDefinition: Sendable, Equatable {
         modelRef: String? = nil,
         toolsAllow: [String]? = nil,
         longRunning: Bool = false,
-        runTimeoutSeconds: TimeInterval = LocalAgentConfiguration.defaultRunTimeoutSeconds,
+        runTimeoutSeconds: TimeInterval? = nil,
         maxRecursionDepth: Int? = nil
     ) {
         self.toolName = toolName
@@ -83,14 +83,29 @@ public struct LocalAgentDefinition: Sendable, Equatable {
         self.toolsAllow = toolsAllow
         self.longRunning = longRunning
         self.runTimeoutSeconds = runTimeoutSeconds
+            ?? LocalAgentConfiguration.resolvedDefaultRunTimeoutSeconds(longRunning: longRunning)
         self.maxRecursionDepth = maxRecursionDepth
     }
 }
 
 /// Parsed `localAgents` PromptConfig section.
 public struct LocalAgentConfiguration: Sendable, Equatable {
-    public static let defaultRunTimeoutSeconds: TimeInterval = 300
+    /// Default budget for a **synchronous** delegate, deliberately below the 300s tool-call
+    /// timeout. A synchronous delegate blocks the tool call for its whole run, so a budget at or
+    /// above that timeout means the tool call dies first and the failure surfaces as a generic
+    /// tool timeout instead of the delegate's own explanatory message. Leaving headroom makes the
+    /// delegate report its own failure.
+    public static let defaultRunTimeoutSeconds: TimeInterval = 240
+    /// Default budget for a **background** delegate. Push-based delivery exists for work measured
+    /// in minutes, so the synchronous default would defeat the point; the run no longer blocks a
+    /// tool call, so there is nothing to stay under.
+    public static let backgroundDefaultRunTimeoutSeconds: TimeInterval = 1800
     public static let maximumRunTimeoutSeconds: TimeInterval = 3600
+
+    /// Budget applied when an agent does not pin `runTimeoutSeconds` itself.
+    public static func resolvedDefaultRunTimeoutSeconds(longRunning: Bool) -> TimeInterval {
+        longRunning ? backgroundDefaultRunTimeoutSeconds : defaultRunTimeoutSeconds
+    }
     /// Floor for operator-supplied timeouts. Below this, a timeout can fire before the child has
     /// registered a run, so the cancel finds nothing to stop and the run is orphaned — it completes
     /// with nobody reading it. Lane accounting stays correct either way; this stops the window being
@@ -195,7 +210,8 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                 maxRecursionDepth = depth
             }
 
-            var runTimeoutSeconds = defaultRunTimeoutSeconds
+            // Left nil so the definition resolves the default from its own delivery mode.
+            var runTimeoutSeconds: TimeInterval?
             if let rawTimeout = entry["runTimeoutSeconds"] {
                 guard let seconds = (rawTimeout as? NSNumber)?.doubleValue, seconds > 0 else {
                     diagnostics.append("localAgents['\(configKey)']: 'runTimeoutSeconds' must be a positive number")
