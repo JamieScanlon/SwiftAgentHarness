@@ -12,6 +12,25 @@ public struct RetryAfterRateLimitError: Error, Sendable {
     }
 }
 
+extension RetryAfterRateLimitError: LocalizedError {
+    /// Without this, `localizedDescription` bridges to Foundation's placeholder
+    /// ("… error 1"), which is what a persisted terminal reason would show.
+    public var errorDescription: String? {
+        let base = (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+        guard let retryAfterSeconds else { return base }
+        return "\(base) (retry after \(retryAfterSeconds)s)"
+    }
+}
+
+/// An error that can restate itself with the number of attempts that produced it.
+///
+/// Exists so a retry wrapper can annotate an error without *wrapping* it — wrapping would hide
+/// the concrete type from the `as?` checks and classifiers downstream.
+public protocol AttemptAnnotatableError: Error {
+    /// Returns a copy carrying `attempts`. Implementations should keep their own type.
+    func annotatedWithAttempts(_ attempts: Int) -> any Error
+}
+
 /// A model stream that terminated without delivering anything the caller can act on.
 ///
 /// Deliberately *not* an ``LLMError`` case. A degenerate stream is a response-*shape* failure,
@@ -40,14 +59,54 @@ public struct DegenerateStreamError: Error, Sendable, CustomStringConvertible {
     public let kind: Kind
     public let provider: String
     public let detail: String
+    /// Attempts made before the failure surfaced. `nil` until a retry wrapper annotates it, so a
+    /// reader can tell "not retried" apart from "retried once".
+    public let attempts: Int?
 
-    public init(kind: Kind, provider: String, detail: String) {
+    public init(kind: Kind, provider: String, detail: String, attempts: Int? = nil) {
         self.kind = kind
         self.provider = provider
         self.detail = detail
+        self.attempts = attempts
     }
 
-    public var description: String { detail }
+    public var description: String { errorDescription ?? detail }
+}
+
+extension DegenerateStreamError: LocalizedError, CustomNSError, AttemptAnnotatableError {
+    public static var errorDomain: String { "SwiftAgentHarness.DegenerateStreamError" }
+
+    /// Distinguishes the kinds for anything reading the bridged `NSError` code, which otherwise
+    /// reports `1` for every case of a Swift struct error.
+    public var errorCode: Int {
+        switch kind {
+        case .noEvents: return 1
+        case .announcedToolCallLost: return 2
+        case .noOutcome: return 3
+        }
+    }
+
+    /// Drives `localizedDescription`, which is what reaches a persisted terminal reason.
+    public var errorDescription: String? {
+        guard let attempts, attempts > 1 else { return detail }
+        return "\(detail) (after \(attempts) attempts)"
+    }
+
+    /// `CustomNSError` fixes this as `[String: Any]`; EasyJSON cannot satisfy the Foundation
+    /// contract, so this is a deliberate exception to the repo-wide preference.
+    public var errorUserInfo: [String: Any] {
+        var info: [String: Any] = [
+            NSLocalizedDescriptionKey: errorDescription ?? detail,
+            "kind": kind.rawValue,
+            "provider": provider,
+        ]
+        if let attempts { info["attempts"] = attempts }
+        return info
+    }
+
+    public func annotatedWithAttempts(_ attempts: Int) -> any Error {
+        DegenerateStreamError(kind: kind, provider: provider, detail: detail, attempts: attempts)
+    }
 }
 
 /// Outcome of inspecting a thrown error to decide whether ``RetryingLLM`` should retry.

@@ -104,8 +104,9 @@ struct RetryingLLM: LLMProtocol, AdapterAuthProbing {
                         if firstYielded
                             || TransientErrorClassifier.classify(error) == .terminal
                             || attempt >= policy.maxRetries {
-                            await emitAttempt(kind: .retry, outcome: .terminalFailure, error: error)
-                            continuation.finish(throwing: error)
+                            let surfaced = Self.annotated(error, attempts: attempt + 1)
+                            await emitAttempt(kind: .retry, outcome: .terminalFailure, error: surfaced)
+                            continuation.finish(throwing: surfaced)
                             return
                         }
                         let delay = Self.retryDelay(for: error, attempt: attempt, policy: policy)
@@ -141,8 +142,9 @@ struct RetryingLLM: LLMProtocol, AdapterAuthProbing {
             } catch {
                 let decision = TransientErrorClassifier.classify(error)
                 guard decision == .transient, attempt < policy.maxRetries else {
-                    await emitAttempt(kind: .retry, outcome: .terminalFailure, error: error)
-                    throw error
+                    let surfaced = Self.annotated(error, attempts: attempt + 1)
+                    await emitAttempt(kind: .retry, outcome: .terminalFailure, error: surfaced)
+                    throw surfaced
                 }
                 let delay = Self.retryDelay(for: error, attempt: attempt, policy: policy)
                 await emitAttempt(kind: .retry, outcome: .continued, error: error, latencyMs: delay * 1000)
@@ -155,6 +157,13 @@ struct RetryingLLM: LLMProtocol, AdapterAuthProbing {
                 attempt += 1
             }
         }
+    }
+
+    /// Lets an error restate itself with the attempt count that produced it. Annotating rather
+    /// than wrapping keeps the concrete type visible to the `as?` checks and classifiers
+    /// downstream; errors that opt out are returned untouched.
+    private static func annotated(_ error: Error, attempts: Int) -> Error {
+        (error as? any AttemptAnnotatableError)?.annotatedWithAttempts(attempts) ?? error
     }
 
     /// Pure exponential-backoff-with-jitter helper. Exposed `internal` (and `static`) so

@@ -208,6 +208,9 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                     )
                 } catch is CancellationError {
                     emitter.finishCancelled()
+                } catch let error as DegenerateStreamError {
+                    // Must precede the generic catch, which would relabel it a network error.
+                    emitter.finishFailed(with: error)
                 } catch let error as LLMError {
                     emitter.finishFailed(with: error)
                 } catch {
@@ -603,6 +606,10 @@ protocol AnthropicStreamSourcing: Sendable {
 }
 
 struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
+    /// Bounds on the debug-only body sample captured when a stream yields nothing.
+    static let bodySampleLineLimit = 5
+    static let bodySampleCharacterLimit = 240
+
     func messageStream(
         apiURL: URL,
         apiKey: String,
@@ -623,7 +630,6 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     do {
                         try AnthropicErrorMapping.validate(response, body: nil)
@@ -632,15 +638,50 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                         return
                     }
                     var decoder = AnthropicSSEFrameDecoder()
+                    var lineCount = 0
+                    var lineBytes = 0
+                    var eventCount = 0
+                    var bodySample = ""
                     for try await line in bytes.lines {
+                        lineCount += 1
+                        lineBytes += line.utf8.count
+                        if lineCount <= Self.bodySampleLineLimit, !line.isEmpty {
+                            bodySample += bodySample.isEmpty ? line : "\n" + line
+                        }
                         for event in decoder.consume(line: line) {
+                            eventCount += 1
                             continuation.yield(event)
                         }
                     }
                     // A body that ends without its terminating blank line still holds a
                     // complete frame; dropping it loses the final delta or stop reason.
                     for event in decoder.flush() {
+                        eventCount += 1
                         continuation.yield(event)
+                    }
+                    guard eventCount > 0 else {
+                        let http = response as? HTTPURLResponse
+                        let diagnostics = AnthropicStreamBodyDiagnostics(
+                            statusCode: http?.statusCode ?? -1,
+                            contentType: http?.value(forHTTPHeaderField: "Content-Type") ?? "<none>",
+                            lineBytes: lineBytes,
+                            lineCount: lineCount,
+                            frameCount: decoder.frameCount,
+                            eventCount: eventCount,
+                            sawCarriageReturn: decoder.sawCarriageReturn
+                        )
+                        logger?.error("Anthropic stream produced no events — \(diagnostics.summary)")
+                        // Body content is response data, so it stays at debug level and never
+                        // reaches the persisted terminal reason.
+                        logger?.debug(
+                            "Anthropic zero-event body sample: \(String(bodySample.prefix(Self.bodySampleCharacterLimit)).debugDescription)"
+                        )
+                        continuation.finish(throwing: DegenerateStreamError(
+                            kind: .noEvents,
+                            provider: "Anthropic",
+                            detail: "Anthropic stream produced no SSE events — \(diagnostics.summary)"
+                        ))
+                        return
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -655,6 +696,30 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
     }
 }
 
+/// Transport-level shape of a stream body, captured so a zero-event turn can report what
+/// actually arrived rather than only that nothing parsed.
+///
+/// Deliberately shape-only — counts, status, and content type, never body content — because it
+/// is surfaced in ``DegenerateStreamError/detail``, which is persisted onto the run's terminal
+/// reason and shown to users.
+struct AnthropicStreamBodyDiagnostics: Sendable {
+    let statusCode: Int
+    let contentType: String
+    /// Bytes across decoded lines, excluding line terminators.
+    let lineBytes: Int
+    let lineCount: Int
+    let frameCount: Int
+    let eventCount: Int
+    let sawCarriageReturn: Bool
+
+    var summary: String {
+        """
+        status=\(statusCode) contentType=\(contentType) lineBytes=\(lineBytes) \
+        lines=\(lineCount) frames=\(frameCount) events=\(eventCount) cr=\(sawCarriageReturn)
+        """
+    }
+}
+
 /// Assembles SSE lines into frames and maps each complete frame to stream events.
 ///
 /// Split out of ``DefaultAnthropicStreamSource`` so frame boundaries — including a body that
@@ -663,9 +728,23 @@ struct AnthropicSSEFrameDecoder {
     private var eventName: String?
     private var dataLines: [String] = []
 
+    /// True once any line arrived CRLF-terminated. Diagnostic only — the CR is stripped either
+    /// way — but it distinguishes a proxied or rewritten body from a direct one.
+    private(set) var sawCarriageReturn = false
+    private(set) var frameCount = 0
+
     init() {}
 
-    mutating func consume(line: String) -> [AnthropicStreamEvent] {
+    mutating func consume(line rawLine: String) -> [AnthropicStreamEvent] {
+        // A CRLF body can hand back lines with the CR still attached, and `.whitespaces` does
+        // not contain CR (it lives in `.newlines`). An unstripped CR would turn every blank
+        // frame separator into a non-empty line, so nothing would flush until end of body and
+        // the whole response would parse as one malformed payload.
+        var line = rawLine
+        if line.hasSuffix("\r") {
+            sawCarriageReturn = true
+            line.removeLast()
+        }
         if line.hasPrefix("event:") {
             eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
             return []
@@ -689,6 +768,7 @@ struct AnthropicSSEFrameDecoder {
         }
         let payload = dataLines.joined(separator: "\n")
         guard !payload.isEmpty else { return [] }
+        frameCount += 1
         return AnthropicSSEParser.events(fromJSONLine: payload, eventName: eventName)
     }
 }

@@ -169,6 +169,47 @@ struct AnthropicSSEEmptyTurnRegressionTests {
         #expect(stopReasons == ["tool_use"])
     }
 
+    @Test("a CRLF body decodes identically and is flagged")
+    func crlfBodyDecodesIdentically() {
+        // A proxied or rewritten body can arrive CRLF-terminated. `.whitespaces` does not strip
+        // CR, so without explicit handling every blank separator would be "\r" instead of "",
+        // no frame would flush mid-stream, and the whole body would parse as one bad payload.
+        let crlfBody = Self.skillActivationSSEBody.replacingOccurrences(of: "\n", with: "\r\n")
+        var decoder = AnthropicSSEFrameDecoder()
+        var events: [AnthropicStreamEvent] = []
+        // Split on LF only — the way a line splitter that does not special-case CRLF behaves —
+        // so every line still carries its CR. That is the exact input this hardening exists for;
+        // splitting on CRLF would strip the CR and test nothing.
+        for line in crlfBody.components(separatedBy: "\n") {
+            events.append(contentsOf: decoder.consume(line: line))
+        }
+        events.append(contentsOf: decoder.flush())
+
+        #expect(decoder.sawCarriageReturn)
+        let text = events.compactMap { event -> String? in
+            if case .contentDelta(let delta) = event { return delta }
+            return nil
+        }.joined()
+        #expect(text == "I can see the 'writing-plans' skill is available")
+
+        let fragments = events.compactMap { event -> String? in
+            if case .toolInputDelta(_, _, let fragment) = event { return fragment }
+            return nil
+        }.joined()
+        #expect(fragments == "{\"skill_name\":\"writing-plans\"}")
+        #expect(decoder.frameCount > 1) // frames flushed as they arrived, not all at the end
+    }
+
+    @Test("an LF body is not flagged as carriage-returned")
+    func lfBodyNotFlagged() {
+        var decoder = AnthropicSSEFrameDecoder()
+        for line in Self.skillActivationSSEBody.components(separatedBy: "\n") {
+            _ = decoder.consume(line: line)
+        }
+        _ = decoder.flush()
+        #expect(decoder.sawCarriageReturn == false)
+    }
+
     @Test("frame that ends without a trailing blank line is still emitted")
     func trailingFrameWithoutBlankLineIsFlushed() {
         let truncated = """
@@ -385,6 +426,68 @@ struct DegenerateStreamErrorClassificationTests {
             return
         }
         #expect(degenerate.kind == .noEvents)
+    }
+
+    @Test("localizedDescription carries the detail, not Foundation's placeholder")
+    func localizedDescriptionCarriesDetail() {
+        let failure = Self.error(.noEvents)
+        #expect(failure.localizedDescription == failure.detail)
+        #expect(failure.localizedDescription.contains("error 1") == false)
+    }
+
+    @Test("attempt annotation preserves the concrete type and shows in the description")
+    func attemptAnnotationPreservesType() {
+        let annotated = Self.error(.noEvents).annotatedWithAttempts(3)
+        guard let degenerate = annotated as? DegenerateStreamError else {
+            Issue.record("annotation must not wrap away the concrete type, got \(annotated)")
+            return
+        }
+        #expect(degenerate.kind == .noEvents)
+        #expect(degenerate.attempts == 3)
+        #expect(degenerate.localizedDescription.contains("after 3 attempts"))
+        // A single attempt is the un-retried case and reads as noise.
+        let once = Self.error(.noEvents).annotatedWithAttempts(1)
+        #expect((once as? DegenerateStreamError)?.localizedDescription == Self.error(.noEvents).detail)
+    }
+
+    @Test("bridged NSError code distinguishes the kinds")
+    func nsErrorCodeDistinguishesKinds() {
+        #expect(Self.error(.noEvents).errorCode == 1)
+        #expect(Self.error(.announcedToolCallLost).errorCode == 2)
+        #expect(Self.error(.noOutcome).errorCode == 3)
+        let info = Self.error(.noOutcome).errorUserInfo
+        #expect(info["kind"] as? String == "noOutcome")
+        #expect(info["provider"] as? String == "Anthropic")
+    }
+
+    @Test("RetryAfterRateLimitError also describes itself")
+    func rateLimitErrorDescribesItself() {
+        // Asserts the hint and the absence of Foundation's placeholder, not the underlying
+        // error's own wording, which SwiftAgentKit owns.
+        let hinted = RetryAfterRateLimitError(retryAfterSeconds: 7.0)
+        #expect(hinted.localizedDescription.contains("retry after 7.0s"))
+        #expect(hinted.localizedDescription.contains("error 1") == false)
+        #expect(RetryAfterRateLimitError(retryAfterSeconds: nil).localizedDescription.isEmpty == false)
+    }
+
+    @Test("body diagnostics summarise shape only, never content")
+    func diagnosticsAreShapeOnly() {
+        let diagnostics = AnthropicStreamBodyDiagnostics(
+            statusCode: 200,
+            contentType: "application/json",
+            lineBytes: 412,
+            lineCount: 3,
+            frameCount: 0,
+            eventCount: 0,
+            sawCarriageReturn: true
+        )
+        let summary = diagnostics.summary
+        #expect(summary.contains("status=200"))
+        #expect(summary.contains("contentType=application/json"))
+        #expect(summary.contains("lineBytes=412"))
+        #expect(summary.contains("frames=0"))
+        #expect(summary.contains("cr=true"))
+        #expect(summary.contains("\n") == false)
     }
 
     @Test("no retry-after hint is invented for a degenerate stream")
