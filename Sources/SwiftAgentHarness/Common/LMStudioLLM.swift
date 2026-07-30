@@ -399,8 +399,15 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     return
                 }
                 
-                self.logger?.warning("Stream ended with no content received")
-                continuation.finish()
+                // Finishing silently here would end the turn with neither a `.complete` nor an
+                // error — the DEF-135 shape one level up from an empty success.
+                let failure = DegenerateStreamError(
+                    kind: .noOutcome,
+                    provider: "LMStudio",
+                    detail: "LMStudio stream ended with no content, tool calls, or finish reason"
+                )
+                self.logger?.error("\(failure.detail)")
+                emitter.finishFailed(with: failure)
             }
         }
     }

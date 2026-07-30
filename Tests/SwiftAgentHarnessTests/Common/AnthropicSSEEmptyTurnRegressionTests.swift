@@ -56,19 +56,36 @@ struct AnthropicSSEEmptyTurnRegressionTests {
 
     """
 
+    /// Drives the decoder exactly as the transport does — one byte at a time — so these tests
+    /// exercise the real framing path. The previous line-based helper fed blank separators that
+    /// `URLSession.AsyncBytes.lines` never delivers, which is how a green suite hid DEF-135.
     private static func decodeEvents(
         from body: String,
         flushTrailingFrame: Bool = true
-    ) -> [AnthropicStreamEvent] {
+    ) -> (events: [AnthropicStreamEvent], decoder: AnthropicSSEFrameDecoder) {
         var decoder = AnthropicSSEFrameDecoder()
         var events: [AnthropicStreamEvent] = []
-        for line in body.components(separatedBy: "\n") {
-            events.append(contentsOf: decoder.consume(line: line))
+        for byte in Array(body.utf8) {
+            events.append(contentsOf: decoder.consume(byte))
         }
         if flushTrailingFrame {
             events.append(contentsOf: decoder.flush())
         }
-        return events
+        return (events, decoder)
+    }
+
+    private static func text(in events: [AnthropicStreamEvent]) -> String {
+        events.compactMap { event -> String? in
+            if case .contentDelta(let delta) = event { return delta }
+            return nil
+        }.joined()
+    }
+
+    private static func toolFragments(in events: [AnthropicStreamEvent]) -> String {
+        events.compactMap { event -> String? in
+            if case .toolInputDelta(_, _, let fragment) = event { return fragment }
+            return nil
+        }.joined()
     }
 
     // MARK: - Harness
@@ -140,13 +157,10 @@ struct AnthropicSSEEmptyTurnRegressionTests {
 
     @Test("real skill-activation SSE body decodes to text deltas and a tool_use stop")
     func fixtureDecodesTextAndToolUse() {
-        let events = Self.decodeEvents(from: Self.skillActivationSSEBody)
+        let (events, _) = Self.decodeEvents(from: Self.skillActivationSSEBody)
 
-        let text = events.compactMap { event -> String? in
-            if case .contentDelta(let delta) = event { return delta }
-            return nil
-        }.joined()
-        #expect(text == "I can see the 'writing-plans' skill is available")
+        #expect(Self.text(in: events) == "I can see the 'writing-plans' skill is available")
+        #expect(Self.toolFragments(in: events) == "{\"skill_name\":\"writing-plans\"}")
 
         let started = events.compactMap { event -> (String?, String?)? in
             if case .toolCallStarted(let id, let name, _) = event { return (id, name) }
@@ -156,12 +170,6 @@ struct AnthropicSSEEmptyTurnRegressionTests {
         #expect(started.first?.0 == "toolu_01SkillActivate")
         #expect(started.first?.1 == "agent-skill-activate")
 
-        let fragments = events.compactMap { event -> String? in
-            if case .toolInputDelta(_, _, let fragment) = event { return fragment }
-            return nil
-        }.joined()
-        #expect(fragments == "{\"skill_name\":\"writing-plans\"}")
-
         let stopReasons = events.compactMap { event -> String? in
             if case .messageDelta(_, let stopReason) = event { return stopReason }
             return nil
@@ -169,44 +177,29 @@ struct AnthropicSSEEmptyTurnRegressionTests {
         #expect(stopReasons == ["tool_use"])
     }
 
+    @Test("frames flush as they arrive, not all at end of body")
+    func framesFlushIncrementally() {
+        // The DEF-135 signature was frames=1: every payload merged into a single trailing frame.
+        let (_, decoder) = Self.decodeEvents(from: Self.skillActivationSSEBody, flushTrailingFrame: false)
+        #expect(decoder.frameCount > 1)
+        #expect(decoder.unparseableFrameCount == 0)
+    }
+
     @Test("a CRLF body decodes identically and is flagged")
     func crlfBodyDecodesIdentically() {
-        // A proxied or rewritten body can arrive CRLF-terminated. `.whitespaces` does not strip
-        // CR, so without explicit handling every blank separator would be "\r" instead of "",
-        // no frame would flush mid-stream, and the whole body would parse as one bad payload.
         let crlfBody = Self.skillActivationSSEBody.replacingOccurrences(of: "\n", with: "\r\n")
-        var decoder = AnthropicSSEFrameDecoder()
-        var events: [AnthropicStreamEvent] = []
-        // Split on LF only — the way a line splitter that does not special-case CRLF behaves —
-        // so every line still carries its CR. That is the exact input this hardening exists for;
-        // splitting on CRLF would strip the CR and test nothing.
-        for line in crlfBody.components(separatedBy: "\n") {
-            events.append(contentsOf: decoder.consume(line: line))
-        }
-        events.append(contentsOf: decoder.flush())
+        let (events, decoder) = Self.decodeEvents(from: crlfBody)
 
         #expect(decoder.sawCarriageReturn)
-        let text = events.compactMap { event -> String? in
-            if case .contentDelta(let delta) = event { return delta }
-            return nil
-        }.joined()
-        #expect(text == "I can see the 'writing-plans' skill is available")
-
-        let fragments = events.compactMap { event -> String? in
-            if case .toolInputDelta(_, _, let fragment) = event { return fragment }
-            return nil
-        }.joined()
-        #expect(fragments == "{\"skill_name\":\"writing-plans\"}")
-        #expect(decoder.frameCount > 1) // frames flushed as they arrived, not all at the end
+        #expect(decoder.unparseableFrameCount == 0)
+        #expect(decoder.frameCount > 1)
+        #expect(Self.text(in: events) == "I can see the 'writing-plans' skill is available")
+        #expect(Self.toolFragments(in: events) == "{\"skill_name\":\"writing-plans\"}")
     }
 
     @Test("an LF body is not flagged as carriage-returned")
     func lfBodyNotFlagged() {
-        var decoder = AnthropicSSEFrameDecoder()
-        for line in Self.skillActivationSSEBody.components(separatedBy: "\n") {
-            _ = decoder.consume(line: line)
-        }
-        _ = decoder.flush()
+        let (_, decoder) = Self.decodeEvents(from: Self.skillActivationSSEBody)
         #expect(decoder.sawCarriageReturn == false)
     }
 
@@ -216,9 +209,9 @@ struct AnthropicSSEEmptyTurnRegressionTests {
         event: content_block_delta
         data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"tail"}}
         """
-        #expect(Self.decodeEvents(from: truncated, flushTrailingFrame: false).isEmpty)
+        #expect(Self.decodeEvents(from: truncated, flushTrailingFrame: false).events.isEmpty)
 
-        let flushed = Self.decodeEvents(from: truncated)
+        let (flushed, _) = Self.decodeEvents(from: truncated)
         guard flushed.count == 1, case .contentDelta(let text) = flushed[0] else {
             Issue.record("expected the buffered frame to flush, got \(flushed)")
             return
@@ -226,11 +219,52 @@ struct AnthropicSSEEmptyTurnRegressionTests {
         #expect(text == "tail")
     }
 
+    @Test("a non-SSE body reports unparseable frames rather than silent emptiness")
+    func nonSSEBodyIsAttributable() {
+        // What an error envelope or a non-streaming JSON response looks like coming back 200.
+        let (events, decoder) = Self.decodeEvents(from: "data: {\"not\": \"an\", \"event\"\n\n")
+        #expect(events.isEmpty)
+        #expect(decoder.frameCount == 1)
+        #expect(decoder.unparseableFrameCount == 1)
+    }
+
+    @Test("the splitter emits byte lines, so no Swift String newline semantics are involved")
+    func splitterEmitsByteLines() {
+        // Guards the grapheme trap directly: "\r\n" is ONE Swift Character, so any String-level
+        // newline split leaves a CRLF frame whole. Framing must stay in bytes.
+        var splitter = SSEFrameSplitter()
+        var frames: [SSEFrame] = []
+        for byte in Array("event: a\r\ndata: 1\r\n\r\nevent: b\ndata: 2\n\n".utf8) {
+            if let frame = splitter.consume(byte) { frames.append(frame) }
+        }
+        #expect(frames.count == 2)
+        #expect(splitter.sawCarriageReturn)
+        #expect(frames.first?.lines.count == 2)
+        #expect(frames.first.map { String(decoding: $0.lines[0], as: UTF8.self) } == "event: a")
+        #expect(frames.last.map { String(decoding: $0.lines[1], as: UTF8.self) } == "data: 2")
+    }
+
+    @Test("multiple data lines in one frame concatenate per the SSE grammar")
+    func multiLineDataFrameConcatenates() {
+        let body = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\ndata: \"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"split\"}}\n\n"
+        let (events, decoder) = Self.decodeEvents(from: body)
+        #expect(decoder.unparseableFrameCount == 0)
+        #expect(Self.text(in: events) == "split")
+    }
+
+    @Test("leading and repeated blank separators do not produce empty frames")
+    func blankSeparatorsAreNotFrames() {
+        let body = "\n\n" + Self.skillActivationSSEBody + "\n\n"
+        let (events, decoder) = Self.decodeEvents(from: body)
+        #expect(decoder.unparseableFrameCount == 0)
+        #expect(Self.text(in: events) == "I can see the 'writing-plans' skill is available")
+    }
+
     // MARK: - Parser -> stream -> accumulator
 
     @Test("fixture survives parser, stream, and AssistantMessageAccumulator intact")
     func fixtureSurvivesFullPipeline() async throws {
-        let (results, terminal) = try await runStream(events: Self.decodeEvents(from: Self.skillActivationSSEBody))
+        let (results, terminal) = try await runStream(events: Self.decodeEvents(from: Self.skillActivationSSEBody).events)
         #expect(terminal == nil)
 
         guard let last = results.last, case .complete(let final) = last else {
@@ -470,22 +504,58 @@ struct DegenerateStreamErrorClassificationTests {
         #expect(RetryAfterRateLimitError(retryAfterSeconds: nil).localizedDescription.isEmpty == false)
     }
 
+    @Test("a non-streaming response with no content blocks fails instead of returning empty")
+    func nonStreamingEmptyResponseFails() {
+        // parseMessageResponse feeds compaction summarisation and memory recall, where an empty
+        // result silently loses context rather than surfacing anything.
+        let failure = DegenerateResponseGuard.failure(
+            provider: "Anthropic",
+            kind: .emptyResponse,
+            text: "",
+            toolCalls: [],
+            providerReportedStop: false
+        )
+        #expect(failure?.kind == .emptyResponse)
+        #expect(failure?.errorCode == 4)
+        // A provider-reported stop with no content stays a legitimate empty turn.
+        #expect(DegenerateResponseGuard.failure(
+            provider: "Anthropic",
+            text: "",
+            toolCalls: [],
+            providerReportedStop: true
+        ) == nil)
+    }
+
+    @Test("the shared guard passes any turn that produced something")
+    func sharedGuardPassesProductiveTurns() {
+        #expect(DegenerateResponseGuard.failure(
+            provider: "OpenAI", text: "hi", toolCalls: [], providerReportedStop: false) == nil)
+        #expect(DegenerateResponseGuard.failure(
+            provider: "OpenAI", text: "", toolCalls: [ToolCall(name: "x", arguments: .object([:]), id: "1")],
+            providerReportedStop: false) == nil)
+        #expect(DegenerateResponseGuard.failure(
+            provider: "OpenAI", text: "", toolCalls: [], sawReasoning: true,
+            providerReportedStop: false) == nil)
+    }
+
     @Test("body diagnostics summarise shape only, never content")
     func diagnosticsAreShapeOnly() {
         let diagnostics = AnthropicStreamBodyDiagnostics(
             statusCode: 200,
             contentType: "application/json",
-            lineBytes: 412,
-            lineCount: 3,
+            bodyBytes: 412,
             frameCount: 0,
+            unparseableFrameCount: 0,
             eventCount: 0,
-            sawCarriageReturn: true
+            sawCarriageReturn: true,
+            droppedOversizedFrame: false
         )
         let summary = diagnostics.summary
         #expect(summary.contains("status=200"))
         #expect(summary.contains("contentType=application/json"))
-        #expect(summary.contains("lineBytes=412"))
+        #expect(summary.contains("bytes=412"))
         #expect(summary.contains("frames=0"))
+        #expect(summary.contains("unparseable=0"))
         #expect(summary.contains("cr=true"))
         #expect(summary.contains("\n") == false)
     }

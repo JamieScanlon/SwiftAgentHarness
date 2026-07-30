@@ -31,7 +31,7 @@ public protocol AttemptAnnotatableError: Error {
     func annotatedWithAttempts(_ attempts: Int) -> any Error
 }
 
-/// A model stream that terminated without delivering anything the caller can act on.
+/// A model response — streaming or not — that carried nothing the caller can act on.
 ///
 /// Deliberately *not* an ``LLMError`` case. A degenerate stream is a response-*shape* failure,
 /// not a transport or request failure, and the two have to classify differently: widening
@@ -54,6 +54,8 @@ public struct DegenerateStreamError: Error, Sendable, CustomStringConvertible {
         case announcedToolCallLost
         /// Events arrived but carried no text, tool calls, or terminal stop reason.
         case noOutcome
+        /// A non-streaming response decoded cleanly but held no content blocks.
+        case emptyResponse
     }
 
     public let kind: Kind
@@ -83,6 +85,7 @@ extension DegenerateStreamError: LocalizedError, CustomNSError, AttemptAnnotatab
         case .noEvents: return 1
         case .announcedToolCallLost: return 2
         case .noOutcome: return 3
+        case .emptyResponse: return 4
         }
     }
 

@@ -311,6 +311,38 @@ struct ToolCallAccumulator {
     }
 }
 
+// MARK: - DegenerateResponseGuard
+
+/// Shared "did this turn deliver anything?" check for provider adapters.
+///
+/// Every adapter previously ended its stream with an unconditional `finishSuccess` (or, worse, a
+/// bare `continuation.finish()`), so a turn that produced nothing was indistinguishable from a
+/// model that chose to say nothing. That is the DEF-135 shape; this centralises the rule so the
+/// adapters cannot drift apart on it.
+///
+/// A turn is legitimately empty only when the provider *reported a terminal stop reason* —
+/// `end_turn` with no text is rare but real. Anything else with no text, no tool calls, and no
+/// reasoning is a failure.
+enum DegenerateResponseGuard {
+    static func failure(
+        provider: String,
+        kind: DegenerateStreamError.Kind = .noOutcome,
+        text: String,
+        toolCalls: [ToolCall],
+        sawReasoning: Bool = false,
+        providerReportedStop: Bool,
+        detail: String? = nil
+    ) -> DegenerateStreamError? {
+        guard text.isEmpty, toolCalls.isEmpty, !sawReasoning else { return nil }
+        guard !providerReportedStop else { return nil }
+        return DegenerateStreamError(
+            kind: kind,
+            provider: provider,
+            detail: detail ?? "\(provider) stream produced no text, tool calls, or finish reason"
+        )
+    }
+}
+
 // MARK: - StreamCompletionEmitter
 
 /// Single source of truth for the `.complete`-once invariant on the streaming

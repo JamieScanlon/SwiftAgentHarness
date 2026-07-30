@@ -223,6 +223,17 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
                                 )),
                                 availableTools: config.availableTools
                             )
+                            if let failure = DegenerateResponseGuard.failure(
+                                provider: "Ollama",
+                                text: fullContent,
+                                toolCalls: toolCalls,
+                                sawReasoning: !fullThinking.isEmpty,
+                                providerReportedStop: chunk.doneReason?.isEmpty == false
+                            ) {
+                                logger?.error("\(failure.detail)")
+                                emitter.finishFailed(with: failure)
+                                return
+                            }
                             let stopReason: NormalizedStopReason = toolCalls.isEmpty ? .end : .toolUse
                             emitter.yield(.stop(stopReason), availableTools: config.availableTools)
                             let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
@@ -256,18 +267,28 @@ actor OllamaLLM: LLMProtocol, AdapterAuthProbing {
                     return
                 }
                 
-                if !sawDoneChunk && !fullContent.isEmpty {
+                let trailingToolCalls = accumulator.finalize()
+                if !sawDoneChunk, !fullContent.isEmpty || !trailingToolCalls.isEmpty || !fullThinking.isEmpty {
                     // Stream ended without a `done` chunk (server disconnected). Surface the
                     // partial content as the terminal `.complete` without sentinel-text
-                    // injection — the contract forbids synthesised content tokens.
+                    // injection — the contract forbids synthesised content tokens. Tool calls and
+                    // reasoning count as content here; checking text alone dropped a tool-only turn.
                     let finalResponse = LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
-                        .appending(toolCalls: accumulator.finalize())
+                        .appending(toolCalls: trailingToolCalls)
                     self.logLLMResponsePayloadIfDebug(finalResponse)
                     emitter.finishSuccess(with: finalResponse)
                     return
                 }
                 
-                continuation.finish()
+                // Finishing silently here would end the turn with neither a `.complete` nor an
+                // error — the DEF-135 shape one level up from an empty success.
+                let failure = DegenerateStreamError(
+                    kind: hasEmittedAnyDelta ? .noOutcome : .noEvents,
+                    provider: "Ollama",
+                    detail: "Ollama stream ended with no content, tool calls, or done chunk"
+                )
+                logger?.error("\(failure.detail)")
+                emitter.finishFailed(with: failure)
             }
         }
     }

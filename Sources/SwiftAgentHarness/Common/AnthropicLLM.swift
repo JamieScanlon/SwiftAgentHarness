@@ -336,8 +336,23 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             usageIsProviderReported: reportedUsage != nil,
             finishReason: storedFinishReason
         )
+        let content = contentParts.joined()
+        // The streaming path guards this; the non-streaming path is used by compaction
+        // summarisation and memory recall, where a silently empty result persists a blank
+        // summary and loses context rather than surfacing anything.
+        if let failure = DegenerateResponseGuard.failure(
+            provider: "Anthropic",
+            kind: .emptyResponse,
+            text: content,
+            toolCalls: toolCalls,
+            providerReportedStop: stopReasonRaw?.isEmpty == false,
+            detail: "Anthropic response decoded with no content blocks and no stop_reason"
+        ) {
+            logger?.error("\(failure.detail)")
+            throw failure
+        }
         return LLMResponse(
-            content: contentParts.joined(),
+            content: content,
             toolCalls: toolCalls,
             metadata: metadata
         )
@@ -606,9 +621,8 @@ protocol AnthropicStreamSourcing: Sendable {
 }
 
 struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
-    /// Bounds on the debug-only body sample captured when a stream yields nothing.
-    static let bodySampleLineLimit = 5
-    static let bodySampleCharacterLimit = 240
+    /// Bound on the debug-only body sample captured when a stream yields nothing.
+    static let bodySampleByteLimit = 512
 
     func messageStream(
         apiURL: URL,
@@ -638,17 +652,17 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                         return
                     }
                     var decoder = AnthropicSSEFrameDecoder()
-                    var lineCount = 0
-                    var lineBytes = 0
+                    var bodyBytes = 0
                     var eventCount = 0
-                    var bodySample = ""
-                    for try await line in bytes.lines {
-                        lineCount += 1
-                        lineBytes += line.utf8.count
-                        if lineCount <= Self.bodySampleLineLimit, !line.isEmpty {
-                            bodySample += bodySample.isEmpty ? line : "\n" + line
+                    var bodySample: [UInt8] = []
+                    // Framed from the raw bytes rather than `bytes.lines`: that sequence drops
+                    // empty lines, and an empty line *is* the SSE frame boundary.
+                    for try await byte in bytes {
+                        bodyBytes += 1
+                        if bodySample.count < Self.bodySampleByteLimit {
+                            bodySample.append(byte)
                         }
-                        for event in decoder.consume(line: line) {
+                        for event in decoder.consume(byte) {
                             eventCount += 1
                             continuation.yield(event)
                         }
@@ -664,17 +678,18 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                         let diagnostics = AnthropicStreamBodyDiagnostics(
                             statusCode: http?.statusCode ?? -1,
                             contentType: http?.value(forHTTPHeaderField: "Content-Type") ?? "<none>",
-                            lineBytes: lineBytes,
-                            lineCount: lineCount,
+                            bodyBytes: bodyBytes,
                             frameCount: decoder.frameCount,
+                            unparseableFrameCount: decoder.unparseableFrameCount,
                             eventCount: eventCount,
-                            sawCarriageReturn: decoder.sawCarriageReturn
+                            sawCarriageReturn: decoder.sawCarriageReturn,
+                            droppedOversizedFrame: decoder.droppedOversizedFrame
                         )
                         logger?.error("Anthropic stream produced no events — \(diagnostics.summary)")
                         // Body content is response data, so it stays at debug level and never
                         // reaches the persisted terminal reason.
                         logger?.debug(
-                            "Anthropic zero-event body sample: \(String(bodySample.prefix(Self.bodySampleCharacterLimit)).debugDescription)"
+                            "Anthropic zero-event body sample: \(String(decoding: bodySample, as: UTF8.self).debugDescription)"
                         )
                         continuation.finish(throwing: DegenerateStreamError(
                             kind: .noEvents,
@@ -705,75 +720,177 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
 struct AnthropicStreamBodyDiagnostics: Sendable {
     let statusCode: Int
     let contentType: String
-    /// Bytes across decoded lines, excluding line terminators.
-    let lineBytes: Int
-    let lineCount: Int
+    let bodyBytes: Int
+    /// Frames the splitter *attempted*, whether or not they parsed. `frames=0` means framing
+    /// failed; `frames=N unparseable=N` means framing worked and decoding did not.
     let frameCount: Int
+    let unparseableFrameCount: Int
     let eventCount: Int
     let sawCarriageReturn: Bool
+    let droppedOversizedFrame: Bool
 
     var summary: String {
         """
-        status=\(statusCode) contentType=\(contentType) lineBytes=\(lineBytes) \
-        lines=\(lineCount) frames=\(frameCount) events=\(eventCount) cr=\(sawCarriageReturn)
+        status=\(statusCode) contentType=\(contentType) bytes=\(bodyBytes) \
+        frames=\(frameCount) unparseable=\(unparseableFrameCount) events=\(eventCount) \
+        cr=\(sawCarriageReturn) oversized=\(droppedOversizedFrame)
         """
     }
 }
 
-/// Assembles SSE lines into frames and maps each complete frame to stream events.
+/// One complete SSE frame, as raw lines with terminators already removed.
 ///
-/// Split out of ``DefaultAnthropicStreamSource`` so frame boundaries — including a body that
-/// ends without its terminating blank line — are exercisable without a network transport.
-struct AnthropicSSEFrameDecoder {
-    private var eventName: String?
-    private var dataLines: [String] = []
+/// Lines rather than frame text on purpose: splitting a Swift `String` on newlines is unsafe for
+/// protocol parsing, because `Character` is a grapheme cluster and `"\r\n"` is *one* Character —
+/// `split(separator: "\n")` silently fails to split a CRLF frame. Framing stays in bytes and
+/// `String` appears only at the leaves.
+struct SSEFrame: Sendable {
+    let lines: [[UInt8]]
+}
 
-    /// True once any line arrived CRLF-terminated. Diagnostic only — the CR is stripped either
-    /// way — but it distinguishes a proxied or rewritten body from a direct one.
+/// Splits a raw SSE byte stream into frames on blank-line boundaries.
+///
+/// Exists because `URLSession.AsyncBytes.lines` **drops empty lines**, and an empty line is
+/// exactly what terminates an SSE frame — consuming `.lines` silently merges an entire response
+/// into one payload. Framing from bytes also makes this a pure value type: tests drive the same
+/// code the transport does, with no network and no dependency on `AsyncLineSequence` semantics.
+struct SSEFrameSplitter {
+    /// Guards against unbounded growth if a body contains no frame boundary at all (a non-SSE
+    /// response, say). Anthropic frames are orders of magnitude smaller.
+    static let maxFrameBytes = 1 << 20
+
+    private static let lineFeed: UInt8 = 0x0A
+    private static let carriageReturn: UInt8 = 0x0D
+
+    private var currentLine: [UInt8] = []
+    private var lines: [[UInt8]] = []
+    private var bufferedBytes = 0
+
     private(set) var sawCarriageReturn = false
-    private(set) var frameCount = 0
+    private(set) var droppedOversizedFrame = false
 
     init() {}
 
-    mutating func consume(line rawLine: String) -> [AnthropicStreamEvent] {
-        // A CRLF body can hand back lines with the CR still attached, and `.whitespaces` does
-        // not contain CR (it lives in `.newlines`). An unstripped CR would turn every blank
-        // frame separator into a non-empty line, so nothing would flush until end of body and
-        // the whole response would parse as one malformed payload.
-        var line = rawLine
-        if line.hasSuffix("\r") {
+    /// Feeds one byte, returning a frame once a blank line closes it.
+    mutating func consume(_ byte: UInt8) -> SSEFrame? {
+        guard bufferedBytes < Self.maxFrameBytes else {
+            droppedOversizedFrame = true
+            reset()
+            return nil
+        }
+        guard byte == Self.lineFeed else {
+            currentLine.append(byte)
+            bufferedBytes += 1
+            return nil
+        }
+        if currentLine.last == Self.carriageReturn {
             sawCarriageReturn = true
-            line.removeLast()
+            currentLine.removeLast()
         }
-        if line.hasPrefix("event:") {
-            eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
-            return []
+        guard currentLine.isEmpty else {
+            // Already counted byte-by-byte on the way in; do not double-count on close.
+            lines.append(currentLine)
+            currentLine = []
+            return nil
         }
-        if line.hasPrefix("data:") {
-            dataLines.append(String(line.dropFirst(5).trimmingCharacters(in: .whitespaces)))
-            return []
-        }
-        if line.isEmpty {
-            return flush()
-        }
-        return []
+        // Blank line: frame boundary. Repeated or leading separators yield nothing.
+        guard !lines.isEmpty else { return nil }
+        let frame = SSEFrame(lines: lines)
+        reset()
+        return frame
     }
 
-    /// Emits whatever frame is still buffered. Called at end-of-body so a stream that closes
-    /// without a trailing blank line does not silently drop its last frame.
+    /// Returns whatever is buffered, for a body that ends without a trailing blank line.
+    mutating func flush() -> SSEFrame? {
+        if currentLine.last == Self.carriageReturn {
+            sawCarriageReturn = true
+            currentLine.removeLast()
+        }
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+        defer { reset() }
+        return lines.isEmpty ? nil : SSEFrame(lines: lines)
+    }
+
+    private mutating func reset() {
+        currentLine = []
+        lines = []
+        bufferedBytes = 0
+    }
+}
+
+/// Turns SSE frames into Anthropic stream events.
+///
+/// Framing and field-reading are split so a failure can be attributed: ``frameCount`` counts
+/// frames the splitter produced and ``unparseableFrameCount`` counts those whose payload was not
+/// decodable JSON. `frames=0` is a framing bug; `frames=N unparseable=N` is a decoding bug.
+struct AnthropicSSEFrameDecoder {
+    private static let eventPrefix = Array("event:".utf8)
+    private static let dataPrefix = Array("data:".utf8)
+
+    private var splitter = SSEFrameSplitter()
+
+    private(set) var frameCount = 0
+    private(set) var unparseableFrameCount = 0
+
+    /// True once any line arrived CRLF-terminated. Diagnostic only — CR is stripped either way —
+    /// but it distinguishes a proxied or rewritten body from a direct one.
+    var sawCarriageReturn: Bool { splitter.sawCarriageReturn }
+    var droppedOversizedFrame: Bool { splitter.droppedOversizedFrame }
+
+    init() {}
+
+    mutating func consume(_ byte: UInt8) -> [AnthropicStreamEvent] {
+        guard let frame = splitter.consume(byte) else { return [] }
+        return events(inFrame: frame)
+    }
+
     mutating func flush() -> [AnthropicStreamEvent] {
-        defer {
-            eventName = nil
-            dataLines = []
+        guard let frame = splitter.flush() else { return [] }
+        return events(inFrame: frame)
+    }
+
+    /// Reads one frame's `event:` / `data:` fields. Multiple `data:` lines concatenate, per the
+    /// SSE grammar. Field names are matched as bytes, so no grapheme-cluster surprises.
+    mutating func events(inFrame frame: SSEFrame) -> [AnthropicStreamEvent] {
+        var eventName: String?
+        var dataLines: [String] = []
+        for line in frame.lines {
+            if line.starts(with: Self.eventPrefix) {
+                eventName = Self.field(line.dropFirst(Self.eventPrefix.count))
+            } else if line.starts(with: Self.dataPrefix) {
+                dataLines.append(Self.field(line.dropFirst(Self.dataPrefix.count)))
+            }
         }
         let payload = dataLines.joined(separator: "\n")
         guard !payload.isEmpty else { return [] }
         frameCount += 1
-        return AnthropicSSEParser.events(fromJSONLine: payload, eventName: eventName)
+        let events = AnthropicSSEParser.events(fromJSONLine: payload, eventName: eventName)
+        if events.isEmpty, AnthropicSSEParser.isUnparseable(payload) {
+            unparseableFrameCount += 1
+        }
+        return events
+    }
+
+    private static func field(_ bytes: ArraySlice<UInt8>) -> String {
+        String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespaces)
     }
 }
 
 enum AnthropicSSEParser {
+    /// `true` when the payload is not decodable JSON at all. Separates a framing/decoding failure
+    /// from a well-formed frame whose `type` this adapter simply does not map, which an empty
+    /// event list alone cannot express.
+    static func isUnparseable(_ payload: String) -> Bool {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              object is [String: Any] else {
+            return true
+        }
+        return false
+    }
+
     static func events(fromJSONLine jsonLine: String, eventName: String?) -> [AnthropicStreamEvent] {
         guard let data = jsonLine.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
