@@ -12,6 +12,44 @@ public struct RetryAfterRateLimitError: Error, Sendable {
     }
 }
 
+/// A model stream that terminated without delivering anything the caller can act on.
+///
+/// Deliberately *not* an ``LLMError`` case. A degenerate stream is a response-*shape* failure,
+/// not a transport or request failure, and the two have to classify differently: widening
+/// ``LLMError/invalidResponse`` to transient would also make SSE `error` events and non-HTTP
+/// responses retryable. Keeping degenerate responses on their own axis matches how every
+/// surveyed harness separates "the provider returned something unusable" from its HTTP/status
+/// error taxonomy.
+///
+/// Classified ``RetryDecision/transient``: the usual cause is a truncated or replayed body, and
+/// re-issuing is the right move. Where re-issuing is *not* safe — partial output already reached
+/// the consumer — ``RetryingLLM`` stops the retry via its `firstYielded` guard, not this
+/// classification.
+public struct DegenerateStreamError: Error, Sendable, CustomStringConvertible {
+    /// What the stream failed to deliver. Carried for diagnostics and metrics, not for control
+    /// flow — every kind classifies the same way.
+    public enum Kind: String, Sendable {
+        /// The stream closed without producing a single event.
+        case noEvents
+        /// A tool-use block was announced but no call could be assembled from it.
+        case announcedToolCallLost
+        /// Events arrived but carried no text, tool calls, or terminal stop reason.
+        case noOutcome
+    }
+
+    public let kind: Kind
+    public let provider: String
+    public let detail: String
+
+    public init(kind: Kind, provider: String, detail: String) {
+        self.kind = kind
+        self.provider = provider
+        self.detail = detail
+    }
+
+    public var description: String { detail }
+}
+
 /// Outcome of inspecting a thrown error to decide whether ``RetryingLLM`` should retry.
 ///
 /// `transient` means the error is plausibly self-healing (rate limits, timeouts, dropped
@@ -39,6 +77,8 @@ public enum BindingFailoverDecision: Equatable, Sendable {
 public enum TransientErrorClassifier {
     public static func classify(_ error: Error) -> RetryDecision {
         if error is CancellationError { return .terminal }
+
+        if error is DegenerateStreamError { return .transient }
 
         if let hinted = error as? RetryAfterRateLimitError {
             return classify(hinted.underlying)
@@ -122,6 +162,10 @@ public enum TransientErrorClassifier {
 public enum BindingFailoverClassifier {
     public static func classify(_ error: Error, providerID: ProviderID? = nil) -> BindingFailoverDecision {
         if error is CancellationError { return .terminal }
+        // Resolved ahead of the provider hook: a degenerate stream is diagnosed by the harness
+        // from the assembled response, so a provider's own error mapper has nothing to add and
+        // could only misfile it.
+        if error is DegenerateStreamError { return .tryNextBinding }
         if let providerID,
            let provider = ProviderRegistry.textInferenceProvider(for: providerID) {
             let classification = provider.failoverError(error)

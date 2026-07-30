@@ -592,6 +592,9 @@ enum OllamaChatStreamSupport {
         } else {
             request.timeoutInterval = effectivelyNoTimeoutInterval
         }
+        // Chat turns are never idempotent; a URL-cache replay would serve a stale or
+        // truncated body. Response caching is a Model Pool decision, not a transport default.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         return request
     }
 

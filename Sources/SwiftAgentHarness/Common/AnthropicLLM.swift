@@ -113,20 +113,27 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                     var accumulator = ToolCallAccumulator()
                     var usage: AnthropicUsage?
                     var stopReasonRaw: String?
+                    var sawStreamEvent = false
+                    var sawThinking = false
+                    var announcedToolUseBlocks: Set<String> = []
                     for try await event in events {
                         if Task.isCancelled {
                             emitter.finishCancelled()
                             return
                         }
+                        sawStreamEvent = true
                         switch event {
                         case .contentDelta(let text):
                             fullContent += text
                             emitter.yield(.textDelta(text), availableTools: config.availableTools)
                         case .thinkingBlockStarted(let signature):
+                            sawThinking = true
                             emitter.yield(.thinkingDelta("", signature: signature), availableTools: config.availableTools)
                         case .thinkingDelta(let text, let signature):
+                            sawThinking = true
                             emitter.yield(.thinkingDelta(text, signature: signature), availableTools: config.availableTools)
                         case .toolCallStarted(let id, let name, let contentIndex):
+                            announcedToolUseBlocks.insert(id ?? "index:\(contentIndex.map(String.init) ?? "?")")
                             accumulator.ingestNameAndArgs(id: id, name: name, argumentsFragment: "")
                             emitter.yield(
                                 .toolCallStarted(id: id, name: name, contentIndex: contentIndex),
@@ -157,6 +164,18 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         }
                     }
                     let toolCalls = accumulator.finalize()
+                    if let failure = Self.degenerateStreamFailure(
+                        sawStreamEvent: sawStreamEvent,
+                        text: fullContent,
+                        sawThinking: sawThinking,
+                        announcedToolUseBlockCount: announcedToolUseBlocks.count,
+                        toolCalls: toolCalls,
+                        stopReasonRaw: stopReasonRaw
+                    ) {
+                        self.logger?.error("\(failure.detail)")
+                        emitter.finishFailed(with: failure)
+                        return
+                    }
                     let canonicalFinish = FinishReason.fromAnthropic(stopReasonRaw)
                     let stopReason: NormalizedStopReason = {
                         if stopReasonRaw != nil {
@@ -198,6 +217,51 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
     }
 
+    /// Diagnoses a stream that terminated without delivering anything the caller can act on.
+    ///
+    /// Returns `nil` when the turn is legitimately empty — a provider-reported terminal
+    /// `stop_reason` with no text is rare but real, and must still complete as a success.
+    /// A non-`nil` result means the turn has to fail: completing it would persist a blank
+    /// assistant message stamped with a successful finish reason, which is indistinguishable
+    /// from the model choosing to say nothing.
+    ///
+    /// The dropped-tool-call check is evidence-based — it compares announced `tool_use` content
+    /// blocks against assembled calls, and never consults `stop_reason`, which providers set
+    /// inconsistently enough that failing a turn on it would reject good responses.
+    nonisolated static func degenerateStreamFailure(
+        sawStreamEvent: Bool,
+        text: String,
+        sawThinking: Bool,
+        announcedToolUseBlockCount: Int,
+        toolCalls: [ToolCall],
+        stopReasonRaw: String?
+    ) -> DegenerateStreamError? {
+        func failure(_ kind: DegenerateStreamError.Kind, _ detail: String) -> DegenerateStreamError {
+            DegenerateStreamError(kind: kind, provider: "Anthropic", detail: detail)
+        }
+        // Checked before the content check: losing one call out of several is broken even
+        // though the surviving calls and any text would otherwise look like a healthy turn.
+        if announcedToolUseBlockCount > toolCalls.count {
+            return failure(
+                .announcedToolCallLost,
+                """
+                Anthropic stream announced \(announcedToolUseBlockCount) tool_use content \
+                block(s) but assembled \(toolCalls.count) tool call(s)
+                """
+            )
+        }
+        if !text.isEmpty || !toolCalls.isEmpty || sawThinking {
+            return nil
+        }
+        if !sawStreamEvent {
+            return failure(.noEvents, "Anthropic stream completed with no SSE events")
+        }
+        if stopReasonRaw == nil {
+            return failure(.noOutcome, "Anthropic stream produced no text, tool calls, or stop_reason")
+        }
+        return nil
+    }
+
     /// Test hook: encodes a Messages request body for the given messages (no network).
     func testEncodedRequestBody(from messages: [Message], config: LLMRequestConfig) async throws -> Data {
         try await buildRequestBody(messages: messages, config: config, stream: false)
@@ -219,6 +283,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         request.httpMethod = "POST"
         request.httpBody = body
         request.timeoutInterval = 120
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -551,9 +616,14 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                     request.httpMethod = "POST"
                     request.httpBody = requestBody
                     request.timeoutInterval = 300
+                    // An SSE turn is never idempotent, and a cached entry replays as a
+                    // truncated body with no events. Response caching is a Model Pool
+                    // decision, not a transport default.
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     do {
                         try AnthropicErrorMapping.validate(response, body: nil)
@@ -561,23 +631,16 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                         continuation.finish(throwing: error)
                         return
                     }
-                    var eventName: String?
-                    var dataLines: [String] = []
+                    var decoder = AnthropicSSEFrameDecoder()
                     for try await line in bytes.lines {
-                        if line.hasPrefix("event:") {
-                            eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
-                        } else if line.hasPrefix("data:") {
-                            dataLines.append(String(line.dropFirst(5).trimmingCharacters(in: .whitespaces)))
-                        } else if line.isEmpty {
-                            let payload = dataLines.joined(separator: "\n")
-                            if !payload.isEmpty {
-                                for event in AnthropicSSEParser.events(fromJSONLine: payload, eventName: eventName) {
-                                    continuation.yield(event)
-                                }
-                            }
-                            eventName = nil
-                            dataLines = []
+                        for event in decoder.consume(line: line) {
+                            continuation.yield(event)
                         }
+                    }
+                    // A body that ends without its terminating blank line still holds a
+                    // complete frame; dropping it loses the final delta or stop reason.
+                    for event in decoder.flush() {
+                        continuation.yield(event)
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -589,6 +652,44 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                 }
             }
         }
+    }
+}
+
+/// Assembles SSE lines into frames and maps each complete frame to stream events.
+///
+/// Split out of ``DefaultAnthropicStreamSource`` so frame boundaries — including a body that
+/// ends without its terminating blank line — are exercisable without a network transport.
+struct AnthropicSSEFrameDecoder {
+    private var eventName: String?
+    private var dataLines: [String] = []
+
+    init() {}
+
+    mutating func consume(line: String) -> [AnthropicStreamEvent] {
+        if line.hasPrefix("event:") {
+            eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+            return []
+        }
+        if line.hasPrefix("data:") {
+            dataLines.append(String(line.dropFirst(5).trimmingCharacters(in: .whitespaces)))
+            return []
+        }
+        if line.isEmpty {
+            return flush()
+        }
+        return []
+    }
+
+    /// Emits whatever frame is still buffered. Called at end-of-body so a stream that closes
+    /// without a trailing blank line does not silently drop its last frame.
+    mutating func flush() -> [AnthropicStreamEvent] {
+        defer {
+            eventName = nil
+            dataLines = []
+        }
+        let payload = dataLines.joined(separator: "\n")
+        guard !payload.isEmpty else { return [] }
+        return AnthropicSSEParser.events(fromJSONLine: payload, eventName: eventName)
     }
 }
 

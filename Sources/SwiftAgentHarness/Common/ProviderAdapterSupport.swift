@@ -368,9 +368,14 @@ struct StreamCompletionEmitter {
         continuation.finish(throwing: CancellationError())
     }
 
-    /// Finishes the stream with the supplied error. `LLMError` instances and
-    /// `CancellationError` pass through unchanged; every other `Error` is
-    /// wrapped as `LLMError.networkError(_:)`.
+    /// Finishes the stream with the supplied error. `LLMError`, `CancellationError`, and
+    /// ``DegenerateStreamError`` pass through unchanged; every other `Error` is wrapped as
+    /// `LLMError.networkError(_:)`.
+    ///
+    /// ``DegenerateStreamError`` is exempt from the wrap because the response arrived fine —
+    /// it was its *shape* that was unusable. Relabelling it `.networkError` would both mislead
+    /// anything that inspects the terminal error and bury the kind that callers need to tell a
+    /// truncated stream apart from a dropped connection.
     func finishFailed(with error: Error) {
         if error is CancellationError {
             continuation.finish(throwing: CancellationError())
@@ -378,6 +383,10 @@ struct StreamCompletionEmitter {
         }
         if let llmError = error as? LLMError {
             continuation.finish(throwing: llmError)
+            return
+        }
+        if let degenerate = error as? DegenerateStreamError {
+            continuation.finish(throwing: degenerate)
             return
         }
         continuation.finish(throwing: LLMError.networkError(error))
