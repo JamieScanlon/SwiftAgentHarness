@@ -22,6 +22,10 @@ public struct EmbeddedSendMessageRequest: Sendable {
     public var ifMatch: String?
     public var originSurface: String?
     public var originSenderID: String?
+    /// Sender-scoped **self-restriction**: `true` asserts the human behind this send is *not* the
+    /// conversation owner. Deliberately negative-only — this value crosses an unauthenticated
+    /// request body, so a caller may only ever lower its own privilege, never claim ownership.
+    public var originSenderIsNonOwner: Bool?
 
     public init(
         message: String,
@@ -32,7 +36,8 @@ public struct EmbeddedSendMessageRequest: Sendable {
         inputTrust: String? = nil,
         ifMatch: String? = nil,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsNonOwner: Bool? = nil
     ) {
         self.message = message
         self.imageNames = imageNames
@@ -43,6 +48,7 @@ public struct EmbeddedSendMessageRequest: Sendable {
         self.ifMatch = ifMatch
         self.originSurface = originSurface
         self.originSenderID = originSenderID
+        self.originSenderIsNonOwner = originSenderIsNonOwner
     }
 }
 

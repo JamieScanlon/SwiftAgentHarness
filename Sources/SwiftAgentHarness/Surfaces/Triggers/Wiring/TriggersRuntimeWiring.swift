@@ -24,7 +24,8 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
         try await HarnessEmbeddedMutation.dispatchTriggerMessage(
             conversationID: conversationID,
@@ -36,6 +37,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
             enableAgents: enableAgents,
             originSurface: originSurface,
             originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner,
             session: session,
             fallbackRuntime: runtime
         )

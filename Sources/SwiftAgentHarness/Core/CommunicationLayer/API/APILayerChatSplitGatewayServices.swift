@@ -345,7 +345,8 @@ final class ChatRuntimeService: APILayerChatRuntimeManaging, Sendable {
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         try await backend.apiSendMessageAndStreamResponse(
             conversationID: conversationID,
@@ -358,7 +359,8 @@ final class ChatRuntimeService: APILayerChatRuntimeManaging, Sendable {
             resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
-            originSenderID: originSenderID
+            originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner
         )
     }
 

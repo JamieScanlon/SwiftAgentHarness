@@ -265,7 +265,8 @@ private actor FakeStreamingChatStore {
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         _ = (images, enableTools, enableAgents, expectedPreviousTailHarnessMessageID, inputTrustRaw, systemReminder)
         guard validConversationIDs.contains(conversationID) else {
@@ -587,7 +588,8 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         try await store.apiSendMessageAndStreamResponse(
             conversationID: conversationID,
@@ -600,7 +602,8 @@ private final class FakeStreamingRuntimeDouble: APILayerChatRuntimeManaging, Sen
             resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
-            originSenderID: originSenderID
+            originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner
         )
     }
 

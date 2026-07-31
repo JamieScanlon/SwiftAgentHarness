@@ -311,7 +311,8 @@ private final class ScheduleTenancyCaptureRuntime: TriggerRuntimeDispatching, @u
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }
 

@@ -246,7 +246,8 @@ extension APILayer {
             resolvedInputTrustClass: configuration.resolvedInputTrustClass,
             systemReminder: configuration.ephemeralSystemReminder,
             originSurface: configuration.originSurface,
-            originSenderID: configuration.originSenderID
+            originSenderID: configuration.originSenderID,
+            originSenderIsOwner: configuration.originSenderIsOwner
         )
     }
 

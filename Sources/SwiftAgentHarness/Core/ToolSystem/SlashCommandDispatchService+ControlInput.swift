@@ -100,14 +100,10 @@ extension SlashCommandDispatchService {
         trustClass: TrustPolicyClass?
     ) async -> ControlInputAuthorization {
         let conversation = await deps.persistenceDomain.modelConversation(id: conversationID)
-        let authenticatedOwner = APISessionContext.authenticatedOwnerAccountID
-        let isOwner: Bool = {
-            guard let ownerAccountID = conversation?.ownerAccountID else {
-                return authenticatedOwner == nil
-            }
-            guard let authenticatedOwner else { return false }
-            return ownerAccountID == authenticatedOwner
-        }()
+        let isOwner = ConversationOwnerResolution.isOwner(
+            conversation: conversation,
+            authenticatedOwnerAccountID: APISessionContext.authenticatedOwnerAccountID
+        )
         return ControlInputAuthorization(
             isOwner: isOwner,
             trustClass: trustClass ?? .lowTrust,

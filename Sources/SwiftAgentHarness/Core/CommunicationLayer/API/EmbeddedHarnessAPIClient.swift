@@ -107,7 +107,8 @@ public actor EmbeddedHarnessAPIClient: HarnessMutationTransporting {
             expectedPreviousTailHarnessMessageID: request.expectedPreviousTailHarnessMessageID,
             inputTrust: effectiveInputTrust,
             originSurface: request.originSurface ?? InteractiveSurfaceID.cli,
-            originSenderID: request.originSenderID
+            originSenderID: request.originSenderID,
+            originSenderIsNonOwner: request.originSenderIsNonOwner
         )
         let encoder = JSONEncoder()
         let data = try encoder.encode(chatRequest)

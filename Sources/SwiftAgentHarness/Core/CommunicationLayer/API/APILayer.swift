@@ -248,7 +248,8 @@ public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
         resolvedInputTrustClass: TrustPolicyClass?,
         systemReminder: String?,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws -> ChatStreamResponse
     func apiRevertToUserMessageAndStreamResponse(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse
     func apiSplitConversationAtUserMessage(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse

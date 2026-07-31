@@ -50,6 +50,11 @@ enum ChannelTriggerBuilder {
             into: &metadata,
             enabled: config.includeKnownPartySecurityPreamble
         )
+        // `primaryUser` defaults to "" — an unconfigured channel cannot answer "is this the owner",
+        // and every sender falls to `.external` by default. Record which of those two worlds this
+        // is, so tool policy can tell "resolved: not the owner" apart from "never asked".
+        let ownershipResolvable = !config.primaryUser.isEmpty
+        metadata["channelOwnershipResolvable"] = String(ownershipResolvable)
         let initiatorKind: TriggerInitiatorKind = event.senderId == config.primaryUser ? .user : .external
         let triggerID = "\(event.channel.rawValue):\(event.platformMessageId)"
         let base = HarnessTrigger(

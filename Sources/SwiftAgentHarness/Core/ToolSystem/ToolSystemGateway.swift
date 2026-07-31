@@ -656,6 +656,25 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         groupIndex: ToolPolicyGroupIndex,
         durableRules: [ToolPolicyRule]
     ) -> ToolPolicyGatingDecision {
+        // Head of the ladder, deliberately: a non-owner must not reach a control-plane tool by any
+        // route, including an `allow-once` binding the owner cleared earlier in the run. Evaluating
+        // this before `bindingPreApproved` is what makes that hold.
+        //
+        // Deny rather than ask. An approval prompt is answered by the *owner*, who is not the one
+        // typing — routing a non-owner's request to the owner converts a denial into an interruption
+        // and trains reflexive approval.
+        //
+        // Only an explicit `false` denies. `nil` means no ownership claim was made — no sender
+        // concept (CLI, TUI, installer, scheduled fire) or an unresolvable one — which is the
+        // common case, and denying on absence would withhold these tools from every deployment that
+        // is not channel-backed.
+        if configuration.originSenderIsOwner == false,
+           ToolControlPlaneClassification.isControlPlane(entry.name) {
+            return .deny(reason: .rule(
+                .bareName(ToolNamePolicyNormalization.canonical(entry.name)),
+                scope: "control-plane-sender"
+            ))
+        }
         let bindingPreApproved = ToolCallApprovalPolicy.isBindingPreApproved(
             call: call,
             configuration: configuration

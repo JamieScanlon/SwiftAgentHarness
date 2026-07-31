@@ -32,7 +32,8 @@ struct WebhookIngressAdapterTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             dispatchCount += 1
         }

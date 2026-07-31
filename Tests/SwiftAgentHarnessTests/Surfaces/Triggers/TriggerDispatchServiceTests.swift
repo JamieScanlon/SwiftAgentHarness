@@ -21,7 +21,8 @@ struct TriggerDispatchServiceTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             lastConversationID = conversationID
             lastText = text

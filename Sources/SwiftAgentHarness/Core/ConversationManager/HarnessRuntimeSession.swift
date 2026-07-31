@@ -45,6 +45,9 @@ public actor HarnessRuntimeSession {
         var originSurface: String? = nil
         /// Originating sender id on the surface.
         var originSenderID: String? = nil
+        /// Whether the human who produced this turn owns the conversation; `nil` when the surface
+        /// has no sender concept. See ``AgentRuntimeTurnConfiguration/originSenderIsOwner``.
+        var originSenderIsOwner: Bool? = nil
         /// One-turn thinking override from inline directives (not persisted).
         var turnThinkingOverride: ThinkingConfig? = nil
         /// One-turn model slug hint from inline directives (not persisted).
