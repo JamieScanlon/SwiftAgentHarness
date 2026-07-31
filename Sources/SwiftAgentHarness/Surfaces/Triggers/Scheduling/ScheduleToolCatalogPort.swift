@@ -48,11 +48,13 @@ private struct ScheduleToolCatalogAdapter: ConversationCatalogServicing, Sendabl
 extension ScheduledTaskToolDataService {
     init(
         scheduler: TriggerSchedulerService,
+        registration: TriggerRegistrationService,
         catalogPort: ScheduleToolCatalogPort,
         tenancyPolicy: TenancyPolicySettings = .disabled
     ) {
         self.init(
             scheduler: scheduler,
+            registration: registration,
             catalog: ScheduleToolCatalogAdapter(port: catalogPort),
             tenancyPolicy: tenancyPolicy
         )

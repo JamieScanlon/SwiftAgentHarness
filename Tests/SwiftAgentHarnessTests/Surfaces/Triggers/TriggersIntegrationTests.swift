@@ -47,13 +47,14 @@ struct TriggersIntegrationTests {
             lockURL: tmp.appendingPathComponent("lock.json"),
             logger: Logger(label: "test")
         )
-        let task = try await scheduler.createTask(
-            ScheduledTask(
+        let task = try TriggerRegistrationTestSupport.service(store: store).registerSchedule(
+            ScheduleRegistrationSpec(
                 schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
                 payloadKind: .agentTurn,
                 payloadText: "integration cron prompt",
                 recurring: false
-            )
+            ),
+            authority: .localFileDrop()
         )
         let result = try await scheduler.fireNow(id: task.id)
         #expect(result.decision == .admitted)

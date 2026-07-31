@@ -56,7 +56,7 @@ struct CronRestartCatchupTests {
             payloadText: "ping",
             recurring: false
         )
-        _ = try store.upsert(task)
+        _ = try TriggerRegistrationTestSupport.register(task, into: store)
         let recorder = DeliverRecorder()
         let svc = scheduler(store: store, recorder: recorder, taskRuns: ports(for: backend))
 
@@ -76,7 +76,7 @@ struct CronRestartCatchupTests {
             payloadText: "ping",
             recurring: false
         )
-        _ = try store.upsert(task)
+        _ = try TriggerRegistrationTestSupport.register(task, into: store)
         _ = try backend.appendTaskRun(jobId: task.id, payload: Data("ping".utf8), idempotencyKey: "\(task.id):0")
 
         let recorder = DeliverRecorder()
@@ -99,7 +99,7 @@ struct CronRestartCatchupTests {
             payloadText: "tick",
             recurring: true
         )
-        _ = try store.upsert(task)
+        _ = try TriggerRegistrationTestSupport.register(task, into: store)
 
         let staleRunId = UUID()
         let stale = SessionHarnessTaskRunRecord(
@@ -145,14 +145,14 @@ struct CronRestartCatchupTests {
         let recent = SessionHarnessTaskRunRecord(runId: UUID(), jobId: "j", createdAt: now.addingTimeInterval(-10), payload: Data(), idempotencyKey: nil)
         let stale = SessionHarnessTaskRunRecord(runId: UUID(), jobId: "j", createdAt: now.addingTimeInterval(-3600), payload: Data(), idempotencyKey: nil)
 
-        let oneShot = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .at, at: "2020-01-01T00:00:00Z"), payloadKind: .systemEvent, payloadText: "", recurring: false)
+        let oneShot = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .at, at: "2020-01-01T00:00:00Z"), payloadKind: .systemEvent, payloadText: "next-fire math", recurring: false)
         #expect(CronRunWindow.contains(record: stale, task: oneShot, now: now) == true)
 
-        let every = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .every, intervalMs: 60_000), payloadKind: .systemEvent, payloadText: "", recurring: true)
+        let every = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .every, intervalMs: 60_000), payloadKind: .systemEvent, payloadText: "next-fire math", recurring: true)
         #expect(CronRunWindow.contains(record: recent, task: every, now: now) == true)
         #expect(CronRunWindow.contains(record: stale, task: every, now: now) == false)
 
-        let cron = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .cron, expr: "*/5 * * * *"), payloadKind: .systemEvent, payloadText: "", recurring: true)
+        let cron = ScheduledTask(schedule: ScheduledTaskSchedule(kind: .cron, expr: "*/5 * * * *"), payloadKind: .systemEvent, payloadText: "next-fire math", recurring: true)
         #expect(CronRunWindow.contains(record: recent, task: cron, now: now) == true)
         #expect(CronRunWindow.contains(record: stale, task: cron, now: now) == false)
     }

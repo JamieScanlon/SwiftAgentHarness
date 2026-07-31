@@ -223,7 +223,8 @@ struct MemoryDreamingCronInstallerTests {
         config.dreamingEnabled = true
         config.dreamingCron = "15 4 * * *"
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
-        let saved = try #require(try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config))
+        let registration = TriggerRegistrationTestSupport.service(store: store)
+        let saved = try #require(try MemoryDreamingCronInstaller.ensureInstalled(registration: registration, config: config))
         #expect(saved.id == "dream")
         #expect(saved.permanent)
         #expect(saved.recurring)
@@ -241,14 +242,15 @@ struct MemoryDreamingCronInstallerTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
+        let registration = TriggerRegistrationTestSupport.service(store: store)
         var config = MemoryConfiguration.default
         config.dreamingEnabled = true
         config.dreamingCron = "0 3 * * *"
-        _ = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        _ = try MemoryDreamingCronInstaller.ensureInstalled(registration: registration, config: config)
         #expect(try store.task(id: "dream") != nil)
 
         config.dreamingEnabled = false
-        let result = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        let result = try MemoryDreamingCronInstaller.ensureInstalled(registration: registration, config: config)
         #expect(result == nil)
         #expect(try store.task(id: "dream") == nil)
     }
@@ -261,12 +263,13 @@ struct MemoryDreamingCronInstallerTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
+        let registration = TriggerRegistrationTestSupport.service(store: store)
         var config = MemoryConfiguration.default
         config.dreamingEnabled = true
         config.dreamingCron = "0 3 * * *"
-        _ = try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config)
+        _ = try MemoryDreamingCronInstaller.ensureInstalled(registration: registration, config: config)
         config.dreamingCron = "30 2 * * 1"
-        let updated = try #require(try MemoryDreamingCronInstaller.ensureInstalled(store: store, config: config))
+        let updated = try #require(try MemoryDreamingCronInstaller.ensureInstalled(registration: registration, config: config))
         #expect(updated.schedule.expr == "30 2 * * 1")
         let loaded = try store.task(id: "dream")
         #expect(loaded?.schedule.expr == "30 2 * * 1")
@@ -349,7 +352,10 @@ struct MemoryDreamingCronInstallerTests {
         var config = MemoryConfiguration.default
         config.dreamingEnabled = true
         config.dreamingCron = "0 3 * * *"
-        let task = try #require(try await MemoryDreamingCronInstaller.ensureInstalled(scheduler: scheduler, config: config))
+        let task = try #require(try MemoryDreamingCronInstaller.ensureInstalled(
+            registration: TriggerRegistrationTestSupport.service(store: store),
+            config: config
+        ))
         #expect(task.id == "dream")
         #expect(task.schedule.expr == config.dreamingCron)
 

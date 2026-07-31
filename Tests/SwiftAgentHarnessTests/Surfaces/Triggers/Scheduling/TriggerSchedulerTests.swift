@@ -48,7 +48,7 @@ struct TriggerSchedulerTests {
             payloadText: "remind me",
             recurring: false
         )
-        _ = try store.upsert(task)
+        _ = try TriggerRegistrationTestSupport.register(task, into: store)
         let loaded = try store.load()
         #expect(loaded.count == 1)
         #expect(loaded.first?.id == task.id)

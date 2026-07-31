@@ -727,7 +727,7 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         parentLookup: @Sendable (UUID) async -> ModelConversation?,
         tenancyPolicy: TenancyPolicySettings
     ) async -> Bool {
-        guard entry.name == "schedule_create" else { return false }
+        guard ToolControlPlaneClassification.TriggerTools.approvalScreened.contains(entry.name) else { return false }
         return await ScheduleCreateApprovalPolicy.requiresApproval(
             arguments: call.arguments,
             callerConversationID: conversation.id,

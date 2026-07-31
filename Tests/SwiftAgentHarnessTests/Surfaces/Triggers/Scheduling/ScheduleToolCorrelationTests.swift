@@ -14,8 +14,7 @@ struct ScheduleToolCorrelationTests {
         let owner = UUID()
         let conv = makeConversation(ownerAccountID: owner)
         let catalog = CorrelationStubCatalog(conversations: [conv.id: conv])
-        let scheduler = makeScheduler(tmp: tmp)
-        let dataService = ScheduledTaskToolDataService(scheduler: scheduler, catalog: catalog)
+        let (dataService, scheduler) = makeDataService(tmp: tmp, catalog: catalog)
         let hostTrigger = HarnessTrigger(
             id: "webhook-delivery-1",
             source: .webhook,
@@ -62,8 +61,7 @@ struct ScheduleToolCorrelationTests {
         let owner = UUID()
         let conv = makeConversation(ownerAccountID: owner)
         let catalog = CorrelationStubCatalog(conversations: [conv.id: conv])
-        let scheduler = makeScheduler(tmp: tmp)
-        let dataService = ScheduledTaskToolDataService(scheduler: scheduler, catalog: catalog)
+        let (dataService, scheduler) = makeDataService(tmp: tmp, catalog: catalog)
         let hostTrigger = HarnessTrigger(
             id: "webhook-delivery-1",
             source: .webhook,
@@ -127,15 +125,27 @@ struct ScheduleToolCorrelationTests {
         )
     }
 
-    private func makeScheduler(tmp: URL) -> TriggerSchedulerService {
+    private func makeDataService(
+        tmp: URL,
+        catalog: CorrelationStubCatalog
+    ) -> (dataService: ScheduledTaskToolDataService, scheduler: TriggerSchedulerService) {
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
-        let dispatch = makeDispatch()
-        return TriggerSchedulerService(
+        // Agent-authority creates default to `durable: false`, so scheduler and registration must
+        // share one session store or the created task is invisible to `schedule_list`.
+        let sessionStore = SessionScopedScheduledTaskStore()
+        let scheduler = TriggerSchedulerService(
             store: store,
-            dispatch: dispatch,
+            sessionStore: sessionStore,
+            dispatch: makeDispatch(),
             lockURL: tmp.appendingPathComponent("lock.json"),
             logger: Logger(label: "test")
         )
+        let dataService = ScheduledTaskToolDataService(
+            scheduler: scheduler,
+            registration: TriggerRegistrationTestSupport.service(store: store, sessionStore: sessionStore),
+            catalog: catalog
+        )
+        return (dataService, scheduler)
     }
 
     private func makeDispatch() -> TriggerDispatchService {

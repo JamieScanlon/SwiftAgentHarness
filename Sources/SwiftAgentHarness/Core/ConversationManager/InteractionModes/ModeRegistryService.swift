@@ -921,17 +921,15 @@ enum ModeProfileBuiltInCatalog {
                 semanticLayerTags: [],
                 tools: ModeProfileToolsSlice(
                     allow: ["read_file", "glob", "grep", "think"],
-                    deny: [
+                    // Control-plane tool names are derived, not restated: a newly classified
+                    // registration tool is withheld from this profile without an edit here.
+                    deny: ([
                         "ask_user",
                         "memory_get",
                         "memory_search",
                         "memory_write",
-                        "schedule_create",
-                        "schedule_delete",
-                        "schedule_fire_now",
-                        "schedule_list",
                         "spawn_sub_agent",
-                    ],
+                    ] + ToolControlPlaneClassification.confinedProfileDenyTokens).sorted(),
                     approvalPolicy: .never
                 ),
                 skills: ModeProfileSkillsSlice(allow: []),

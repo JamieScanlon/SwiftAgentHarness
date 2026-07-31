@@ -32,6 +32,7 @@ public struct TriggerTaskRunPorts: Sendable {
 
 public actor TriggerSchedulerService {
     private let store: ScheduledTaskStore
+    private let sessionStore: SessionScopedScheduledTaskStore
     private let deliver: @Sendable (HarnessTrigger) async throws -> TriggerActivationResult
     private let lockURL: URL
     private let config: TriggerSchedulerConfiguration
@@ -42,6 +43,7 @@ public actor TriggerSchedulerService {
 
     init(
         store: ScheduledTaskStore,
+        sessionStore: SessionScopedScheduledTaskStore = SessionScopedScheduledTaskStore(),
         dispatch: TriggerDispatchService,
         lockURL: URL,
         config: TriggerSchedulerConfiguration = TriggerSchedulerConfiguration(),
@@ -50,6 +52,7 @@ public actor TriggerSchedulerService {
     ) {
         self.init(
             store: store,
+            sessionStore: sessionStore,
             deliver: { try await dispatch.ingest($0) },
             lockURL: lockURL,
             config: config,
@@ -60,6 +63,7 @@ public actor TriggerSchedulerService {
 
     init(
         store: ScheduledTaskStore,
+        sessionStore: SessionScopedScheduledTaskStore = SessionScopedScheduledTaskStore(),
         deliver: @escaping @Sendable (HarnessTrigger) async throws -> TriggerActivationResult,
         lockURL: URL,
         config: TriggerSchedulerConfiguration = TriggerSchedulerConfiguration(),
@@ -67,6 +71,7 @@ public actor TriggerSchedulerService {
         logger: Logger
     ) {
         self.store = store
+        self.sessionStore = sessionStore
         self.deliver = deliver
         self.lockURL = lockURL
         self.config = config
@@ -95,26 +100,17 @@ public actor TriggerSchedulerService {
         }
     }
 
-    func createTask(_ task: ScheduledTask, allowPermanent: Bool = false) throws -> ScheduledTask {
-        switch ScheduledTaskCreateScanner.validateCreate(task: task, allowPermanent: allowPermanent) {
-        case .failure(let error):
-            throw error
-        case .success:
-            break
-        }
-        return try store.upsert(task)
-    }
+    // Create / update / delete live on `TriggerRegistrationService`, which is the one path that runs
+    // validation, the content scan, trust clamping, and creator stamping. The scheduler reads and
+    // fires; it does not register.
 
+    /// Durable rows plus this process's session-scoped ones. Both fire; only the first persists.
     func listTasks() throws -> [ScheduledTask] {
-        try store.load()
-    }
-
-    func deleteTask(id: String) throws -> Bool {
-        try store.delete(id: id)
+        try store.load() + sessionStore.all()
     }
 
     func fireNow(id: String) async throws -> TriggerActivationResult {
-        guard var task = try store.task(id: id) else {
+        guard var task = try store.task(id: id) ?? sessionStore.task(id: id) else {
             throw ScheduledTaskValidationError.invalidSchedule("task not found")
         }
         let windowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -124,12 +120,20 @@ public actor TriggerSchedulerService {
     /// Completes deliveries that were enqueued but undelivered before the last restart, honoring the per-kind missed-fire policy.
     func catchUp() async {
         do {
-            let tasks = try store.load()
+            let tasks = try listTasks()
             let now = Date()
             for task in tasks {
                 guard let pending = try await taskRuns.latestUndelivered(task.id) else { continue }
                 guard CronRunWindow.contains(record: pending, task: task, now: now) else {
                     logger.info("scheduler_catchup_skip job=\(task.id) reason=out-of-window")
+                    continue
+                }
+                guard task.enabled else {
+                    // Drain rather than skip: leaving the run undelivered means it is replayed
+                    // whenever the task is resumed, delivering a `[missed]` fire for a window that
+                    // may be months past.
+                    try await taskRuns.markDelivered(pending.runId)
+                    logger.info("scheduler_catchup_drained job=\(task.id) reason=paused")
                     continue
                 }
                 let trigger = ScheduledTaskTriggerBuilder.makeTrigger(
@@ -150,30 +154,42 @@ public actor TriggerSchedulerService {
         do {
             ownsLock = try SchedulerLock.tryAcquire(lockURL: lockURL, identity: config.lockIdentity)
             guard ownsLock else { return }
-            let tasks = try store.load()
+            let tasks = try listTasks()
             let now = Date()
-            var remaining: [ScheduledTask] = []
-            var changed = false
+            // A delta, not a replacement set: firing is `await`ed, so a registration can land
+            // between this read and the commit below. Rewriting the whole file would erase it.
+            var result = ScheduledTaskTickResult()
             for var task in tasks {
+                // Pause first: an explicitly paused task is the clearest possible evidence the user
+                // has *not* forgotten it, and age-out exists to collect forgotten ones. Checking
+                // age-out first would silently delete a paused task at 90 days.
+                guard task.enabled else { continue }
                 if shouldAgeOut(task, now: now) {
-                    changed = true
+                    result.removedIDs.insert(task.id)
                     continue
                 }
                 if let fireAt = nextFireDate(for: task, now: now), fireAt <= now {
                     let windowMs = task.lastFiredAt ?? task.createdAt
-                    _ = try await fire(task: &task, missed: fireAt < now.addingTimeInterval(-1), windowMs: windowMs)
-                    changed = true
-                    if task.recurring {
-                        task.lastFiredAt = Int64(now.timeIntervalSince1970 * 1000)
-                        remaining.append(task)
+                    do {
+                        _ = try await fire(task: &task, missed: fireAt < now.addingTimeInterval(-1), windowMs: windowMs)
+                    } catch {
+                        // Contain the failure to this task. Letting it escape would discard the
+                        // whole delta, so tasks already delivered this tick would lose their
+                        // `lastFiredAt` bump and fire again on the next pass.
+                        logger.warning("scheduler_fire_failed job=\(task.id) error=\(String(describing: error))")
+                        continue
                     }
-                } else {
-                    remaining.append(task)
+                    if task.recurring {
+                        result.firedAt[task.id] = Int64(now.timeIntervalSince1970 * 1000)
+                    } else {
+                        result.removedIDs.insert(task.id)
+                    }
                 }
             }
-            if changed {
-                try store.save(remaining)
-            }
+            // Infallible store first: a durable-store write failure must not strand the
+            // session store's bookkeeping and re-fire its one-shots on every tick.
+            sessionStore.applyTickResults(result)
+            try store.applyTickResults(result)
         } catch {
             logger.warning("scheduler_tick_failed error=\(String(describing: error))")
         }

@@ -68,6 +68,9 @@ struct TriggerDispatchService: Sendable {
                 sessionKey: route.sessionKey,
                 built: built
             )
+            // Delegated runs get their own child conversation: the whole thing belongs to this
+            // source, which is also how sub-agent fan-out rolls up.
+            activationPolicy.budget?.indexRun(trigger: resolved, conversationID: childID)
             return TriggerActivationResult(decision: .admitted, sessionID: childID)
         case .isolated, .threaded:
             if resolved.source == .channel, let holder = channelRunStreaming, let service = holder.service() {
@@ -95,6 +98,12 @@ struct TriggerDispatchService: Sendable {
                 originSurface: resolved.sourceMetadata["channel"] ?? resolved.source.rawValue,
                 originSenderID: resolved.sourceMetadata["senderId"] ?? resolved.initiator.id
             )
+            // Only isolated runs are billed by conversation. A threaded fire shares the user's
+            // conversation with their own turns, so charging it would bill their typing to their
+            // reminder; those fires are recorded as unattributed rather than mis-attributed.
+            if route.routingMode == .isolated {
+                activationPolicy.budget?.indexRun(trigger: resolved, conversationID: conversationID)
+            }
             return TriggerActivationResult(decision: .admitted, sessionID: conversationID)
         }
     }

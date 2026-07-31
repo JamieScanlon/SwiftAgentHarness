@@ -86,8 +86,11 @@ struct FileEventQueueIntegrationTests {
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let dispatch = makeDispatch(runtime: runtime)
         let taskStore = ScheduledTaskStore(fileURL: dataDir.appendingPathComponent("tasks.json"))
+        let sessionStore = SessionScopedScheduledTaskStore()
+        let registration = TriggerRegistrationTestSupport.service(store: taskStore, sessionStore: sessionStore)
         let scheduler = TriggerSchedulerService(
             store: taskStore,
+            sessionStore: sessionStore,
             dispatch: dispatch,
             lockURL: dataDir.appendingPathComponent("lock"),
             logger: Logger(label: "test")
@@ -116,7 +119,7 @@ struct FileEventQueueIntegrationTests {
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: eventsDir,
             dispatch: dispatch,
-            taskStore: taskStore,
+            registration: registration,
             logger: Logger(label: "test"),
             debounceMilliseconds: 10,
             watcherRetryDelayMilliseconds: 100
@@ -137,6 +140,7 @@ struct FileEventQueueIntegrationTests {
         )
         return TriggersRuntimeBundle(
             dispatch: dispatch,
+            registration: registration,
             scheduler: scheduler,
             webhookAdapter: webhookAdapter,
             webhookRouteStore: WebhookRouteStore(
@@ -146,6 +150,14 @@ struct FileEventQueueIntegrationTests {
             scheduleTools: ScheduleToolProvider(
                 dataService: ScheduledTaskToolDataService(
                     scheduler: scheduler,
+                    registration: registration,
+                    catalog: FileEventStubCatalog()
+                )
+            ),
+            webhookTools: WebhookToolProvider(
+                dataService: ScheduledTaskToolDataService(
+                    scheduler: scheduler,
+                    registration: registration,
                     catalog: FileEventStubCatalog()
                 )
             ),

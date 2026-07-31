@@ -19,7 +19,7 @@ public actor FileEventQueueService {
     init(
         eventsDirectory: URL,
         dispatch: TriggerDispatchService,
-        taskStore: ScheduledTaskStore,
+        registration: TriggerRegistrationService,
         logger: Logger,
         enabled: Bool = true,
         debounceMilliseconds: Int = FileEventQueueWatcher.debounceMilliseconds,
@@ -39,8 +39,8 @@ public actor FileEventQueueService {
             dispatch: dispatch,
             logger: logger
         )
-        self.periodicSync = FileEventPeriodicSync(eventsDirectory: eventsDirectory, taskStore: taskStore, logger: logger)
-        self.scheduledSync = FileEventScheduledSync(eventsDirectory: eventsDirectory, taskStore: taskStore, logger: logger)
+        self.periodicSync = FileEventPeriodicSync(eventsDirectory: eventsDirectory, registration: registration, logger: logger)
+        self.scheduledSync = FileEventScheduledSync(eventsDirectory: eventsDirectory, registration: registration, logger: logger)
     }
 
     public func start() async {

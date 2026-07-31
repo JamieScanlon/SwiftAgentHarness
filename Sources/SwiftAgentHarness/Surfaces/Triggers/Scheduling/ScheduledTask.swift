@@ -44,6 +44,31 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
     var routingMode: TriggerRoutingMode
     var delegate: TriggerDelegateProfile?
     var correlation: TriggerCorrelation?
+    /// Who registered this task. Canonical attribution; `ownerAccountID` and
+    /// `createdByConversationID` are mirrors kept in sync by the registration validator and are
+    /// retained for the existing owner/lineage access checks.
+    ///
+    /// `nil` on rows written before the registration layer existed — see ``resolvedCreator``.
+    var createdBy: RegistrationCreator?
+    var updatedAt: Int64?
+    /// Pause knob. A disabled task keeps its row, its history and its anchor — the scheduler simply
+    /// skips it. Pausing is what a user reaches for when a trigger misbehaves and they do not want
+    /// to lose it.
+    var enabled: Bool
+    /// Where a fire should announce back to, captured at create time. See ``TriggerOriginRef``.
+    var origin: TriggerOriginRef?
+
+    /// Best-effort creator for legacy rows: a pre-registration-layer row with a creating
+    /// conversation was written by the agent tool path; one without was written by the installer or
+    /// a local sync, both of which are owner-level.
+    var resolvedCreator: RegistrationCreator {
+        if let createdBy { return createdBy }
+        if permanent || trust == .system { return .installer }
+        if let conversation = createdByConversationID {
+            return .agent(conversationID: conversation, ownerAccountID: ownerAccountID)
+        }
+        return .owner(accountID: ownerAccountID)
+    }
 
     init(
         id: String = UUID().uuidString,
@@ -64,7 +89,11 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         title: String? = nil,
         routingMode: TriggerRoutingMode = .isolated,
         delegate: TriggerDelegateProfile? = nil,
-        correlation: TriggerCorrelation? = nil
+        correlation: TriggerCorrelation? = nil,
+        createdBy: RegistrationCreator? = nil,
+        updatedAt: Int64? = nil,
+        origin: TriggerOriginRef? = nil,
+        enabled: Bool = true
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -85,5 +114,47 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         self.routingMode = routingMode
         self.delegate = delegate
         self.correlation = correlation
+        self.createdBy = createdBy
+        self.updatedAt = updatedAt
+        self.origin = origin
+        self.enabled = enabled
+    }
+
+    /// Hand-written so that a task file written by an older build still decodes: every field is
+    /// tolerated as absent and falls back to the same default the memberwise initializer uses.
+    /// Rows that are malformed beyond that are dropped individually by the store's row wrapper, so
+    /// one bad row never fails the whole schedule file.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.createdAt = try container.decodeIfPresent(Int64.self, forKey: .createdAt)
+            ?? Int64(Date().timeIntervalSince1970 * 1000)
+        self.lastFiredAt = try container.decodeIfPresent(Int64.self, forKey: .lastFiredAt)
+        self.schedule = try container.decode(ScheduledTaskSchedule.self, forKey: .schedule)
+        // Enum-valued fields use `try?`: a *present but unrecognized* raw value throws rather than
+        // returning nil, so a row written by a newer build with a new case would otherwise be
+        // dropped entirely (and then erased by the next write). Degrade to the default instead.
+        self.payloadKind = (try? container.decodeIfPresent(ScheduledTaskPayloadKind.self, forKey: .payloadKind)) ?? .agentTurn
+        self.payloadText = try container.decodeIfPresent(String.self, forKey: .payloadText) ?? ""
+        self.delivery = (try? container.decodeIfPresent(ScheduledTaskDelivery.self, forKey: .delivery)) ?? .none
+        self.deliveryWebhookURL = try container.decodeIfPresent(String.self, forKey: .deliveryWebhookURL)
+        self.recurring = try container.decodeIfPresent(Bool.self, forKey: .recurring) ?? false
+        self.permanent = try container.decodeIfPresent(Bool.self, forKey: .permanent) ?? false
+        self.durable = try container.decodeIfPresent(Bool.self, forKey: .durable) ?? true
+        self.trust = (try? container.decodeIfPresent(CommEnvelopeOriginTrust.self, forKey: .trust)) ?? .userDeferred
+        self.conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
+        self.ownerAccountID = try container.decodeIfPresent(UUID.self, forKey: .ownerAccountID)
+        self.createdByConversationID = try container.decodeIfPresent(UUID.self, forKey: .createdByConversationID)
+        self.title = try container.decodeIfPresent(String.self, forKey: .title)
+        self.routingMode = (try? container.decodeIfPresent(TriggerRoutingMode.self, forKey: .routingMode)) ?? .isolated
+        self.delegate = try? container.decodeIfPresent(TriggerDelegateProfile.self, forKey: .delegate)
+        self.correlation = try? container.decodeIfPresent(TriggerCorrelation.self, forKey: .correlation)
+        // `try?` rather than `try`: a creator case written by a newer build must degrade to
+        // "unattributed" (see `resolvedCreator`) instead of failing the whole row.
+        self.createdBy = try? container.decodeIfPresent(RegistrationCreator.self, forKey: .createdBy)
+        self.updatedAt = try container.decodeIfPresent(Int64.self, forKey: .updatedAt)
+        self.origin = try? container.decodeIfPresent(TriggerOriginRef.self, forKey: .origin)
+        // Absent on rows written before the pause knob existed — those were all running.
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 }

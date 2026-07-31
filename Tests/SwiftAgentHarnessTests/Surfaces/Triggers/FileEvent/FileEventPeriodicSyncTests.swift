@@ -12,7 +12,11 @@ struct FileEventPeriodicSyncTests {
         let event = dir.appendingPathComponent("daily.json")
         try JSONEncoder().encode(FileEventPayload(type: .periodic, text: "check inbox", schedule: "0 9 * * *")).write(to: event)
         let store = ScheduledTaskStore(fileURL: storeURL)
-        let sync = FileEventPeriodicSync(eventsDirectory: dir, taskStore: store, logger: Logger(label: "test"))
+        let sync = FileEventPeriodicSync(
+            eventsDirectory: dir,
+            registration: TriggerRegistrationTestSupport.service(store: store),
+            logger: Logger(label: "test")
+        )
         try sync.syncFromFile(at: event)
         let tasks = try store.load()
         #expect(tasks.count == 1)
@@ -25,15 +29,21 @@ struct FileEventPeriodicSyncTests {
         let dir = try makeTempDir()
         let storeURL = dir.appendingPathComponent("tasks.json")
         let store = ScheduledTaskStore(fileURL: storeURL)
-        let sync = FileEventPeriodicSync(eventsDirectory: dir, taskStore: store, logger: Logger(label: "test"))
-        _ = try store.upsert(
+        let sync = FileEventPeriodicSync(
+            eventsDirectory: dir,
+            registration: TriggerRegistrationTestSupport.service(store: store),
+            logger: Logger(label: "test")
+        )
+        _ = try TriggerRegistrationTestSupport.register(
             ScheduledTask(
                 id: "file-periodic:daily",
                 schedule: ScheduledTaskSchedule(kind: .cron, expr: "0 9 * * *"),
                 payloadKind: .agentTurn,
                 payloadText: "x",
                 recurring: true
-            )
+            ),
+            into: store,
+            authority: .localFileDrop()
         )
         try sync.removeForDeletedFile(named: "daily.json")
         #expect(try store.load().isEmpty)

@@ -1,10 +1,22 @@
 import Foundation
 import Logging
 
+/// Registers `periodic` event files as recurring scheduled tasks.
+///
+/// The events directory serves two roles: an event *queue* (a dropped `immediate` file is itself a
+/// trigger) and a *configuration store* (a `periodic` or `one-shot` file registers a scheduled task
+/// and unregisters it when deleted). Registrations go through ``TriggerRegistrationService`` so they
+/// get creator stamping, trust clamping, and an audit row — which is also what makes them visible to
+/// `schedule_list` instead of being orphaned rows nobody can see or delete.
 struct FileEventPeriodicSync: Sendable {
     let eventsDirectory: URL
-    let taskStore: ScheduledTaskStore
+    let registration: TriggerRegistrationService
     let logger: Logger
+
+    /// The drop directory is a local trusted path, so the *creator* is the machine owner. The
+    /// *content* trust still comes from the `.trust` sidecar and defaults to `unknown-party` —
+    /// the filesystem grants no trust by itself.
+    private var authority: RegistrationAuthority { .localFileDrop() }
 
     func syncFromFile(at eventURL: URL) throws {
         guard let data = try? Data(contentsOf: eventURL),
@@ -16,30 +28,28 @@ struct FileEventPeriodicSync: Sendable {
         }
         let trust = FileEventTrustResolver.resolve(for: eventURL)
         let taskID = FileEventQueueLayout.periodicTaskIDPrefix + eventURL.deletingPathExtension().lastPathComponent
-        let task = ScheduledTask(
+        let spec = ScheduleRegistrationSpec(
             id: taskID,
             schedule: ScheduledTaskSchedule(kind: .cron, expr: expr),
             payloadKind: .agentTurn,
             payloadText: payload.text,
             recurring: true,
-            trust: trust.trust,
             conversationID: payload.conversationID,
-            title: eventURL.lastPathComponent
+            title: eventURL.lastPathComponent,
+            requestedTrust: trust.trust,
+            durable: true
         )
-        switch ScheduledTaskCreateScanner.validateCreate(task: task) {
-        case .failure(let error):
+        do {
+            _ = try registration.registerSchedule(spec, authority: authority)
+        } catch {
             logger.warning("file_event_periodic_rejected file=\(eventURL.lastPathComponent) error=\(String(describing: error))")
-            return
-        case .success:
-            break
         }
-        _ = try taskStore.upsert(task)
     }
 
     func removeForDeletedFile(named filename: String) throws {
         let base = (filename as NSString).deletingPathExtension
         let taskID = FileEventQueueLayout.periodicTaskIDPrefix + base
-        _ = try taskStore.delete(id: taskID)
+        _ = try registration.deleteSchedule(id: taskID, authority: authority)
     }
 
     func syncAllPeriodicFiles() throws {

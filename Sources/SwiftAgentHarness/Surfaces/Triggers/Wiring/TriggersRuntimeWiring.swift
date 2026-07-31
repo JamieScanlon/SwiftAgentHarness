@@ -70,10 +70,13 @@ struct HarnessTriggerDedupeAdapter: TriggerDedupeChecking {
 
 public struct TriggersRuntimeBundle: Sendable {
     let dispatch: TriggerDispatchService
+    /// The shared registration endpoint. Phase-3 clients (slash, CLI, HTTP) attach here.
+    let registration: TriggerRegistrationService
     public let scheduler: TriggerSchedulerService
     public let webhookAdapter: WebhookIngressAdapter
     public let webhookRouteStore: WebhookRouteStore
     public let scheduleTools: ScheduleToolProvider
+    public let webhookTools: WebhookToolProvider
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
@@ -136,6 +139,12 @@ public enum TriggersRuntimeWiring {
         public var conversationEventsHub: ConversationEventsTopicHub? = nil
         public var staticWebhookRoutes: [WebhookRoute] = []
         public var schedulerIdentity: String = "sah-trigger-scheduler"
+        /// Operator-owned spend ceilings. No agent-facing parameter reaches this.
+        public var budgets: TriggerBudgetConfiguration = TriggerBudgetConfiguration()
+        /// Settled USD for a finished trigger-host conversation, from the host's authoritative
+        /// per-run usage rollups. Without it the ledger never accrues and ceilings never bind — the
+        /// harness says so loudly at boot rather than presenting an unmetered ceiling as enforcement.
+        public var conversationCostUSD: (@Sendable (UUID) async -> Double?)? = nil
 
         public init(
             dataDirectory: URL,
@@ -204,10 +213,30 @@ public enum TriggersRuntimeWiring {
         let idempotency = TriggerIdempotencyGate(dedupe: dedupe)
         let rateLimit = TriggerRateLimitGate()
         let costCeiling = TriggerCostCeilingGate()
+        let budgetNotifier = TriggerBudgetNotifierHolder()
+        let spendLedger = TriggerSpendLedgerStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("trigger_spend_ledger.json"),
+            retainedWindows: configuration.budgets.retainedWindows
+        )
+        if configuration.budgets.enabled, configuration.conversationCostUSD == nil {
+            logger.warning(
+                "trigger_budgets_unmetered — spend ceilings are configured but no conversationCostUSD meter was supplied; ledgers will not accrue and ceilings will not bind"
+            )
+        }
+        let budgetGate = TriggerBudgetGate(
+            store: spendLedger,
+            configuration: configuration.budgets,
+            ports: TriggerSpendPorts(
+                conversationCostUSD: configuration.conversationCostUSD ?? { _ in nil },
+                notify: { [budgetNotifier] notice in await budgetNotifier.notify(notice) }
+            ),
+            logger: logger
+        )
         let activationPolicy = TriggerActivationPolicy(
             idempotency: idempotency,
             rateLimit: rateLimit,
             costCeiling: costCeiling,
+            budget: budgetGate,
             auditLog: auditLog
         )
         let sessionIndex = TriggerSessionIndex(
@@ -259,6 +288,25 @@ public enum TriggersRuntimeWiring {
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
         )
+        // Session-scoped tasks (`durable: false`) live here and never reach disk. Shared by
+        // reference between the registration endpoint that writes them and the scheduler that
+        // fires them — two instances would mean tasks that exist but never run.
+        let sessionTaskStore = SessionScopedScheduledTaskStore()
+        // Webhook routes are built here rather than at their point of use: the registration
+        // endpoint owns webhook create/update/delete too, so the store has to exist first.
+        let dynamicStore = WebhookDynamicRouteStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
+        )
+        let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
+        // The one registration endpoint. Every create/update/delete for a trigger — agent tool,
+        // file drop, installer, and (from phase 3) slash/CLI/HTTP — goes through this value.
+        let registration = TriggerRegistrationService(
+            store: taskStore,
+            sessionStore: sessionTaskStore,
+            webhookRoutes: routeStore,
+            auditLog: auditLog,
+            logger: logger
+        )
         let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
         let memoryConfig = MemoryConfiguration.default
         let dreamingBridge = MemoryDreamingBridge(config: memoryConfig, logger: logger)
@@ -269,26 +317,24 @@ public enum TriggersRuntimeWiring {
         )
         let scheduler = TriggerSchedulerService(
             store: taskStore,
+            sessionStore: sessionTaskStore,
             deliver: dreamingDeliver,
             lockURL: lockURL,
             config: TriggerSchedulerConfiguration(lockIdentity: configuration.schedulerIdentity),
             taskRuns: taskRuns,
             logger: logger
         )
-        // Permanent system cron — installer path only (`allowPermanent` via scanner on store upsert).
+        // Permanent system cron — installer authority only, and write-if-missing so a user deletion
+        // is not resurrected on the next boot.
         do {
             try MemoryDreamingCronInstaller.ensureInstalled(
-                store: taskStore,
+                registration: registration,
                 config: memoryConfig,
                 logger: logger
             )
         } catch {
             logger.error("[Dreaming] failed to install dream cron: \(error.localizedDescription)")
         }
-        let dynamicStore = WebhookDynamicRouteStore(
-            fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
-        )
-        let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
         let resolvedEventsDirectory = configuration.eventsDirectory
             ?? FileEventQueueLayout.resolveEventsDirectory(dataDirectory: configuration.dataDirectory)
         let channelIngress = ChannelIngressAdapter(dispatch: dispatch)
@@ -331,9 +377,11 @@ public enum TriggersRuntimeWiring {
         )
         let scheduleDataService = ScheduledTaskToolDataService(
             scheduler: scheduler,
+            registration: registration,
             catalogPort: scheduleToolPorts.catalogPort,
             tenancyPolicy: scheduleToolPorts.tenancyPolicy
         )
+        let webhookTools = WebhookToolProvider(dataService: scheduleDataService)
         let scheduleTools = ScheduleToolProvider(
             dataService: scheduleDataService,
             resolveHostTrigger: resolveHostTrigger
@@ -341,7 +389,7 @@ public enum TriggersRuntimeWiring {
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: resolvedEventsDirectory,
             dispatch: dispatch,
-            taskStore: taskStore,
+            registration: registration,
             logger: logger,
             enabled: configuration.fileEventQueueEnabled
         )
@@ -351,6 +399,12 @@ public enum TriggersRuntimeWiring {
             auditLog: auditLog,
             logger: logger
         )
+        // Late-bound: the router needs the dispatch service, which needs the activation policy,
+        // which needs the gate. Every rung notifies — a trigger the user registered is a standing
+        // instruction, and making it silently stop firing is a correctness bug in a cost costume.
+        budgetNotifier.install { [outputRouter] notice in
+            await outputRouter.deliverBudgetNotice(notice)
+        }
         let delegatedCompletionHandoff = TriggerDelegatedCompletionHandoff(
             runRegistry: runRegistry,
             outputRouter: outputRouter,
@@ -360,10 +414,12 @@ public enum TriggersRuntimeWiring {
         )
         return TriggersRuntimeBundle(
             dispatch: dispatch,
+            registration: registration,
             scheduler: scheduler,
             webhookAdapter: webhookAdapter,
             webhookRouteStore: routeStore,
             scheduleTools: scheduleTools,
+            webhookTools: webhookTools,
             fileEventQueue: fileEventQueue,
             replay: replay,
             channelRegistry: channelRegistry,
