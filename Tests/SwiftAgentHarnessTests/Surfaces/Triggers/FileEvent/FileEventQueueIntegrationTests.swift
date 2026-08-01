@@ -162,6 +162,14 @@ struct FileEventQueueIntegrationTests {
                     catalog: FileEventStubCatalog()
                 )
             ),
+            channelTools: ChannelToolProvider(
+                dataService: ScheduledTaskToolDataService(
+                    scheduler: scheduler,
+                    registration: registration,
+                    catalog: FileEventStubCatalog(),
+                    channelRegistry: channelRegistry
+                )
+            ),
             fileEventQueue: fileEventQueue,
             replay: TriggerReplayService(dispatch: dispatch, eventsDirectory: eventsDir),
             channelRegistry: channelRegistry,

@@ -53,6 +53,19 @@ enum TriggerRegistrationError: Error, Equatable {
     /// The original create cleared an approval gate for a specific prompt; the rewrite has not.
     case crossConversationPayloadChange(id: String)
     case webhook(WebhookRegistrationError)
+    /// The caller's owner account does not match the one recorded on the channel's config.
+    case channelNotOwned(channel: String)
+    /// This deployment has no channel lifecycle store or no channel config to check against.
+    /// Distinct from `kindNotRegisterable` so an unconfigured deployment does not fill the audit log
+    /// with rows that read exactly like a sub-agent trying to silence a channel.
+    case channelLifecycleUnavailable
+    /// `channels.json` did not decode, so there is no trustworthy ACL to authorize against. Refused
+    /// rather than treated as "no owner recorded", which would be a permissive read of a broken file.
+    case channelConfigUnreadable(channel: String)
+    /// A runtime enable was asked for on a channel `channels.json` disables. Config is authoritative
+    /// in that direction: turning a channel on is the decision that carries the credentials and the
+    /// inbound socket, and it belongs in config, not in a runtime overlay.
+    case channelDisabledInConfig(channel: String)
 }
 
 extension TriggerRegistrationError {
@@ -66,6 +79,7 @@ extension TriggerRegistrationError {
             case .scanFailed: return "scan_failed"
             case .permanentNotAllowed: return "permanent_not_allowed"
             case .emptyPayload: return "empty_payload"
+            case .unknownTimezone: return "unknown_timezone"
             }
         case .notFound: return "not_found"
         case .immutableSystemEntry: return "immutable_system_entry"
@@ -81,6 +95,10 @@ extension TriggerRegistrationError {
             case .staticRouteImmutable: return "static_route_immutable"
             case .notOwned: return "not_owned"
             }
+        case .channelNotOwned: return "channel_not_owned"
+        case .channelLifecycleUnavailable: return "channel_lifecycle_unavailable"
+        case .channelConfigUnreadable: return "channel_config_unreadable"
+        case .channelDisabledInConfig: return "channel_disabled_in_config"
         }
     }
 }

@@ -50,13 +50,15 @@ extension ScheduledTaskToolDataService {
         scheduler: TriggerSchedulerService,
         registration: TriggerRegistrationService,
         catalogPort: ScheduleToolCatalogPort,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        channelRegistry: ChannelListenerRegistry? = nil
     ) {
         self.init(
             scheduler: scheduler,
             registration: registration,
             catalog: ScheduleToolCatalogAdapter(port: catalogPort),
-            tenancyPolicy: tenancyPolicy
+            tenancyPolicy: tenancyPolicy,
+            channelRegistry: channelRegistry
         )
     }
 }

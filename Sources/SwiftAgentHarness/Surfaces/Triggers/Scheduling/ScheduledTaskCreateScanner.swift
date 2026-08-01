@@ -5,6 +5,10 @@ enum ScheduledTaskValidationError: Error, Equatable {
     case scanFailed([String])
     case permanentNotAllowed
     case emptyPayload
+    /// A timezone identifier `TimeZone(identifier:)` does not recognise. Refused rather than
+    /// defaulted: a task that silently runs in the wrong zone is worse than one that fails to
+    /// register, because the failure is visible and the wrong hour is not.
+    case unknownTimezone(String)
 }
 
 enum ScheduledTaskCreateScanner {

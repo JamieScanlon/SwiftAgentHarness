@@ -79,6 +79,9 @@ public struct TriggersRuntimeBundle: Sendable {
     public let webhookRouteStore: WebhookRouteStore
     public let scheduleTools: ScheduleToolProvider
     public let webhookTools: WebhookToolProvider
+    /// Read-only. Channel mutation is owner-only and has no agent-facing tool — see
+    /// ``ChannelToolProvider``.
+    public let channelTools: ChannelToolProvider
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
@@ -300,12 +303,30 @@ public enum TriggersRuntimeWiring {
             fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
         )
         let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
+        // Per-channel lifecycle overlay. Separate from `channels.json`, which stays operator-owned
+        // and is never rewritten from a runtime client; this file records only that a channel config
+        // permits is currently held off. A value type over one `fileURL`, so the endpoint that
+        // writes it and the registry that reads it agree because they name the same file, not
+        // because they share an instance — unlike `SessionScopedScheduledTaskStore` above, whose
+        // state is in memory and therefore genuinely must be one object.
+        let channelStateStore = ChannelRuntimeStateStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("channel_runtime_state.json")
+        )
+        let resolvedChannelsConfigURL = configuration.channelsConfigURL
+            ?? configuration.dataDirectory.appendingPathComponent("channels.json")
+        // Closed below, once the listener registry exists. A lifecycle decision that only persists
+        // and never reaches the running process would report a pause that has not happened.
+        let channelApplier = ChannelLifecycleApplierHolder()
         // The one registration endpoint. Every create/update/delete for a trigger — agent tool,
         // file drop, installer, and (from phase 3) slash/CLI/HTTP — goes through this value.
         let registration = TriggerRegistrationService(
             store: taskStore,
             sessionStore: sessionTaskStore,
             webhookRoutes: routeStore,
+            channelState: channelStateStore,
+            channelConfigURL: resolvedChannelsConfigURL,
+            channelApply: channelApplier,
+            tenancy: scheduleToolPorts.tenancyPolicy,
             auditLog: auditLog,
             logger: logger
         )
@@ -348,8 +369,13 @@ public enum TriggersRuntimeWiring {
             channelRunStreaming: channelRunStreamingHolder,
             logger: logger,
             enabled: configuration.channelListenersEnabled,
-            configURL: configuration.channelsConfigURL
+            configURL: resolvedChannelsConfigURL,
+            runtimeState: channelStateStore
         )
+        // Close the late-bound edge: a persisted lifecycle decision now reaches the live listeners.
+        channelApplier.install { [channelRegistry] in
+            _ = await channelRegistry.reconcile()
+        }
         if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
             channelRunStreamingHolder.install(
                 ChannelRunStreamingService(
@@ -381,9 +407,11 @@ public enum TriggersRuntimeWiring {
             scheduler: scheduler,
             registration: registration,
             catalogPort: scheduleToolPorts.catalogPort,
-            tenancyPolicy: scheduleToolPorts.tenancyPolicy
+            tenancyPolicy: scheduleToolPorts.tenancyPolicy,
+            channelRegistry: channelRegistry
         )
         let webhookTools = WebhookToolProvider(dataService: scheduleDataService)
+        let channelTools = ChannelToolProvider(dataService: scheduleDataService)
         let scheduleTools = ScheduleToolProvider(
             dataService: scheduleDataService,
             resolveHostTrigger: resolveHostTrigger
@@ -422,6 +450,7 @@ public enum TriggersRuntimeWiring {
             webhookRouteStore: routeStore,
             scheduleTools: scheduleTools,
             webhookTools: webhookTools,
+            channelTools: channelTools,
             fileEventQueue: fileEventQueue,
             replay: replay,
             channelRegistry: channelRegistry,

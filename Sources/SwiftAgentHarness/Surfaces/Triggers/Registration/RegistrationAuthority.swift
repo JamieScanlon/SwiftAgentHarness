@@ -101,6 +101,14 @@ public struct RegistrationAuthority: Sendable, Equatable {
     public static func localFileDrop(ownerAccountID: UUID? = nil) -> RegistrationAuthority {
         RegistrationAuthority(creator: .owner(accountID: ownerAccountID), surface: .fileDrop)
     }
+
+    /// The operator CLI. Authority comes from being able to run the binary against the data
+    /// directory at all — the same trust basis as `localFileDrop`, and the reason neither carries a
+    /// conversation. A deployment that does not want this must not hand out shell access to that
+    /// directory; there is no in-band check that would add anything.
+    public static func localCLI(ownerAccountID: UUID? = nil) -> RegistrationAuthority {
+        RegistrationAuthority(creator: .owner(accountID: ownerAccountID), surface: .cli)
+    }
 }
 
 // MARK: - Policy

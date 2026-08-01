@@ -419,6 +419,215 @@ non-owner becomes a chat message rather than a denial. Changing that is a three-
 `SlashCommandDispatchServiceOwnerGateTests` asserts the current semantics and that test was not in
 scope here — worth doing as its own change with the test updated alongside.
 
+
+## Channel lifecycle (phase 4a)
+
+Per-channel enable/disable/reload for channels already present in `channels.json`.
+`ChannelListenerService.start()`/`stop()` always existed and were idempotent; they were unreachable
+because `ChannelListenerRegistry.service(for:)` is internal and nothing drove it. This phase adds the
+control plane around them, not the mechanism.
+
+**Two files, one direction.** `channels.json` is operator config and is authoritative. Nothing at
+runtime rewrites it — the same rule `staticRouteImmutable` enforces for webhook routes.
+`channel_runtime_state.json` (`ChannelRuntimeStateStore`) is the separate, narrower thing a runtime
+client may write: a record that a channel config *permits* is currently held off. The effective
+verdict is `configEnabled ∧ ¬runtimeDisabled ∧ registryEnabled`, written down exactly once in
+`ChannelListenerRegistry.desiredState(for:)`.
+
+The overlay can only attenuate. Turning a channel *on* means editing config, because that is the
+decision carrying the credentials and the inbound socket; `enable` through the endpoint clears a
+previous hold and refuses outright (`channel_disabled_in_config`) if config says no.
+
+**Owner-only, and that is the existing verdict.** `RegistrationPolicy.allowsRegistration(_:kind:
+.channel)` already denied `agent` and `subAgent`; `setChannelEnabled` reuses it rather than inventing
+a second rung. A creator that may not register a channel must not be able to silence one either —
+silencing is the more attacker-interesting direction, because the channel that has been turned off
+is also the channel that stops reporting. There is deliberately no agent-facing mutation tool.
+
+**The ACL is loaded server-side.** `ChannelListenerConfig.owner_account_id` is the registration owner
+in the tenancy layer's units, and `setChannelEnabled` reads `channels.json` itself rather than
+accepting a config argument. A resource's own ACL passed in as a parameter is not an ACL — `nil`
+would skip the comparison. Under strict tenancy both ids must be present and equal; under
+`.disabled` tenancy a missing id on either side falls back to creator class, the same ladder
+`AgentMemoryPathResolver` uses.
+
+`owner_account_id` is deliberately *not* merged with `primary_user`. `primary_user` is a platform
+sender-id string deciding `user-direct` trust for inbound messages (`ChannelTrustClassifier`); the
+account id is an authorization principal. Merging them would make a Slack handle one.
+
+**Persist and apply are one call.** `setChannelEnabled` writes the overlay and then drives
+`ChannelListenerRegistry.reconcile()` through `ChannelLifecycleApplierHolder` (late-bound, because
+the registry is built after the endpoint — same shape as `TriggerBudgetNotifierHolder`). A pause that
+persisted an intent and left the channel ingesting until the next restart would be the wrong failure
+for a control whose whole point is taking effect now; when no applier is attached the result says
+`appliedToRunningProcess: false` rather than implying the listener stopped.
+
+**Reconcile re-reads.** Every lifecycle decision re-reads `channels.json`, never the boot-time
+snapshot, so an operator who edits config and reloads is not overruled by what the file said at
+start. `reconcile()` moves listeners between started and stopped; it does not rebuild services, so a
+changed transport or credential is reported in `requiresRestart` rather than silently ignored, and a
+channel dropped from config is stopped and reported in `removedFromConfig`. A channel newly switched
+on in config has no built service and also lands in `requiresRestart`.
+
+**Config diagnostics.** `ChannelConfigLoader` returns `ChannelConfigLoadResult` with diagnostics
+instead of collapsing missing / unreadable / malformed / typo'd into one empty `ChannelsFile` and no
+log line — the shape of "my channel vanished". `decodedCleanly` (whole-file parse) is what per-channel
+decisions gate on, deliberately not "were there any diagnostics": a single unknown-channel key must
+not switch off drift reporting for every channel that parsed.
+
+**Overlay read failures fall back to the last good state, not to permissive.** A read error inside
+`runtimeEnabled` uses the last overlay that decoded cleanly; falling back to "no overlay" would mean
+anyone who can corrupt one byte re-enables every channel the owner disabled. Symmetrically,
+`setDisabled` quarantines an undecodable file (renamed `.corrupt-<ms>`) rather than refusing, so
+corruption cannot wedge the owner out of disabling. Corruption *before* the first successful read is
+undecidable — deleting the file is indistinguishable from never having disabled anything — so that
+case runs open and says so via `ChannelStatusSummary.overlayUnreadable`.
+
+**Redaction.** `ChannelStatusSummary` carries no `platform_identity`, no `primary_user`, and only the
+fatal *code*; a fatal message is `String(describing:)` of a transport error and routinely carries the
+URL and sometimes the rejected token. `channelRuntimeState(authority:)` is owner-scoped and drops
+`changedBy` to a creator label, for the same reason `listWebhooks` is filtered and redacted.
+
+`running` and `fatalCode` are reported independently: `ChannelSupervisedListening` has no
+`clearFatal`, so `running: true` alongside a fatal code reads as "failed, then recovered". Suppressing
+the fatal on non-fatal states looks like the fix and is not — `stop()` writes `.disconnected`, so the
+first stop after a failure would erase the only record of why the channel died.
+
+### Fixed alongside
+
+- `ChannelListenerService.start()` was not reentrancy-safe: it guards on `supervisor == nil` but
+  suspends at `prepareSupervisedTransport()` while that is still nil, so two lifecycle callers could
+  both pass, both build a pipeline, and both attach a supervisor — duplicate ingestion of every
+  inbound message plus a socket `stop()` could never close. Replaced with a `runState` set before the
+  first suspension.
+- A start that failed partway kept what it had taken: the instance lock, and on the `connect_failed`
+  path a live pipeline with its debounce tasks. Repeated reconciles leaked one pipeline per attempt
+  and left the lock held by a listener that was not listening, so a second instance saw
+  `instance_lock_contention` from a dead channel. `failStart()` unwinds both.
+- No backoff guarded the pre-supervisor connect path (`ChannelTransportSupervisor` owns the real
+  curve, but the failure happens before it exists), so a caller looping reconcile became a connect
+  flood at the upstream platform. A 5s retry floor now applies to failed starts only; a deliberate
+  stop clears it.
+- `ChannelId` is now `CaseIterable`; the registry and the loader each carried their own hand-written
+  channel list, so a fifth channel would have been silently skipped by whichever was not updated.
+
+### Clients (phase 4a-ii)
+
+**`channel` agent tool — read-only, and the schema says so.** `list` and `get` only.
+`allowsRegistration(_:kind: .channel)` denies `agent`, so a mutation action would be a button that
+always returns "denied": it burns turns, teaches the model to retry with synonyms, and advertises a
+capability that does not exist. `enable`/`disable` are handled explicitly rather than falling to
+"unknown action" — the difference between "that verb does not exist" and "that verb exists and you
+may not have it" decides whether the model retries or tells the user. `reload` is deliberately *not*
+mapped: `ChannelListenerRegistry.reload(channel:)` exists but has no owner client, so pointing at it
+would name a command nobody can run.
+
+The reads earn their place. "Why did my Slack messages stop arriving?" is asked of the agent
+directly and was previously unanswerable — the state lived in `channel-status/*.json` and in nothing
+the model could see. `statuses()` therefore iterates **config**, not built services: a channel with
+`enabled: false`, or one whose transport is a stub, has no service, and reporting from `services`
+answered "not configured" for a channel that is configured and switched off. `serviceBuilt: false`
+is what distinguishes "paused" from "there is no such listener".
+
+`channel` joins `TriggerTools.all`, inheriting the control-plane sender deny rung and the
+confined-profile deny tokens without restating either — read-only is not an exemption, by the same
+reasoning that already covers `schedule_list`. It also joins `statusOnlyResults`, which `schedule_list`
+does not: every field it renders is an enum or a bool, and the one attacker-influenced string in the
+underlying type (the fatal *message*, `String(describing:)` of a transport error, which can carry a
+URL or a rejected token) never leaves `ChannelStatusSummary`. If that stops being true, the entry
+moves.
+
+**`/channel` slash bridge** maps onto the same tool via `TriggerToolArgumentBridge`. As with
+`/schedule` and `/webhook`, the command row itself is host configuration
+(`SlashCommandConfiguration.toolDispatchCommands`) — nothing in-tree declares it. Mark it
+`ownerOnly` there if you want the unauthorized fall-through.
+
+**`trigger channel status|enable|disable <channel>` (operator CLI)** is the owner surface.
+Authority is `.owner` / `.cli`: being able to run the binary against the data directory *is* the
+credential, the same basis as `localFileDrop`.
+
+`--data-directory` is **required** here, unlike every other `trigger` subcommand.
+`TriggerReplayPaths.resolve` falls back to a fresh temp directory when it is omitted, which is right
+for replay and wrong for this: `trigger channel disable slack` would write an overlay into `/tmp`,
+report success, exit 0, and leave the channel ingesting.
+
+The CLI is a different process from any running gateway, so it writes the overlay and nothing else —
+no applier is wired, `appliedToRunningProcess` is false, and the output says when the change takes
+effect. Claiming a live pause is the one lie this command must not tell. `status` likewise prints no
+`running` column and points at `channel-status/<channel>.json` instead of guessing at state it
+cannot observe.
+
+### Not in this phase
+
+- **In-session owner mutation (4a-iii).** Neither client can pause a channel *in a running gateway*.
+  Two routes, both real work: a `/channel` **builtin** slash command (`SlashCommandDispatcher`
+  already gates `ownerOnly` against an unforgeable `isOwner`, but `ConversationRuntimeDependencies`
+  has no trigger seam), or an **authenticated HTTP admin route** (`TriggerWebhookRouteRegistrar` is
+  the pattern; `ClientSessionMiddleware` already binds the principal, and it runs in-process so
+  `reconcile()` applies live). HTTP is the better fit — this is an operator concern — but it needs
+  the admin route group wired.
+  Note what is *not* an option: granting owner authority from anything the tool provider can see.
+  `{commandName, args}` is constructible by the model, so keying on it would be privilege escalation
+  dressed as a slash command. That is the same conclusion reached about gating the `/`-spelling.
+- **Phase 4b** — `register(channel:config:)` for genuinely new channels. Blocked on real transports
+  (only `.mock` is implemented) and on missing `unregister` for `MessageToolSchemaRegistry` /
+  `MessageOutputDeliveryRegistry`. That last gap is also why a runtime disable stops a channel
+  *listening* without withdrawing the agent's ability to send there.
+- **`ChannelInstanceLock` is not process-scoped** (pre-existing). `tryAcquire` returns true when the
+  live holder's identity string matches, and the identity is `channel:platformIdentity` — process
+  independent. Two gateways running the same bot both "acquire" it, and either one's `stop()` deletes
+  the other's lock file. `channel-triggers.md` §2 says this case must fail fatal. Making `reload()`
+  reachable widens the window; the fix (compare PID/start token) is its own change.
+
+## Schedule timezones
+
+`cron` schedules are wall-clock, and wall-clock needs a zone. Until this landed there was none:
+`CronSchedule.nextDate` used `Calendar(identifier: .gregorian)`, whose zone is the *process* zone, so
+"every morning at 9" meant 9am wherever the container happened to run. `FileEventPayload.timezone`
+existed, was decoded, and was thrown away — a sidecar could ask for `America/Los_Angeles` and be
+scheduled in UTC with no error anywhere.
+
+`ScheduledTask.timezone` is an IANA identifier, and `nextDate(after:in:)` evaluates against it.
+
+**Stamped at create, not resolved at fire.** A cron create with no zone records the caller's
+(`TimeZone.current.identifier`) rather than leaving the field empty. A row that inherits whichever
+host it later runs on is exactly how a 9am briefing becomes a 2am one after a deploy. An *update*
+keeps the stored zone — re-deriving it from the updating caller would move an existing schedule the
+first time someone edits it from a laptop in another country, the same reasoning that makes
+attribution and origin create-time properties.
+
+**`nil` means the process zone, not UTC.** Rows written before the field existed keep their old
+behaviour. Reinterpreting them as UTC would silently move every existing recurring task by the
+deployment's offset, which is a worse failure than the one being fixed.
+
+**An unrecognised identifier is refused** (`unknown_timezone`), never defaulted. Defaulting yields a
+task that runs — just at the wrong hour, silently, forever. A registration failure is the only
+version of this a user can see and correct.
+
+**Only `cron` is stamped.** `at` carries its own offset in the ISO-8601 string; `every` is a pure
+duration. Neither has a wall-clock to interpret.
+
+### Daylight saving
+
+Both transitions are covered by tests in `CronTimeZoneTests`, because both are the kind of thing that
+is discovered in production a year after shipping.
+
+- **Fall-back** (01:30 happens twice): a job that pins the hour fires **once**, which is the rule
+  Vixie cron uses and what a person writing "01:30 daily" means. A job with a *wildcard* hour
+  (`30 * * * *`) fires on both — it is asking for every occurrence, and both hours are real elapsed
+  time. Without this, an hour-pinned job double-fired once a year.
+- **Spring-forward** (02:30 does not exist): the job is **skipped** for that day and resumes the
+  next. This is a deliberate divergence from Vixie, which runs the skipped job once at the new time;
+  implementing that needs transition-aware search rather than the minute walk, so the current
+  behaviour is pinned by a test instead of left to be discovered.
+
+### Known gap
+
+`nextFireDate` applies ±jitter to the computed boundary, so a negative jitter can place a fire
+slightly *before* its cron boundary; the next tick then computes the boundary again and can fire a
+second time. Pre-existing, independent of timezones, and not addressed here — it needs the
+scheduler's anchor logic rather than the expression evaluator.
+
 ## Upcoming work (next steps)
 
 | Step | Work |

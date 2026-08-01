@@ -1514,6 +1514,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/FileUploadResponse"
 
+  /channels:
+    get:
+      operationId: listChannels
+      tags: [Triggers]
+      summary: Lifecycle status of every configured messaging channel
+      description: >-
+        Reports channels present in `channels.json`, including ones disabled there or whose transport
+        is unimplemented — `listenerBuilt: false` distinguishes "paused" from "there is no such
+        listener". Redacted by design: no platform identity, no primary user, and the last fatal
+        *code* rather than its message.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelAdminListResponse"
+
+  /channels/{channel}:
+    get:
+      operationId: getChannel
+      tags: [Triggers]
+      summary: Lifecycle status of one channel
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ChannelId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelAdminStatus"
+        "400":
+          description: Unknown channel id
+        "404":
+          description: Channel not present in channels.json
+
+  # Both mutations require an authenticated principal regardless of tenancy mode.
+  /channels/{channel}/pause:
+    post:
+      operationId: pauseChannel
+      tags: [Triggers]
+      summary: Stop a channel listener and record the pause
+      description: >-
+        Owner-only. Writes the runtime overlay and reconciles the live listener in the same call, so
+        the channel stops ingesting before the response is written. `channels.json` is never
+        modified. Requires an authenticated principal when strict tenancy is enabled.
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ChannelId"
+      responses:
+        "200":
+          description: Paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelAdminLifecycleResponse"
+        "400":
+          description: Unknown channel id
+        "401":
+          description: Authenticated owner required (always, not only under strict tenancy)
+        "404":
+          description: Channel not present in channels.json
+        "403":
+          description: Caller may not change this channel's lifecycle
+        "500":
+          description: channels.json could not be read, so there is no ACL to authorize against
+        "501":
+          description: Deployment has no channel lifecycle store configured
+
+  /channels/{channel}/resume:
+    post:
+      operationId: resumeChannel
+      tags: [Triggers]
+      summary: Clear a runtime pause and restart the listener
+      description: >-
+        Clears a previous pause; it cannot override `enabled: false` in `channels.json`, which
+        returns 409. Turning a channel on is the decision that carries the credentials and the
+        inbound socket, and it stays in operator config.
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ChannelId"
+      responses:
+        "200":
+          description: Resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelAdminLifecycleResponse"
+        "400":
+          description: Unknown channel id
+        "401":
+          description: Authenticated owner required (always, not only under strict tenancy)
+        "404":
+          description: Channel not present in channels.json
+        "403":
+          description: Caller may not change this channel's lifecycle
+        "409":
+          description: channels.json disables this channel; runtime cannot override it
+
   /exec-approvals/grants:
     get:
       operationId: listExecApprovalGrants
@@ -1705,6 +1815,69 @@ components:
         type: string
 
   schemas:
+    ChannelId:
+      type: string
+      enum: [slack, telegram, discord, email]
+
+    ChannelAdminStatus:
+      type: object
+      required: [channel, transport, configEnabled, runtimePaused, running, listenerBuilt, state, overlayUnreadable]
+      properties:
+        channel:
+          $ref: "#/components/schemas/ChannelId"
+        transport:
+          type: string
+          enum: [mock, slack, telegram, discord, email]
+        configEnabled:
+          type: boolean
+          description: What channels.json permits. Authoritative; no runtime surface changes it.
+        runtimePaused:
+          type: boolean
+          description: Whether the runtime overlay is currently holding this channel off.
+        running:
+          type: boolean
+        listenerBuilt:
+          type: boolean
+          description: >-
+            False when config names the channel but no listener exists — it was disabled at process
+            start (listeners are built once, at boot) or its transport is unimplemented.
+        state:
+          type: string
+          enum: [disconnected, connecting, connected, fatal]
+        lastFatalCode:
+          type: [string, "null"]
+          description: >-
+            Present even while running; a listener cannot clear a recorded fatal, so `running: true`
+            alongside this reads as "failed, then recovered". Code only — never the message.
+        overlayUnreadable:
+          type: boolean
+          description: The lifecycle overlay could not be read, so runtimePaused is a guess.
+
+    ChannelAdminListResponse:
+      type: object
+      required: [channels]
+      properties:
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelAdminStatus"
+
+    ChannelAdminLifecycleResponse:
+      type: object
+      required: [channel, paused, appliedToRunningProcess, message]
+      properties:
+        channel:
+          $ref: "#/components/schemas/ChannelId"
+        paused:
+          type: boolean
+        appliedToRunningProcess:
+          type: boolean
+          description: >-
+            Whether the change reached the live listeners. Always true from this surface, which runs
+            in the gateway process; the operator CLI writes the same overlay with false.
+        message:
+          type: string
+
     WireJSONObject:
       type: object
       additionalProperties: true

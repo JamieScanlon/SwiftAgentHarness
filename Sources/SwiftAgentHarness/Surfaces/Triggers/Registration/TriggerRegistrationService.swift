@@ -18,6 +18,16 @@ struct TriggerRegistrationService: Sendable {
     private let store: ScheduledTaskStore
     private let sessionStore: SessionScopedScheduledTaskStore
     private let webhookRoutes: WebhookRouteStore?
+    private let channelState: ChannelRuntimeStateStore?
+    /// Where `channels.json` lives. The channel ACL is loaded from here, by this type — never
+    /// accepted as a caller argument.
+    private let channelConfigURL: URL?
+    /// Late-bound applier for channel lifecycle decisions. Late because the listener registry is
+    /// built *after* this service (it needs the dispatch chain this service also feeds), so the
+    /// dependency can only be closed afterwards — the same pattern `TriggerBudgetNotifierHolder`
+    /// uses for the budget notice router.
+    private let channelApply: ChannelLifecycleApplierHolder?
+    private let tenancy: TenancyPolicySettings
     private let auditLog: TriggerAuditLog
     private let policy: RegistrationPolicy
     private let logger: Logger
@@ -26,6 +36,10 @@ struct TriggerRegistrationService: Sendable {
         store: ScheduledTaskStore,
         sessionStore: SessionScopedScheduledTaskStore = SessionScopedScheduledTaskStore(),
         webhookRoutes: WebhookRouteStore? = nil,
+        channelState: ChannelRuntimeStateStore? = nil,
+        channelConfigURL: URL? = nil,
+        channelApply: ChannelLifecycleApplierHolder? = nil,
+        tenancy: TenancyPolicySettings = .disabled,
         auditLog: TriggerAuditLog,
         policy: RegistrationPolicy = .default,
         logger: Logger
@@ -33,6 +47,10 @@ struct TriggerRegistrationService: Sendable {
         self.store = store
         self.sessionStore = sessionStore
         self.webhookRoutes = webhookRoutes
+        self.channelState = channelState
+        self.channelConfigURL = channelConfigURL
+        self.channelApply = channelApply
+        self.tenancy = tenancy
         self.auditLog = auditLog
         self.policy = policy
         self.logger = logger
@@ -462,6 +480,163 @@ struct TriggerRegistrationService: Sendable {
             .map(\.redacted)
     }
 
+    // MARK: - Channel lifecycle
+
+    /// Authority gate for changing a channel's lifecycle state.
+    ///
+    /// `allowsRegistration(_:kind: .channel)` is owner/installer only, and that verdict is reused
+    /// here deliberately: a creator that may not register a channel must not be able to silence one
+    /// either. Silencing is the more attacker-interesting direction of the two — a channel that has
+    /// been turned off is also the channel that stops reporting.
+    ///
+    /// `config` is loaded **server-side** by the caller of this method inside this type, never
+    /// handed in by the client. A resource's own ACL supplied as an argument is not an ACL: passing
+    /// `nil` would skip the ownership comparison entirely, which is the same defect as a field that
+    /// is stamped and never read, wearing a different hat.
+    ///
+    /// Under strict tenancy both ids must be present and equal. Under `.disabled` tenancy a missing
+    /// id on either side falls back to creator class alone — the same ladder
+    /// `AgentMemoryPathResolver` uses, and what keeps single-tenant deployments (where nothing
+    /// carries an account id at all) working.
+    private func assertChannelMutable(
+        channel: ChannelId,
+        config: ChannelListenerConfig?,
+        authority: RegistrationAuthority
+    ) throws {
+        guard policy.allowsRegistration(authority.creator, kind: .channel) else {
+            throw TriggerRegistrationError.kindNotRegisterable(
+                kind: .channel,
+                creator: authority.creator.auditLabel
+            )
+        }
+        if case .installer = authority.creator { return }
+        let callerOwner = authority.creator.ownerAccountID
+        // Strict tenancy forbids the anonymous local-trust surfaces outright: in a multi-tenant
+        // deployment "whoever can reach the data directory" is not a principal.
+        if tenancy.requireAuthenticatedOwnerOnMutations, callerOwner == nil {
+            throw TriggerRegistrationError.channelNotOwned(channel: channel.rawValue)
+        }
+        // No account id and non-strict tenancy: the CLI and the file drop, whose credential is
+        // filesystem access. Nothing an account id would add. (The HTTP surface cannot reach here
+        // with a nil id — it refuses before building the authority.)
+        guard let callerOwner else { return }
+        // An earlier version additionally required `configOwner` to be present under strict
+        // tenancy, which meant a correctly authenticated owner got `channel_not_owned` on every
+        // channel, because `owner_account_id` is optional and undocumented. A channel with no
+        // recorded owner is unpartitioned, not forbidden.
+        guard let configOwner = config?.ownerAccountID else { return }
+        guard configOwner == callerOwner else {
+            throw TriggerRegistrationError.channelNotOwned(channel: channel.rawValue)
+        }
+    }
+
+    /// Persist a channel lifecycle decision, apply it to the live process, and audit it.
+    ///
+    /// Writes only the runtime overlay: `channels.json` is operator config and is never rewritten
+    /// from a runtime client, the same rule `staticRouteImmutable` enforces for webhook routes. The
+    /// overlay can only hold a permitted channel off — enabling here clears a previous hold, it does
+    /// not override an operator's `enabled: false`.
+    ///
+    /// The apply step is not optional. A `pause` that persists an intent, reports success, and
+    /// leaves the channel ingesting until the next restart is the wrong failure for a control whose
+    /// entire justification is that silencing needs to take effect *now*. When no reconcile port is
+    /// installed the call still succeeds — the overlay is authoritative at next start — but says so
+    /// in its result rather than implying the listener stopped.
+    @discardableResult
+    func setChannelEnabled(
+        channel: ChannelId,
+        enabled: Bool,
+        authority: RegistrationAuthority,
+        reason: String? = nil
+    ) async throws -> ChannelLifecycleResult {
+        let op = enabled ? "resume" : "pause"
+        do {
+            // Both halves or neither: without the config URL there is no ACL to check against, and
+            // a lifecycle mutation that skips the ownership comparison is worse than one that is
+            // unavailable.
+            guard let channelState, let channelConfigURL else {
+                throw TriggerRegistrationError.channelLifecycleUnavailable
+            }
+            // Loaded here, from disk, under this type's control.
+            let loaded = ChannelConfigLoader.loadResult(from: channelConfigURL)
+            guard loaded.decodedCleanly else {
+                throw TriggerRegistrationError.channelConfigUnreadable(channel: channel.rawValue)
+            }
+            // A channel absent from `channels.json` is refused in *both* directions. Only the
+            // enable branch checked before, so pausing a nonexistent channel returned success and
+            // wrote an overlay row for it — while `GET /api/channels/{channel}` answered 404 for the
+            // same name, because status reports from config.
+            guard let config = loaded.file.config(for: channel) else {
+                throw TriggerRegistrationError.notFound
+            }
+            try assertChannelMutable(channel: channel, config: config, authority: authority)
+            // Enable additionally requires config to say yes: the overlay may only attenuate.
+            if enabled, !config.enabled {
+                throw TriggerRegistrationError.channelDisabledInConfig(channel: channel.rawValue)
+            }
+            let entry = try channelState.setDisabled(
+                channel: channel,
+                disabled: !enabled,
+                changedBy: authority.creator,
+                reason: reason
+            )
+            var applied = false
+            if let channelApply {
+                applied = await channelApply.applyChannelState()
+            }
+            recordRegistrationAudit(
+                op: op,
+                kind: .channel,
+                id: channel.rawValue,
+                authority: authority,
+                trust: .knownParty,
+                outcome: applied ? "ok" : "ok_pending_restart",
+                admitted: true
+            )
+            return ChannelLifecycleResult(entry: entry, appliedToRunningProcess: applied)
+        } catch {
+            let outcome = (error as? TriggerRegistrationError)?.code ?? "store_error"
+            recordRegistrationAudit(
+                op: op,
+                kind: .channel,
+                id: channel.rawValue,
+                authority: authority,
+                trust: .knownParty,
+                outcome: outcome,
+                admitted: false
+            )
+            throw error
+        }
+    }
+
+    /// The persisted overlay, owner-scoped and redacted.
+    ///
+    /// Same shape as `listWebhooks(authority:)` and for the same reason: an unfiltered listing would
+    /// hand one caller every other actor's conversation, lineage-root and owner-account UUIDs, plus
+    /// whatever free text they wrote into `reason`.
+    func channelRuntimeState(authority: RegistrationAuthority) throws -> [ChannelRuntimeStateView] {
+        guard let channelState else { return [] }
+        let callerOwner = authority.creator.ownerAccountID
+        // The installer, and an owner surface with no account id at all (single-tenant), see
+        // everything. Anyone else sees only rows with no recorded owner or a matching one.
+        let unscoped = authority.creator.isInstaller || (!authority.creator.isModelDriven && callerOwner == nil)
+        return try channelState.load().values
+            .filter { entry in
+                if unscoped { return true }
+                guard let owner = entry.changedBy?.ownerAccountID else { return true }
+                return owner == callerOwner
+            }
+            .sorted { $0.channel < $1.channel }
+            .map {
+                ChannelRuntimeStateView(
+                    channel: $0.channel,
+                    disabled: $0.disabled,
+                    updatedAtMs: $0.updatedAtMs,
+                    changedByLabel: $0.changedBy?.auditLabel
+                )
+            }
+    }
+
     // MARK: - Reads
 
     func listSchedules() throws -> [ScheduledTask] {
@@ -481,6 +656,17 @@ struct TriggerRegistrationService: Sendable {
 
     // MARK: - Audit
 
+    /// Registration rows are audited under the *fire-time* source their kind will produce, so a
+    /// query for "everything that ever touched the Slack channel" finds the registration too.
+    private static func auditSource(for kind: TriggerKind) -> TriggerSource {
+        switch kind {
+        case .schedule: return .cron
+        case .webhook: return .webhook
+        case .channel: return .channel
+        case .fileEvent: return .fileEvent
+        }
+    }
+
     private func recordRegistrationAudit(
         op: String,
         kind: TriggerKind = .schedule,
@@ -493,7 +679,7 @@ struct TriggerRegistrationService: Sendable {
         auditLog.record(
             TriggerAuditEntry(
                 triggerID: "registration:\(kind.rawValue):\(op):\(id):\(outcome)",
-                source: kind == .webhook ? .webhook : .cron,
+                source: Self.auditSource(for: kind),
                 trust: trust,
                 receivedAt: Int64(Date().timeIntervalSince1970 * 1000),
                 decision: admitted ? .admitted : .unauthorized,

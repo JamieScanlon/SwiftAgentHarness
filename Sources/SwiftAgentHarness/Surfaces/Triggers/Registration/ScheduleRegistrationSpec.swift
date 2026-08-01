@@ -31,6 +31,12 @@ struct ScheduleRegistrationSpec: Sendable, Equatable {
     var durable: Bool?
     /// `nil` keeps an existing row's pause state, or starts a new row enabled.
     var enabled: Bool?
+    /// IANA identifier for `cron` wall-clock evaluation, e.g. `Europe/Berlin`.
+    ///
+    /// `nil` on a create means "the zone this process is in", which the validator resolves and
+    /// stamps rather than leaving implicit — a task that inherits whatever host it later runs on is
+    /// how "every morning at 9" becomes 2am after a deploy.
+    var timezone: String?
 
     init(
         id: String? = nil,
@@ -48,7 +54,8 @@ struct ScheduleRegistrationSpec: Sendable, Equatable {
         requestedTrust: CommEnvelopeOriginTrust? = nil,
         permanent: Bool = false,
         durable: Bool? = nil,
-        enabled: Bool? = nil
+        enabled: Bool? = nil,
+        timezone: String? = nil
     ) {
         self.id = id
         self.schedule = schedule
@@ -66,6 +73,7 @@ struct ScheduleRegistrationSpec: Sendable, Equatable {
         self.permanent = permanent
         self.durable = durable
         self.enabled = enabled
+        self.timezone = timezone
     }
 
     /// The spec an existing row corresponds to.
@@ -92,7 +100,8 @@ struct ScheduleRegistrationSpec: Sendable, Equatable {
             requestedTrust: task.trust,
             permanent: task.permanent,
             durable: task.durable,
-            enabled: task.enabled
+            enabled: task.enabled,
+            timezone: task.timezone
         )
     }
 }
@@ -142,6 +151,33 @@ struct ValidatedScheduledTask: Sendable {
         }
 
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+
+        // Resolve the zone before the schedule is built.
+        //
+        // An unrecognised identifier is refused rather than defaulted. Defaulting produces a task
+        // that runs — just at the wrong hour, silently, forever; the registration failure is the
+        // only version of this a user can see and fix. Only `cron` has a wall-clock to interpret:
+        // `at` carries its own offset in the ISO-8601 string and `every` is a pure duration, so
+        // neither is stamped.
+        let resolvedTimezone: String?
+        if spec.schedule.kind != .cron {
+            // Nothing to interpret, so nothing to validate. Without this an `at` one-shot carrying a
+            // typo'd identifier — which used to register fine, because the field was decoded and
+            // dropped — would start being refused for a field that has no effect on it.
+            resolvedTimezone = nil
+        } else if let requested = spec.timezone, !requested.isEmpty {
+            guard TimeZone(identifier: requested) != nil else {
+                throw TriggerRegistrationError.validation(.unknownTimezone(requested))
+            }
+            resolvedTimezone = requested
+        } else if let existing {
+            // An update keeps the row's zone. Re-deriving it from the updating caller would move an
+            // existing schedule the first time it is edited from a host in another zone — the same
+            // reasoning that makes attribution and origin create-time properties below.
+            resolvedTimezone = existing.timezone
+        } else {
+            resolvedTimezone = TimeZone.current.identifier
+        }
 
         // Attribution, trust and origin are **create-time** properties. An update re-validates
         // content; it does not re-author the row. Deriving them from the updating authority would
@@ -206,7 +242,8 @@ struct ValidatedScheduledTask: Sendable {
             createdBy: creator,
             updatedAt: nowMs,
             origin: (existing?.origin ?? authority.origin)?.normalized,
-            enabled: spec.enabled ?? existing?.enabled ?? true
+            enabled: spec.enabled ?? existing?.enabled ?? true,
+            timezone: resolvedTimezone
         )
 
         switch ScheduledTaskCreateScanner.validateCreate(

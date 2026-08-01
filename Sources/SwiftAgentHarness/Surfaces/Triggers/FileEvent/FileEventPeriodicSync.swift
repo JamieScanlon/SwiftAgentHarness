@@ -37,7 +37,11 @@ struct FileEventPeriodicSync: Sendable {
             conversationID: payload.conversationID,
             title: eventURL.lastPathComponent,
             requestedTrust: trust.trust,
-            durable: true
+            durable: true,
+            // `FileEventPayload.timezone` was decoded and then dropped: a sidecar could ask
+            // for `America/Los_Angeles` and be scheduled in the host's zone with no error at
+            // all. An unrecognised identifier is now refused by the validator, not ignored.
+            timezone: payload.timezone
         )
         do {
             _ = try registration.registerSchedule(spec, authority: authority)

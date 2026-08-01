@@ -39,8 +39,12 @@ enum ToolControlPlaneClassification {
         static let scheduleResume = "schedule_resume"
         /// One action-enum tool per kind: 4 kinds x 7 ops would otherwise be 28 tool names.
         static let webhook = "webhook"
+        /// Read-only (list/get). Classified control-plane anyway: a caller with no authority to
+        /// change a channel has no reason to enumerate the owner's, which is the same rule that puts
+        /// `scheduleList` in this list.
+        static let channel = "channel"
 
-        /// Every schedule tool, including the read-only listing.
+        /// Every trigger control-plane tool, including the read-only ones.
         static let all: [String] = [
             scheduleCreate,
             scheduleList,
@@ -50,6 +54,7 @@ enum ToolControlPlaneClassification {
             schedulePause,
             scheduleResume,
             webhook,
+            channel,
         ]
 
         /// The subset whose tool result is a fixed status string rather than task content.
@@ -57,6 +62,12 @@ enum ToolControlPlaneClassification {
         /// `scheduleList` is deliberately excluded: it echoes every accessible task's `payloadText`
         /// and `title`, which can originate from a file drop or a channel-hosted conversation, so it
         /// stays inside the external-content envelope.
+        ///
+        /// `channel` is included despite being a listing, because every field it renders comes from
+        /// an enum or a bool — channel id, transport, listener state, and a fatal *code* this
+        /// codebase writes. The one attacker-influenced string in the underlying type, the fatal
+        /// message, never reaches the tool result. If that ever stops being true, this entry has to
+        /// move.
         static let statusOnlyResults: [String] = [
             scheduleCreate,
             scheduleDelete,
@@ -64,6 +75,7 @@ enum ToolControlPlaneClassification {
             scheduleUpdate,
             schedulePause,
             scheduleResume,
+            channel,
         ]
 
         /// Tools whose *arguments* can introduce or rewrite a deferred prompt, and therefore need

@@ -12,17 +12,22 @@ actor ScheduledTaskToolDataService {
     private let registration: TriggerRegistrationService
     private let catalog: any ConversationCatalogServicing
     private let tenancyPolicy: TenancyPolicySettings
+    /// Live listener registry, for the read-only channel tool. Optional: a deployment with no
+    /// channels wires none, and the tool then reports "not configured" rather than failing.
+    private let channelRegistry: ChannelListenerRegistry?
 
     init(
         scheduler: TriggerSchedulerService,
         registration: TriggerRegistrationService,
         catalog: any ConversationCatalogServicing,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        channelRegistry: ChannelListenerRegistry? = nil
     ) {
         self.scheduler = scheduler
         self.registration = registration
         self.catalog = catalog
         self.tenancyPolicy = tenancyPolicy
+        self.channelRegistry = channelRegistry
     }
 
     func listAccessibleTasks() async throws -> [ScheduledTask] {
@@ -150,6 +155,27 @@ actor ScheduledTaskToolDataService {
     func webhookRoute(named name: String) async throws -> WebhookRoute? {
         let normalized = WebhookRouteNaming.normalize(name)
         return try await listWebhooks().first { $0.name == normalized }
+    }
+
+    // MARK: - Channels (read-only)
+    //
+    // No authority resolution here, unlike the schedule and webhook paths, and that is deliberate
+    // rather than an omission. Those methods scope by *owner*, because their rows are created by
+    // individual actors; a channel is written into this deployment's `channels.json` by the
+    // operator, so there is no cross-tenant set to filter. What gates these reads is the tool's
+    // control-plane classification — the sender deny rung and the confined-profile deny tokens —
+    // which applies before dispatch reaches this type.
+    //
+    // Mutation has no counterpart here on purpose: it lives on `TriggerRegistrationService`, behind
+    // an authority parameter no tool client can supply.
+
+    func listChannels() async throws -> [ChannelStatusSummary] {
+        guard let channelRegistry else { return [] }
+        return await channelRegistry.statuses()
+    }
+
+    func channelStatus(_ channel: ChannelId) async throws -> ChannelStatusSummary? {
+        try await listChannels().first { $0.channel == channel }
     }
 
     func deleteTask(id: String) async throws -> Bool {

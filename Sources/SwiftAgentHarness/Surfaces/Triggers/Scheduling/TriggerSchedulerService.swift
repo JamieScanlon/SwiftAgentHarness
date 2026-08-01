@@ -224,7 +224,27 @@ public actor TriggerSchedulerService {
         case .cron:
             guard let expr = task.schedule.expr, let cron = try? CronSchedule(expression: expr) else { return nil }
             let after = task.lastFiredAt == nil ? anchor : now
-            guard let next = cron.nextDate(after: after) else { return nil }
+            let zone = task.resolvedTimeZone
+            guard let next = cron.nextDate(after: after, in: zone) else { return nil }
+            // Daylight-saving fall-back: a pinned-hour job runs once through the repeated hour, the
+            // rule Vixie cron uses and what "01:30 daily" means to whoever wrote it.
+            //
+            // The comparison is against the *previous fire*, not against `after` — `after` is the
+            // scheduler tick, whose wall clock is almost never the boundary's, so a guard keyed on
+            // it would fire only in the single tick that happened to land on `:30`. An earlier
+            // version made exactly that mistake inside `CronSchedule.nextDate`, where the previous
+            // fire is not in scope at all.
+            //
+            // `lastFiredAt` carries up to ±6s of jitter (see `jittered`), which can put it in the
+            // adjacent minute; rounding to the nearest minute recovers the boundary it came from.
+            if cron.pinsHour, let lastFiredAt = task.lastFiredAt {
+                let lastSeconds = TimeInterval(lastFiredAt) / 1000
+                let lastBoundary = Date(timeIntervalSince1970: (lastSeconds / 60).rounded() * 60)
+                if CronSchedule.isSameLocalMinute(next, lastBoundary, in: zone) {
+                    guard let following = cron.nextDate(after: next, in: zone) else { return nil }
+                    return jittered(date: following, intervalMs: 60_000)
+                }
+            }
             return jittered(date: next, intervalMs: 60_000)
         }
     }

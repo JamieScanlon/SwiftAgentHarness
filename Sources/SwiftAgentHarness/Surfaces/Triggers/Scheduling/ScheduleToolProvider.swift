@@ -26,6 +26,7 @@ public struct ScheduleToolProvider: ToolProvider {
                     .init(name: "at", description: "ISO8601 for at", type: "string", required: false),
                     .init(name: "intervalMs", description: "Interval ms for every", type: "number", required: false),
                     .init(name: "cronExpr", description: "Cron expression", type: "string", required: false),
+                    .init(name: "timezone", description: "IANA timezone the cron wall-clock is read in, e.g. Europe/Berlin. Defaults to the harness host's zone, captured now rather than resolved at fire time. Only meaningful for cron. An unrecognised identifier is rejected rather than defaulted.", type: "string", required: false),
                     .init(name: "payloadKind", description: "systemEvent | agentTurn", type: "string", required: true),
                     .init(name: "payloadText", description: "Prompt or event text", type: "string", required: true),
                     .init(name: "recurring", description: "Whether task repeats", type: "boolean", required: true),
@@ -67,6 +68,7 @@ public struct ScheduleToolProvider: ToolProvider {
                     .init(name: "payloadText", description: "Replacement prompt or event text", type: "string", required: false),
                     .init(name: "title", description: "Replacement label", type: "string", required: false),
                     .init(name: "cronExpr", description: "Replacement cron expression", type: "string", required: false),
+                    .init(name: "timezone", description: "Replacement IANA timezone for a cron schedule.", type: "string", required: false),
                     .init(name: "at", description: "Replacement ISO8601 one-shot time", type: "string", required: false),
                     .init(name: "intervalMs", description: "Replacement interval in ms", type: "number", required: false),
                     .init(name: "delivery", description: "none | announce | webhook", type: "string", required: false),
@@ -171,7 +173,8 @@ public struct ScheduleToolProvider: ToolProvider {
             routingMode: extractString(from: toolCall.arguments, key: "routingMode")
                 .flatMap(TriggerRoutingMode.init(rawValue:)),
             correlation: correlation,
-            durable: extractBool(from: toolCall.arguments, key: "durable")
+            durable: extractBool(from: toolCall.arguments, key: "durable"),
+            timezone: extractString(from: toolCall.arguments, key: "timezone")
         )
         let saved = try await dataService.createTask(spec)
         return "created id=\(saved.id) delivery=\(saved.delivery.rawValue) durable=\(saved.durable)"
@@ -202,6 +205,7 @@ public struct ScheduleToolProvider: ToolProvider {
             }
             if let recurring = Self.boolean(arguments, "recurring") { spec.recurring = recurring }
             if let enabled = Self.boolean(arguments, "enabled") { spec.enabled = enabled }
+            if let timezone = Self.string(arguments, "timezone") { spec.timezone = timezone }
         }
         return "updated id=\(saved.id) enabled=\(saved.enabled)"
     }

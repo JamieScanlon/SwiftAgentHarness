@@ -172,6 +172,7 @@ enum TriggerToolArgumentBridge {
             putNumber("intervalMs", line.option("every-ms", "intervalMs"))
             put("delivery", line.option("delivery"))
             put("routingMode", line.option("routing"))
+            put("timezone", line.option("tz", "timezone"))
             putBool("recurring", line.flag("recurring"))
             putBool("enabled", line.flag("enabled"))
             return (Tools.scheduleUpdate, .object(fields))
@@ -198,11 +199,42 @@ enum TriggerToolArgumentBridge {
             put("title", line.option("title"))
             put("delivery", line.option("delivery"))
             put("routingMode", line.option("routing"))
+            put("timezone", line.option("tz", "timezone"))
             putBool("durable", line.flag("durable"))
             return (Tools.scheduleCreate, .object(fields))
         default:
             return nil
         }
+    }
+
+    /// Map a `/channel …` line onto the read-only `channel` tool.
+    ///
+    /// The mutation verbs are mapped through rather than rejected here. `/channel disable slack`
+    /// reaching a "that is an owner operation, run it from the operator CLI" result is a better
+    /// answer than "unknown action", and the refusal itself belongs in the provider, where the
+    /// reason is known and can name the command that does work.
+    static func channelArguments(from arguments: JSON) -> JSON? {
+        guard let line = commandLine(from: arguments) else { return nil }
+        var fields: [String: JSON] = [:]
+        let action: String
+        switch line.subcommand ?? "list" {
+        case "list", "ls", "status": action = "list"
+        case "get", "show", "info": action = "get"
+        case "enable", "resume": action = "enable"
+        case "disable", "pause": action = "disable"
+        // `reload`/`restart` are deliberately absent. `ChannelListenerRegistry.reload(channel:)`
+        // exists but has no owner client, so mapping the verb through would produce a refusal that
+        // points at a command nobody can run. Unknown action is the honest answer until 4a-iii.
+        default: return nil
+        }
+        fields["action"] = .string(action)
+        if let name = line.option("channel") ?? line.argument(0) {
+            fields["channel"] = .string(name)
+            // `/channel status slack` names one channel, so it is a `get`; a bare `/channel status`
+            // lists. Only the listing verb is promoted — `/channel disable slack` stays `disable`.
+            if action == "list" { fields["action"] = .string("get") }
+        }
+        return .object(fields)
     }
 
     /// Map a `/webhook …` line onto the single action-enum `webhook` tool.

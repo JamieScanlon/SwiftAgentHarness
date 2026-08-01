@@ -57,6 +57,27 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
     var enabled: Bool
     /// Where a fire should announce back to, captured at create time. See ``TriggerOriginRef``.
     var origin: TriggerOriginRef?
+    /// IANA identifier the `cron` schedule's wall-clock is evaluated in, e.g. `America/Los_Angeles`.
+    ///
+    /// Stamped at registration from the caller's zone when not supplied, so a task created on a
+    /// laptop keeps firing at the human's 9am after the service is deployed to a UTC host. `nil` is
+    /// a row written before this field existed and keeps the old behaviour — the process zone —
+    /// because reinterpreting those rows as UTC would move every existing schedule by the
+    /// deployment's offset without anyone asking.
+    ///
+    /// Only meaningful for `cron`. `at` carries its own offset in the ISO-8601 string and `every` is
+    /// a pure duration, so neither has a wall-clock to interpret.
+    var timezone: String?
+
+    /// Resolved zone for schedule evaluation, or `nil` for the process zone.
+    ///
+    /// An identifier that no longer resolves — a tzdata rename, or a row hand-edited on disk —
+    /// degrades to the process zone with the same reasoning as ``resolvedCreator``: the alternative
+    /// is a task that silently stops firing.
+    var resolvedTimeZone: TimeZone? {
+        guard let timezone else { return nil }
+        return TimeZone(identifier: timezone)
+    }
 
     /// Best-effort creator for legacy rows: a pre-registration-layer row with a creating
     /// conversation was written by the agent tool path; one without was written by the installer or
@@ -93,7 +114,8 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         createdBy: RegistrationCreator? = nil,
         updatedAt: Int64? = nil,
         origin: TriggerOriginRef? = nil,
-        enabled: Bool = true
+        enabled: Bool = true,
+        timezone: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -118,6 +140,7 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         self.updatedAt = updatedAt
         self.origin = origin
         self.enabled = enabled
+        self.timezone = timezone
     }
 
     /// Hand-written so that a task file written by an older build still decodes: every field is
@@ -156,5 +179,6 @@ struct ScheduledTask: Codable, Sendable, Equatable, Identifiable {
         self.origin = try? container.decodeIfPresent(TriggerOriginRef.self, forKey: .origin)
         // Absent on rows written before the pause knob existed — those were all running.
         self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
     }
 }
