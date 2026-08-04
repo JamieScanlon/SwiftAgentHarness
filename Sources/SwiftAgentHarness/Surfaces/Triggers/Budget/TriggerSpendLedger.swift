@@ -106,13 +106,19 @@ struct TriggerSpendLedgerStore: Sendable {
     }
 
     /// Read-modify-write under one lock, so concurrent settlements cannot lose a charge.
+    ///
+    /// `now` is a parameter because retention is the one part of this store that depends on a clock,
+    /// and every other `now` in this subsystem is injectable. Reading `Date()` here instead meant
+    /// retention was measured against the wall clock while the charge it judged carried the caller's
+    /// clock — so a caller working with any date but today had its writes pruned by the write that
+    /// created them.
     @discardableResult
-    func mutate<T>(_ body: (inout TriggerSpendLedgerFile) -> T) throws -> T {
+    func mutate<T>(now: Date = Date(), _ body: (inout TriggerSpendLedgerFile) -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
         var file = try readUnlocked()
         let result = body(&file)
-        prune(&file)
+        prune(&file, now: now)
         try writeUnlocked(file)
         return result
     }
@@ -127,16 +133,46 @@ struct TriggerSpendLedgerStore: Sendable {
     /// the limit and evict a *live* ledger entry, resetting the ceiling it was holding.
     ///
     /// Window keys sort lexicographically in chronological order (`yyyy-MM-dd`, `yyyy-MM`).
-    private func prune(_ file: inout TriggerSpendLedgerFile) {
-        let windows = Set(file.entries.values.map(\.windowKey)).sorted()
-        guard windows.count > retainedWindows else { return }
-        let retained = Set(windows.suffix(retainedWindows))
-        file.entries = file.entries.filter { retained.contains($0.value.windowKey) }
-        // A charge whose window is no longer retained can never be posted anywhere, and until now
-        // it stayed pending forever — refetched from the meter on every single admission for its
-        // source. Dropping it forgives spend that has no ledger row left to land in.
-        file.pending.removeAll { !retained.contains($0.dayWindowKey) && !retained.contains($0.monthWindowKey) }
+    private func prune(_ file: inout TriggerSpendLedgerFile, now: Date) {
+        pruneEntries(&file)
+        prunePending(&file, now: now)
     }
+
+    private func pruneEntries(_ file: inout TriggerSpendLedgerFile) {
+        let all = Set(file.entries.values.map(\.windowKey))
+        // Day (`yyyy-MM-dd`) and month (`yyyy-MM`) keys are two independent series sharing one
+        // dictionary. Ranking them together let a month budget's rows inflate the count and evict
+        // day history early, for no reason a reader of `retainedWindows` would predict.
+        var retained = Set(all.filter { $0.count == dayKeyLength }.sorted().suffix(retainedWindows))
+        retained.formUnion(all.filter { $0.count == monthKeyLength }.sorted().suffix(retainedWindows))
+        // Anything of an unrecognised shape is kept. Dropping rows this code cannot interpret would
+        // make a future window granularity silently lose history.
+        retained.formUnion(all.filter { $0.count != dayKeyLength && $0.count != monthKeyLength })
+        guard retained.count < all.count else { return }
+        file.entries = file.entries.filter { retained.contains($0.value.windowKey) }
+    }
+
+    /// Drop charges no retained window could still receive.
+    ///
+    /// Driven off the charge's own `firedAtMs`, never off which windows still have entry rows. A
+    /// charge fired in the current window normally has *no* row yet — the row is created at
+    /// settlement — so testing it against `entries` deletes charges at the moment they are written.
+    /// That is spend silently forgiven, which is the one thing a ledger may not do by accident.
+    ///
+    /// The horizon is measured in **months** even though most budgets are daily. This store cannot
+    /// see which windows are configured, and a charge still postable to a retained month row has to
+    /// survive; the asymmetry is deliberate, because being generous costs some re-offering to the
+    /// meter and being tight costs money that silently never lands. So this is a backstop against
+    /// charges abandoned across the ledger's whole retained history — not a tight bound on the
+    /// pending list, which `settlePending` still re-offers in full on every admission for a source.
+    private func prunePending(_ file: inout TriggerSpendLedgerFile, now: Date) {
+        guard let horizon = Calendar.current.date(byAdding: .month, value: -retainedWindows, to: now) else { return }
+        let horizonMs = Int64(horizon.timeIntervalSince1970 * 1000)
+        file.pending.removeAll { $0.firedAtMs < horizonMs }
+    }
+
+    private let dayKeyLength = 10
+    private let monthKeyLength = 7
 
     private func readUnlocked() throws -> TriggerSpendLedgerFile {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {

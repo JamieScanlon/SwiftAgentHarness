@@ -107,26 +107,29 @@ struct TriggerBudgetGate: Sendable {
         guard !budgets.isEmpty else { return .admit }
 
         do {
-            return try store.mutate { file in
-                // Checked against the *scope* key, which is what `escalate` writes. These were two
-                // different strings — suspension was stored under `source:<key>` and read under the
-                // bare `<key>`, so the ladder's terminal rung never refused anything. Every
-                // applicable scope is checked, so a future non-source suspension binds too.
-                for budget in budgets where file.sources[budget.scope.key]?.suspended == true {
-                    return .refuse(rung: .suspend, scopeKey: budget.scope.key)
-                }
-                // Refuse if *any* applicable ledger is at its ceiling — otherwise a per-source
-                // budget would let a source keep spending after the global pot is empty.
-                for budget in budgets {
-                    let windowKey = budget.window.key(for: now)
-                    let entryKey = TriggerSpendLedgerFile.entryKey(scopeKey: budget.scope.key, windowKey: windowKey)
-                    let spent = file.entries[entryKey]?.spentUSD ?? 0
-                    if budget.rung(forSpent: spent) == .deferFires {
-                        return .refuse(rung: .deferFires, scopeKey: budget.scope.key)
-                    }
-                }
-                return .admit
+            // `load`, not `mutate`. Admission decides nothing that needs writing, and taking the
+            // read-modify-write path made every admission re-encode the whole ledger, create the
+            // file for sources that had never spent, and run retention — so a decision could
+            // silently drop a pending charge as a side effect.
+            let file = try store.load()
+            // Checked against the *scope* key, which is what `escalate` writes. These were two
+            // different strings — suspension was stored under `source:<key>` and read under the
+            // bare `<key>`, so the ladder's terminal rung never refused anything. Every applicable
+            // scope is checked, so a future non-source suspension binds too.
+            for budget in budgets where file.sources[budget.scope.key]?.suspended == true {
+                return .refuse(rung: .suspend, scopeKey: budget.scope.key)
             }
+            // Refuse if *any* applicable ledger is at its ceiling — otherwise a per-source budget
+            // would let a source keep spending after the global pot is empty.
+            for budget in budgets {
+                let windowKey = budget.window.key(for: now)
+                let entryKey = TriggerSpendLedgerFile.entryKey(scopeKey: budget.scope.key, windowKey: windowKey)
+                let spent = file.entries[entryKey]?.spentUSD ?? 0
+                if budget.rung(forSpent: spent) == .deferFires {
+                    return .refuse(rung: .deferFires, scopeKey: budget.scope.key)
+                }
+            }
+            return .admit
         } catch {
             // Fail open on ledger IO, and say so. Refusing every trigger because a file is
             // unreadable turns a bookkeeping fault into an outage of the user's automations.
@@ -156,7 +159,7 @@ struct TriggerBudgetGate: Sendable {
             originMetadata: trigger.sourceMetadata.filter { $0.key.hasPrefix("origin") }
         )
         do {
-            try store.mutate { file in
+            try store.mutate(now: now) { file in
                 file.pending.append(charge)
             }
         } catch {
@@ -187,7 +190,7 @@ struct TriggerBudgetGate: Sendable {
 
         var notices: [TriggerBudgetBreachNotice] = []
         do {
-            notices = try store.mutate { file in
+            notices = try store.mutate(now: now) { file in
                 var produced: [TriggerBudgetBreachNotice] = []
                 let settledIDs = Set(settled.map(\.charge.conversationID))
                 file.pending.removeAll { settledIDs.contains($0.conversationID) }
@@ -274,12 +277,20 @@ struct TriggerBudgetGate: Sendable {
             suspendedAtMs: nil
         )
         guard state.lastBreachedWindowKey != windowKey else { return nil }
-        // A run is only a run if the previous window was breached too. Without this the counter
-        // just accumulated: a source that blew its daily ceiling once a month was suspended on the
-        // third month and told it had "exhausted its budget for several windows running".
         let firedAt = Date(timeIntervalSince1970: Double(charge.firedAtMs) / 1000)
-        if let last = state.lastBreachedWindowKey, last != budget.window.previousKey(for: firedAt) {
-            state.consecutiveBreachedWindows = 0
+        if let last = state.lastBreachedWindowKey {
+            // Settlement lags firing — `chargePostsToFiringWindow` is the same fact from the other
+            // side — so a charge that fired in an *older* window can arrive after a newer one has
+            // already breached. That is not a gap in the run; ignoring it is. Rewinding here meant
+            // a source breaching every single day never suspended, as long as one settlement was
+            // late.
+            guard windowKey > last else { return nil }
+            // A run is only a run if the previous window was breached too. Without this the counter
+            // just accumulated: a source that blew its daily ceiling once a month was suspended on
+            // the third month and told it had "exhausted its budget for several windows running".
+            if last != budget.window.previousKey(for: firedAt) {
+                state.consecutiveBreachedWindows = 0
+            }
         }
         state.consecutiveBreachedWindows += 1
         state.lastBreachedWindowKey = windowKey
