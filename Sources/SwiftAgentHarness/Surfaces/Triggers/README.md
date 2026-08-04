@@ -628,6 +628,107 @@ slightly *before* its cron boundary; the next tick then computes the boundary ag
 second time. Pre-existing, independent of timezones, and not addressed here — it needs the
 scheduler's anchor logic rather than the expression evaluator.
 
+## File events: one directory, two roles
+
+`events/` is both an event **queue** and a **configuration store**, and the template
+(`file-event-triggers.md` § Two patterns, kept distinct) is explicit that mixing them "is a category
+error that produces confusing double-fires and phantom handlers." This surface mixes them anyway, on
+purpose — the divergence and its reasoning are recorded here rather than left to be rediscovered.
+
+| `type` | Role | Lifecycle |
+|---|---|---|
+| `immediate` | Queue event — the file *is* the trigger | Consumed, moved to `.processing/`, deleted |
+| `periodic` | Configuration — registers a recurring `ScheduledTask` | Persists; deleting the file unregisters the task |
+| `one-shot` | Configuration — registers a future-dated task | Persists until fired; deleting unregisters |
+
+**Why one directory.** The alternative was `events/` for immediates and `subscriptions/` for the
+rest, which is more spec-faithful but breaks every existing drop path and buys little: the sync code
+already dispatches on `type` cleanly, and the two roles never share a file. What actually removes the
+"phantom handler" hazard is not separate directories but the fact that subscriptions register through
+`TriggerRegistrationService` like everything else — so a file-registered task is creator-stamped,
+trust-clamped, audited, and **visible to `schedule_list`**. Before that it was an orphaned store row
+nobody could see or delete.
+
+**The writer.** `FileEventQueueWriter.writeSubscription` is the configuration-half counterpart to
+`writeImmediate`. Only the queue half had a writer, so the harness could produce its own immediates
+but not its own subscriptions — those had to come from outside, and nothing could round-trip what it
+wrote. `removeSubscription` is the other end: deleting the file is what unregisters the task.
+
+Writing is all it does. Registration still happens when the watcher notices the file and
+`FileEventPeriodicSync` / `FileEventScheduledSync` route it through the endpoint — deliberately, so a
+file the harness wrote and a file dropped by hand take exactly the same path to becoming a task.
+
+**Everything the registration path can reject is rejected here first.** Basename, cron expression,
+timezone identifier, empty prompt, `ProjectInstructionContentScanner`, and a one-shot `at` that will
+not still be in the future when the watcher reaches the file. The alternative is not a later error
+but a silent one: `syncFromFile` swallows a registration failure into a `.warning`, so the file stays
+on disk to fail again on every scan while the caller holds a task id for a task that does not exist.
+
+The one-shot case is the sharpest, and it is not just bookkeeping. `syncFutureOneShot` re-checks
+`atDate > Date()` when it runs; a payload that was future at write time and past by then is *not
+registered at all* — it falls through to the immediate-consume path, which fires the turn at once,
+deletes the file, and skips the content scan that only runs on the registration path. So the writer
+enforces a lead-time floor (`minimumOneShotLeadSeconds`) rather than a bare `> now`, and there is no
+injectable clock: a `now:` seam could only ever be used to make a stale timestamp look future.
+
+**A timezone on a one-shot is refused, not dropped.** The `at` string carries its own offset and the
+registration validator stamps no zone for non-cron schedules, so accepting one would be a field that
+looks honoured and is not — the same reason the validator refuses an unrecognised identifier instead
+of defaulting it.
+
+**A partial correlation is refused.** `TriggerCorrelation.fromPayload` honours payload lineage only
+when `rootId` *and* `correlationId` are both present; anything less is silently replaced by a fresh
+root. A caller stitching a chain would get a broken one and no signal.
+
+**Basenames are narrow** — `TriggerSlug`, the same definition webhook route names use, because they
+are the same rule for the same reason: the string becomes a path component *and* the tail of the
+scheduled-task id (`file-periodic:<basename>`). `..` would escape the directory; a leading `.` would
+be written and then never seen, because the queue skips dotfiles. The anchors are `\A`/`\z`, not
+`^`/`$`: ICU's `$` matches before a final line terminator, so `"digest\n"` satisfied the old pattern
+and produced the file `digest\n.json`. One definition is what let that fix land on both surfaces.
+
+**One namespace, two writers, so writes are checked before they land.** `writeImmediate` and
+`writeSubscription` compute the identical path and both replace unconditionally. A subscription
+written over a queued immediate drops a turn that never fires; an immediate written over a
+subscription gets the file consumed *and deleted*, and deletion is what unregistration means here —
+so a one-line immediate write would silently unregister an unrelated recurring task. `writeSubscription`
+now refuses when the basename is taken by a different `type`, and `removeSubscription` refuses to
+delete an `immediate`. The same check covers case-insensitive filesystems, where `Daily.json` and
+`daily.json` are one file but `file-periodic:Daily` and `file-periodic:daily` are two ids.
+
+**`immediate` is unrepresentable in the writer.** `FileEventSubscriptionKind` has two cases, not
+three. While it took `FileEventKind`, both the writer and the id helper needed a third branch that
+could only be a mistake — the writer threw a mislabelled error and the helper returned a bare,
+unprefixed basename, which is exactly the drift the helper exists to prevent.
+
+**Correlation crosses the file boundary on both kinds.** `rootId` / `parentTriggerId` /
+`correlationId` are writable and carried into the registered task. `FileEventPeriodicSync` used to
+drop them while `FileEventScheduledSync` carried them, so the same lineage survived one path and not
+the other — a periodic subscription written as a follow-up looked like a fresh root on every fire.
+
+**Task ids have one spelling.** `FileEventQueueLayout.taskID(forSubscription:kind:)`. The two
+prefixes were previously written out at four call sites across the two sync types and their removal
+paths; a writer that guessed differently would register under one id and unregister under another.
+
+**Trust ordering is load-bearing.** The sidecar is written before the payload in both writers,
+because the watcher fires on the `.json` — a sidecar written second can be missed and the event
+resolved at the default `unknown-party`. `.atomic` makes each file untearable and does nothing for
+the pair, so a failed payload write removes the sidecar it just wrote: an orphan is inert to the
+queue, but the next file dropped under that basename would inherit a trust claim it never made.
+Dropping it can only attenuate, which is the safe direction. The sidecar is a trust *request* either
+way — the registration validator clamps it to the creator's ceiling under `localFileDrop()`, so this
+path cannot amplify. The filesystem grants no trust by itself: the drop path is
+local, so the *creator* is the machine owner (`RegistrationAuthority.localFileDrop`), while the
+*content* trust comes from the `.trust` sidecar.
+
+### Not in this phase
+
+Runtime watch-path registration (a `watch_subscribe` op). The events directory is fixed at
+`FileEventQueueService.init` and `FileEventDirectoryWatchSource` opens exactly one path,
+non-recursively. No reference harness supports runtime watch registration — the one whose entire API
+is file-drop still has a single fixed directory — and the interesting version of the feature ("watch
+this project directory for changes") is a different problem from trigger registration.
+
 ## Upcoming work (next steps)
 
 | Step | Work |

@@ -117,14 +117,25 @@ struct TriggerSpendLedgerStore: Sendable {
         return result
     }
 
+    /// Retain the newest `retainedWindows` *windows*, not the newest that many *rows*.
+    ///
+    /// Counting rows conflated retention with scope count: one row exists per scope per window, so a
+    /// deployment with fifty sources crossed a ninety-row limit in two days and began evicting
+    /// two-day-old history. Worse, rows in the same window share a `windowKey`, and `sorted` is not
+    /// stable — once every row was current-window, which rows got dropped was arbitrary, so anyone
+    /// able to mint scope keys (a channel peer id feeds `sourceKey`) could push the row count over
+    /// the limit and evict a *live* ledger entry, resetting the ceiling it was holding.
+    ///
+    /// Window keys sort lexicographically in chronological order (`yyyy-MM-dd`, `yyyy-MM`).
     private func prune(_ file: inout TriggerSpendLedgerFile) {
-        guard file.entries.count > retainedWindows else { return }
-        // Window keys sort lexicographically in chronological order (`yyyy-MM-dd`, `yyyy-MM`).
-        let doomed = file.entries.values
-            .sorted { $0.windowKey < $1.windowKey }
-            .prefix(file.entries.count - retainedWindows)
-            .map { TriggerSpendLedgerFile.entryKey(scopeKey: $0.scopeKey, windowKey: $0.windowKey) }
-        for key in doomed { file.entries.removeValue(forKey: key) }
+        let windows = Set(file.entries.values.map(\.windowKey)).sorted()
+        guard windows.count > retainedWindows else { return }
+        let retained = Set(windows.suffix(retainedWindows))
+        file.entries = file.entries.filter { retained.contains($0.value.windowKey) }
+        // A charge whose window is no longer retained can never be posted anywhere, and until now
+        // it stayed pending forever — refetched from the meter on every single admission for its
+        // source. Dropping it forgives spend that has no ledger row left to land in.
+        file.pending.removeAll { !retained.contains($0.dayWindowKey) && !retained.contains($0.monthWindowKey) }
     }
 
     private func readUnlocked() throws -> TriggerSpendLedgerFile {

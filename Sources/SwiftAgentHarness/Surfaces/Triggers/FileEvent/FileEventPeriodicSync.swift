@@ -27,7 +27,20 @@ struct FileEventPeriodicSync: Sendable {
             return
         }
         let trust = FileEventTrustResolver.resolve(for: eventURL)
-        let taskID = FileEventQueueLayout.periodicTaskIDPrefix + eventURL.deletingPathExtension().lastPathComponent
+        let taskID = FileEventQueueLayout.taskID(
+            forSubscription: eventURL.deletingPathExtension().lastPathComponent,
+            kind: .periodic
+        )
+        // Carried the same way ``FileEventScheduledSync`` carries it. Without this a periodic
+        // subscription written as a follow-up — by the harness itself, through
+        // `writeSubscription` — lost its lineage the moment it registered, so every fire looked
+        // like a fresh root and nothing tied it back to what asked for it.
+        let correlation = TriggerCorrelation.fromPayload(
+            rootId: payload.rootId,
+            parentTriggerId: payload.parentTriggerId,
+            correlationId: payload.correlationId,
+            fallbackTriggerID: taskID
+        )
         let spec = ScheduleRegistrationSpec(
             id: taskID,
             schedule: ScheduledTaskSchedule(kind: .cron, expr: expr),
@@ -36,6 +49,7 @@ struct FileEventPeriodicSync: Sendable {
             recurring: true,
             conversationID: payload.conversationID,
             title: eventURL.lastPathComponent,
+            correlation: correlation,
             requestedTrust: trust.trust,
             durable: true,
             // `FileEventPayload.timezone` was decoded and then dropped: a sidecar could ask
@@ -52,7 +66,7 @@ struct FileEventPeriodicSync: Sendable {
 
     func removeForDeletedFile(named filename: String) throws {
         let base = (filename as NSString).deletingPathExtension
-        let taskID = FileEventQueueLayout.periodicTaskIDPrefix + base
+        let taskID = FileEventQueueLayout.taskID(forSubscription: base, kind: .periodic)
         _ = try registration.deleteSchedule(id: taskID, authority: authority)
     }
 

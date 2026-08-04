@@ -39,6 +39,17 @@ public enum TriggerBudgetWindow: String, Sendable, Equatable {
     case day
     case month
 
+    /// The key of the window immediately before the one `date` falls in.
+    ///
+    /// Escalation counts *consecutive* breached windows, which cannot be decided from two keys
+    /// alone — `2026-01-05` and `2026-03-05` are two breaches, not a run of two. This is how a run
+    /// is told apart from a coincidence.
+    public func previousKey(for date: Date, calendar: Calendar = .current) -> String {
+        let component: Calendar.Component = self == .day ? .day : .month
+        let previous = calendar.date(byAdding: component, value: -1, to: date) ?? date
+        return key(for: previous, calendar: calendar)
+    }
+
     /// Calendar-aligned in local time, per the spec.
     public func key(for date: Date, calendar: Calendar = .current) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)

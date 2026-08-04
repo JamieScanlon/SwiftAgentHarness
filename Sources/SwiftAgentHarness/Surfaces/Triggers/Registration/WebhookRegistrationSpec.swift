@@ -107,9 +107,6 @@ struct ValidatedWebhookRoute: Sendable {
         self.generatedSecret = generatedSecret
     }
 
-    /// Route names become URL path segments, so the charset is deliberately narrow.
-    static let namePattern = "^[a-z0-9][a-z0-9_-]{0,63}$"
-
     static func validate(
         spec: WebhookRegistrationSpec,
         authority: RegistrationAuthority,
@@ -130,7 +127,12 @@ struct ValidatedWebhookRoute: Sendable {
         guard name != Self.reservedGlobalBucketName else {
             throw TriggerRegistrationError.webhook(.invalidName(spec.name))
         }
-        guard name.range(of: namePattern, options: .regularExpression) != nil else {
+        // Route names become URL path segments, so the charset is deliberately narrow. Shared with
+        // file-event subscription basenames — the same rule for the same reason. The switch to
+        // ``TriggerSlug`` is behaviour-preserving here (`normalize` above already trims the line
+        // terminators its `\A`/`\z` anchors guard against); the point is that there is now one
+        // definition to fix rather than two to keep in step.
+        guard TriggerSlug.isValid(name) else {
             throw TriggerRegistrationError.webhook(.invalidName(spec.name))
         }
         // Config is authoritative over runtime registration: a self-registered route must not be

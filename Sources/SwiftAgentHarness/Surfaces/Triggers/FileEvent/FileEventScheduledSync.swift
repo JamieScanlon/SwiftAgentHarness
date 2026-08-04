@@ -23,7 +23,10 @@ struct FileEventScheduledSync: Sendable {
               let atDate = ISO8601DateFormatter().date(from: atRaw),
               atDate > Date() else { return false }
         let trust = FileEventTrustResolver.resolve(for: eventURL)
-        let taskID = FileEventScheduledFileKind.oneShotTaskIDPrefix + eventURL.deletingPathExtension().lastPathComponent
+        let taskID = FileEventQueueLayout.taskID(
+            forSubscription: eventURL.deletingPathExtension().lastPathComponent,
+            kind: .oneShot
+        )
         let correlation = TriggerCorrelation.fromPayload(
             rootId: payload.rootId,
             parentTriggerId: payload.parentTriggerId,
@@ -53,12 +56,14 @@ struct FileEventScheduledSync: Sendable {
 
     func removeForDeletedFile(named filename: String) throws {
         let base = (filename as NSString).deletingPathExtension
+        // Both prefixes are probed: the file's own type is not knowable once it has been deleted,
+        // so removal has to cover either kind it might have been.
         _ = try registration.deleteSchedule(
-            id: FileEventQueueLayout.periodicTaskIDPrefix + base,
+            id: FileEventQueueLayout.taskID(forSubscription: base, kind: .periodic),
             authority: authority
         )
         _ = try registration.deleteSchedule(
-            id: FileEventScheduledFileKind.oneShotTaskIDPrefix + base,
+            id: FileEventQueueLayout.taskID(forSubscription: base, kind: .oneShot),
             authority: authority
         )
     }

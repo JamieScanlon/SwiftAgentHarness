@@ -108,8 +108,12 @@ struct TriggerBudgetGate: Sendable {
 
         do {
             return try store.mutate { file in
-                if file.sources[key]?.suspended == true {
-                    return .refuse(rung: .suspend, scopeKey: key)
+                // Checked against the *scope* key, which is what `escalate` writes. These were two
+                // different strings — suspension was stored under `source:<key>` and read under the
+                // bare `<key>`, so the ladder's terminal rung never refused anything. Every
+                // applicable scope is checked, so a future non-source suspension binds too.
+                for budget in budgets where file.sources[budget.scope.key]?.suspended == true {
+                    return .refuse(rung: .suspend, scopeKey: budget.scope.key)
                 }
                 // Refuse if *any* applicable ledger is at its ceiling — otherwise a per-source
                 // budget would let a source keep spending after the global pot is empty.
@@ -270,6 +274,13 @@ struct TriggerBudgetGate: Sendable {
             suspendedAtMs: nil
         )
         guard state.lastBreachedWindowKey != windowKey else { return nil }
+        // A run is only a run if the previous window was breached too. Without this the counter
+        // just accumulated: a source that blew its daily ceiling once a month was suspended on the
+        // third month and told it had "exhausted its budget for several windows running".
+        let firedAt = Date(timeIntervalSince1970: Double(charge.firedAtMs) / 1000)
+        if let last = state.lastBreachedWindowKey, last != budget.window.previousKey(for: firedAt) {
+            state.consecutiveBreachedWindows = 0
+        }
         state.consecutiveBreachedWindows += 1
         state.lastBreachedWindowKey = windowKey
         var notice: TriggerBudgetBreachNotice?
