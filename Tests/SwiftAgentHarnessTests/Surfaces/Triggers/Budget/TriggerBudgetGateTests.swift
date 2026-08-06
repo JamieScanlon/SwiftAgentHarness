@@ -125,7 +125,8 @@ struct TriggerBudgetGateTests {
         )
     }
 
-    /// Run one billed fire: index it, tell the meter what it cost, settle.
+    /// Run one billed fire in its own conversation: index it, tell the meter the conversation's
+    /// cumulative cost, settle.
     @discardableResult
     private func fire(_ fixture: Fixture, cost: Double, on date: Date) async -> UUID {
         let conversationID = UUID()
@@ -133,6 +134,20 @@ struct TriggerBudgetGateTests {
         fixture.meter.settle(conversationID, at: cost)
         await fixture.gate.settlePending(sourceKey: Self.sourceKey, now: date)
         return conversationID
+    }
+
+    /// Run one fire in a conversation that is *reused* — the real shape for an isolated trigger,
+    /// where `TriggerSessionRouter` hands back the same conversation for a stable session key.
+    /// `runningTotal` is what the meter reports afterwards, i.e. cumulative.
+    private func fire(
+        _ fixture: Fixture,
+        in conversationID: UUID,
+        runningTotal: Double,
+        on date: Date
+    ) async {
+        fixture.gate.indexRun(trigger: deployTrigger(), conversationID: conversationID, now: date)
+        fixture.meter.settle(conversationID, at: runningTotal)
+        await fixture.gate.settlePending(sourceKey: Self.sourceKey, now: date)
     }
 
     // MARK: - Admission and charging
@@ -276,6 +291,80 @@ struct TriggerBudgetGateTests {
             ]
         )
         #expect(entry.spentUSD == 5)
+    }
+
+    /// A trigger-host conversation is reused across fires, so the meter's answer is cumulative and
+    /// the ledger must charge the delta. Billing the whole total each time accrues `N²/2` dollars
+    /// for `N` dollars of spend — three $1 fires reading 1, 2, 3 would post $6 — and a $10 ceiling
+    /// would refuse on the 5th fire instead of the 11th.
+    @Test("a reused conversation is charged the delta, not its running total")
+    func reusedConversationChargesDelta() async throws {
+        let fixture = makeFixture(configuration: sourceOnly(ceilingUSD: 100))
+        let conversationID = UUID()
+        for total in [1.0, 2.0, 3.0] {
+            await fire(fixture, in: conversationID, runningTotal: total, on: day(0))
+        }
+        let windowKey = TriggerBudgetWindow.day.key(for: day(0))
+        let entry = try #require(
+            try fixture.store.load().entries[
+                TriggerSpendLedgerFile.entryKey(scopeKey: Self.sourceScopeKey, windowKey: windowKey)
+            ]
+        )
+        #expect(entry.spentUSD == 3)
+        #expect(entry.chargedRuns == 3)
+    }
+
+    /// The high-water mark is what makes the delta correct across a restart, so it has to be in the
+    /// file rather than in memory.
+    @Test("the billed high-water mark persists")
+    func billedTotalPersists() async throws {
+        let fixture = makeFixture(configuration: sourceOnly(ceilingUSD: 100))
+        let conversationID = UUID()
+        await fire(fixture, in: conversationID, runningTotal: 4, on: day(0))
+        let mark = try #require(try fixture.store.load().billedConversations[conversationID.uuidString])
+        #expect(mark.totalUSD == 4)
+    }
+
+    /// A meter that reports less than last time — a compaction, a rewritten transcript — must not
+    /// credit the ledger back.
+    @Test("a meter that goes backwards cannot credit the ledger")
+    func decreasingTotalDoesNotCredit() async throws {
+        let fixture = makeFixture(configuration: sourceOnly(ceilingUSD: 100))
+        let conversationID = UUID()
+        await fire(fixture, in: conversationID, runningTotal: 5, on: day(0))
+        await fire(fixture, in: conversationID, runningTotal: 1, on: day(0))
+        let windowKey = TriggerBudgetWindow.day.key(for: day(0))
+        let entry = try #require(
+            try fixture.store.load().entries[
+                TriggerSpendLedgerFile.entryKey(scopeKey: Self.sourceScopeKey, windowKey: windowKey)
+            ]
+        )
+        #expect(entry.spentUSD == 5)
+        #expect(try fixture.store.load().billedConversations[conversationID.uuidString]?.totalUSD == 5)
+    }
+
+    /// Several outstanding charges routinely share one conversation. The meter is expensive — a full
+    /// transcript re-derivation per call — so it must be asked once per conversation, not once per
+    /// charge.
+    @Test("the meter is consulted once per conversation, not once per charge")
+    func meterConsultedOncePerConversation() async throws {
+        let fixture = makeFixture(configuration: sourceOnly(ceilingUSD: 100))
+        let conversationID = UUID()
+        for _ in 0 ..< 3 {
+            fixture.gate.indexRun(trigger: deployTrigger(), conversationID: conversationID, now: day(0))
+        }
+        fixture.meter.settle(conversationID, at: 9)
+        await fixture.gate.settlePending(sourceKey: Self.sourceKey, now: day(0))
+        #expect(fixture.meter.lookupCount == 1)
+        let windowKey = TriggerBudgetWindow.day.key(for: day(0))
+        let entry = try #require(
+            try fixture.store.load().entries[
+                TriggerSpendLedgerFile.entryKey(scopeKey: Self.sourceScopeKey, windowKey: windowKey)
+            ]
+        )
+        // Three charges, one conversation, one delta — posted once, not three times.
+        #expect(entry.spentUSD == 9)
+        #expect(entry.chargedRuns == 3)
     }
 
     // MARK: - The ladder

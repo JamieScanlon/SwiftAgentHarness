@@ -109,7 +109,7 @@ struct TriggerDelegatedCompletionHandoffTests {
             activationPolicy: TriggerActivationPolicy(
                 idempotency: TriggerIdempotencyGate(dedupe: AlwaysPassIdempotency()),
                 rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-                costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+                initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
                 auditLog: TriggerAuditLog(logger: Logger(label: "test"))
             ),
             sessionRouter: TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() })),

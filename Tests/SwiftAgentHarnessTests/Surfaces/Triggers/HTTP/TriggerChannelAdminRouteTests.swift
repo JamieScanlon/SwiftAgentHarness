@@ -107,7 +107,7 @@ struct TriggerChannelAdminRouteTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: ChannelTestDedupe()),
             rateLimit: TriggerRateLimitGate(),
-            costCeiling: TriggerCostCeilingGate(),
+            initiatorBurst: TriggerInitiatorBurstGate(),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         return ChannelIngressAdapter(

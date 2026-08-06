@@ -30,8 +30,14 @@ struct TriggerBudgetBreachNotice: Sendable, Equatable {
 /// knows what a conversation cost, from the authoritative per-run usage rollups. This port is that
 /// one number and nothing else.
 struct TriggerSpendPorts: Sendable {
-    /// Settled USD for a finished trigger-host conversation. `nil` means "not settled yet" — the
-    /// charge stays pending and is retried on the next admission.
+    /// **Cumulative** settled USD for a trigger-host conversation — the total it has cost so far,
+    /// not the cost of one fire. `nil` means "not settled yet": the charge stays pending and is
+    /// retried on the next admission.
+    ///
+    /// Cumulative because a trigger-host conversation is reused across fires, so there is no stable
+    /// "cost of this fire" a host could report. The gate charges the delta against a per-conversation
+    /// high-water mark, which is monotonic-counter metering and needs nothing from the host but the
+    /// running total.
     var conversationCostUSD: @Sendable (_ conversationID: UUID) async -> Double?
     /// Deliver a breach notice to the owner through the origin channel captured at registration.
     var notify: @Sendable (TriggerBudgetBreachNotice) async -> Void
@@ -179,22 +185,53 @@ struct TriggerBudgetGate: Sendable {
         }
         guard !outstanding.isEmpty else { return }
 
-        var settled: [(charge: TriggerPendingRunCharge, costUSD: Double)] = []
-        for charge in outstanding {
+        // One lookup per *conversation*, not per charge. A trigger-host conversation is reused
+        // across fires, so several outstanding charges routinely share one — and the meter's
+        // implementation re-derives a whole transcript per call.
+        var totals: [UUID: Double] = [:]
+        for conversationID in Set(outstanding.map(\.conversationID)) {
             // `nil` means the host has not settled this conversation yet — leave it pending and try
             // again on the next admission rather than charging a guess.
-            guard let cost = await ports.conversationCostUSD(charge.conversationID) else { continue }
-            settled.append((charge, max(0, cost)))
+            guard let cost = await ports.conversationCostUSD(conversationID) else { continue }
+            totals[conversationID] = max(0, cost)
         }
+        let settled = outstanding.filter { totals[$0.conversationID] != nil }
         guard !settled.isEmpty else { return }
 
         var notices: [TriggerBudgetBreachNotice] = []
         do {
             notices = try store.mutate(now: now) { file in
                 var produced: [TriggerBudgetBreachNotice] = []
-                let settledIDs = Set(settled.map(\.charge.conversationID))
+                // Re-read inside the lock. The meter is awaited *outside* it, so two concurrent
+                // admissions for one source can both arrive here holding the same settlement; the
+                // second must charge nothing rather than post it twice. Latent while the port was
+                // unmetered (`settled` was always empty); live the moment a real meter is supplied.
+                let stillPending = Set(file.pending.map(\.conversationID))
+                let settledIDs = Set(settled.map(\.conversationID))
                 file.pending.removeAll { settledIDs.contains($0.conversationID) }
-                for (charge, cost) in settled {
+                // The meter reports the conversation's *cumulative* cost, and a trigger-host
+                // conversation is reused across fires, so the charge is the delta against what has
+                // already been billed for it. Posting the whole total each time bills `N²/2` for
+                // `N` dollars of spend — and reports `chargedRuns: N` beside it, so the ledger
+                // disagrees with itself.
+                var deltas: [UUID: Double] = [:]
+                for conversationID in settledIDs where stillPending.contains(conversationID) {
+                    let total = totals[conversationID] ?? 0
+                    let key = conversationID.uuidString
+                    let alreadyBilled = file.billedConversations[key]?.totalUSD ?? 0
+                    // Clamped: a meter that reports less than last time (a compaction, a rewritten
+                    // transcript) must not credit the ledger.
+                    deltas[conversationID] = max(0, total - alreadyBilled)
+                    file.billedConversations[key] = TriggerBilledConversation(
+                        totalUSD: max(total, alreadyBilled),
+                        updatedAtMs: Int64(now.timeIntervalSince1970 * 1000)
+                    )
+                }
+                for charge in settled where stillPending.contains(charge.conversationID) {
+                    // The whole delta lands on the first charge for that conversation; the rest
+                    // settle at zero. They are the same conversation's spend either way, and the
+                    // window each is posted to is the window it fired in.
+                    let cost = deltas.removeValue(forKey: charge.conversationID) ?? 0
                     let budgets = configuration.applicable(sourceKey: charge.sourceKey, trust: charge.trust)
                     for budget in budgets {
                         let windowKey = budget.window == .day ? charge.dayWindowKey : charge.monthWindowKey

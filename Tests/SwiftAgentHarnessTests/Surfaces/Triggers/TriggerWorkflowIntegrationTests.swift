@@ -41,7 +41,7 @@ struct TriggerWorkflowIntegrationTests {
             activationPolicy: TriggerActivationPolicy(
                 idempotency: TriggerIdempotencyGate(dedupe: LocalDedupe()),
                 rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-                costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+                initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
                 auditLog: auditLog
             ),
             sessionRouter: TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() })),

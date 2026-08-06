@@ -1,6 +1,6 @@
 import Foundation
 
-actor TriggerCostCeilingGate {
+actor TriggerInitiatorBurstGate {
     private var counts: [String: (windowStart: Date, count: Int)] = [:]
     private let windowSeconds: TimeInterval
     private let maxPerWindow: Int
@@ -10,7 +10,7 @@ actor TriggerCostCeilingGate {
         self.maxPerWindow = maxPerWindow
     }
 
-    func isOverBudget(initiatorKey: String, now: Date = Date()) -> Bool {
+    func isOverBurstLimit(initiatorKey: String, now: Date = Date()) -> Bool {
         if var entry = counts[initiatorKey] {
             if now.timeIntervalSince(entry.windowStart) >= windowSeconds {
                 entry = (now, 0)

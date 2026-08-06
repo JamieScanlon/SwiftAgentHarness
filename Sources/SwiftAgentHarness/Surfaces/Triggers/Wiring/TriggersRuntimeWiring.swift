@@ -150,6 +150,19 @@ public enum TriggersRuntimeWiring {
         /// per-run usage rollups. Without it the ledger never accrues and ceilings never bind — the
         /// harness says so loudly at boot rather than presenting an unmetered ceiling as enforcement.
         public var conversationCostUSD: (@Sendable (UUID) async -> Double?)? = nil
+        /// Opt in to the in-package meter (``TriggerConversationCostMeter``) instead of supplying
+        /// your own. Ignored when `conversationCostUSD` is set — an explicit meter always wins.
+        ///
+        /// Off by default because it is honest about being partial: `costRollup` is populated only
+        /// by the sub-agent completion path, so this meters delegate spend and reads `$0` for a
+        /// trigger that did its work in the main loop. Opting in binds ceilings for the spend it can
+        /// see; it does not make them complete.
+        public var meterConversationCostFromRunRollups: Bool = false
+        /// How long a still-running trigger run may hold up settlement before the finished runs are
+        /// billed without it. Nothing in the harness times a run out, so without this a wedged lane
+        /// pins the charge until retention drops it; set it above your longest legitimate run,
+        /// because settling early is unrecoverable.
+        public var meterOpenRunGrace: TimeInterval = 6 * 3600
 
         public init(
             dataDirectory: URL,
@@ -217,22 +230,44 @@ public enum TriggersRuntimeWiring {
         let dedupe = HarnessTriggerDedupeAdapter(peek: dedupePeek, check: dedupeCheckAndSet)
         let idempotency = TriggerIdempotencyGate(dedupe: dedupe)
         let rateLimit = TriggerRateLimitGate()
-        let costCeiling = TriggerCostCeilingGate()
+        let initiatorBurst = TriggerInitiatorBurstGate()
         let budgetNotifier = TriggerBudgetNotifierHolder()
         let spendLedger = TriggerSpendLedgerStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("trigger_spend_ledger.json"),
             retainedWindows: configuration.budgets.retainedWindows
         )
-        if configuration.budgets.enabled, configuration.conversationCostUSD == nil {
-            logger.warning(
-                "trigger_budgets_unmetered — spend ceilings are configured but no conversationCostUSD meter was supplied; ledgers will not accrue and ceilings will not bind"
-            )
+        // An explicit host meter wins; the in-package one is opt-in; otherwise there is none.
+        let costMeter: (@Sendable (UUID) async -> Double?)?
+        if let supplied = configuration.conversationCostUSD {
+            costMeter = supplied
+        } else if configuration.meterConversationCostFromRunRollups {
+            costMeter = TriggerConversationCostMeter.runRollups(
+                runtime: runtime,
+                openRunGrace: configuration.meterOpenRunGrace,
+                logger: logger
+            ).port
+        } else {
+            costMeter = nil
+        }
+        if configuration.budgets.enabled {
+            if costMeter == nil {
+                logger.warning(
+                    "trigger_budgets_unmetered — spend ceilings are configured but no conversationCostUSD meter was supplied; ledgers will not accrue and ceilings will not bind"
+                )
+            } else if configuration.conversationCostUSD == nil {
+                // Said out loud for the same reason `trigger_budgets_unmetered` is: a ceiling that
+                // silently measures a fraction of the spend is the same failure as one that
+                // measures none, and the fraction is invisible from the ledger.
+                logger.warning(
+                    "trigger_budgets_delegate_spend_only — metering from per-run rollups, which only the sub-agent completion path populates; fires that stay in the main loop will accrue $0 and their ceilings will not bind"
+                )
+            }
         }
         let budgetGate = TriggerBudgetGate(
             store: spendLedger,
             configuration: configuration.budgets,
             ports: TriggerSpendPorts(
-                conversationCostUSD: configuration.conversationCostUSD ?? { _ in nil },
+                conversationCostUSD: costMeter ?? { _ in nil },
                 notify: { [budgetNotifier] notice in await budgetNotifier.notify(notice) }
             ),
             logger: logger
@@ -240,7 +275,7 @@ public enum TriggersRuntimeWiring {
         let activationPolicy = TriggerActivationPolicy(
             idempotency: idempotency,
             rateLimit: rateLimit,
-            costCeiling: costCeiling,
+            initiatorBurst: initiatorBurst,
             budget: budgetGate,
             auditLog: auditLog
         )

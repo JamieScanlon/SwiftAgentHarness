@@ -315,11 +315,43 @@ gate that speaks the right unit.
   no completion hook for isolated runs. A fire records a `TriggerPendingRunCharge` when it is routed;
   the next admission for that source settles anything outstanding. Exact, idempotent (each
   conversation settles once), and restart-safe.
-- **The meter is host-supplied.** `Configuration.conversationCostUSD` answers "what did this
-  conversation cost" from the authoritative per-run rollups. The harness knows which conversation
-  belongs to which source; the host knows what it cost. **Without the meter the ledger never accrues
-  and ceilings never bind** — boot logs `trigger_budgets_unmetered` rather than presenting an
-  unmetered ceiling as enforcement.
+- **The meter is host-supplied, with an opt-in default.** `Configuration.conversationCostUSD`
+  answers "what did this conversation cost". The harness knows which conversation belongs to which
+  source; the host knows what it cost. **Without a meter the ledger never accrues and ceilings never
+  bind** — boot logs `trigger_budgets_unmetered` rather than presenting an unmetered ceiling as
+  enforcement. Setting `meterConversationCostFromRunRollups` uses `TriggerConversationCostMeter`,
+  which reads the authoritative per-run rollups; an explicit `conversationCostUSD` always wins.
+- **The meter reports a cumulative total; the ledger charges the delta.** A trigger-host
+  conversation is **reused** across fires — `TriggerSessionRouter.resolveOrCreate` returns the same
+  conversation for a stable session key, from an LRU cache or by title after a restart — so there is
+  no per-fire number a host could report from a conversation id alone. `settlePending` keeps a
+  per-conversation high-water mark (`TriggerSpendLedgerFile.billedConversations`) and posts
+  `total − alreadyBilled`, clamped at zero so a meter that goes backwards cannot credit the ledger.
+  Charging the whole total each time accrues **N²/2 dollars for N dollars of spend**, and reports
+  `chargedRuns: N` beside it, so the ledger disagrees with itself.
+- **The meter is consulted once per conversation per settlement**, not once per charge — several
+  outstanding charges routinely share one conversation, and a meter call can re-derive a whole
+  transcript.
+- **Settled is not the same as known.** The port's `nil` means "ask again later", so the meter has
+  two silent failure directions: settle early and the ledger bills a fraction of a run and never
+  revisits it, because a settled charge leaves `pending`; never settle and the charge pends until
+  retention writes it off. The rules are: no runs yet → `nil`; any `.open` run → `nil` (its
+  `costRollup` already carries partial mid-run cost); everything else settles, including `.errored`
+  / `run_orphaned`, which is how a crashed run projects. A terminal run with no rollup bills **zero**
+  rather than pending. There is one escape hatch, because nothing in the harness times a run out: an
+  `.open` run older than the grace period stops blocking, and the terminal runs bill without it.
+- **Do not wire `ModelPoolCostLedger.projectedCostUSD` into this port.** It has the exact required
+  signature, which makes it the obvious thing to reach for and the wrong one — it returns settled
+  *plus pending reservations* and stops returning `nil` once a conversation exists, so it posts
+  in-flight projections as final and settles a charge before the run it bills has finished.
+- **Metering from run rollups is partial, and says so.** `costRollup` is derived from
+  `tool_audit_lifecycle_event` rows carrying a `usage` payload, and only the sub-agent completion
+  path ever attaches one — the main turn loop's `.toolCallCompleted` carries none. So a fire that
+  does its work in the main loop meters at `$0`, and boot logs
+  `trigger_budgets_delegate_spend_only`. Closing the gap means attaching usage to the main loop's
+  completion events, which is an Agent Runtime change; a ceiling that silently measures a fraction
+  of the spend is the same failure as one that measures none, so it is announced rather than
+  presented as enforcement.
 - **Ladder: warn (75%) → defer (100%) → suspend** (after N consecutive fully-breached windows).
   `degrade` is deliberately absent — it needs per-task model pinning, which does not exist yet.
   Every rung notifies through the origin channel; a trigger the user registered is a standing
@@ -327,10 +359,14 @@ gate that speaks the right unit.
 - Ledger IO failure **fails open** and logs. Refusing every trigger because a file is unreadable
   turns a bookkeeping fault into an outage of the user's automations.
 
-Naming debt: `TriggerCostCeilingGate` is now a per-initiator burst cap denominated in *fires*, not
-cost — it survives as a cheap O(1) pre-filter in front of the ledger. It should be renamed
-`TriggerInitiatorBurstGate`; that rename touches ~24 test fixtures and is safest done with an IDE
-refactor rather than by hand.
+Naming debt, paid: `TriggerCostCeilingGate` was a per-initiator burst cap denominated in *fires*, not
+cost — it survives as a cheap O(1) pre-filter in front of the ledger, and is now called
+`TriggerInitiatorBurstGate` (with `costCeiling` → `initiatorBurst` and `isOverBudget` →
+`isOverBurstLimit`).
+
+One spelling is deliberately left alone: the audit decision is still `overBudget`, because that
+string is a persisted wire value in `trigger_audit.jsonl` and renaming it would silently break any
+consumer reading the audit trail. It is a log-format change, not a refactor.
 
 ## Webhook lifecycle (phase 2)
 

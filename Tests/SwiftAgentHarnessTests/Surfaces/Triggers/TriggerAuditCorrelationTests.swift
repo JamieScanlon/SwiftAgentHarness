@@ -24,7 +24,7 @@ struct TriggerAuditCorrelationTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: MemoryDedupe()),
             rateLimit: TriggerRateLimitGate(windowSeconds: 60, maxPerWindow: 1),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: auditLog,
             rateLimitKey: { _ in "same-route" }
         )

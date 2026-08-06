@@ -58,23 +58,64 @@ struct TriggerPendingRunCharge: Codable, Sendable, Equatable {
     var originMetadata: [String: String]?
 }
 
+/// The running total already billed for one conversation.
+///
+/// A trigger-host conversation is **reused** across fires — `TriggerSessionRouter.resolveOrCreate`
+/// returns the same conversation for a stable session key, from an LRU cache or by title after a
+/// restart. So the meter's answer is cumulative, and charging it whole on each settlement bills
+/// `N²/2` dollars for `N` dollars of spend. This is the high-water mark that turns the meter's
+/// monotonic counter into a per-fire delta.
+struct TriggerBilledConversation: Codable, Sendable, Equatable {
+    var totalUSD: Double
+    var updatedAtMs: Int64
+}
+
 struct TriggerSpendLedgerFile: Codable, Sendable {
     var entries: [String: TriggerSpendLedgerEntry]
     var sources: [String: TriggerSourceBudgetState]
     var pending: [TriggerPendingRunCharge]
+    /// Keyed by conversation id. See ``TriggerBilledConversation``.
+    var billedConversations: [String: TriggerBilledConversation]
 
     init(
         entries: [String: TriggerSpendLedgerEntry] = [:],
         sources: [String: TriggerSourceBudgetState] = [:],
-        pending: [TriggerPendingRunCharge] = []
+        pending: [TriggerPendingRunCharge] = [],
+        billedConversations: [String: TriggerBilledConversation] = [:]
     ) {
         self.entries = entries
         self.sources = sources
         self.pending = pending
+        self.billedConversations = billedConversations
     }
 
     static func entryKey(scopeKey: String, windowKey: String) -> String {
         "\(scopeKey)|\(windowKey)"
+    }
+}
+
+extension TriggerSpendLedgerFile {
+    /// Hand-written so a ledger written before `billedConversations` existed still decodes.
+    ///
+    /// The synthesized `init(from:)` emits `decode` for every non-Optional property regardless of
+    /// its default, so adding a field to a persisted type silently turns every existing file into
+    /// `corruptLedgerFile` — and this store deliberately refuses to recover from that by truncating,
+    /// because a ceiling that resets when its file is unreadable is a ceiling an attacker resets.
+    ///
+    /// `CodingKeys` below is the *synthesized* one, which exists only because `encode(to:)` is still
+    /// synthesized. Hand-writing `encode(to:)` as well would delete it and break this initializer —
+    /// so if you ever need a custom encoder, declare `CodingKeys` explicitly at the same time.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            entries: try container.decodeIfPresent([String: TriggerSpendLedgerEntry].self, forKey: .entries) ?? [:],
+            sources: try container.decodeIfPresent([String: TriggerSourceBudgetState].self, forKey: .sources) ?? [:],
+            pending: try container.decodeIfPresent([TriggerPendingRunCharge].self, forKey: .pending) ?? [],
+            billedConversations: try container.decodeIfPresent(
+                [String: TriggerBilledConversation].self,
+                forKey: .billedConversations
+            ) ?? [:]
+        )
     }
 }
 
@@ -169,6 +210,10 @@ struct TriggerSpendLedgerStore: Sendable {
         guard let horizon = Calendar.current.date(byAdding: .month, value: -retainedWindows, to: now) else { return }
         let horizonMs = Int64(horizon.timeIntervalSince1970 * 1000)
         file.pending.removeAll { $0.firedAtMs < horizonMs }
+        // The high-water marks age out on the same horizon. A conversation nobody has billed since
+        // then will not be billed again, and keeping its mark forever would grow the ledger without
+        // bound on exactly the attacker-mintable key the entry retention above guards against.
+        file.billedConversations = file.billedConversations.filter { $0.value.updatedAtMs >= horizonMs }
     }
 
     private let dayKeyLength = 10

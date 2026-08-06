@@ -11,7 +11,7 @@ struct TriggerActivationPolicy: Sendable {
     let idempotency: TriggerIdempotencyGate
     let rateLimit: TriggerRateLimitGate
     /// Per-initiator burst cap, denominated in *fires*. Cheap O(1) pre-filter.
-    let costCeiling: TriggerCostCeilingGate
+    let initiatorBurst: TriggerInitiatorBurstGate
     /// Stage 4 proper, denominated in *spend*. `nil` disables the ledger entirely.
     let budget: TriggerBudgetGate?
     let auditLog: TriggerAuditLog
@@ -22,7 +22,7 @@ struct TriggerActivationPolicy: Sendable {
     init(
         idempotency: TriggerIdempotencyGate,
         rateLimit: TriggerRateLimitGate,
-        costCeiling: TriggerCostCeilingGate,
+        initiatorBurst: TriggerInitiatorBurstGate,
         budget: TriggerBudgetGate? = nil,
         auditLog: TriggerAuditLog,
         // Source-prefixed: the webhook validation gate already consumed the bare route-name bucket
@@ -39,7 +39,7 @@ struct TriggerActivationPolicy: Sendable {
     ) {
         self.idempotency = idempotency
         self.rateLimit = rateLimit
-        self.costCeiling = costCeiling
+        self.initiatorBurst = initiatorBurst
         self.budget = budget
         self.auditLog = auditLog
         self.rateLimitKey = rateLimitKey
@@ -63,7 +63,7 @@ struct TriggerActivationPolicy: Sendable {
             return .rateLimited
         }
         let initKey = initiatorKey(trigger)
-        if await costCeiling.isOverBudget(initiatorKey: initKey) {
+        if await initiatorBurst.isOverBurstLimit(initiatorKey: initKey) {
             audit(trigger, decision: .overBudget)
             return .overBudget
         }

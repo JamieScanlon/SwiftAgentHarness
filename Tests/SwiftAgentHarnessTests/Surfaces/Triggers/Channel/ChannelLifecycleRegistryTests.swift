@@ -145,7 +145,7 @@ struct ChannelLifecycleRegistryTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: ChannelTestDedupe()),
             rateLimit: TriggerRateLimitGate(),
-            costCeiling: TriggerCostCeilingGate(),
+            initiatorBurst: TriggerInitiatorBurstGate(),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))

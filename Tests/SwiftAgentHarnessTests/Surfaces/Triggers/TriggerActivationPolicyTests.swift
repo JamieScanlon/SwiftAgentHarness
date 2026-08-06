@@ -39,7 +39,7 @@ struct TriggerActivationPolicyTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: MemoryDedupe()),
             rateLimit: TriggerRateLimitGate(),
-            costCeiling: TriggerCostCeilingGate(),
+            initiatorBurst: TriggerInitiatorBurstGate(),
             auditLog: TriggerAuditLog(logger: Logger(label: "test")),
             authorize: { _ in TriggerAuthorizationContext(routeEnabled: false, sourceAllowed: true) }
         )
@@ -51,7 +51,7 @@ struct TriggerActivationPolicyTests {
         TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: MemoryDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
     }
