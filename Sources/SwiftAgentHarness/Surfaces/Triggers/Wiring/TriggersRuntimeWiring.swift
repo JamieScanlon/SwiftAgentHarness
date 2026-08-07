@@ -153,10 +153,10 @@ public enum TriggersRuntimeWiring {
         /// Opt in to the in-package meter (``TriggerConversationCostMeter``) instead of supplying
         /// your own. Ignored when `conversationCostUSD` is set — an explicit meter always wins.
         ///
-        /// Off by default because it is honest about being partial: `costRollup` is populated only
-        /// by the sub-agent completion path, so this meters delegate spend and reads `$0` for a
-        /// trigger that did its work in the main loop. Opting in binds ceilings for the spend it can
-        /// see; it does not make them complete.
+        /// Off by default because it is priced, not billed: main-loop spend is valued at the
+        /// conversation model's catalog rates, which are absent for some registry rows (tokens
+        /// accrue, cost reads `$0`) and can differ from the model a routed call actually used.
+        /// Opting in binds ceilings against a good estimate, not an invoice.
         public var meterConversationCostFromRunRollups: Bool = false
         /// How long a still-running trigger run may hold up settlement before the finished runs are
         /// billed without it. Nothing in the harness times a run out, so without this a wedged lane
@@ -259,7 +259,7 @@ public enum TriggersRuntimeWiring {
                 // silently measures a fraction of the spend is the same failure as one that
                 // measures none, and the fraction is invisible from the ledger.
                 logger.warning(
-                    "trigger_budgets_delegate_spend_only — metering from per-run rollups, which only the sub-agent completion path populates; fires that stay in the main loop will accrue $0 and their ceilings will not bind"
+                    "trigger_budgets_priced_from_catalog_rates — metering from per-run rollups; main-loop spend is priced from the conversation model's catalog rates, so a model with no rates accrues tokens but $0, and a call dispatched elsewhere by mode-profile routing or fallback substitution is priced at the conversation model's rate rather than the one actually billed"
                 )
             }
         }

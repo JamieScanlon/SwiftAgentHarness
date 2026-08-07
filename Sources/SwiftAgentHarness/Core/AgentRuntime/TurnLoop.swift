@@ -309,8 +309,45 @@ struct TurnLoop {
                 }
             }
 
+            // Provider-reported tokens for this completion, priced with the same catalog rates the
+            // budget ledger bills against. Without this the main loop recorded no usage at all, so
+            // any conversation that never spawned a sub-agent reported a cost of `$0` — which is
+            // what made the trigger surface's spend ceilings unable to bind.
+            //
+            // `nil` when the provider reported nothing, and that distinction is load-bearing: the
+            // audit path admits this event *only* when usage is present, so a payload that is
+            // always non-nil would persist an empty, never-pruned derived row for every model call
+            // — `toolAuditLifecycleEvent` is `retentionEligible: false`, so those rows are re-read
+            // on every projection for the life of the conversation.
+            //
+            // Tokens are clamped here rather than only downstream, because the wire frame is
+            // published straight from this payload and `PublishingContractValidator` rejects a
+            // negative count.
+            let completionMetadata = acc.completionMetadata
+            let promptTokens = completionMetadata?.promptTokens.map { max(0, $0) }
+            let completionTokens = completionMetadata?.completionTokens.map { max(0, $0) }
+            let totalTokens = completionMetadata?.totalTokens.map { max(0, $0) }
+            let completionUsage: DelegateCompletionUsagePayload?
+            if (promptTokens ?? 0) > 0 || (completionTokens ?? 0) > 0 || (totalTokens ?? 0) > 0 {
+                completionUsage = DelegateCompletionUsagePayload(
+                    promptTokens: promptTokens,
+                    completionTokens: completionTokens,
+                    totalTokens: totalTokens,
+                    // Priced at the *conversation's* model rates. Mode-profile routing and ranked
+                    // fallback can dispatch a different registry model, whose rates the ledger uses
+                    // — so this figure can diverge from `ModelPoolCostLedger` for a routed call.
+                    // Plumbing the settled cost out of `BudgetEnforcingLLM` is the real fix.
+                    costUSD: ModelCompletionCostMath.usd(
+                        promptTokens: promptTokens,
+                        completionTokens: completionTokens,
+                        cost: conv.model.cost
+                    )
+                )
+            } else {
+                completionUsage = nil
+            }
             await lifecycleEmitter.emit(
-                .modelCallCompleted(iteration: iteration, modelID: handle.modelID),
+                .modelCallCompleted(iteration: iteration, modelID: handle.modelID, usage: completionUsage),
                 conversationID: conversationID,
                 runID: runID
             )

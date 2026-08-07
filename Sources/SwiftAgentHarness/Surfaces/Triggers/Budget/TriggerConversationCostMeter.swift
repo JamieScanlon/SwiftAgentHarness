@@ -22,18 +22,19 @@ import Logging
 /// in-flight projections as if they were final and settles a charge before the run it bills has
 /// finished. The contract here is settled dollars, and `nil` genuinely means "ask again later".
 ///
-/// ## Known coverage gap — read this before trusting a ceiling
+/// ## What the numbers mean — read this before trusting a ceiling
 ///
-/// `costRollup` is derived from `tool_audit_lifecycle_event` rows that carry a `usage` payload, and
-/// **only the sub-agent completion path ever attaches one**. The main turn loop's
-/// `.toolCallCompleted` emission carries no usage at all. So a trigger fire that does its work in
-/// the main loop — which is most of them — records no authoritative usage and meters at `$0`.
+/// `costRollup` sums two differently-sourced figures. Sub-agent completions carry the provider's own
+/// reported cost. Main-loop completions carry provider-reported *tokens* priced with the
+/// conversation model's catalog rates (`ModelCompletionCostMath`, shared with the budget ledger so
+/// the formula cannot drift). Two consequences worth knowing:
 ///
-/// This meter therefore binds ceilings for delegate spend and undercounts everything else. That is
-/// a real improvement over an unmetered ceiling and it is *not* the finished job; closing it means
-/// attaching usage to the main loop's completion events, which is an Agent Runtime change. Until
-/// then the wiring logs `trigger_budgets_delegate_spend_only` at boot, because a ceiling that
-/// silently measures a fraction of the spend is the same failure as one that measures none.
+/// - A model whose registry row has no rates contributes tokens but no cost, so its fires accrue
+///   `$0` against the ceiling.
+/// - Mode-profile routing and ranked fallback can dispatch a call to a different model than the
+///   conversation's; the ledger prices that at the dispatched model's rates while this prices it at
+///   the conversation's. Plumbing the settled cost out of `BudgetEnforcingLLM` is the real fix.
+///
 public struct TriggerConversationCostMeter: Sendable {
     /// Every run belonging to a conversation, newest first. A port rather than a runtime reference:
     /// `ConversationManager` is deliberately confined behind its persistence domain, and a meter

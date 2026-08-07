@@ -229,17 +229,14 @@ struct BudgetEnforcingLLM: LLMProtocol {
         return inputUSD + outputUSD
     }
 
+    /// Shared with the turn loop's per-completion audit stamp — see ``ModelCompletionCostMath``.
+    /// Two copies of this formula is how the budget ledger and the run rollup come to disagree.
     private func actualCostUSD(from metadata: LLMMetadata?) -> Double? {
-        guard let cost = modelCost,
-              let inputRate = cost.inputPer1MUSD,
-              let outputRate = cost.outputPer1MUSD,
-              let metadata
-        else { return nil }
-        let promptTokens = max(0, metadata.promptTokens ?? 0)
-        let completionTokens = max(0, metadata.completionTokens ?? 0)
-        let inputUSD = (Double(promptTokens) / 1_000_000.0) * inputRate
-        let outputUSD = (Double(completionTokens) / 1_000_000.0) * outputRate
-        return inputUSD + outputUSD
+        ModelCompletionCostMath.usd(
+            promptTokens: metadata?.promptTokens,
+            completionTokens: metadata?.completionTokens,
+            cost: modelCost
+        )
     }
 
     private func projectedImageCostUSD(config: ImageGenerationRequestConfig) -> Double? {

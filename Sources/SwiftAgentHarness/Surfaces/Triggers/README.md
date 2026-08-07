@@ -344,14 +344,25 @@ gate that speaks the right unit.
   signature, which makes it the obvious thing to reach for and the wrong one — it returns settled
   *plus pending reservations* and stops returning `nil` once a conversation exists, so it posts
   in-flight projections as final and settles a charge before the run it bills has finished.
-- **Metering from run rollups is partial, and says so.** `costRollup` is derived from
-  `tool_audit_lifecycle_event` rows carrying a `usage` payload, and only the sub-agent completion
-  path ever attaches one — the main turn loop's `.toolCallCompleted` carries none. So a fire that
-  does its work in the main loop meters at `$0`, and boot logs
-  `trigger_budgets_delegate_spend_only`. Closing the gap means attaching usage to the main loop's
-  completion events, which is an Agent Runtime change; a ceiling that silently measures a fraction
-  of the spend is the same failure as one that measures none, so it is announced rather than
-  presented as enforcement.
+- **Main-loop spend is counted, and it is priced rather than billed.** `costRollup` is derived from
+  `tool_audit_lifecycle_event` rows carrying a `usage` payload. That used to mean sub-agent
+  completions only, so a fire that stayed in the main loop metered at `$0`; the turn loop now stamps
+  its own provider-reported tokens on `.modelCallCompleted`, valued with the conversation model's
+  catalog rates through `ModelCompletionCostMath` — the same formula `BudgetEnforcingLLM` bills
+  against, shared so the two cannot drift.
+
+  Two caveats, announced at boot as `trigger_budgets_priced_from_catalog_rates` rather than
+  presented as enforcement: a registry row with no rates accrues tokens but `$0`, and mode-profile
+  routing or ranked fallback can dispatch a call to a model other than the conversation's, which the
+  ledger prices at the dispatched rate and this prices at the conversation's. Plumbing the settled
+  cost out of `BudgetEnforcingLLM` closes the second.
+- **The audit row is a tool-shaped row carrying a model-level event.** `.modelCallCompleted` is
+  admitted to the audit path *only* when it carries usage — the event also fires for unmetered
+  completions, and `tool_audit_lifecycle_event` is `retentionEligible: false`, so an empty row per
+  model call would be re-read on every projection forever. It is stamped with a synthetic
+  `toolName: "model_completion"` and a deterministic `toolCallID` of `model:<runID>:<iteration>`,
+  because the rollup's last-resort dedupe key is the row's own event id, which deduplicates nothing
+  — a re-published completion would otherwise double the run's cost.
 - **Ladder: warn (75%) → defer (100%) → suspend** (after N consecutive fully-breached windows).
   `degrade` is deliberately absent — it needs per-task model pinning, which does not exist yet.
   Every rung notifies through the origin channel; a trigger the user registered is a standing
