@@ -193,21 +193,20 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
 
     public func start() async {
         guard enabled else { return }
-        // Schemas and deliverers are registered for **every** configured plugin, including ones the
-        // runtime overlay is holding off. Disabling a channel stops it *listening*; it does not
-        // withdraw the agent's ability to send there, because `MessageToolSchemaRegistry` and
-        // `MessageOutputDeliveryRegistry` have no unregister (that lands with phase 4b). Registering
-        // at boot and skipping on a runtime disable would make outbound behaviour depend on when the
-        // disable happened, which is worse than either rule applied consistently.
-        registerMessageToolSchemas()
-        await registerMessageOutputDeliverers()
+        // Outbound capability follows the channel's *live* state. Both registries are keyed by
+        // `channel.rawValue`, so a held-off channel is simply never armed, and one paused later is
+        // withdrawn by `reconcile()`. Before they were keyed, everything configured was registered
+        // at boot and never removed — so disabling a channel stopped it listening while leaving the
+        // agent able to send there.
         let overlay = currentOverlay()
         for (channel, service) in services {
             guard !overlay.disabled(channel) else {
                 logger.info("channel_listener_held_off channel=\(channel.rawValue) reason=runtime-disabled")
+                await withdrawOutbound(channel)
                 continue
             }
             await service.start()
+            await syncOutbound(channel, service: service)
         }
     }
 
@@ -281,28 +280,68 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
         plugins[channel]
     }
 
-    private func registerMessageToolSchemas() {
-        let schemas = plugins.values.flatMap { plugin in
-            plugin.surface.messageToolDescriptor?.describeMessageTool() ?? []
-        }
-        MessageToolSchemaRegistry.register(actionSchemas: schemas)
+    /// Arm a channel's *outbound* surface: what the agent may send, and where it lands.
+    ///
+    /// Separate from `start()` because outbound capability now tracks the channel's live state
+    /// rather than the boot-time config — see ``withdrawOutbound(_:)``.
+    private func armOutbound(_ channel: ChannelId) async {
+        guard let plugin = plugins[channel] else { return }
+        MessageToolSchemaRegistry.register(
+            surfaceID: channel.rawValue,
+            actionSchemas: plugin.surface.messageToolDescriptor?.describeMessageTool() ?? []
+        )
+        await MessageOutputDeliveryRegistry.shared.register(
+            surfaceID: channel.rawValue,
+            // `[weak self]`, not a by-value snapshot of `plugins`. A snapshot cannot see a channel
+            // built after it was armed — the phase-4b case — and a *strong* capture would pin this
+            // registry alive for the process lifetime, because `MessageOutputDeliveryRegistry.shared`
+            // is a global that holds its deliverers. Once the registry is gone the lookup returns
+            // nil and delivery no-ops, which is the right end state for a torn-down surface.
+            deliverer: ChannelMessageOutputDeliverer { [weak self, logger] channel in
+                guard let self else {
+                    // Every layer below returns silently on a nil surface, so without this an
+                    // agent's message to this channel would vanish with no record anywhere.
+                    logger.warning(
+                        "channel_outbound_registry_released channel=\(channel.rawValue) — delivery dropped"
+                    )
+                    return nil
+                }
+                return await self.plugins[channel]?.surface
+            }
+        )
     }
 
-    private func registerMessageOutputDeliverers() async {
-        let deliverer = ChannelMessageOutputDeliverer { [plugins] channel in
-            plugins[channel]?.surface
-        }
-        for (channel, _) in plugins {
-            await MessageOutputDeliveryRegistry.shared.register(
-                surfaceID: channel.rawValue,
-                deliverer: deliverer
-            )
+    /// Withdraw it again.
+    ///
+    /// Pausing a channel used to stop it *listening* while leaving the agent able to send there:
+    /// the deliverer stayed in the registry keyed by `channel.rawValue`, so a `message` tool call
+    /// still resolved and reached a stopped transport, and the tool schema still advertised that
+    /// channel's media params. Both registries are keyed by the same string, so both come down here.
+    /// Point outbound at reality: armed exactly when the listener is actually running.
+    ///
+    /// Arming *before* `start()` and never unwinding left a channel advertising itself after a
+    /// failed start — and `reconcile()` could then never withdraw it, because its `desired ==
+    /// running` short-circuit sees `false == false` and reports "unchanged". Deciding from
+    /// `isRunning` after the fact makes both cases fall out.
+    private func syncOutbound(_ channel: ChannelId, service: ChannelListenerService) async {
+        if await service.isRunning {
+            await armOutbound(channel)
+        } else {
+            await withdrawOutbound(channel)
         }
     }
 
+    private func withdrawOutbound(_ channel: ChannelId) async {
+        MessageToolSchemaRegistry.unregister(surfaceID: channel.rawValue)
+        await MessageOutputDeliveryRegistry.shared.unregister(surfaceID: channel.rawValue)
+    }
+
+    /// Stops listening *and* withdraws outbound, so process shutdown does not leave the global
+    /// registries holding every plugin this registry built.
     public func stop() async {
-        for service in services.values {
+        for (channel, service) in services {
             await service.stop()
+            await withdrawOutbound(channel)
         }
     }
 
@@ -321,8 +360,12 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
         guard let service = services[channel] else { return .noService }
         refreshedConfig()
         await service.stop()
-        guard desiredState(for: channel, overlay: currentOverlay()) else { return .heldOff }
+        guard desiredState(for: channel, overlay: currentOverlay()) else {
+            await withdrawOutbound(channel)
+            return .heldOff
+        }
         await service.start()
+        await syncOutbound(channel, service: service)
         return .restarted
     }
 
@@ -358,6 +401,10 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
             let desired = desiredState(for: channel, overlay: overlay)
             let running = await service.isRunning
             if desired == running {
+                // Still reconcile outbound. A channel whose start failed reads `running == false`
+                // while the overlay says `desired == false` too, so this branch is taken — and
+                // before, that left it armed with nothing listening behind it.
+                await syncOutbound(channel, service: service)
                 report.unchanged.append(channel)
                 continue
             }
@@ -368,6 +415,7 @@ public actor ChannelListenerRegistry: ChannelListenerLooking {
                 await service.stop()
                 report.stopped.append(channel)
             }
+            await syncOutbound(channel, service: service)
         }
 
         // A channel the operator has since switched on has no service to start: services are built

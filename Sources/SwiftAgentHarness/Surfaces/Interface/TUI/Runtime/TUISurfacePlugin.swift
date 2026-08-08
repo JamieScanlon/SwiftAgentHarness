@@ -90,11 +90,10 @@ public struct TUISurfaceRegistration: Sendable {
             surfaceID: plugin.surfaceID,
             deliverer: TUIMessageOutputDeliverer(app: app, conversationID: conversationID)
         )
-        // Deliberately NOT registering `surfaceMessageToolDescriptor` here.
-        // `MessageToolSchemaRegistry.register(actionSchemas:)` replaces the whole list
-        // rather than merging, and `ChannelListenerRegistry` sets the union of every
-        // channel's media params — so registering from a second surface would silently
-        // wipe them. Wire this up once the registry is keyed by surface.
+        // Still not registering `surfaceMessageToolDescriptor` here, but the blocker is gone:
+        // `MessageToolSchemaRegistry` is keyed by surface id now, so a TUI registration no longer
+        // wipes the channels' media params. What remains is a product question — whether a terminal
+        // surface should advertise media params at all — not a safety one.
     }
 
     public func unregister() async {

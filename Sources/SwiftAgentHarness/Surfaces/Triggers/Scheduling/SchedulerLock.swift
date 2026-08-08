@@ -31,11 +31,35 @@ struct SchedulerLockState: Codable, Equatable {
 enum SchedulerLock {
     static let probeIntervalSeconds: TimeInterval = 5
 
-    static func tryAcquire(lockURL: URL, identity: String) throws -> Bool {
+    /// Is the recorded holder *this* process, not merely something with the same identity string?
+    ///
+    /// The sentinels (`ownerStartToken == 0`, empty `bootKey`) mean "written by a build that did not
+    /// record this", and are treated as unknown-but-not-disqualifying — the same reading
+    /// ``isHolderAlive`` gives them.
+    static func isHeldByCurrentProcess(_ state: SchedulerLockState) -> Bool {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        guard state.ownerPID == pid else { return false }
+        if state.ownerStartToken != 0, state.ownerStartToken != ProcessLockIdentity.startToken(for: pid) {
+            return false
+        }
+        if !state.bootKey.isEmpty, state.bootKey != ProcessLockIdentity.currentBootKey() {
+            return false
+        }
+        return true
+    }
+
+    /// - Parameter requireSameProcess: when true, a live holder satisfies the lock only if it is
+    ///   *this* process. Channels need it; the cron scheduler does not, and defaulting to `false`
+    ///   keeps its re-acquire semantics untouched.
+    static func tryAcquire(lockURL: URL, identity: String, requireSameProcess: Bool = false) throws -> Bool {
         try FileManager.default.createDirectory(at: lockURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let existing = try read(lockURL: lockURL) {
             if isHolderAlive(existing) {
-                return existing.identity == identity
+                guard existing.identity == identity else { return false }
+                // The identity is config-derived (`channel:platformIdentity`) and carries nothing
+                // process-specific, so two gateways running the same bot both matched it and both
+                // believed they held the lock. The spec requires the second to fail fatal.
+                return requireSameProcess ? isHeldByCurrentProcess(existing) : true
             }
         }
         let pid = ProcessInfo.processInfo.processIdentifier
@@ -51,8 +75,12 @@ enum SchedulerLock {
         return true
     }
 
-    static func release(lockURL: URL, identity: String) throws {
+    /// - Parameter requireSameProcess: when true, refuse to delete a lock file this process does not
+    ///   own. Without it, a second gateway that wrongly believed it held the lock deleted the real
+    ///   owner's file on the way out.
+    static func release(lockURL: URL, identity: String, requireSameProcess: Bool = false) throws {
         guard let existing = try read(lockURL: lockURL), existing.identity == identity else { return }
+        if requireSameProcess, isHolderAlive(existing), !isHeldByCurrentProcess(existing) { return }
         try? FileManager.default.removeItem(at: lockURL)
     }
 

@@ -616,15 +616,22 @@ cannot observe.
   Note what is *not* an option: granting owner authority from anything the tool provider can see.
   `{commandName, args}` is constructible by the model, so keying on it would be privilege escalation
   dressed as a slash command. That is the same conclusion reached about gating the `/`-spelling.
-- **Phase 4b** — `register(channel:config:)` for genuinely new channels. Blocked on real transports
-  (only `.mock` is implemented) and on missing `unregister` for `MessageToolSchemaRegistry` /
-  `MessageOutputDeliveryRegistry`. That last gap is also why a runtime disable stops a channel
-  *listening* without withdrawing the agent's ability to send there.
-- **`ChannelInstanceLock` is not process-scoped** (pre-existing). `tryAcquire` returns true when the
-  live holder's identity string matches, and the identity is `channel:platformIdentity` — process
-  independent. Two gateways running the same bot both "acquire" it, and either one's `stop()` deletes
-  the other's lock file. `channel-triggers.md` §2 says this case must fail fatal. Making `reload()`
-  reachable widens the window; the fix (compare PID/start token) is its own change.
+- **Phase 4b** — `register(channel:config:)` for genuinely new channels. Still blocked on real
+  transports (only `.mock` is implemented) and on process-scoping `ChannelInstanceLock`, below.
+
+  The registry half is **done**: `MessageToolSchemaRegistry` is now keyed by surface id (it was a
+  whole-array replace, so there was nothing to unregister *by*, and a second surface registering
+  silently wiped the first), and `MessageOutputDeliveryRegistry` already had `unregister`. Outbound
+  capability is armed and withdrawn per channel alongside its listener, so a runtime disable now
+  withdraws the agent's ability to send there rather than only stopping it listening.
+- **`ChannelInstanceLock` is process-scoped** (fixed). `SchedulerLock` already recorded
+  `ownerPID` / `ownerStartToken` / `bootKey`; they simply were not consulted when the identity string
+  matched, and that identity (`channel:platformIdentity`) is entirely config-derived. Two gateways
+  running the same bot both "acquired", and the loser's `stop()` deleted the real owner's file.
+  Acquisition and release now additionally require the live holder to be *this* process, via an
+  opt-in `requireSameProcess` flag so the cron scheduler keeps its own semantics. The lock *path*
+  stays keyed by `(channel, platformIdentity)` — the spec is explicit that one gateway may run two
+  different bot users.
 
 ## Schedule timezones
 
