@@ -226,7 +226,8 @@ enum TurnLoopTestPorts {
         stopRequestedFn: (@Sendable (UUID) async -> Bool)? = nil,
         dispatchContract: AgentRuntimeToolDispatchContract = .conservativeDefault,
         hangDispatchSeconds: TimeInterval? = nil,
-        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil
+        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil,
+        settlementSink: ModelCompletionSettlementSink? = nil
     ) -> AgentLoopPorts {
         let emptySnapshot = RuntimeToolTurnPolicySnapshot(
             availabilitySnapshots: effectiveToolEntries.map {
@@ -359,7 +360,8 @@ enum TurnLoopTestPorts {
             contextCompaction: contextCompaction,
             modeRegistry: modeRegistry ?? ModeRegistryTestSupport.makePort(seedingBuiltIns: true),
             logger: nil,
-            reconnectMCPClient: reconnectMCPClient
+            reconnectMCPClient: reconnectMCPClient,
+            settlementSink: settlementSink
         )
     }
 }

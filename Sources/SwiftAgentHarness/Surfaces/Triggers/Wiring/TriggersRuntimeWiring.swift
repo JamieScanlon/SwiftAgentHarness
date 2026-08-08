@@ -153,11 +153,15 @@ public enum TriggersRuntimeWiring {
         /// Opt in to the in-package meter (``TriggerConversationCostMeter``) instead of supplying
         /// your own. Ignored when `conversationCostUSD` is set — an explicit meter always wins.
         ///
-        /// Off by default because it is priced, not billed: main-loop spend is valued at the
-        /// conversation model's catalog rates, which are absent for some registry rows (tokens
-        /// accrue, cost reads `$0`) and can differ from the model a routed call actually used.
-        /// Opting in binds ceilings against a good estimate, not an invoice.
-        public var meterConversationCostFromRunRollups: Bool = false
+        /// **On by default.** Main-loop and sub-agent spend both reach the per-run rollups now, and
+        /// main-loop cost is the figure `BudgetEnforcingLLM` settled — the same number
+        /// `ModelPoolCostLedger` bills — rather than a re-derivation from the conversation's model.
+        ///
+        /// It is still catalog rates, not an invoice: a registry row with no rates contributes
+        /// tokens and no cost, so a deployment running unpriced models will see ceilings that do not
+        /// bind. Boot logs `trigger_budgets_priced_from_catalog_rates` to say so. Set `false` to opt
+        /// out, or supply `conversationCostUSD` to override entirely.
+        public var meterConversationCostFromRunRollups: Bool = true
         /// How long a still-running trigger run may hold up settlement before the finished runs are
         /// billed without it. Nothing in the harness times a run out, so without this a wedged lane
         /// pins the charge until retention drops it; set it above your longest legitimate run,
@@ -259,7 +263,7 @@ public enum TriggersRuntimeWiring {
                 // silently measures a fraction of the spend is the same failure as one that
                 // measures none, and the fraction is invisible from the ledger.
                 logger.warning(
-                    "trigger_budgets_priced_from_catalog_rates — metering from per-run rollups; main-loop spend is priced from the conversation model's catalog rates, so a model with no rates accrues tokens but $0, and a call dispatched elsewhere by mode-profile routing or fallback substitution is priced at the conversation model's rate rather than the one actually billed"
+                    "trigger_budgets_priced_from_catalog_rates — metering from per-run rollups at the cost the budget gate settled; a registry model with no configured rates accrues tokens but $0, so its ceilings will not bind"
                 )
             }
         }

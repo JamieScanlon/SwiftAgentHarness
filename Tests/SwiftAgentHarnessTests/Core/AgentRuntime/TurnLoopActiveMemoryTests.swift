@@ -66,7 +66,8 @@ struct TurnLoopActiveMemoryTests {
             agentHarness: basePorts.agentHarness,
             contextCompaction: basePorts.contextCompaction,
             modeRegistry: basePorts.modeRegistry,
-            logger: basePorts.logger
+            logger: basePorts.logger,
+            settlementSink: basePorts.settlementSink
         )
         let loop = TurnLoop(ports: ports)
         let orchestrator = SwiftAgentKitOrchestrator(
@@ -140,7 +141,8 @@ struct TurnLoopActiveMemoryTests {
             agentHarness: basePorts.agentHarness,
             contextCompaction: basePorts.contextCompaction,
             modeRegistry: basePorts.modeRegistry,
-            logger: basePorts.logger
+            logger: basePorts.logger,
+            settlementSink: basePorts.settlementSink
         )
         let loop = TurnLoop(ports: ports)
         let orchestrator = SwiftAgentKitOrchestrator(
@@ -209,7 +211,8 @@ struct TurnLoopActiveMemoryTests {
             agentHarness: basePorts.agentHarness,
             contextCompaction: basePorts.contextCompaction,
             modeRegistry: basePorts.modeRegistry,
-            logger: basePorts.logger
+            logger: basePorts.logger,
+            settlementSink: basePorts.settlementSink
         )
         let loop = TurnLoop(ports: ports)
         let orchestrator = SwiftAgentKitOrchestrator(

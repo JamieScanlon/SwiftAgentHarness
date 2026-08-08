@@ -15,6 +15,9 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
     var budgetConfiguration: ModelPoolBudgetConfiguration?
     /// Test seam: bypasses the provider switch to exercise factory failover wiring without network I/O.
     var testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)?
+    /// Set at the composition root so the turn loop can read back what a completion actually cost.
+    /// A reference type, so the copies this struct makes on its way there share one instance.
+    var settlementSink: ModelCompletionSettlementSink?
 
     public init(
         advanced: ModelPoolAdvancedConfiguration = ModelPoolAdvancedConfiguration(),
@@ -25,7 +28,8 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         authProfileCooldownRegistry: AuthProfileCooldownRegistry = AuthProfileCooldownRegistry(),
         tenancyPolicy: TenancyPolicySettings = .disabled,
         budgetConfiguration: ModelPoolBudgetConfiguration? = nil,
-        testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)? = nil
+        testBindingAdapterOverride: (@Sendable (ProviderBinding) -> any LLMProtocol)? = nil,
+        settlementSink: ModelCompletionSettlementSink? = nil
     ) {
         self.advanced = advanced
         self.accounting = accounting
@@ -36,6 +40,7 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
         self.tenancyPolicy = tenancyPolicy
         self.budgetConfiguration = budgetConfiguration
         self.testBindingAdapterOverride = testBindingAdapterOverride
+        self.settlementSink = settlementSink
     }
 
     /// Production factory: real ``BudgetAccounting`` plus enabled budget/failover policies from config.
@@ -88,6 +93,26 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
             return factory
         }
         std.accounting = tracker
+        return std
+    }
+
+    /// Hand the factory the sink the turn loop will read from. Mirrors ``aligningAccounting``:
+    /// downcast, mutate a copy, return — the sink is a class, so the copy shares the instance.
+    static func applyingSettlementSink(
+        factory: any ModelLLMFactoring,
+        sink: ModelCompletionSettlementSink,
+        logger: Logger? = nil
+    ) -> any ModelLLMFactoring {
+        guard var std = factory as? StandardModelLLMFactory else {
+            // Said out loud: the turn loop still holds a sink, so nothing errors — main-loop cost
+            // just silently falls back to the conversation model's catalog rates for the life of
+            // the process, which is exactly the kind of quiet downgrade a spend ceiling must not do.
+            logger?.warning(
+                "model_settlement_sink_not_applied factory=\(String(describing: type(of: factory))) — run cost rollups will use conversation-model catalog rates rather than the settled figure"
+            )
+            return factory
+        }
+        std.settlementSink = sink
         return std
     }
 
@@ -165,7 +190,8 @@ public struct StandardModelLLMFactory: ModelLLMFactoring {
             conversationID: conversationID,
             ownerAccountID: ownerAccountID,
             modelCost: model.cost,
-            logger: logger
+            logger: logger,
+            settlementSink: settlementSink
         )
     }
 

@@ -413,12 +413,20 @@ public actor HarnessRuntimeSession {
             callScheduler,
             tenancyPolicy: tenancyPolicy
         )
-        let alignedFactory = Self.factoryApplyingTenancyPolicy(
-            StandardModelLLMFactory.aligningAccounting(
-                factory: llmFactory,
-                delegateCostTracker: delegateCostTracker
+        // One sink, shared by the budget gate that prices a completion and the turn loop that
+        // records what it cost. `StandardModelLLMFactory` is a struct copied several times on the
+        // way here; the sink is a class, so every copy points at this instance.
+        let settlementSink = ModelCompletionSettlementSink()
+        let alignedFactory = StandardModelLLMFactory.applyingSettlementSink(
+            factory: Self.factoryApplyingTenancyPolicy(
+                StandardModelLLMFactory.aligningAccounting(
+                    factory: llmFactory,
+                    delegateCostTracker: delegateCostTracker
+                ),
+                tenancyPolicy: tenancyPolicy
             ),
-            tenancyPolicy: tenancyPolicy
+            sink: settlementSink,
+            logger: logger
         )
         let runtimeDependencies = ConversationRuntimeDependencies(
             persistenceDomain: persistenceDomain,
@@ -427,6 +435,7 @@ public actor HarnessRuntimeSession {
             contextAssemblyRuntime: contextAssemblyRuntime,
             modeRegistry: modeRegistry,
             llmFactory: alignedFactory,
+            modelCompletionSettlementSink: settlementSink,
             callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,
@@ -494,12 +503,20 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default
     ) {
-        let alignedFactory = Self.factoryApplyingTenancyPolicy(
-            StandardModelLLMFactory.aligningAccounting(
-                factory: llmFactory,
-                delegateCostTracker: delegateCostTracker
+        // One sink, shared by the budget gate that prices a completion and the turn loop that
+        // records what it cost. `StandardModelLLMFactory` is a struct copied several times on the
+        // way here; the sink is a class, so every copy points at this instance.
+        let settlementSink = ModelCompletionSettlementSink()
+        let alignedFactory = StandardModelLLMFactory.applyingSettlementSink(
+            factory: Self.factoryApplyingTenancyPolicy(
+                StandardModelLLMFactory.aligningAccounting(
+                    factory: llmFactory,
+                    delegateCostTracker: delegateCostTracker
+                ),
+                tenancyPolicy: tenancyPolicy
             ),
-            tenancyPolicy: tenancyPolicy
+            sink: settlementSink,
+            logger: logger
         )
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -554,6 +571,7 @@ public actor HarnessRuntimeSession {
                 modeProfileConfiguration: configuration.modeProfiles
             ),
             llmFactory: alignedFactory,
+            modelCompletionSettlementSink: settlementSink,
             callScheduler: alignedScheduler,
             invocationCoordinator: invocationCoordinator,
             runtimeLaneCoordinator: runtimeLaneCoordinator,

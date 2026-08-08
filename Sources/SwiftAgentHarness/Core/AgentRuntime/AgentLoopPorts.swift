@@ -40,6 +40,9 @@ struct AgentLoopPorts: Sendable {
     let logger: Logger?
     /// Optional reconnect hook (tests). Production falls back to `orchestrator.mcpManager.reconnectClient(named:)`.
     let reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)?
+    /// What the budget gate settled for the last completion on this conversation. `nil` in tests and
+    /// in hosts that never wired it; the loop then falls back to the conversation model's rates.
+    let settlementSink: ModelCompletionSettlementSink?
 
     init(
         model: any RuntimeModelPort,
@@ -51,7 +54,8 @@ struct AgentLoopPorts: Sendable {
         contextCompaction: ContextCompactionConfiguration,
         modeRegistry: any ModeRegistryAccessing,
         logger: Logger?,
-        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil
+        reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil,
+        settlementSink: ModelCompletionSettlementSink? = nil
     ) {
         self.model = model
         self.context = context
@@ -63,6 +67,7 @@ struct AgentLoopPorts: Sendable {
         self.modeRegistry = modeRegistry
         self.logger = logger
         self.reconnectMCPClient = reconnectMCPClient
+        self.settlementSink = settlementSink
     }
 }
 

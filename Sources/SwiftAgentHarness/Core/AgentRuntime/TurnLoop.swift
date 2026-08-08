@@ -323,6 +323,13 @@ struct TurnLoop {
             // Tokens are clamped here rather than only downstream, because the wire frame is
             // published straight from this payload and `PublishingContractValidator` rejects a
             // negative count.
+            // Consumed, not peeked: a completion that settles nothing must not inherit the price
+            // of the one before it.
+            // `flatMap`, not `?.` — optional chaining yields `Double??`, and `??` would then only
+            // reach the fallback when no sink exists at all. With a sink wired and nothing settled
+            // the outer optional is `.some(nil)`, so catalog pricing was skipped and every
+            // unsettled completion reported no cost.
+            let settledCostUSD = ports.settlementSink.flatMap { $0.consume(conversationID: conversationID) }
             let completionMetadata = acc.completionMetadata
             let promptTokens = completionMetadata?.promptTokens.map { max(0, $0) }
             let completionTokens = completionMetadata?.completionTokens.map { max(0, $0) }
@@ -333,11 +340,16 @@ struct TurnLoop {
                     promptTokens: promptTokens,
                     completionTokens: completionTokens,
                     totalTokens: totalTokens,
-                    // Priced at the *conversation's* model rates. Mode-profile routing and ranked
-                    // fallback can dispatch a different registry model, whose rates the ledger uses
-                    // — so this figure can diverge from `ModelPoolCostLedger` for a routed call.
-                    // Plumbing the settled cost out of `BudgetEnforcingLLM` is the real fix.
-                    costUSD: ModelCompletionCostMath.usd(
+                    // What the budget gate actually settled, so the run rollup and
+                    // `ModelPoolCostLedger` bill the same call at the same price. The gate is
+                    // constructed per *dispatched* model, which mode-profile routing and ranked
+                    // fallback can substitute away from the conversation's — pricing here from
+                    // `conv.model.cost` charged a routed call at the wrong model's rates, and read
+                    // `$0` whenever the conversation's row carried none.
+                    //
+                    // The fallback is for hosts that never wired a sink, and for the paths that
+                    // legitimately settle nothing.
+                    costUSD: settledCostUSD ?? ModelCompletionCostMath.usd(
                         promptTokens: promptTokens,
                         completionTokens: completionTokens,
                         cost: conv.model.cost

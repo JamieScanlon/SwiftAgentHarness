@@ -10,6 +10,12 @@ struct ConversationRuntimeDependencies {
     let contextAssemblyRuntime: ContextAssemblyRuntimeFacade
     let modeRegistry: any ModeRegistryAccessing
     let llmFactory: any ModelLLMFactoring
+    /// Shared with `llmFactory`, so the turn loop can read the settled cost of a completion the
+    /// budget gate priced. Defaulted in the initializer so the construction sites that do not care
+    /// are untouched — but it has to be a *parameter*, not a property default: a property default
+    /// would mint a fresh sink per dependency set, and the loop would read one the factory never
+    /// writes to, silently falling back to catalog pricing forever.
+    let modelCompletionSettlementSink: ModelCompletionSettlementSink
     let callScheduler: any ModelCallScheduling
     let invocationCoordinator: any ModelInvocationLifecycleTracking
     let runtimeLaneCoordinator: RuntimeLaneCoordinator
@@ -37,6 +43,7 @@ struct ConversationRuntimeDependencies {
         contextAssemblyRuntime: ContextAssemblyRuntimeFacade,
         modeRegistry: any ModeRegistryAccessing,
         llmFactory: any ModelLLMFactoring,
+        modelCompletionSettlementSink: ModelCompletionSettlementSink = ModelCompletionSettlementSink(),
         callScheduler: any ModelCallScheduling,
         invocationCoordinator: any ModelInvocationLifecycleTracking,
         runtimeLaneCoordinator: RuntimeLaneCoordinator,
@@ -61,6 +68,7 @@ struct ConversationRuntimeDependencies {
         self.contextAssemblyRuntime = contextAssemblyRuntime
         self.modeRegistry = modeRegistry
         self.llmFactory = llmFactory
+        self.modelCompletionSettlementSink = modelCompletionSettlementSink
         self.callScheduler = callScheduler
         self.invocationCoordinator = invocationCoordinator
         self.runtimeLaneCoordinator = runtimeLaneCoordinator
