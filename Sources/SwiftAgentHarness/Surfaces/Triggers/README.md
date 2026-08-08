@@ -511,10 +511,85 @@ for a control whose whole point is taking effect now; when no applier is attache
 
 **Reconcile re-reads.** Every lifecycle decision re-reads `channels.json`, never the boot-time
 snapshot, so an operator who edits config and reloads is not overruled by what the file said at
-start. `reconcile()` moves listeners between started and stopped; it does not rebuild services, so a
-changed transport or credential is reported in `requiresRestart` rather than silently ignored, and a
-channel dropped from config is stopped and reported in `removedFromConfig`. A channel newly switched
-on in config has no built service and also lands in `requiresRestart`.
+start.
+
+**Runtime service construction.** `services` / `plugins` / `configs` were built once, in `init`, with
+no add or remove path — so a channel the operator switched on could only be told to restart the
+gateway. `reconcile()` now acts on three kinds of difference:
+
+- config enables a channel with no service → **built**, and started if the overlay permits
+  (`report.built`, `report.started`). An unimplemented transport or a failed build lands in
+  `report.buildFailed`, deliberately not `requiresRestart`, because a restart fixes neither.
+- a channel dropped from config → **torn down**: `stop()` first, because that is what releases the
+  `ChannelInstanceLock` and drains the pipeline, then `withdrawOutbound`, then dropped from the maps.
+  Leaving a stopped service resident was survivable; dropping a running one from the map without
+  stopping it would strand a lock file only this process may release.
+- a live service whose non-lifecycle settings changed → still only *reported* in `requiresRestart`.
+  Rebuilding here would reconnect a working listener as a side effect of an unrelated pause on some
+  other channel, and drop its in-flight debounce buffers with it.
+
+None of this weakens the attenuate-only rule. Config stays the authority and building is strictly
+"make the process match what `channels.json` already says". One rule, applied in both places:
+**building follows config, starting follows `desiredState`.** The build pass is deliberately *not*
+gated on the registry's process-wide `enabled` switch, because boot is not either — gating only the
+runtime half would make `serviceBuilt` depend on whether a channel happened to be enabled before or
+after process start, giving two different answers for identical config. So a channel the owner has
+paused, or a deployment with listeners switched off entirely, is built and left stopped rather than
+skipped: status reads `serviceBuilt: true, running: false` instead of "there is no such listener".
+
+Five things underneath had to change with it.
+
+- `refreshedConfig()` iterated `services.keys`, so a channel with no service never got a `configs`
+  entry and `desiredState` could not be asked about it.
+- The session-drain handler closed over a **by-value snapshot** of the boot services — an actor's
+  `self` cannot escape its nonisolated `init` — which could never see a channel built later. The map
+  now lives in a `Mutex`-backed `ChannelServiceBox` that the actor and the handler share.
+- **`reconcile()` is serialized against itself.** It decides from one config read and acts across
+  many suspensions, and an actor does not hold its executor across a suspension; two owner actions
+  arriving together interleaved two passes, one able to tear a channel down while the other was
+  mid-`start()` on it. Serialized, not coalesced — a caller that just persisted a decision needs a
+  pass that read it.
+- **Three defences, because one is not enough.** Serialization covers `reconcile()` against itself,
+  but `start()` and `reload()` are separate entry points on the same state, so each re-asserts
+  `isCurrent(service, for:)` after a suspension — acting on a detached service would start a listener
+  holding the instance lock that is absent from `services` and therefore invisible to
+  `configuredChannels()`, `statuses()` and `stop()`. And `ChannelListenerService` carries a
+  `lifecycleEpoch` captured before its first suspension, so a `start()` superseded by a teardown's
+  `stop()` unwinds instead of attaching a supervisor to a transport nobody wants. The epoch is
+  checked on the **error** path too: a slow connect that finally throws would otherwise run
+  `failStart()` against a newer attempt's pipeline and delete its lock file while its supervisor was
+  live.
+- Drift is compared against **`builtConfigs`** — what each live service was actually built from —
+  rather than against `configs`, which `refreshedConfig()` overwrites on every read. `statuses()`
+  refreshes too, so a read-only `channel` tool call used to erase the drift baseline and every later
+  reconcile then found no difference while the listener ran the old credential.
+
+**Withdrawing outbound means withdrawing it.** The two process-global registries are keyed by
+`channel.rawValue` and come down together, but two consumers never went through them — they resolved
+a plugin once and held `plugin.outbound` afterwards, so a paused or torn-down channel kept receiving.
+Each is fixed in the shape that fits it:
+
+- a **live run stream** is a session with a teardown, so `withdrawOutbound` terminates it
+  (`ChannelRunStreamingService.detachAll(channel:)`) rather than letting it fail message by message
+- **exec-approval delivery** is a long-lived sender built once per conversation, so its route now
+  resolves per send through `outboundPlugin(for:)` — "may the agent send there *right now*", derived
+  from `isRunning` for the same reason `syncOutbound` is, rather than from config or the overlay
+
+The same question gates *opening* a stream: `TriggersRuntimeWiring` looks a plugin up for
+`ChannelRunStreamingService` through `outboundPlugin`, so a turn starting as `withdrawOutbound` tears
+streams down cannot slip a new one in behind the teardown.
+
+`TriggerSymmetricOutputRouter` and `WebhookDirectDelivery` already resolved per call and are
+unchanged; they answer to `plugin(for:)`, so they follow teardown but not pause. Worth revisiting
+when a real transport makes the difference observable. Known and not fixed: that same `pluginLookup`
+captures the registry **strongly**, so registry and streaming service retain each other — which is
+exactly what `armOutbound`'s `[weak self]` takes care to avoid, contradicted one layer up.
+
+A missing `channels.json` **stops** channels but does not tear them down. An absent file is a clean
+decode of "no channels" and stopping on it is the documented operator switch, but it is also what a
+rename-based editor save looks like for a moment — and destroying every service on a transient read
+is unrecoverable, because nothing schedules the reconcile that would rebuild them. Only an existing
+file that omits a channel tears that channel down.
 
 **Config diagnostics.** `ChannelConfigLoader` returns `ChannelConfigLoadResult` with diagnostics
 instead of collapsing missing / unreadable / malformed / typo'd into one empty `ChannelsFile` and no
@@ -604,26 +679,45 @@ effect. Claiming a live pause is the one lie this command must not tell. `status
 `running` column and points at `channel-status/<channel>.json` instead of guessing at state it
 cannot observe.
 
+**In-session owner mutation** is the authenticated HTTP admin route,
+`TriggerChannelAdminRouteRegistrar`: `GET /api/channels`, `GET /api/channels/:channel`, and
+`POST /api/channels/:channel/{pause,resume}`. It registers on the **`api` group** rather than the raw
+`Application`, because that is the only place `ClientSessionMiddleware` binds the principal, and it
+takes the owner account as a **non-optional** parameter so the anonymous case cannot come back. A
+`/channel` builtin slash command was the alternative and was rejected: it needs a trigger seam on
+`ConversationRuntimeDependencies` that nothing else wants. What is *not* an option either way is
+granting owner authority from anything the tool provider can see — `{commandName, args}` is
+constructible by the model, so keying on it would be privilege escalation dressed as a slash command.
+Like `setTriggerWebhookRegistrar`, `setTriggerChannelAdminRegistrar` has no in-repo caller: the
+composition root is out of tree and must wire it, or the routes simply do not exist.
+
+The lifecycle response carries a `reconcile` object — what the reconcile that mutation drove actually
+did, grouped as `started` / `stopped` / `built` / `buildFailed` / `requiresRestart` /
+`removedFromConfig`. Until it did, `ChannelReconcileReport` reached no client at all (the composition
+root discarded it with `_ =`), which made every "reported rather than silently ignored" promise in
+this section unachievable. It omits `diagnostics`, which carry the config file path.
+
 ### Not in this phase
 
-- **In-session owner mutation (4a-iii).** Neither client can pause a channel *in a running gateway*.
-  Two routes, both real work: a `/channel` **builtin** slash command (`SlashCommandDispatcher`
-  already gates `ownerOnly` against an unforgeable `isOwner`, but `ConversationRuntimeDependencies`
-  has no trigger seam), or an **authenticated HTTP admin route** (`TriggerWebhookRouteRegistrar` is
-  the pattern; `ClientSessionMiddleware` already binds the principal, and it runs in-process so
-  `reconcile()` applies live). HTTP is the better fit — this is an operator concern — but it needs
-  the admin route group wired.
-  Note what is *not* an option: granting owner authority from anything the tool provider can see.
-  `{commandName, args}` is constructible by the model, so keying on it would be privilege escalation
-  dressed as a slash command. That is the same conclusion reached about gating the `/`-spelling.
-- **Phase 4b** — `register(channel:config:)` for genuinely new channels. Still blocked on real
-  transports (only `.mock` is implemented) and on process-scoping `ChannelInstanceLock`, below.
-
-  The registry half is **done**: `MessageToolSchemaRegistry` is now keyed by surface id (it was a
-  whole-array replace, so there was nothing to unregister *by*, and a second surface registering
-  silently wiped the first), and `MessageOutputDeliveryRegistry` already had `unregister`. Outbound
-  capability is armed and withdrawn per channel alongside its listener, so a runtime disable now
-  withdraws the agent's ability to send there rather than only stopping it listening.
+- **A config surface for a channel `channels.json` does not name.** The registry is mutable now (see
+  *Runtime service construction* above), so everything config enables can be built while the process
+  runs. What is still missing is somewhere to put the config of a channel the operator never wrote
+  down. `channels.json` stays operator-owned and unwritten, so the shape will be a separate
+  `channels_runtime.json` that config **shadows** on collision — the same static-beats-dynamic rule
+  `WebhookRouteStore.staticRouteNames` enforces for routes. Note the ceiling this sits under:
+  `ChannelId` is a closed four-case enum, so that store can hold at most four rows, which is nothing
+  like the open namespace webhook route names occupy.
+- **Real transports.** `ChannelPluginFactory.build` throws `notImplemented` for `.slack`,
+  `.telegram`, `.discord` and `.email`; only `.mock` exists. Independent of the registration
+  mechanism — it needs SDKs, credentials and network, not lifecycle work. Two guards exist for the
+  day it lands and cannot be exercised before then: a 30s ceiling on `prepareSupervisedTransport()`
+  (the only unbounded await in `ChannelListenerService`, and it is held while `reconcile()` owns its
+  serialization gate, so a black-holed socket would wedge every channel operation in the process),
+  and a `stopped` flag on `ChannelTransportSupervisor` so a `stop()` job that the executor runs ahead
+  of an already-enqueued `start()` cannot leave an uncancellable `runTask` behind. The ceiling bounds
+  a *cooperative* connect only — structured concurrency cancels a losing child and then waits for it,
+  so a transport that ignores cancellation is not abandoned and must carry its own deadline. Saying
+  otherwise would be worse than shipping no timeout.
 - **`ChannelInstanceLock` is process-scoped** (fixed). `SchedulerLock` already recorded
   `ownerPID` / `ownerStartToken` / `bootKey`; they simply were not consulted when the identity string
   matched, and that identity (`channel:platformIdentity`) is entirely config-derived. Two gateways

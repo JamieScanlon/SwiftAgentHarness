@@ -7,6 +7,11 @@ actor ChannelTransportSupervisor {
     private let maxBackoffSeconds: TimeInterval = 60
     private var backoffSeconds: TimeInterval = 1
     private var runTask: Task<Void, Never>?
+    /// Set by ``stop()``. A supervisor is single-use — `ChannelListenerService` builds a fresh one per
+    /// start — and `runTask == nil` alone is not enough: if the executor runs an interleaved `stop()`
+    /// job *before* an already-enqueued `start()` job, `stop()` no-ops and `start()` then creates a
+    /// `runTask` whose only reference has already been discarded, so nothing can ever cancel it.
+    private var stopped = false
     private let onEvent: @Sendable (ChannelTransportRawEvent) async -> Void
 
     init(
@@ -20,13 +25,14 @@ actor ChannelTransportSupervisor {
     }
 
     func start() {
-        guard runTask == nil else { return }
+        guard !stopped, runTask == nil else { return }
         runTask = Task {
             await self.runLoop()
         }
     }
 
     func stop() async {
+        stopped = true
         runTask?.cancel()
         runTask = nil
         Task { await transport.disconnect() }

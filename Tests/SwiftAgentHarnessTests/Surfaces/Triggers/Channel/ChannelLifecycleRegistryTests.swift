@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Synchronization
 import Testing
 @testable import SwiftAgentHarness
 
@@ -271,18 +272,192 @@ struct ChannelLifecycleRegistryTests {
         #expect(report.requiresRestart.contains(.slack) == false)
     }
 
-    /// Services are built once, in `init`. A channel the operator has since switched on has nothing
-    /// to start, and without this would reconcile to "unchanged" and report nothing at all.
-    @Test("a channel newly enabled in config needs a restart to get a listener")
-    func newlyEnabledChannelNeedsRestart() async throws {
-        let fixture = try makeFixture(channels: [
-            "slack": ChannelListenerConfig(enabled: false, transport: .mock),
-        ])
+    /// Before the registry became mutable this reported `requiresRestart` and the operator had to
+    /// bounce the gateway — `services` was built once, in `init`.
+    @Test("a channel newly enabled in config is built and started by reconcile")
+    func newlyEnabledChannelIsBuilt() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: false, transport: .mock)],
+            enabled: true
+        )
         try rewrite(fixture, channels: [
             "slack": ChannelListenerConfig(enabled: true, transport: .mock),
         ])
         let report = await fixture.registry.reconcile()
-        #expect(report.requiresRestart.contains(.slack))
+        #expect(report.built.contains(.slack))
+        #expect(report.started.contains(.slack))
+        #expect(report.requiresRestart.contains(.slack) == false)
+
+        let statuses = await fixture.registry.statuses()
+        let summary = try #require(statuses.first { $0.channel == .slack })
+        #expect(summary.serviceBuilt)
+        #expect(summary.running)
+        await fixture.registry.stop()
+    }
+
+    /// Building is "make the process match config"; the overlay still attenuates. A channel the
+    /// owner paused must be *built* — so status can say `serviceBuilt: true, running: false` rather
+    /// than "there is no such listener" — and left stopped.
+    @Test("a newly enabled channel the overlay holds off is built but not started")
+    func newlyEnabledChannelHeldOffIsBuiltNotStarted() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: false, transport: .mock)],
+            enabled: true
+        )
+        try fixture.state.setDisabled(channel: .slack, disabled: true, changedBy: .owner(accountID: nil))
+        try rewrite(fixture, channels: [
+            "slack": ChannelListenerConfig(enabled: true, transport: .mock),
+        ])
+        let report = await fixture.registry.reconcile()
+        #expect(report.built.contains(.slack))
+        #expect(report.started.contains(.slack) == false)
+
+        let statuses = await fixture.registry.statuses()
+        let summary = try #require(statuses.first { $0.channel == .slack })
+        #expect(summary.serviceBuilt)
+        #expect(summary.running == false)
+        #expect(summary.runtimeDisabled)
+        await fixture.registry.stop()
+    }
+
+    /// `enabled: false` is the process-wide "no channel listeners here" switch. Building a transport
+    /// nothing will ever start is waste that also makes `serviceBuilt: true` lie.
+    /// Building follows config; starting follows `desiredState`. Boot builds config-enabled channels
+    /// regardless of the process-wide switch, so the runtime half must too — otherwise `serviceBuilt`
+    /// depends on whether the channel was enabled before or after process start.
+    @Test("a globally disabled registry builds a service but does not start it")
+    func disabledRegistryBuildsButDoesNotStart() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: false, transport: .mock)],
+            enabled: false
+        )
+        try rewrite(fixture, channels: [
+            "slack": ChannelListenerConfig(enabled: true, transport: .mock),
+        ])
+        let report = await fixture.registry.reconcile()
+        #expect(report.built.contains(.slack))
+        #expect(report.started.isEmpty)
+        #expect(report.buildFailed.isEmpty)
+        let statuses = await fixture.registry.statuses()
+        let summary = try #require(statuses.first { $0.channel == .slack })
+        #expect(summary.serviceBuilt)
+        #expect(summary.running == false)
+    }
+
+    /// What this actually proves: the gate does not deadlock, and two overlapping passes converge on
+    /// one service. It does **not** prove serialization — `buildService` is synchronous, so its
+    /// `services[channel] == nil` guard cannot be split by a suspension and two *unserialized*
+    /// reconciles would also build once. Serialization is what keeps `removeService` and the
+    /// stop/start loop from interleaving, and that is not directly covered by any test; it is argued
+    /// in `reconcile()`'s doc comment and reviewed, not demonstrated.
+    @Test("concurrent reconciles build a channel exactly once")
+    func concurrentReconcilesBuildOnce() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: false, transport: .mock)],
+            enabled: true
+        )
+        try rewrite(fixture, channels: [
+            "slack": ChannelListenerConfig(enabled: true, transport: .mock),
+        ])
+        async let first = fixture.registry.reconcile()
+        async let second = fixture.registry.reconcile()
+        let (a, b) = await (first, second)
+        #expect(a.diagnostics.isEmpty)
+        #expect(b.diagnostics.isEmpty)
+        // Exactly one pass may build it. Two services would mean two listeners behind one instance
+        // lock and duplicate ingestion of every inbound message.
+        #expect(a.built.count + b.built.count == 1)
+        let statuses = await fixture.registry.statuses()
+        let summary = try #require(statuses.first { $0.channel == .slack })
+        #expect(summary.serviceBuilt)
+        #expect(summary.running)
+        await fixture.registry.stop()
+    }
+
+    /// An absent `channels.json` is a clean decode of "no channels" — the emphatic operator switch —
+    /// but it is also what a rename-based editor save looks like for a moment. Stopping on that read
+    /// is recoverable; destroying every service is not, because nothing schedules the reconcile that
+    /// would rebuild them.
+    @Test("a missing config file stops channels but does not tear them down")
+    func missingConfigFileStopsButDoesNotTearDown() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: true, transport: .mock)],
+            enabled: true
+        )
+        await fixture.registry.start()
+        try FileManager.default.removeItem(at: fixture.configURL)
+
+        let report = await fixture.registry.reconcile()
+        #expect(report.removedFromConfig.contains(.slack))
+        // The half the guard must preserve: a missing file still *stops*. Without this a regression
+        // that made a missing file a pure no-op — leaving the listener running — would pass.
+        #expect(report.stopped.contains(.slack))
+        let remaining = await fixture.registry.configuredChannels()
+        #expect(remaining.contains(.slack))
+        let service = await fixture.registry.service(for: .slack)
+        let stillRunning = await service?.isRunning
+        #expect(stillRunning == false)
+        await fixture.registry.stop()
+    }
+
+    /// An unimplemented transport is not fixed by a restart, so it must not be reported as needing
+    /// one — which is the whole reason `buildFailed` is a separate list.
+    @Test("a channel with an unimplemented transport reports buildFailed, not requiresRestart")
+    func unimplementedTransportReportsBuildFailed() async throws {
+        let fixture = try makeFixture(
+            channels: ["discord": ChannelListenerConfig(enabled: false, transport: .discord)],
+            enabled: true
+        )
+        try rewrite(fixture, channels: [
+            "discord": ChannelListenerConfig(enabled: true, transport: .discord),
+        ])
+        let report = await fixture.registry.reconcile()
+        #expect(report.buildFailed.contains(.discord))
+        #expect(report.built.contains(.discord) == false)
+        #expect(report.requiresRestart.contains(.discord) == false)
+    }
+
+    /// Dropping the service from the map without stopping it would strand the instance lock file,
+    /// which only this process may release — the channel could then never start again short of a
+    /// restart.
+    @Test("a channel dropped from config is torn down, not just stopped")
+    func removedFromConfigIsTornDown() async throws {
+        let fixture = try makeFixture(
+            channels: ["slack": ChannelListenerConfig(enabled: true, transport: .mock)],
+            enabled: true
+        )
+        await fixture.registry.start()
+        let running = await fixture.registry.statuses()
+        #expect(running.first { $0.channel == .slack }?.running == true)
+
+        try rewrite(fixture, channels: [:])
+        let report = await fixture.registry.reconcile()
+        #expect(report.removedFromConfig.contains(.slack))
+        // Not "unchanged": a channel about to be destroyed is the one thing that is not, and the
+        // desired/running comparison would have said so for a channel that was already stopped.
+        #expect(report.unchanged.contains(.slack) == false)
+
+        // The service itself is gone from the registry's maps. `statuses()` iterating config would
+        // report an empty list either way — it did so before teardown existed — so it proves
+        // nothing on its own.
+        let remaining = await fixture.registry.configuredChannels()
+        #expect(remaining.isEmpty)
+        let after = await fixture.registry.statuses()
+        #expect(after.isEmpty)
+
+        // The teardown's `stop()` released the instance lock. Asserted on the file rather than by
+        // re-acquiring: `tryAcquire` is idempotent for the holding process, so a re-acquire would
+        // succeed whether or not the release happened.
+        let lockURL = ChannelInstanceLock.lockURL(
+            dataDirectory: fixture.directory,
+            channel: .slack,
+            platformIdentity: "mock-bot"
+        )
+        #expect(FileManager.default.fileExists(atPath: lockURL.path) == false)
+
+        // Nothing left for an outbound deliverer to resolve to.
+        let plugin = await fixture.registry.plugin(for: .slack)
+        #expect(plugin == nil)
     }
 
     @Test("a malformed config suppresses drift reporting rather than acting on garbage")
@@ -374,5 +549,154 @@ struct ChannelLifecycleRegistryTests {
         ])
         let outcome = await fixture.registry.reload(channel: .slack)
         #expect(outcome == .registryDisabled)
+    }
+
+    /// `ChannelListenerService.lifecycleEpoch`, exercised.
+    ///
+    /// Without the guard the resumed `start()` attaches a supervisor to a transport the interleaved
+    /// `stop()` has already torn down and unlocked: a listener that is running, holds no instance
+    /// lock, and — now that the registry can drop services — is unreachable from anything that would
+    /// stop it, so it ingests until the process exits.
+    @Test("a stop during an in-flight start unwinds instead of attaching a supervisor")
+    func stopDuringStartUnwinds() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chan-svc-epoch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let config = ChannelListenerConfig(enabled: true, transport: .mock)
+        let real = try ChannelPluginFactory.build(
+            channel: .slack,
+            config: config,
+            logger: Logger(label: "test")
+        )
+        let gate = ChannelStartGate()
+        let gated = GatedSupervisedListener(inner: real.listener, gate: gate)
+        let bundle = ChannelBuiltListenerBundle(
+            plugin: real.plugin,
+            listener: gated,
+            parseRawEvent: real.parseRawEvent
+        )
+        let service = ChannelListenerService(
+            channel: .slack,
+            bundle: bundle,
+            dataDirectory: directory,
+            mediaRoot: directory.appendingPathComponent("media", isDirectory: true),
+            ingress: Self.makeIngress(),
+            dedupe: ChannelTestDedupe(),
+            logger: Logger(label: "test")
+        )
+
+        let startTask = Task { await service.start() }
+        // Returns once `start()` is suspended inside `prepareSupervisedTransport()`, holding the
+        // instance lock and with its pipeline installed.
+        await gate.waitUntilEntered()
+        await service.stop()
+        await gate.release()
+        await startTask.value
+
+        let running = await service.isRunning
+        #expect(running == false)
+        // The interleaved `stop()` released the lock; the superseded `start()` must not have taken
+        // it again on the way out.
+        let lockURL = ChannelInstanceLock.lockURL(
+            dataDirectory: directory,
+            channel: .slack,
+            platformIdentity: "mock-bot"
+        )
+        #expect(FileManager.default.fileExists(atPath: lockURL.path) == false)
+        // The connect *succeeded* — the gate released it — so a superseded start that merely returns
+        // leaves an open transport with no supervisor and nobody holding it, and the next `start()`
+        // opens a second one under the same bot identity. Neither assertion above can see that:
+        // `isRunning` reads `supervisor`, and the lock was released by `stop()` either way.
+        #expect(gated.disconnectCount == 1)
+    }
+}
+
+/// Holds `prepareSupervisedTransport()` open until the test releases it.
+private actor ChannelStartGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Called from inside the listener under test.
+    func enterAndWait() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+/// Forwards every listener member to a real one and gates only the connect.
+///
+/// A from-scratch conformer would restate eleven members and quietly invent behaviour for ten of
+/// them; forwarding keeps the double honest — everything except the suspension point under test is
+/// the production path.
+private final class GatedSupervisedListener: ChannelSupervisedListening, @unchecked Sendable {
+    private let inner: any ChannelSupervisedListening
+    private let gate: ChannelStartGate
+    /// `Mutex` because that is this codebase's idiom for a lock an `async`-facing type owns; the
+    /// critical section itself is synchronous and released before the forwarded `await`.
+    private let disconnects = Mutex(0)
+
+    var disconnectCount: Int { disconnects.withLock { $0 } }
+
+    init(inner: any ChannelSupervisedListening, gate: ChannelStartGate) {
+        self.inner = inner
+        self.gate = gate
+    }
+
+    var id: ChannelId { inner.id }
+    var platformIdentity: String { inner.platformIdentity }
+    var state: ChannelListenerState { inner.state }
+    var fatalError: ChannelFatalError? { inner.fatalError }
+    var config: ChannelListenerConfig { inner.config }
+
+    func prepareSupervisedTransport() async throws {
+        await gate.enterAndWait()
+        try await inner.prepareSupervisedTransport()
+    }
+
+    func transportForSupervision() -> any ChannelTransport { inner.transportForSupervision() }
+    func markTransportConnected() { inner.markTransportConnected() }
+    func markTransportDisconnected() { inner.markTransportDisconnected() }
+    func setFatal(_ error: ChannelFatalError) { inner.setFatal(error) }
+
+    func connect() async throws -> ChannelConnectResult { try await inner.connect() }
+    func disconnect() async {
+        disconnects.withLock { $0 += 1 }
+        await inner.disconnect()
+    }
+    func onTrigger(_ handler: @escaping ChannelTriggerHandler) -> @Sendable () -> Void {
+        inner.onTrigger(handler)
+    }
+    func sendTyping(chatId: String) async { await inner.sendTyping(chatId: chatId) }
+    func react(messageId: String, emoji: String) async {
+        await inner.react(messageId: messageId, emoji: emoji)
+    }
+    func send(_ message: ChannelOutboundMessage) async -> ChannelSendResult {
+        await inner.send(message)
     }
 }

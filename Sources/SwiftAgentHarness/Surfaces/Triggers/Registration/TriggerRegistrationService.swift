@@ -580,10 +580,11 @@ struct TriggerRegistrationService: Sendable {
                 changedBy: authority.creator,
                 reason: reason
             )
-            var applied = false
+            var reconcileReport: ChannelReconcileReport?
             if let channelApply {
-                applied = await channelApply.applyChannelState()
+                reconcileReport = await channelApply.applyChannelState()
             }
+            let applied = reconcileReport != nil
             recordRegistrationAudit(
                 op: op,
                 kind: .channel,
@@ -593,7 +594,11 @@ struct TriggerRegistrationService: Sendable {
                 outcome: applied ? "ok" : "ok_pending_restart",
                 admitted: true
             )
-            return ChannelLifecycleResult(entry: entry, appliedToRunningProcess: applied)
+            return ChannelLifecycleResult(
+                entry: entry,
+                appliedToRunningProcess: applied,
+                reconcile: reconcileReport
+            )
         } catch {
             let outcome = (error as? TriggerRegistrationError)?.code ?? "store_error"
             recordRegistrationAudit(

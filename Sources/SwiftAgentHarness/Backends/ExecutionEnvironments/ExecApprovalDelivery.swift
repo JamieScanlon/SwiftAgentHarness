@@ -44,9 +44,46 @@ public protocol ExecApprovalDelivering: Sendable {
 }
 
 struct ExecApprovalPluginRoute: Sendable {
-    let approval: any ChannelApprovalCapabilityAdapting
-    let outbound: any ChannelOutboundAdapting
     let target: ChannelDeliveryTarget
+    private let resolveApproval: @Sendable () async -> (any ChannelApprovalCapabilityAdapting)?
+    private let resolveOutbound: @Sendable () async -> (any ChannelOutboundAdapting)?
+
+    /// Fixed adapters, resolved by the caller.
+    ///
+    /// No production caller: everything that ships goes through the resolving init below, which is
+    /// what makes pause and teardown take effect mid-conversation. Retained for tests that exercise
+    /// the delivery in isolation, without a registry.
+    init(
+        approval: any ChannelApprovalCapabilityAdapting,
+        outbound: any ChannelOutboundAdapting,
+        target: ChannelDeliveryTarget
+    ) {
+        self.target = target
+        resolveApproval = { approval }
+        resolveOutbound = { outbound }
+    }
+
+    /// Resolve the channel's plugin on **every** send.
+    ///
+    /// This delivery is built once per conversation and held for its lifetime, so capturing
+    /// `plugin.approvalCapability` and `plugin.outbound` up front meant an exec-approval prompt kept
+    /// going to a channel that had since been paused or torn down — a stored reference quietly
+    /// bypassing the "outbound is armed exactly while the listener is running" invariant the registry
+    /// enforces everywhere else. `outboundPlugin(for:)` is the question actually being asked: may the
+    /// agent send there right now.
+    init(channel: ChannelId, target: ChannelDeliveryTarget, registry: any ChannelPluginLooking) {
+        self.target = target
+        resolveApproval = { await registry.outboundPlugin(for: channel)?.approvalCapability }
+        resolveOutbound = { await registry.outboundPlugin(for: channel)?.outbound }
+    }
+
+    func approval() async -> (any ChannelApprovalCapabilityAdapting)? {
+        await resolveApproval()
+    }
+
+    func outbound() async -> (any ChannelOutboundAdapting)? {
+        await resolveOutbound()
+    }
 }
 
 struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
@@ -85,7 +122,13 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
         guard let route else {
             return .deferred(request.presentation.textFallback(approvalID: request.id))
         }
-        let sendResult = await route.approval.deliverApproval(
+        guard let approval = await route.approval() else {
+            // The channel went away, or was paused, between building this delivery and needing it.
+            // Falling back to the text approval flow is the same answer as having had no channel at
+            // all, which is the honest one.
+            return .deferred(request.presentation.textFallback(approvalID: request.id))
+        }
+        let sendResult = await approval.deliverApproval(
             presentation: request.presentation,
             approvalID: request.id,
             command: request.command,
@@ -111,7 +154,8 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
             ? "Exec approval \(approvalID) approved."
             : "Exec approval \(approvalID) denied."
         let payload = ChannelRenderedPayload(text: text, approvalCard: nil)
-        _ = await route.outbound.sendPayload(payload, target: route.target)
+        guard let outbound = await route.outbound() else { return }
+        _ = await outbound.sendPayload(payload, target: route.target)
     }
 }
 
@@ -130,7 +174,9 @@ enum ExecApprovalDeliveryFactory {
               !chatId.isEmpty,
               let channelRegistry,
               let plugin = await channelRegistry.plugin(for: channel),
-              let approval = plugin.approvalCapability
+              // A probe, not a binding: this decides whether the channel supports native approval
+              // delivery at all. The adapter itself is re-resolved on every send, below.
+              plugin.approvalCapability != nil
         else {
             return DefaultExecApprovalDelivery(
                 approvalScope: scope,
@@ -139,13 +185,13 @@ enum ExecApprovalDeliveryFactory {
             )
         }
         let route = ExecApprovalPluginRoute(
-            approval: approval,
-            outbound: plugin.outbound,
+            channel: channel,
             target: ChannelDeliveryTarget(
                 chatId: chatId,
                 threadId: trigger.sourceMetadata["threadId"],
                 replyToMessageId: trigger.sourceMetadata["platformMessageId"]
-            )
+            ),
+            registry: channelRegistry
         )
         return PluginChannelExecApprovalDelivery(approvalScope: scope, route: route)
     }

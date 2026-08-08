@@ -208,6 +208,32 @@ struct ChannelAdminListResponse: Encodable, Sendable {
     var channels: [ChannelAdminStatus]
 }
 
+/// What the reconcile driven by a lifecycle mutation actually did.
+///
+/// A separate wire type for the same reason ``ChannelAdminStatus`` is one: the internal report may
+/// gain fields for in-process callers, and coupling them would make every internal addition a wire
+/// change.
+///
+/// Deliberately omits `diagnostics` — those carry the config file path — and `unchanged`, which is
+/// every channel that did nothing and would drown the fields an operator acts on.
+struct ChannelAdminReconcileSummary: Encodable, Sendable {
+    var started: [String]
+    var stopped: [String]
+    var built: [String]
+    var buildFailed: [String]
+    var requiresRestart: [String]
+    var removedFromConfig: [String]
+
+    init(_ report: ChannelReconcileReport) {
+        started = report.started.map(\.rawValue).sorted()
+        stopped = report.stopped.map(\.rawValue).sorted()
+        built = report.built.map(\.rawValue).sorted()
+        buildFailed = report.buildFailed.map(\.rawValue).sorted()
+        requiresRestart = report.requiresRestart.map(\.rawValue).sorted()
+        removedFromConfig = report.removedFromConfig.map(\.rawValue).sorted()
+    }
+}
+
 struct ChannelAdminLifecycleResponse: Encodable, Sendable {
     var channel: String
     var paused: Bool
@@ -216,11 +242,15 @@ struct ChannelAdminLifecycleResponse: Encodable, Sendable {
     /// and the CLI's copy of it is false; a client should not have to know which surface it hit.
     var appliedToRunningProcess: Bool
     var message: String
+    /// Absent when no live registry was attached, i.e. exactly when `appliedToRunningProcess` is
+    /// false. Present and all-empty means the reconcile ran and found nothing to change.
+    var reconcile: ChannelAdminReconcileSummary?
 
     init(_ result: ChannelLifecycleResult) {
         channel = result.entry.channel
         paused = result.entry.disabled
         appliedToRunningProcess = result.appliedToRunningProcess
         message = result.summary
+        reconcile = result.reconcile.map(ChannelAdminReconcileSummary.init)
     }
 }

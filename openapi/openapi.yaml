@@ -1839,8 +1839,10 @@ components:
         listenerBuilt:
           type: boolean
           description: >-
-            False when config names the channel but no listener exists — it was disabled at process
-            start (listeners are built once, at boot) or its transport is unimplemented.
+            False when config names the channel but no listener exists — its transport is
+            unimplemented, or its build failed. Boot and every reconcile build a listener for each
+            channel the config enables, whether or not listeners are switched on; a channel that is
+            merely switched off reports `listenerBuilt: true` with `running: false`.
         state:
           type: string
           enum: [disconnected, connecting, connected, fatal]
@@ -1877,6 +1879,40 @@ components:
             in the gateway process; the operator CLI writes the same overlay with false.
         message:
           type: string
+        reconcile:
+          $ref: "#/components/schemas/ChannelAdminReconcileSummary"
+          description: >-
+            What the reconcile driven by this mutation did. Absent exactly when
+            `appliedToRunningProcess` is false; present and all-empty means it ran and changed
+            nothing.
+
+    ChannelAdminReconcileSummary:
+      type: object
+      required: [started, stopped, built, buildFailed, requiresRestart, removedFromConfig]
+      description: >-
+        Channel ids grouped by what the reconcile did to each. A channel newly enabled in
+        `channels.json` appears in both `built` and `started`; `buildFailed` means its transport is
+        unimplemented or its build threw, which a restart does not fix; `requiresRestart` means a
+        live listener's non-lifecycle config changed and only a restart will pick it up.
+      properties:
+        started:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
+        stopped:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
+        built:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
+        buildFailed:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
+        requiresRestart:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
+        removedFromConfig:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelId" }
 
     WireJSONObject:
       type: object

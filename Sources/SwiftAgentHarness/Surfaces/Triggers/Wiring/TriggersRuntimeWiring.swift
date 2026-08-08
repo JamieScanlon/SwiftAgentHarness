@@ -413,14 +413,19 @@ public enum TriggersRuntimeWiring {
         )
         // Close the late-bound edge: a persisted lifecycle decision now reaches the live listeners.
         channelApplier.install { [channelRegistry] in
-            _ = await channelRegistry.reconcile()
+            await channelRegistry.reconcile()
         }
         if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
             channelRunStreamingHolder.install(
                 ChannelRunStreamingService(
                     hub: hub,
+                    // `outboundPlugin`, not `plugin`: this decides whether a turn may open a stream
+                    // to the channel, and the answer is "only while its listener is running" — the
+                    // same question `syncOutbound` asks. With the weaker lookup, a turn starting at
+                    // the moment `withdrawOutbound` was tearing streams down could slip a new one in
+                    // behind the teardown and stream to a paused channel anyway.
                     pluginLookup: { channel in
-                        await channelRegistry.plugin(for: channel)
+                        await channelRegistry.outboundPlugin(for: channel)
                     },
                     lifecycleCoordinator: channelSessionLifecycleCoordinator
                 )

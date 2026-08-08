@@ -59,7 +59,10 @@ struct TriggerChannelAdminRouteTests {
         )
         let applied = ChannelApplyRecorder()
         let applier = ChannelLifecycleApplierHolder()
-        applier.install { applied.record() }
+        applier.install {
+            applied.record()
+            return ChannelReconcileReport()
+        }
 
         let registration = TriggerRegistrationService(
             store: ScheduledTaskStore(fileURL: directory.appendingPathComponent("tasks.json")),

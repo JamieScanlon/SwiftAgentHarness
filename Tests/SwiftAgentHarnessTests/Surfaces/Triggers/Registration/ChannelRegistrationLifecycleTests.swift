@@ -274,7 +274,10 @@ struct ChannelRegistrationLifecycleTests {
     func applierRuns() async throws {
         let box = ChannelApplyCountBox()
         let holder = ChannelLifecycleApplierHolder()
-        holder.install { await box.increment() }
+        holder.install {
+            await box.increment()
+            return ChannelReconcileReport()
+        }
         let fixture = try makeFixture(applier: holder)
 
         let result = try await fixture.registration.setChannelEnabled(
@@ -291,7 +294,10 @@ struct ChannelRegistrationLifecycleTests {
     func refusedMutationSkipsApplier() async throws {
         let box = ChannelApplyCountBox()
         let holder = ChannelLifecycleApplierHolder()
-        holder.install { await box.increment() }
+        holder.install {
+            await box.increment()
+            return ChannelReconcileReport()
+        }
         let fixture = try makeFixture(applier: holder)
 
         _ = try? await fixture.registration.setChannelEnabled(

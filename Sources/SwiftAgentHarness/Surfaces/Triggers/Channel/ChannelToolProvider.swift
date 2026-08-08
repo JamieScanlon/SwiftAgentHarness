@@ -133,9 +133,11 @@ public struct ChannelToolProvider: ToolProvider {
             "state=\(summary.state.rawValue)",
         ]
         if !summary.serviceBuilt {
-            // The answer to "it is in my config, why is nothing happening": either it was off when
-            // the process started (listeners are built once, at boot) or its transport is a stub.
-            parts.append("listener=none(needs-restart-or-unimplemented-transport)")
+            // The answer to "it is in my config, why is nothing happening". Boot and every reconcile
+            // build a service for any channel config enables, so what is left is an unimplemented
+            // transport or a build that failed. A channel that is merely switched off reports
+            // `serviceBuilt: true, running: false` instead.
+            parts.append("listener=none(unimplemented-transport-or-build-failed)")
         }
         if let fatalCode = summary.fatalCode {
             // Present even when running: the listener has no way to clear a recorded fatal, so
