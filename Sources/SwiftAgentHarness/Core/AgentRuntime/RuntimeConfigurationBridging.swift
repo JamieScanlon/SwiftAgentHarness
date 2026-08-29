@@ -15,6 +15,7 @@ extension AgentRuntimeTurnConfiguration {
             ephemeralSystemReminder: managerConfiguration.ephemeralSystemReminder,
             originSurface: managerConfiguration.originSurface,
             originSenderID: managerConfiguration.originSenderID,
+            originSenderIsOwner: managerConfiguration.originSenderIsOwner,
             turnThinkingOverride: managerConfiguration.turnThinkingOverride,
             turnModelSlug: managerConfiguration.turnModelSlug,
             runLaneOrigin: managerConfiguration.runLaneOrigin
@@ -37,6 +38,7 @@ extension HarnessRuntimeSession.Configuration {
             ephemeralSystemReminder: runtimeConfiguration.ephemeralSystemReminder,
             originSurface: runtimeConfiguration.originSurface,
             originSenderID: runtimeConfiguration.originSenderID,
+            originSenderIsOwner: runtimeConfiguration.originSenderIsOwner,
             turnThinkingOverride: runtimeConfiguration.turnThinkingOverride,
             turnModelSlug: runtimeConfiguration.turnModelSlug,
             runLaneOrigin: runtimeConfiguration.runLaneOrigin

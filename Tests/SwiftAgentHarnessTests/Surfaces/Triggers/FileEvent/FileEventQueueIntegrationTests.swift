@@ -19,7 +19,8 @@ struct FileEventQueueIntegrationTests {
             enableTools: Bool,
             enableAgents: Bool,
             originSurface: String?,
-            originSenderID: String?
+            originSenderID: String?,
+            originSenderIsOwner: Bool?
         ) async throws {
             texts.append(text)
         }
@@ -86,8 +87,11 @@ struct FileEventQueueIntegrationTests {
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let dispatch = makeDispatch(runtime: runtime)
         let taskStore = ScheduledTaskStore(fileURL: dataDir.appendingPathComponent("tasks.json"))
+        let sessionStore = SessionScopedScheduledTaskStore()
+        let registration = TriggerRegistrationTestSupport.service(store: taskStore, sessionStore: sessionStore)
         let scheduler = TriggerSchedulerService(
             store: taskStore,
+            sessionStore: sessionStore,
             dispatch: dispatch,
             lockURL: dataDir.appendingPathComponent("lock"),
             logger: Logger(label: "test")
@@ -116,7 +120,7 @@ struct FileEventQueueIntegrationTests {
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: eventsDir,
             dispatch: dispatch,
-            taskStore: taskStore,
+            registration: registration,
             logger: Logger(label: "test"),
             debounceMilliseconds: 10,
             watcherRetryDelayMilliseconds: 100
@@ -137,6 +141,7 @@ struct FileEventQueueIntegrationTests {
         )
         return TriggersRuntimeBundle(
             dispatch: dispatch,
+            registration: registration,
             scheduler: scheduler,
             webhookAdapter: webhookAdapter,
             webhookRouteStore: WebhookRouteStore(
@@ -146,7 +151,23 @@ struct FileEventQueueIntegrationTests {
             scheduleTools: ScheduleToolProvider(
                 dataService: ScheduledTaskToolDataService(
                     scheduler: scheduler,
+                    registration: registration,
                     catalog: FileEventStubCatalog()
+                )
+            ),
+            webhookTools: WebhookToolProvider(
+                dataService: ScheduledTaskToolDataService(
+                    scheduler: scheduler,
+                    registration: registration,
+                    catalog: FileEventStubCatalog()
+                )
+            ),
+            channelTools: ChannelToolProvider(
+                dataService: ScheduledTaskToolDataService(
+                    scheduler: scheduler,
+                    registration: registration,
+                    catalog: FileEventStubCatalog(),
+                    channelRegistry: channelRegistry
                 )
             ),
             fileEventQueue: fileEventQueue,
@@ -163,7 +184,7 @@ struct FileEventQueueIntegrationTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: AlwaysNewDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))

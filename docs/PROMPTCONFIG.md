@@ -255,6 +255,7 @@ Interaction-mode profiles. Accepts an **array** of profile objects, a single obj
 |---|---|---|
 | `maxIterations` | Int | Per-turn loop iteration cap (min 1; non-numeric value clears an inherited cap). Built-ins: plan = 8, chat/agent = uncapped. |
 | `stopOnApprovalRequest` | Bool | Pause the loop when a tool requests approval. Built-ins: `true` for plan. |
+| `resumesOnDelegateCompletion` | Bool | Whether an **idle** conversation in this mode starts a turn when an asynchronous delegate completes (wake-on-idle). Unset on every built-in; when unset the harness falls back to the historical rule — agent-mode conversations wake, chat and plan do not. Set `true` on a chat-derived profile to have it wake for background delegate results, or `false` on an agent-derived one to leave the result on the transcript for the next user turn. A completion landing **mid-turn** is always picked up by the running turn regardless of this value; this only decides whether an idle conversation is woken. |
 | `termination.policy` | String | `"bare-message"` (turn ends on plain assistant text; built-in chat) or `"terminal-tool"` (turn ends only via a terminal tool; built-in plan/agent). |
 | `termination.recovery.strategy` | String | `"forced-tool-choice"` or `"behavioral-fallback"`. |
 | `termination.recovery.rollbackStalledTurn` | Bool | Roll back the stalled turn before retrying. |
@@ -513,6 +514,100 @@ Map of delegate tool name → HTTP endpoint binding. Entries with an invalid `ur
 | `authHeaderName` | String | no | `nil` | Auth header name. |
 | `authHeaderValue` | String | no | `nil` | Auth header value. Alternative: `authHeaderValueEnv` names an environment variable to read the value from. |
 | `timeoutSeconds` | Number | no | `120` | Request timeout. |
+
+
+## `localAgents`
+
+Map of agent name → definition. Each entry publishes an **in-process sub-agent** to the model as a
+delegate tool. The model calls it like any other tool; the harness spawns an isolated child
+conversation, runs it to completion, and returns the child's final report as the tool result.
+
+**Built-in roles ship enabled.** Three delegate agents are seeded whether or not this section is
+present, each paired with a built-in mode profile that carries its capability grant:
+
+| Tool | Mode profile | Tools | Purpose |
+|---|---|---|---|
+| `delegate_explore` | `subagent-explore` | `read_file`, `read_attachment`, `glob`, `grep` | Fast read-only search. Omits workspace conventions and skills to stay cheap. |
+| `delegate_plan` | `subagent-plan` | same read-only set | Architecture and planning; reports approach, risks, and a "Critical Files for Implementation" section. |
+| `delegate_general_purpose` | `subagent-general` | `*` minus `delegate_*` | A self-contained task in its own context window. |
+
+All three inherit the parent conversation's model, **run in the background**, and deny sub-agent
+spawning (flat delegation, `maxRecursionDepth: 1`). Background is the default because a synchronous
+delegate blocks the tool call for its entire run, so any non-trivial exploration or plan trips the
+tool-call timeout; the model can still wait on one per call with `run_in_background: false`. **Read-only is enforced at dispatch, not by prompt** —
+`bash` is withheld from explore and plan because redirects and heredocs would otherwise make
+write-prevention prompt-enforced only. A `localAgents` row whose slugified key matches a built-in
+tool name replaces that built-in outright; the others survive.
+
+**Tool naming.** The config key is slugified into a `delegate_`-prefixed tool name — `"Coding Agent"`
+becomes `delegate_coding_agent`. The prefix is what classifies the tool as a delegate throughout the
+harness (routing, result formatting, compaction protection), so it is added automatically. Two keys
+that slugify to the same name are a conflict: the first in sorted order wins and the rest are skipped
+with a diagnostic.
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `description` | String | **yes** | — | Model-facing description of what this agent does. Prompt text — see the tool-description convention in `AGENTS.md`. |
+| `modeProfileId` | String | **yes** | — | Mode profile assigned to the spawned child. Must resolve against `modeProfiles`; an unknown id means the delegate is **not published at all** (fail closed, logged at error). |
+| `modelRef` | String | no | `nil` | Model the child runs on, resolved through the Model Pool. Omit to inherit the parent conversation's model (what all three built-ins do). A *present but unresolvable* ref fails the delegate call with a clear message rather than silently falling back. |
+| `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
+| `longRunning` | Bool | no | `false` (built-ins: `true`) | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
+| `runTimeoutSeconds` | Number | no | `240` sync / `1800` background | Wall-clock budget for the child run, clamped to `5…3600`. Omit it and the budget follows the agent's delivery mode. The synchronous default sits **below the 300s tool-call timeout** on purpose: a synchronous delegate blocks the tool call for its whole run, so a longer budget means the tool call dies first and you get a generic tool timeout instead of the delegate's own message. Background runs block nothing, so they get room to work. The `5`s floor exists because a shorter timeout can fire before the child has registered a run, leaving the cancel with nothing to stop and the run orphaned. |
+| `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
+
+```json
+{
+  "localAgents": {
+    "Coding Agent": {
+      "description": "In-process coding delegate for repo read/write and shell work.",
+      "modeProfileId": "coding-agent",
+      "modelRef": "qwen/qwen3-coder-30b",
+      "toolsAllow": ["read_file", "write_file", "bash"],
+      "longRunning": false,
+      "runTimeoutSeconds": 300,
+      "maxRecursionDepth": 1
+    }
+  }
+}
+```
+
+**Capability assignment is the load-bearing control.** The child never inherits the parent's tool
+approvals or allow-list. Derive the agent's mode profile from `subagent-minimal` and enumerate
+`toolsAllow` — prompt-level instructions in the profile's `modeDirective` are advisory; the
+allowlist is what survives prompt injection reaching the delegate through its `instructions`.
+
+**Generated tool schema.** Each delegate tool takes:
+
+- `instructions` (string, required) — the full task brief. The child starts from a fresh
+  conversation with no knowledge of the parent's transcript.
+- `description` (string, optional) — a short 3-5 word label used for the child's topic and for
+  lifecycle/progress display. Without it the agent's config key is used, and the full brief would
+  otherwise become the child's topic.
+- `run_in_background` (boolean, optional) — overrides `longRunning` for this one call, so the model
+  can wait on a normally-backgrounded agent or background a normally-synchronous one. Omitted means
+  the agent's configured mode applies; a malformed value is ignored rather than read as `false`.
+
+**Two different timeouts, two different fixes.** A delegate that runs too long can fail in two
+unrelated ways. `runTimeoutSeconds` is the harness's own budget — its message names the setting
+(`exceeded its runTimeoutSeconds budget of Ns`) so the log tells you which knob to turn. The
+tool-call timeout is separate and applies only to *synchronous* delegates, because those hold the
+tool call open for the whole run; the fix for that one is `longRunning: true`, not a larger budget.
+Raising `runTimeoutSeconds` above the tool-call timeout on a synchronous agent achieves nothing.
+
+**Background delivery.** With `longRunning: true` the delegate call returns
+`Delegate '<name>' is running in the background (handle: <tool-call-id>)` plus an explicit
+do-not-poll instruction, and the completion is announced later as a `tool` message on the parent
+conversation keyed to the original tool-call id. The handle is the tool-call id rather than the
+agent id, so concurrent calls to one agent do not collide. Announce idempotency, the durable
+announce marker, retry and the bounded fallback are all owned by the shared completion pipeline.
+
+**Test coverage.** Unit tests cover config parsing, tool registration and delegate classification,
+status derivation, result bounding, depth folding and argument mapping.
+`InProcessLocalAgentIntegrationTests` covers the end-to-end path with a scripted child run: one
+lifecycle row per delegate call keyed by tool-call id, run-lane released on terminal, the selected
+conversation unchanged across a delegate call, `toolsAllow` reaching the child's
+`routingPrefs.explicitToolPolicy`, `longRunning: false` taking the synchronous path, and the
+unresolvable-model / empty-instructions / no-reply / timeout failure modes.
 
 ---
 

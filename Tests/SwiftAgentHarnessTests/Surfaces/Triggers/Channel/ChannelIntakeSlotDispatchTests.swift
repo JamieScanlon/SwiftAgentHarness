@@ -168,7 +168,7 @@ struct ChannelIntakeSlotDispatchTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: SlotDispatchDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))
@@ -201,7 +201,8 @@ private struct SlotDispatchNoopRuntime: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }
 

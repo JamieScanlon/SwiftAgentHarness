@@ -5,6 +5,9 @@ struct WebhookValidationGate: Sendable {
     let routeStore: WebhookRouteStore
     let idempotency: TriggerIdempotencyGate
     let rateLimit: TriggerRateLimitGate
+    /// Shared ceiling across every runtime-registered route, in requests per the injected gate's
+    /// window (60s as wired).
+    var selfRegisteredGlobalPerMin: Int = 60
 
     func validate(_ request: WebhookIngressRequest) async throws -> (route: WebhookRoute, payload: [String: Any]) {
         guard let route = try routeStore.route(named: request.routeName) else {
@@ -24,7 +27,16 @@ struct WebhookValidationGate: Sendable {
         if try await idempotency.peekDuplicate(triggerID: dedupeKey) {
             throw WebhookValidationFailure.duplicate
         }
-        if await rateLimit.isRateLimited(key: request.routeName) {
+        if await rateLimit.isRateLimited(key: request.routeName, limit: route.rateLimitPerMin) {
+            throw WebhookValidationFailure.rateLimited
+        }
+        // Self-registered routes additionally share one aggressive global bucket: per-route limits
+        // alone do not bound an agent that registers many routes.
+        if route.source == .dynamic,
+           await rateLimit.isRateLimited(
+               key: ValidatedWebhookRoute.reservedGlobalBucketName,
+               limit: selfRegisteredGlobalPerMin
+           ) {
             throw WebhookValidationFailure.rateLimited
         }
         let payload = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? ["__raw__": String(data: request.body, encoding: .utf8) ?? ""]

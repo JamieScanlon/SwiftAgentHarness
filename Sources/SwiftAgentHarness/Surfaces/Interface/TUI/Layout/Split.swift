@@ -13,6 +13,8 @@ public final class SplitComponent: TUIComponent, Focusable {
     public var secondary: any TUIComponent
     public var isFocused: Bool = false
     public private(set) var focusedPane: Int = 0
+    /// Column budget consumed by the vertical separator in a horizontal split.
+    private static let separator = "│"
 
     public init(
         orientation: SplitOrientation = .horizontal,
@@ -26,23 +28,50 @@ public final class SplitComponent: TUIComponent, Focusable {
         self.secondary = secondary
     }
 
-    public func focusPrimary() { focusedPane = 0 }
-    public func focusSecondary() { focusedPane = 1 }
+    public func focusPrimary() {
+        focusedPane = 0
+        FocusTraversal.setFocus(true, on: primary)
+        FocusTraversal.setFocus(false, on: secondary)
+    }
+
+    public func focusSecondary() {
+        focusedPane = 1
+        FocusTraversal.setFocus(false, on: primary)
+        FocusTraversal.setFocus(true, on: secondary)
+    }
 
     public func render(width: Int) -> [String] {
+        guard width > 0 else { return [] }
         switch orientation {
         case .horizontal:
-            let primaryWidth = max(1, Int(Double(width) * ratio))
-            let secondaryWidth = max(1, width - primaryWidth - 1)
-            let primaryLines = primary.render(width: primaryWidth)
-            let secondaryLines = secondary.render(width: secondaryWidth)
-            return zipLines(primaryLines, secondaryLines, separator: "│", totalWidth: width)
+            let separatorWidth = ANSIWidth.visibleWidth(of: Self.separator)
+            // Below the minimum for two panes plus a separator, degrade to the primary
+            // pane instead of emitting a line wider than the frame.
+            guard width >= separatorWidth + 2 else {
+                return TUIComponentRender.renderClamped(primary, width: width)
+            }
+            let usable = width - separatorWidth
+            let primaryWidth = max(1, min(usable - 1, Int(Double(usable) * ratio)))
+            let secondaryWidth = max(1, usable - primaryWidth)
+            let primaryLines = TUIComponentRender.renderClamped(primary, width: primaryWidth)
+            let secondaryLines = TUIComponentRender.renderClamped(secondary, width: secondaryWidth)
+            return zipLines(
+                primaryLines,
+                secondaryLines,
+                leftWidth: primaryWidth,
+                rightWidth: secondaryWidth
+            )
+
         case .vertical:
-            let primaryHeight = max(1, Int(Double(terminalRowsEstimate(width: width)) * ratio))
-            let primaryLines = primary.render(width: width)
-            let secondaryLines = secondary.render(width: width)
+            // Render each child exactly once. The previous implementation rendered both
+            // children an extra time purely to estimate a height, so every frame cost
+            // four renders instead of two.
+            let primaryLines = TUIComponentRender.renderClamped(primary, width: width)
+            let secondaryLines = TUIComponentRender.renderClamped(secondary, width: width)
+            let total = max(1, primaryLines.count + secondaryLines.count)
+            let primaryHeight = max(1, min(primaryLines.count, Int(Double(total) * ratio)))
             var lines = Array(primaryLines.prefix(primaryHeight))
-            lines.append(ANSIStyle.finishLine(String(repeating: "─", count: max(0, width))))
+            lines.append(ANSIStyle.finishLine(String(repeating: "─", count: width)))
             lines.append(contentsOf: secondaryLines)
             return lines
         }
@@ -50,7 +79,9 @@ public final class SplitComponent: TUIComponent, Focusable {
 
     public func handleInput(_ data: String) {
         if data == "\u{1B}[Z" || data == "\u{09}" {
-            FocusTraversal.focusNext(in: 2, selectedIndex: &focusedPane)
+            var pane = focusedPane
+            FocusTraversal.focusNext(in: 2, selectedIndex: &pane)
+            if pane == 0 { focusPrimary() } else { focusSecondary() }
             return
         }
         if focusedPane == 0 {
@@ -65,29 +96,26 @@ public final class SplitComponent: TUIComponent, Focusable {
         secondary.invalidate()
     }
 
-    private func terminalRowsEstimate(width: Int) -> Int {
-        max(primary.render(width: width).count + secondary.render(width: width).count, 1)
-    }
-
-    private func zipLines(_ left: [String], _ right: [String], separator: String, totalWidth: Int) -> [String] {
+    /// Lays panes out at the widths they were *rendered* at.
+    ///
+    /// The previous version rendered at `ratio` and then laid out at a hard-coded 50/50,
+    /// so at the default 0.6 ratio every primary-pane line was re-truncated from 60% to
+    /// 50% of the frame — silently chopping the last ~10% of every transcript line.
+    private func zipLines(
+        _ left: [String],
+        _ right: [String],
+        leftWidth: Int,
+        rightWidth: Int
+    ) -> [String] {
         let height = max(left.count, right.count)
-        let sepWidth = ANSIWidth.visibleWidth(of: separator)
-        let leftWidth = max(1, (totalWidth - sepWidth) / 2)
-        let rightWidth = max(1, totalWidth - leftWidth - sepWidth)
         var lines: [String] = []
         for row in 0..<height {
-            let l = row < left.count ? left[row] : ""
-            let r = row < right.count ? right[row] : ""
-            let leftPart = pad(ANSITruncate.truncate(l, toWidth: leftWidth), to: leftWidth)
-            let rightPart = pad(ANSITruncate.truncate(r, toWidth: rightWidth), to: rightWidth)
-            lines.append(ANSIStyle.finishLine(leftPart + separator + rightPart))
+            let leftLine = row < left.count ? left[row] : ""
+            let rightLine = row < right.count ? right[row] : ""
+            let leftPart = ANSITruncate.fit(leftLine, toWidth: leftWidth)
+            let rightPart = ANSITruncate.fit(rightLine, toWidth: rightWidth)
+            lines.append(ANSIStyle.finishLine(leftPart + Self.separator + rightPart))
         }
         return lines
-    }
-
-    private func pad(_ text: String, to width: Int) -> String {
-        let visible = ANSIWidth.visibleWidth(of: text)
-        if visible >= width { return text }
-        return text + String(repeating: " ", count: width - visible)
     }
 }

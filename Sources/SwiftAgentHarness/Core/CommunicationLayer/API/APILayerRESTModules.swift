@@ -2227,6 +2227,35 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
         let expectedTail = ifMatch != nil
             ? APILayer.parseMessageTailIfMatch(ifMatch)
             : chatRequest.expectedPreviousTailHarnessMessageID
+        // Resolved server-side from the authenticated principal, never from the request body: the
+        // ownership verdict is what control-plane tool policy keys off, so a caller must not be able
+        // to assert it. `originSurface`/`originSenderID` below are client-supplied provenance and
+        // carry no authority.
+        //
+        // An unreadable conversation yields `nil`, not `false`. `apiGetConversation` also returns
+        // `nil` for a soft-deleted row, and "we could not determine ownership" is a different claim
+        // from "this sender is not the owner" — only the latter denies.
+        // Only an authenticated request yields an affirmative-or-negative verdict. An *unauthenticated*
+        // one asserts nothing: the harness's own loopback client posts here with no `Authorization`
+        // header for every trigger fire, so reading a missing principal as "not the owner" would
+        // stamp `false` on the owner's own cron jobs and channel messages and then deny them their
+        // `schedule_*` tools. Absent principal means absent claim, which is what `nil` encodes.
+        let senderPrincipal = APISessionContext.authenticatedOwnerAccountID
+        var ownershipConversation: ModelConversation?
+        if senderPrincipal != nil {
+            ownershipConversation = await dependencies.conversation.apiGetConversation(id: routingConversationID)
+        }
+        let authenticatedVerdict: Bool? = ownershipConversation.map {
+            ConversationOwnerResolution.isOwner(
+                conversationOwnerAccountID: $0.ownerAccountID,
+                authenticatedOwnerAccountID: senderPrincipal
+            )
+        }
+        // The body may only ever *lower* the sender's privilege. A channel message from a non-owner
+        // crosses this route inside the harness's own loopback POST, where the principal check above
+        // cannot see the human who actually spoke — the self-restriction is how that fact survives
+        // the hop. Any other caller setting it merely restricts itself.
+        let senderIsOwner: Bool? = chatRequest.originSenderIsNonOwner == true ? false : authenticatedVerdict
         let configuration = MessageOutputTurnConfiguration.forRESTSend(
             enableTools: chatRequest.includeTools != false,
             enableAgents: chatRequest.includeAgents != false,
@@ -2234,7 +2263,8 @@ struct APILayerMessagesModule: APILayerRESTEndpointModule {
             inputTrustRaw: inputTrustRaw,
             resolvedInputTrustClass: resolvedTrustClass,
             originSurface: chatRequest.originSurface,
-            originSenderID: chatRequest.originSenderID
+            originSenderID: chatRequest.originSenderID,
+            originSenderIsOwner: senderIsOwner
         )
         do {
             let stream = try await APILayer.acquireChatStream(

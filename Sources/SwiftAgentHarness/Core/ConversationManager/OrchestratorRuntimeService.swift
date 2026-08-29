@@ -520,6 +520,30 @@ public actor OrchestratorRuntimeService {
         )
     }
 
+    /// Publishes operator-declared local agents as in-process delegate tools.
+    ///
+    /// Fails closed per definition: an entry whose `modeProfileId` does not resolve is not published
+    /// at all, rather than silently spawning children under the default machine profile.
+    private func makeLocalAgentDelegateProvider() async -> InProcessLocalAgentToolProvider? {
+        let localAgents = deps.configurationSet.localAgents
+        guard !localAgents.isEmpty else { return nil }
+        for diagnostic in localAgents.diagnostics {
+            logger?.warning("[OrchestratorRuntimeService] \(diagnostic)")
+        }
+        var publishable: [LocalAgentDefinition] = []
+        for definition in localAgents.definitions {
+            guard (try? await deps.modeRegistry.resolve(modeId: definition.modeProfileID)) != nil else {
+                logger?.error(
+                    "[OrchestratorRuntimeService] local agent '\(definition.displayName)' not published: unknown modeProfileId '\(definition.modeProfileID)'"
+                )
+                continue
+            }
+            publishable.append(definition)
+        }
+        guard !publishable.isEmpty else { return nil }
+        return InProcessLocalAgentToolProvider(definitions: publishable, logger: logger)
+    }
+
     private func toolSchemaDispatchMaps(
         for conversation: ModelConversation?,
         effectiveEntries: [ToolRegistryEntry]
@@ -639,6 +663,9 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        if let localAgentProvider = await makeLocalAgentDelegateProvider() {
+            providers.append(localAgentProvider)
+        }
         let workspaceRoot: String?
         if let conv = activeConversation {
             workspaceRoot = try? await deps.persistenceDomain.resolveHarnessPersistenceCwdForSideEffects(

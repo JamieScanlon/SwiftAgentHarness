@@ -655,7 +655,8 @@ extension AgentRuntimeSessionService {
             agentHarness: deps.agentHarness,
             contextCompaction: deps.conversationTransformConfiguration.contextCompaction,
             modeRegistry: deps.modeRegistry,
-            logger: deps.logger
+            logger: deps.logger,
+            settlementSink: deps.modelCompletionSettlementSink
         )
     }
 }

@@ -39,7 +39,7 @@ struct ChannelDMScopeRegistryTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: ChannelTestDedupe()),
             rateLimit: TriggerRateLimitGate(),
-            costCeiling: TriggerCostCeilingGate(),
+            initiatorBurst: TriggerInitiatorBurstGate(),
             auditLog: TriggerAuditLog(logger: Logging.Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))
@@ -94,6 +94,7 @@ struct DMScopeNoopRuntime: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }

@@ -24,7 +24,8 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
         try await HarnessEmbeddedMutation.dispatchTriggerMessage(
             conversationID: conversationID,
@@ -36,6 +37,7 @@ struct HarnessTriggerRuntimeAdapter: TriggerRuntimeDispatching {
             enableAgents: enableAgents,
             originSurface: originSurface,
             originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner,
             session: session,
             fallbackRuntime: runtime
         )
@@ -70,10 +72,16 @@ struct HarnessTriggerDedupeAdapter: TriggerDedupeChecking {
 
 public struct TriggersRuntimeBundle: Sendable {
     let dispatch: TriggerDispatchService
+    /// The shared registration endpoint. Phase-3 clients (slash, CLI, HTTP) attach here.
+    let registration: TriggerRegistrationService
     public let scheduler: TriggerSchedulerService
     public let webhookAdapter: WebhookIngressAdapter
     public let webhookRouteStore: WebhookRouteStore
     public let scheduleTools: ScheduleToolProvider
+    public let webhookTools: WebhookToolProvider
+    /// Read-only. Channel mutation is owner-only and has no agent-facing tool — see
+    /// ``ChannelToolProvider``.
+    public let channelTools: ChannelToolProvider
     public let fileEventQueue: FileEventQueueService
     let replay: TriggerReplayService
     public let channelRegistry: ChannelListenerRegistry
@@ -136,6 +144,29 @@ public enum TriggersRuntimeWiring {
         public var conversationEventsHub: ConversationEventsTopicHub? = nil
         public var staticWebhookRoutes: [WebhookRoute] = []
         public var schedulerIdentity: String = "sah-trigger-scheduler"
+        /// Operator-owned spend ceilings. No agent-facing parameter reaches this.
+        public var budgets: TriggerBudgetConfiguration = TriggerBudgetConfiguration()
+        /// Settled USD for a finished trigger-host conversation, from the host's authoritative
+        /// per-run usage rollups. Without it the ledger never accrues and ceilings never bind — the
+        /// harness says so loudly at boot rather than presenting an unmetered ceiling as enforcement.
+        public var conversationCostUSD: (@Sendable (UUID) async -> Double?)? = nil
+        /// Opt in to the in-package meter (``TriggerConversationCostMeter``) instead of supplying
+        /// your own. Ignored when `conversationCostUSD` is set — an explicit meter always wins.
+        ///
+        /// **On by default.** Main-loop and sub-agent spend both reach the per-run rollups now, and
+        /// main-loop cost is the figure `BudgetEnforcingLLM` settled — the same number
+        /// `ModelPoolCostLedger` bills — rather than a re-derivation from the conversation's model.
+        ///
+        /// It is still catalog rates, not an invoice: a registry row with no rates contributes
+        /// tokens and no cost, so a deployment running unpriced models will see ceilings that do not
+        /// bind. Boot logs `trigger_budgets_priced_from_catalog_rates` to say so. Set `false` to opt
+        /// out, or supply `conversationCostUSD` to override entirely.
+        public var meterConversationCostFromRunRollups: Bool = true
+        /// How long a still-running trigger run may hold up settlement before the finished runs are
+        /// billed without it. Nothing in the harness times a run out, so without this a wedged lane
+        /// pins the charge until retention drops it; set it above your longest legitimate run,
+        /// because settling early is unrecoverable.
+        public var meterOpenRunGrace: TimeInterval = 6 * 3600
 
         public init(
             dataDirectory: URL,
@@ -203,11 +234,53 @@ public enum TriggersRuntimeWiring {
         let dedupe = HarnessTriggerDedupeAdapter(peek: dedupePeek, check: dedupeCheckAndSet)
         let idempotency = TriggerIdempotencyGate(dedupe: dedupe)
         let rateLimit = TriggerRateLimitGate()
-        let costCeiling = TriggerCostCeilingGate()
+        let initiatorBurst = TriggerInitiatorBurstGate()
+        let budgetNotifier = TriggerBudgetNotifierHolder()
+        let spendLedger = TriggerSpendLedgerStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("trigger_spend_ledger.json"),
+            retainedWindows: configuration.budgets.retainedWindows
+        )
+        // An explicit host meter wins; the in-package one is opt-in; otherwise there is none.
+        let costMeter: (@Sendable (UUID) async -> Double?)?
+        if let supplied = configuration.conversationCostUSD {
+            costMeter = supplied
+        } else if configuration.meterConversationCostFromRunRollups {
+            costMeter = TriggerConversationCostMeter.runRollups(
+                runtime: runtime,
+                openRunGrace: configuration.meterOpenRunGrace,
+                logger: logger
+            ).port
+        } else {
+            costMeter = nil
+        }
+        if configuration.budgets.enabled {
+            if costMeter == nil {
+                logger.warning(
+                    "trigger_budgets_unmetered — spend ceilings are configured but no conversationCostUSD meter was supplied; ledgers will not accrue and ceilings will not bind"
+                )
+            } else if configuration.conversationCostUSD == nil {
+                // Said out loud for the same reason `trigger_budgets_unmetered` is: a ceiling that
+                // silently measures a fraction of the spend is the same failure as one that
+                // measures none, and the fraction is invisible from the ledger.
+                logger.warning(
+                    "trigger_budgets_priced_from_catalog_rates — metering from per-run rollups at the cost the budget gate settled; a registry model with no configured rates accrues tokens but $0, so its ceilings will not bind"
+                )
+            }
+        }
+        let budgetGate = TriggerBudgetGate(
+            store: spendLedger,
+            configuration: configuration.budgets,
+            ports: TriggerSpendPorts(
+                conversationCostUSD: costMeter ?? { _ in nil },
+                notify: { [budgetNotifier] notice in await budgetNotifier.notify(notice) }
+            ),
+            logger: logger
+        )
         let activationPolicy = TriggerActivationPolicy(
             idempotency: idempotency,
             rateLimit: rateLimit,
-            costCeiling: costCeiling,
+            initiatorBurst: initiatorBurst,
+            budget: budgetGate,
             auditLog: auditLog
         )
         let sessionIndex = TriggerSessionIndex(
@@ -259,6 +332,43 @@ public enum TriggersRuntimeWiring {
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
         )
+        // Session-scoped tasks (`durable: false`) live here and never reach disk. Shared by
+        // reference between the registration endpoint that writes them and the scheduler that
+        // fires them — two instances would mean tasks that exist but never run.
+        let sessionTaskStore = SessionScopedScheduledTaskStore()
+        // Webhook routes are built here rather than at their point of use: the registration
+        // endpoint owns webhook create/update/delete too, so the store has to exist first.
+        let dynamicStore = WebhookDynamicRouteStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
+        )
+        let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
+        // Per-channel lifecycle overlay. Separate from `channels.json`, which stays operator-owned
+        // and is never rewritten from a runtime client; this file records only that a channel config
+        // permits is currently held off. A value type over one `fileURL`, so the endpoint that
+        // writes it and the registry that reads it agree because they name the same file, not
+        // because they share an instance — unlike `SessionScopedScheduledTaskStore` above, whose
+        // state is in memory and therefore genuinely must be one object.
+        let channelStateStore = ChannelRuntimeStateStore(
+            fileURL: configuration.dataDirectory.appendingPathComponent("channel_runtime_state.json")
+        )
+        let resolvedChannelsConfigURL = configuration.channelsConfigURL
+            ?? configuration.dataDirectory.appendingPathComponent("channels.json")
+        // Closed below, once the listener registry exists. A lifecycle decision that only persists
+        // and never reaches the running process would report a pause that has not happened.
+        let channelApplier = ChannelLifecycleApplierHolder()
+        // The one registration endpoint. Every create/update/delete for a trigger — agent tool,
+        // file drop, installer, and (from phase 3) slash/CLI/HTTP — goes through this value.
+        let registration = TriggerRegistrationService(
+            store: taskStore,
+            sessionStore: sessionTaskStore,
+            webhookRoutes: routeStore,
+            channelState: channelStateStore,
+            channelConfigURL: resolvedChannelsConfigURL,
+            channelApply: channelApplier,
+            tenancy: scheduleToolPorts.tenancyPolicy,
+            auditLog: auditLog,
+            logger: logger
+        )
         let lockURL = configuration.dataDirectory.appendingPathComponent("scheduler.lock")
         let memoryConfig = MemoryConfiguration.default
         let dreamingBridge = MemoryDreamingBridge(config: memoryConfig, logger: logger)
@@ -269,26 +379,24 @@ public enum TriggersRuntimeWiring {
         )
         let scheduler = TriggerSchedulerService(
             store: taskStore,
+            sessionStore: sessionTaskStore,
             deliver: dreamingDeliver,
             lockURL: lockURL,
             config: TriggerSchedulerConfiguration(lockIdentity: configuration.schedulerIdentity),
             taskRuns: taskRuns,
             logger: logger
         )
-        // Permanent system cron — installer path only (`allowPermanent` via scanner on store upsert).
+        // Permanent system cron — installer authority only, and write-if-missing so a user deletion
+        // is not resurrected on the next boot.
         do {
             try MemoryDreamingCronInstaller.ensureInstalled(
-                store: taskStore,
+                registration: registration,
                 config: memoryConfig,
                 logger: logger
             )
         } catch {
             logger.error("[Dreaming] failed to install dream cron: \(error.localizedDescription)")
         }
-        let dynamicStore = WebhookDynamicRouteStore(
-            fileURL: configuration.dataDirectory.appendingPathComponent("webhook_subscriptions.json")
-        )
-        let routeStore = WebhookRouteStore(staticRoutes: configuration.staticWebhookRoutes, dynamicStore: dynamicStore)
         let resolvedEventsDirectory = configuration.eventsDirectory
             ?? FileEventQueueLayout.resolveEventsDirectory(dataDirectory: configuration.dataDirectory)
         let channelIngress = ChannelIngressAdapter(dispatch: dispatch)
@@ -300,14 +408,24 @@ public enum TriggersRuntimeWiring {
             channelRunStreaming: channelRunStreamingHolder,
             logger: logger,
             enabled: configuration.channelListenersEnabled,
-            configURL: configuration.channelsConfigURL
+            configURL: resolvedChannelsConfigURL,
+            runtimeState: channelStateStore
         )
+        // Close the late-bound edge: a persisted lifecycle decision now reaches the live listeners.
+        channelApplier.install { [channelRegistry] in
+            await channelRegistry.reconcile()
+        }
         if let hub = configuration.conversationEventsHub, let channelRunStreamingHolder {
             channelRunStreamingHolder.install(
                 ChannelRunStreamingService(
                     hub: hub,
+                    // `outboundPlugin`, not `plugin`: this decides whether a turn may open a stream
+                    // to the channel, and the answer is "only while its listener is running" — the
+                    // same question `syncOutbound` asks. With the weaker lookup, a turn starting at
+                    // the moment `withdrawOutbound` was tearing streams down could slip a new one in
+                    // behind the teardown and stream to a paused channel anyway.
                     pluginLookup: { channel in
-                        await channelRegistry.plugin(for: channel)
+                        await channelRegistry.outboundPlugin(for: channel)
                     },
                     lifecycleCoordinator: channelSessionLifecycleCoordinator
                 )
@@ -331,9 +449,13 @@ public enum TriggersRuntimeWiring {
         )
         let scheduleDataService = ScheduledTaskToolDataService(
             scheduler: scheduler,
+            registration: registration,
             catalogPort: scheduleToolPorts.catalogPort,
-            tenancyPolicy: scheduleToolPorts.tenancyPolicy
+            tenancyPolicy: scheduleToolPorts.tenancyPolicy,
+            channelRegistry: channelRegistry
         )
+        let webhookTools = WebhookToolProvider(dataService: scheduleDataService)
+        let channelTools = ChannelToolProvider(dataService: scheduleDataService)
         let scheduleTools = ScheduleToolProvider(
             dataService: scheduleDataService,
             resolveHostTrigger: resolveHostTrigger
@@ -341,7 +463,7 @@ public enum TriggersRuntimeWiring {
         let fileEventQueue = FileEventQueueService(
             eventsDirectory: resolvedEventsDirectory,
             dispatch: dispatch,
-            taskStore: taskStore,
+            registration: registration,
             logger: logger,
             enabled: configuration.fileEventQueueEnabled
         )
@@ -351,6 +473,12 @@ public enum TriggersRuntimeWiring {
             auditLog: auditLog,
             logger: logger
         )
+        // Late-bound: the router needs the dispatch service, which needs the activation policy,
+        // which needs the gate. Every rung notifies — a trigger the user registered is a standing
+        // instruction, and making it silently stop firing is a correctness bug in a cost costume.
+        budgetNotifier.install { [outputRouter] notice in
+            await outputRouter.deliverBudgetNotice(notice)
+        }
         let delegatedCompletionHandoff = TriggerDelegatedCompletionHandoff(
             runRegistry: runRegistry,
             outputRouter: outputRouter,
@@ -360,10 +488,13 @@ public enum TriggersRuntimeWiring {
         )
         return TriggersRuntimeBundle(
             dispatch: dispatch,
+            registration: registration,
             scheduler: scheduler,
             webhookAdapter: webhookAdapter,
             webhookRouteStore: routeStore,
             scheduleTools: scheduleTools,
+            webhookTools: webhookTools,
+            channelTools: channelTools,
             fileEventQueue: fileEventQueue,
             replay: replay,
             channelRegistry: channelRegistry,

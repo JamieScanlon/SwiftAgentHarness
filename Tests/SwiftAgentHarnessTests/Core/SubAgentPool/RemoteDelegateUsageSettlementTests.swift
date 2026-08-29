@@ -5,7 +5,7 @@ import SwiftData
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("Remote delegate usage settlement")
+@Suite("Remote delegate usage settlement", .serialized)
 struct RemoteDelegateUsageSettlementTests {
     actor MockACPStreamClientWithUsage: ACPAgentStreamClient {
         var agentInfo: ACPImplementation?
@@ -89,7 +89,7 @@ struct RemoteDelegateUsageSettlementTests {
         )
 
         var settledCost: Double?
-        for _ in 0 ..< 100 {
+        for _ in 0 ..< 300 {
             settledCost = await ledger.projectedCostUSD(conversationID: parentConversationID)
             if settledCost == 0.0125 {
                 break

@@ -16,7 +16,8 @@ struct FileEventConsumePipelineTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             count += 1
         }
@@ -33,7 +34,8 @@ struct FileEventConsumePipelineTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             lastTrust = inputTrustRaw
         }
@@ -97,7 +99,7 @@ struct FileEventConsumePipelineTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: AlwaysNewDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))

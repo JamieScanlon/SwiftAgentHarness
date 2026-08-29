@@ -32,7 +32,10 @@ struct ModeRegistryTests {
             "memory-extraction",
             "memory-pre-compaction-flush",
             "plan",
+            "subagent-explore",
+            "subagent-general",
             "subagent-minimal",
+            "subagent-plan",
             "trigger-delegate",
             "trigger-host",
         ])
@@ -223,14 +226,17 @@ struct ModeRegistryTests {
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: config)
         let diagnostics = await registry.configurationDiagnostics()
         #expect(diagnostics.contains("modeProfiles[x] invalid interactionMode"))
-        #expect(await registry.registeredModeIDs() == [
+        #expect(await registry.registeredModeIDs().sorted() == [
             "agent",
             "chat",
             "memory-active-recall",
             "memory-extraction",
             "memory-pre-compaction-flush",
             "plan",
+            "subagent-explore",
+            "subagent-general",
             "subagent-minimal",
+            "subagent-plan",
             "trigger-delegate",
         ])
     }

@@ -26,9 +26,16 @@ enum HarnessEmbeddedMutation {
         enableAgents: Bool,
         originSurface: String?,
         originSenderID: String?,
+        originSenderIsOwner: Bool? = nil,
         session: EmbeddedHarnessAPISession = EmbeddedHarnessAPISession(),
         fallbackRuntime: (any APILayerChatRuntimeManaging)? = nil
     ) async throws {
+        // Only a *negative* verdict crosses the transport. The loopback client serializes this into
+        // a `ChatRequest` body, which is indistinguishable from any other caller's body at the REST
+        // boundary, so an affirmative claim would be forgeable. `false` becomes a self-restriction
+        // the receiver can safely honor; `true`/`nil` assert nothing and let the REST side resolve
+        // ownership from the authenticated principal instead.
+        let senderIsNonOwner: Bool? = originSenderIsOwner == false ? true : nil
         let resolvedSession = embeddedAPISession(defaultSession: session)
         if let transport = await currentTransport() {
             var messageText = text
@@ -53,7 +60,8 @@ enum HarnessEmbeddedMutation {
                 inputTrust: inputTrustRaw,
                 ifMatch: ifMatch,
                 originSurface: originSurface,
-                originSenderID: originSenderID
+                originSenderID: originSenderID,
+                originSenderIsNonOwner: senderIsNonOwner
             )
         )
             return
@@ -72,7 +80,10 @@ enum HarnessEmbeddedMutation {
             resolvedInputTrustClass: resolvedInputTrustClass,
             systemReminder: systemReminder,
             originSurface: originSurface,
-            originSenderID: originSenderID
+            originSenderID: originSenderID,
+            // In-process: nothing is serialized, so the verdict travels intact rather than being
+            // narrowed to a self-restriction.
+            originSenderIsOwner: originSenderIsOwner
         )
     }
 

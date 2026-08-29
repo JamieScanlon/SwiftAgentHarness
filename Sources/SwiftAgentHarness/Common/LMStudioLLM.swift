@@ -399,8 +399,15 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     return
                 }
                 
-                self.logger?.warning("Stream ended with no content received")
-                continuation.finish()
+                // Finishing silently here would end the turn with neither a `.complete` nor an
+                // error — the DEF-135 shape one level up from an empty success.
+                let failure = DegenerateStreamError(
+                    kind: .noOutcome,
+                    provider: "LMStudio",
+                    detail: "LMStudio stream ended with no content, tool calls, or finish reason"
+                )
+                self.logger?.error("\(failure.detail)")
+                emitter.finishFailed(with: failure)
             }
         }
     }
@@ -1068,18 +1075,8 @@ private struct LMStudioTool: Codable {
 private struct LMStudioFunction: Codable {
     let name: String
     let description: String
-    let parameters: LMStudioParameters
-}
-
-private struct LMStudioParameters: Codable {
-    let type: String
-    let properties: [String: LMStudioProperty]
-    let required: [String]
-}
-
-private struct LMStudioProperty: Codable {
-    let type: String
-    let description: String
+    /// Full JSON Schema tree (preserves nested fields such as `items`, `enum`, nested `properties`).
+    let parameters: JSON
 }
 
 private struct LMStudioChatResponse: Codable {
@@ -1148,57 +1145,59 @@ private struct LMStudioUsage: Codable {
 // MARK: - Extension for ToolDefinition
 
 extension ToolDefinition {
-    fileprivate func toLMStudioParameters(parameterSchema: JSON? = nil) -> LMStudioParameters {
-        if let parameterSchema,
-           case .object(let root) = parameterSchema,
-           case .object(let props) = root["properties"] ?? .object([:]) {
-            var properties: [String: LMStudioProperty] = [:]
-            for (name, value) in props {
-                guard case .object(let field) = value else { continue }
-                let type: String
-                if case .string(let typeString) = field["type"] {
-                    type = typeString
-                } else {
-                    type = "string"
+    /// Builds the LM Studio `parameters` JSON Schema, preferring the full
+    /// provider-normalized schema when present and ensuring every `type: "array"`
+    /// node has an `items` schema (gpt-oss and similar Jinja templates require it).
+    fileprivate func toLMStudioParameters(parameterSchema: JSON? = nil) -> JSON {
+        let schema: JSON
+        if let parameterSchema {
+            schema = parameterSchema
+        } else {
+            var properties: [String: JSON] = [:]
+            var required: [JSON] = []
+            for param in parameters {
+                properties[param.name] = .object([
+                    "type": .string(param.type),
+                    "description": .string(param.description),
+                ])
+                if param.required {
+                    required.append(.string(param.name))
                 }
-                let description: String
-                if case .string(let descriptionString) = field["description"] {
-                    description = descriptionString
-                } else {
-                    description = ""
-                }
-                properties[name] = LMStudioProperty(type: type, description: description)
             }
-            let required = (root["required"] ?? .array([])).arrayElements.compactMap { value in
-                if case .string(let name) = value { return name }
-                return nil
-            }
-            return LMStudioParameters(type: "object", properties: properties, required: required)
+            schema = .object([
+                "type": .string("object"),
+                "properties": .object(properties),
+                "required": .array(required),
+            ])
         }
-        var properties: [String: LMStudioProperty] = [:]
-        var required: [String] = []
-        
-        for param in parameters {
-            properties[param.name] = LMStudioProperty(
-                type: param.type,
-                description: param.description
-            )
-            if param.required {
-                required.append(param.name)
-            }
-        }
-        
-        return LMStudioParameters(
-            type: "object",
-            properties: properties,
-            required: required
-        )
+        return ensureLMStudioArrayItemsDefaults(schema)
     }
 }
 
-private extension JSON {
-    var arrayElements: [JSON] {
-        if case .array(let values) = self { return values }
-        return []
+/// Recursively ensures every JSON Schema object with `type: "array"` has an
+/// `items` schema. When missing, defaults to `{"type":"string"}` so chat
+/// templates that truth-check `param_spec['items']` do not resolve the map's
+/// `.items` method.
+private func ensureLMStudioArrayItemsDefaults(_ json: JSON) -> JSON {
+    switch json {
+    case .object(var object):
+        if case .string("array") = object["type"], object["items"] == nil {
+            object["items"] = .object(["type": .string("string")])
+        }
+        if let properties = object["properties"], case .object(let props) = properties {
+            var rewritten: [String: JSON] = [:]
+            for (name, value) in props {
+                rewritten[name] = ensureLMStudioArrayItemsDefaults(value)
+            }
+            object["properties"] = .object(rewritten)
+        }
+        if let items = object["items"] {
+            object["items"] = ensureLMStudioArrayItemsDefaults(items)
+        }
+        return .object(object)
+    case .array(let values):
+        return .array(values.map(ensureLMStudioArrayItemsDefaults))
+    default:
+        return json
     }
 }

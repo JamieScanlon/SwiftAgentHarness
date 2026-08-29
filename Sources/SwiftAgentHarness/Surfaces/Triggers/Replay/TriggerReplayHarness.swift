@@ -99,7 +99,7 @@ enum TriggerReplayHarness {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: ReplayHarnessDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 10_000),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 10_000),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 10_000),
             auditLog: TriggerAuditLog(logger: resolved)
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: createConversation))
@@ -154,6 +154,7 @@ struct ReplayStdoutRuntime: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }

@@ -185,6 +185,21 @@ extension AgentRuntimeSessionService {
         sessionState.lastTopicRefreshOrchestrationSnapshot = snapshot
     }
 
+    func lastPublishedSubAgentActivityPhase(conversationID: UUID) -> ConversationSubAgentActivityPhase {
+        sessionState.lastPublishedSubAgentActivityPhaseByConversationID[conversationID] ?? .idle
+    }
+
+    func setLastPublishedSubAgentActivityPhase(
+        _ phase: ConversationSubAgentActivityPhase,
+        conversationID: UUID
+    ) {
+        if phase == .idle {
+            sessionState.lastPublishedSubAgentActivityPhaseByConversationID.removeValue(forKey: conversationID)
+        } else {
+            sessionState.lastPublishedSubAgentActivityPhaseByConversationID[conversationID] = phase
+        }
+    }
+
     func orchestrationStateTopicRefreshHandler() -> (@Sendable (UUID, ConversationOrchestrationState) async -> Void)? {
         sessionState.orchestrationStateTopicRefreshHandler
     }

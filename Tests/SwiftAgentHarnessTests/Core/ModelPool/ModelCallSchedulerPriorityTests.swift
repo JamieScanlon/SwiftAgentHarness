@@ -10,14 +10,14 @@ private actor PriorityCollector {
     }
 }
 
-@Suite("ModelCallScheduler priority")
+@Suite("ModelCallScheduler priority", .serialized)
 struct ModelCallSchedulerPriorityTests {
     private func waitForQueueState(
         scheduler: ModelCallScheduler,
         foreground: Int,
         background: Int,
-        timeoutMS: Int = 1_500
-    ) async {
+        timeoutMS: Int = 10_000
+    ) async -> Bool {
         let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1_000.0)
         while Date() < deadline {
             let snapshot = await scheduler.poolHealthSnapshot()
@@ -25,10 +25,11 @@ struct ModelCallSchedulerPriorityTests {
             let hasForeground = (byPriority?.foreground ?? snapshot.queueDepth) >= foreground
             let hasBackground = (byPriority?.background ?? 0) >= background
             if hasForeground && hasBackground {
-                return
+                return true
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
+        return false
     }
 
     // MARK: - Pure helper
@@ -120,14 +121,14 @@ struct ModelCallSchedulerPriorityTests {
             await scheduler.release(for: modelID)
         }
         // Ensure background enqueues first.
-        await waitForQueueState(scheduler: scheduler, foreground: 0, background: 1)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 0, background: 1))
 
         let fgTask = Task {
             await scheduler.acquire(for: modelID, priority: .foreground)
             await order.record("fg")
             await scheduler.release(for: modelID)
         }
-        await waitForQueueState(scheduler: scheduler, foreground: 1, background: 1)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 1, background: 1))
 
         // Release the in-flight slot; foreground should resume first because background is well under grace.
         await scheduler.release(for: modelID)
@@ -152,13 +153,13 @@ struct ModelCallSchedulerPriorityTests {
             await order.record("fg1")
             await scheduler.release(for: modelID)
         }
-        await waitForQueueState(scheduler: scheduler, foreground: 1, background: 0)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 1, background: 0))
         let second = Task {
             await scheduler.acquire(for: modelID, priority: .foreground)
             await order.record("fg2")
             await scheduler.release(for: modelID)
         }
-        await waitForQueueState(scheduler: scheduler, foreground: 2, background: 0)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 2, background: 0))
 
         await scheduler.release(for: modelID)
         await first.value
@@ -182,7 +183,7 @@ struct ModelCallSchedulerPriorityTests {
             await order.record("bg")
             await scheduler.release(for: modelID)
         }
-        await waitForQueueState(scheduler: scheduler, foreground: 0, background: 1)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 0, background: 1))
         // Let background sit in the queue past the grace window.
         try await Task.sleep(for: .milliseconds(250))
 
@@ -191,7 +192,7 @@ struct ModelCallSchedulerPriorityTests {
             await order.record("fg")
             await scheduler.release(for: modelID)
         }
-        await waitForQueueState(scheduler: scheduler, foreground: 1, background: 1)
+        #expect(await waitForQueueState(scheduler: scheduler, foreground: 1, background: 1))
 
         await scheduler.release(for: modelID)
         await bgTask.value

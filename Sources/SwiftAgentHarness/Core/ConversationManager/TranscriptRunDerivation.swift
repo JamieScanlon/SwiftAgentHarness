@@ -109,7 +109,13 @@ enum TranscriptRunDerivation {
                   let runID = audit.runID,
                   let usage = audit.usage
             else { continue }
-            guard audit.name == .toolCompletionAnnounced || audit.name == .toolCallCompleted else {
+            // `.modelCallCompleted` is the main agent loop's own spend. Before it was counted here,
+            // a run's cost was whatever its sub-agents reported and nothing else, so a conversation
+            // that never delegated rolled up to `$0` however much it actually cost.
+            guard audit.name == .toolCompletionAnnounced
+                || audit.name == .toolCallCompleted
+                || audit.name == .modelCallCompleted
+            else {
                 continue
             }
 

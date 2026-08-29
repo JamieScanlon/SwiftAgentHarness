@@ -60,6 +60,22 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
     public var ephemeralSystemReminder: String?
     public var originSurface: String?
     public var originSenderID: String?
+    /// Whether the human who produced this turn is the conversation's owner.
+    ///
+    /// Carries the *verdict*, not the identity: channels match a `primaryUser` string while the API
+    /// layer compares an account UUID, and reconciling those units inside the policy evaluator would
+    /// re-import that problem at the worst layer. One bit, computed by whoever already knows.
+    ///
+    /// `nil` means **no ownership claim was made**, which covers two cases: the surface has no
+    /// sender concept (a local CLI turn, an installer path, a scheduled fire with no human), or the
+    /// surface could not resolve one (an unreadable conversation row). Both are treated
+    /// permissively — policy treats `nil` and `true` alike, and only `false` denies — because
+    /// treating absence as non-ownership would deny control-plane tools in every deployment that
+    /// isn't channel-backed, which is the common case.
+    ///
+    /// The bit is only ever set to `false` by a surface that genuinely knows the answer. That is
+    /// what makes failing open safe here.
+    public var originSenderIsOwner: Bool?
     public var turnThinkingOverride: ThinkingConfig?
     public var turnModelSlug: String?
     public var runLaneOrigin: RunLaneOriginKind
@@ -77,6 +93,7 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         ephemeralSystemReminder: String? = nil,
         originSurface: String? = nil,
         originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil,
         turnThinkingOverride: ThinkingConfig? = nil,
         turnModelSlug: String? = nil,
         runLaneOrigin: RunLaneOriginKind = .interactive
@@ -93,6 +110,7 @@ public struct AgentRuntimeTurnConfiguration: Sendable {
         self.ephemeralSystemReminder = ephemeralSystemReminder
         self.originSurface = originSurface
         self.originSenderID = originSenderID
+        self.originSenderIsOwner = originSenderIsOwner
         self.turnThinkingOverride = turnThinkingOverride
         self.turnModelSlug = turnModelSlug
         self.runLaneOrigin = runLaneOrigin

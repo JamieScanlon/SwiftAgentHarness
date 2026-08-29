@@ -24,6 +24,13 @@ extension AgentRuntimeSessionService: AgentRuntimeCoordinatorServicing {
                 recentMessages: recentMessages
             )
         )
+        // No-op unless this conversation is a spawned sub-agent child; when it is, the run just
+        // ended, so its run-lane slot is released here rather than waiting for whoever spawned it
+        // to write a terminal lifecycle row.
+        await subAgentSpawnServiceForRuntime()?.finishSubAgentLifecycleForEndedChildRun(
+            childConversationID: conversationID,
+            terminalReason: terminalReason
+        )
     }
 
     func makeTerminationRecoveryReminderMessage(

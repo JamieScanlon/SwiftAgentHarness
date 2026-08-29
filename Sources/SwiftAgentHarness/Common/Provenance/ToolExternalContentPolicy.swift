@@ -8,7 +8,10 @@ struct ToolExternalContentDecision: Sendable, Equatable {
 }
 
 enum ToolExternalContentPolicy {
-    private static let exemptTools: Set<String> = [
+    private static let exemptTools: Set<String> = baseExemptTools
+        .union(ToolControlPlaneClassification.TriggerTools.statusOnlyResults)
+
+    private static let baseExemptTools: Set<String> = [
         TerminationToolProvider.finishToolName,
         TerminationToolProvider.askUserToolName,
         TerminationToolProvider.thinkToolName,
@@ -28,10 +31,6 @@ enum ToolExternalContentPolicy {
         WorkspaceFilesystemToolProvider.writeFileToolName,
         WorkspaceFilesystemToolProvider.editFileToolName,
         WorkspaceFilesystemToolProvider.processSendKeysToolName,
-        "schedule_create",
-        "schedule_list",
-        "schedule_delete",
-        "schedule_fire_now",
         ContextCompactionToolProvider.compactConversationToolName,
         "activate_skill",
         "list_skills",

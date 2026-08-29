@@ -89,6 +89,10 @@ actor RuntimeLifecyclePublicationService {
             || payload.name == .toolApprovalRequired
             || payload.name == .toolApprovalResolved
             || payload.name == .toolElevatedExecuted
+            // A main-loop completion, admitted only when it actually carries usage — the event also
+            // fires for every unmetered completion, and persisting a usage-less audit row per model
+            // call would triple the derived-event volume for nothing.
+            || (payload.name == .modelCallCompleted && payload.usage != nil)
         else {
             return
         }

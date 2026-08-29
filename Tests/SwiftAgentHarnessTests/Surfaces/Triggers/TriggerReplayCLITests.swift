@@ -80,7 +80,7 @@ struct TriggerReplayCLITests {
             recurring: true
         )
         let store = ScheduledTaskStore(fileURL: dataDir.appendingPathComponent("scheduled_tasks.json"))
-        _ = try store.upsert(task)
+        _ = try TriggerRegistrationTestSupport.register(task, into: store)
         let code = TriggerReplayCLI.execute(arguments: [
             "host", "trigger", "cron", "fire", "task-cli-1",
             "--data-directory", dataDir.path,

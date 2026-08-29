@@ -137,6 +137,54 @@ struct RetryingLLMStreamTests {
         #expect(calls == 1) // no retry once consumer saw first chunk
     }
 
+    @Test("Degenerate stream with no partials retries: classified transient")
+    func degenerateStreamPreFirstChunkRetries() async throws {
+        let stub = ScriptedStreamLLM(scripts: [
+            .throwBeforeFirstChunk(error: DegenerateStreamError(
+                kind: .noEvents,
+                provider: "Anthropic",
+                detail: "Anthropic stream completed with no SSE events"
+            )),
+            .successYieldThenComplete(partials: ["hello "], finalText: "hello world"),
+        ])
+        let retry = RetryingLLM(base: stub, policy: Self.fastPolicy, logger: nil)
+
+        let result = try await Self.collect(retry.stream([], config: LLMRequestConfig()))
+
+        #expect(result.final == "hello world")
+        let calls = await stub.observedStreamCalls()
+        #expect(calls == 2)
+    }
+
+    @Test("Degenerate stream after a partial does not retry: the firstYielded guard outranks transient")
+    func degenerateStreamAfterPartialDoesNotRetry() async throws {
+        let stub = ScriptedStreamLLM(scripts: [
+            .yieldThenThrow(firstPartial: "I can see the ", error: DegenerateStreamError(
+                kind: .announcedToolCallLost,
+                provider: "Anthropic",
+                detail: "Anthropic stream announced 1 tool_use content block(s) but assembled 0 tool call(s)"
+            )),
+            // Would only run on a retry — re-issuing here would duplicate the emitted text.
+            .successYieldThenComplete(partials: ["duplicate"], finalText: "duplicate"),
+        ])
+        let retry = RetryingLLM(base: stub, policy: Self.fastPolicy, logger: nil)
+
+        var partials: [String] = []
+        var thrown: Error?
+        do {
+            for try await result in retry.stream([], config: LLMRequestConfig()) {
+                if case .stream(let p) = result { partials.append(p.content) }
+            }
+        } catch {
+            thrown = error
+        }
+
+        #expect(partials == ["I can see the "])
+        #expect(thrown is DegenerateStreamError)
+        let calls = await stub.observedStreamCalls()
+        #expect(calls == 1)
+    }
+
     @Test("Terminal pre-first-chunk error does not retry")
     func terminalPreFirstChunkNoRetry() async throws {
         let stub = ScriptedStreamLLM(scripts: [

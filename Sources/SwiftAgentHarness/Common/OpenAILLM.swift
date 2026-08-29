@@ -175,6 +175,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     self.logOpenAIRequestPayloadIfDebug(query: query)
                     
                     var fullContent = ""
+                    var sawReasoning = false
                     var accumulator = ToolCallAccumulator()
                     var usage: ChatResult.CompletionUsage?
                     var finishReason: String?
@@ -188,6 +189,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                         }
                         let delta = result.choices.first?.delta
                         if let reasoning = delta?.reasoning, !reasoning.isEmpty {
+                            sawReasoning = true
                             emitter.yield(
                                 .thinkingDelta(reasoning),
                                 availableTools: config.availableTools
@@ -258,6 +260,17 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     }()
                     let metadata = openAIMetadata(usage: usage, config: config, finishReason: storedFinishReason)
                     let toolCalls = accumulator.finalize()
+                    if let failure = DegenerateResponseGuard.failure(
+                        provider: "OpenAI",
+                        text: fullContent,
+                        toolCalls: toolCalls,
+                        sawReasoning: sawReasoning,
+                        providerReportedStop: finishReason != nil
+                    ) {
+                        self.logger?.error("\(failure.detail)")
+                        emitter.finishFailed(with: failure)
+                        return
+                    }
                     self.logLLMResponsePayloadIfDebug(
                         LLMResponse.llmResponse(from: fullContent, availableTools: config.availableTools)
                             .appending(toolCalls: toolCalls)

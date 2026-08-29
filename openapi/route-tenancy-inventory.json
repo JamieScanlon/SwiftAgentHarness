@@ -356,6 +356,34 @@
       "tenancy_guard": "conversationAccess",
       "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
       "handler_anchor": "resolveExecApprovalViaREST"
+    },
+    {
+      "method": "GET",
+      "path": "/api/channels",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Surfaces/Triggers/HTTP/TriggerChannelAdminRouteRegistrar.swift",
+      "handler_anchor": "channelsPath.get {"
+    },
+    {
+      "method": "GET",
+      "path": "/api/channels/{channel}",
+      "tenancy_guard": "none",
+      "source_file": "Sources/SwiftAgentHarness/Surfaces/Triggers/HTTP/TriggerChannelAdminRouteRegistrar.swift",
+      "handler_anchor": "channelsPath.get(\":channel\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/channels/{channel}/pause",
+      "tenancy_guard": "createMutation",
+      "source_file": "Sources/SwiftAgentHarness/Surfaces/Triggers/HTTP/TriggerChannelAdminRouteRegistrar.swift",
+      "handler_anchor": "channelsPath.post(\":channel\", \"pause\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/channels/{channel}/resume",
+      "tenancy_guard": "createMutation",
+      "source_file": "Sources/SwiftAgentHarness/Surfaces/Triggers/HTTP/TriggerChannelAdminRouteRegistrar.swift",
+      "handler_anchor": "channelsPath.post(\":channel\", \"resume\")"
     }
   ]
 }

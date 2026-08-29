@@ -34,7 +34,7 @@ public final class FileDiffViewComponent: TUIComponent {
 
     public func render(width: Int) -> [String] {
         var lines: [String] = []
-        lines.append(ANSIStyle.finishLine(ANSIStyle.bold("📄 \(filePath)")))
+        lines.append(ANSIStyle.finishLine(ANSITruncate.truncate(ANSIStyle.bold("📄 \(filePath)"), toWidth: width)))
         for hunk in hunks {
             let header = "@@ -\(hunk.oldStart) +\(hunk.newStart) @@"
             lines.append(ANSIStyle.finishLine(ANSIStyle.dim(ANSITruncate.truncate(header, toWidth: width))))

@@ -15,7 +15,8 @@ struct TriggerWorkflowIntegrationTests {
             enableTools: Bool,
             enableAgents: Bool,
             originSurface: String?,
-            originSenderID: String?
+            originSenderID: String?,
+            originSenderIsOwner: Bool?
         ) async throws {}
     }
 
@@ -40,7 +41,7 @@ struct TriggerWorkflowIntegrationTests {
             activationPolicy: TriggerActivationPolicy(
                 idempotency: TriggerIdempotencyGate(dedupe: LocalDedupe()),
                 rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-                costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+                initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
                 auditLog: auditLog
             ),
             sessionRouter: TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() })),
@@ -57,20 +58,22 @@ struct TriggerWorkflowIntegrationTests {
             correlation: .root(triggerID: "delivery-webhook-1")
         )
         _ = try await dispatch.ingest(webhookTrigger)
+        let taskStore = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
         let scheduler = TriggerSchedulerService(
-            store: ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json")),
+            store: taskStore,
             dispatch: dispatch,
             lockURL: tmp.appendingPathComponent("lock.json"),
             logger: Logger(label: "test")
         )
-        let savedTask = try await scheduler.createTask(
-            ScheduledTask(
+        let savedTask = try TriggerRegistrationTestSupport.service(store: taskStore).registerSchedule(
+            ScheduleRegistrationSpec(
                 schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
                 payloadKind: .agentTurn,
                 payloadText: "follow up later",
                 recurring: false,
                 correlation: .child(parent: webhookTrigger, followUpKind: "scheduled")
-            )
+            ),
+            authority: .localFileDrop()
         )
         let fireResult = try await scheduler.fireNow(id: savedTask.id)
         #expect(fireResult.decision == .admitted)

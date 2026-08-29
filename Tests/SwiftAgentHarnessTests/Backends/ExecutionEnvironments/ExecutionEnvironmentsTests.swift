@@ -366,35 +366,36 @@ struct WorkspaceMirrorOpenShellTests {
 
     @Test("finalizeExec syncs mirror workspace after completed exec")
     func finalizeExecSyncAfter() async throws {
-        await WorkspaceMirrorSync.shared.resetForTesting()
-        let host = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mirror-host-\(UUID().uuidString)", isDirectory: true)
-        let mirror = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mirror-copy-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: mirror, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.removeItem(at: host)
-            try? FileManager.default.removeItem(at: mirror)
-        }
-        try "host".write(to: host.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
-        final class RecordingRunner: WorkspaceMirrorSyncRunning, @unchecked Sendable {
-            private let lock = NSLock()
-            private var _calls: [String] = []
-            var calls: [String] {
-                lock.withLock { _calls }
+        try await WorkspaceMirrorSyncTestIsolation.withExclusiveAccess {
+            let host = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mirror-host-\(UUID().uuidString)", isDirectory: true)
+            let mirror = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mirror-copy-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: mirror, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.removeItem(at: host)
+                try? FileManager.default.removeItem(at: mirror)
             }
-            func run(argv: [String]) async throws -> ShellProcessRunner.RunResult {
-                lock.withLock { _calls.append(argv.joined(separator: " ")) }
-                return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
+            try "host".write(to: host.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+            final class RecordingRunner: WorkspaceMirrorSyncRunning, @unchecked Sendable {
+                private let lock = NSLock()
+                private var _calls: [String] = []
+                var calls: [String] {
+                    lock.withLock { _calls }
+                }
+                func run(argv: [String]) async throws -> ShellProcessRunner.RunResult {
+                    lock.withLock { _calls.append(argv.joined(separator: " ")) }
+                    return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
+                }
             }
+            let runner = RecordingRunner()
+            await WorkspaceMirrorSync.shared.setRunnerForTesting(runner)
+            try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: host.path, mirrorRoot: mirror.path)
+            try await WorkspaceMirrorSync.shared.syncAfter(hostRoot: host.path, mirrorRoot: mirror.path)
+            #expect(runner.calls.count == 2)
+            #expect(runner.calls[0].contains("rsync"))
+            #expect(runner.calls[1].contains("rsync"))
         }
-        let runner = RecordingRunner()
-        await WorkspaceMirrorSync.shared.setRunnerForTesting(runner)
-        try await WorkspaceMirrorSync.shared.syncBefore(hostRoot: host.path, mirrorRoot: mirror.path)
-        try await WorkspaceMirrorSync.shared.syncAfter(hostRoot: host.path, mirrorRoot: mirror.path)
-        #expect(runner.calls.count == 2)
-        #expect(runner.calls[0].contains("rsync"))
-        #expect(runner.calls[1].contains("rsync"))
     }
 }

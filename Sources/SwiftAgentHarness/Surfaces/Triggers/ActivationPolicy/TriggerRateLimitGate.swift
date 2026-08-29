@@ -10,10 +10,13 @@ actor TriggerRateLimitGate {
         self.maxPerWindow = maxPerWindow
     }
 
-    func isRateLimited(key: String, now: Date = Date()) -> Bool {
+    /// `limit` overrides the gate default for this key — that is how a webhook route's
+    /// `rateLimitPerMin` reaches the gate. It was a declared field with no wiring until now.
+    func isRateLimited(key: String, limit: Int? = nil, now: Date = Date()) -> Bool {
         let cutoff = now.addingTimeInterval(-windowSeconds)
+        let effectiveLimit = limit.map { max(1, $0) } ?? maxPerWindow
         var hits = (buckets[key] ?? []).filter { $0 > cutoff }
-        if hits.count >= maxPerWindow {
+        if hits.count >= effectiveLimit {
             buckets[key] = hits
             return true
         }

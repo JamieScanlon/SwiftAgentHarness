@@ -100,7 +100,11 @@ extension SlashCommandDispatchService {
         )
     }
 
-    private func execApprovalResolverContext(conversationID: UUID) async -> (
+    /// Scope / tenancy / owner triple a surface needs to call
+    /// ``ExecApprovalInbound/resolve(approvalID:actionID:scope:strictTenancy:ownerScope:store:reason:)``.
+    /// Internal rather than private so in-process surfaces can resolve a decision without
+    /// reimplementing tenancy resolution.
+    func execApprovalResolverContext(conversationID: UUID) async -> (
         scope: ExecApprovalScope,
         strictTenancy: Bool,
         ownerScope: UUID?

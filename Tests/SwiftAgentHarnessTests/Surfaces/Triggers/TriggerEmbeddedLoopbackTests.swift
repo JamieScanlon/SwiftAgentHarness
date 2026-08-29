@@ -55,7 +55,8 @@ struct TriggerEmbeddedLoopbackTests {
       enableTools: false,
       enableAgents: false,
       originSurface: "cron",
-      originSenderID: "job-1"
+      originSenderID: "job-1",
+      originSenderIsOwner: nil
     )
 
     let messages = try await runtimeSession.listMessages(conversationID: conversationID)

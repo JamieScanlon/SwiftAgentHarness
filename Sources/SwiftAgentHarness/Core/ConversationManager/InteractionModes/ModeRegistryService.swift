@@ -445,6 +445,17 @@ public actor ModeRegistryService {
         if o.keys.contains("stopOnApprovalRequest"), let b = o.optionalBool(for: "stopOnApprovalRequest") {
             copy.stopOnApprovalRequest = b
         }
+        if o.keys.contains("resumesOnDelegateCompletion") {
+            if let b = o.optionalBool(for: "resumesOnDelegateCompletion") {
+                copy.resumesOnDelegateCompletion = b
+            } else {
+                // Silently ignoring a typed-wrong value would look like the knob is off, which is
+                // also what the historical default looks like for every non-agent mode.
+                diagnostics.append(
+                    "modeProfiles[\(profileID)].runtime.resumesOnDelegateCompletion must be a boolean"
+                )
+            }
+        }
         if let terminationOverlay = o["termination"]?.objectFields {
             copy.termination = mergeTerminationSlice(
                 parent: copy.termination,
@@ -780,6 +791,35 @@ enum ModeProfileBuiltInCatalog {
         // Suppress (not just empty) the skills + tool-guidance prompt sections so the chat preamble carries no dead tokens.
         let leanMachineContext = ModeProfileContextSlice(includeSkills: false, includeToolGuidance: false)
 
+        // Built-in delegate roles. Read-only enforcement lives in the allow list; the directives
+        // pin the report shape the parent relays.
+        let readOnlySearchTools = ["read_file", "read_attachment", "glob", "grep"]
+        let exploreDirective = """
+        You are a fast, read-only codebase search delegate. You cannot modify anything: file writes, \
+        edits and shell access are withheld at dispatch, so do not attempt them or describe them as \
+        done. Locate what was asked for and report it.
+
+        Answer with the concrete findings — file paths with line numbers, the relevant excerpts, and \
+        a one-line note on why each match matters. Keep it tight; the caller relays your report and \
+        only needs the essentials.
+        """
+        let planDirective = """
+        You are a read-only architect delegate. You cannot modify anything: file writes, edits and \
+        shell access are withheld at dispatch. Investigate, then produce a plan.
+
+        Structure your reply as: the approach and its trade-offs, the risks worth flagging, and a \
+        final section headed "Critical Files for Implementation" listing 3-5 files with one line \
+        each on what must change in them.
+        """
+        let generalPurposeDirective = """
+        You are a general-purpose delegate handling one task in its own context window. Execute \
+        directly rather than delegating further.
+
+        When the task is complete, respond with a concise report covering what was done and any key \
+        findings — the caller relays this to the user, so it only needs the essentials. Derive your \
+        report from what actually happened, never from what you intended to do.
+        """
+
         func memoryChatProfile(
             id: String,
             tools: ModeProfileToolsSlice,
@@ -815,6 +855,52 @@ enum ModeProfileBuiltInCatalog {
                 runtime: ModeProfileRuntimeSlice(maxIterations: 1),
                 subAgents: denyAllSubAgents
             ),
+            ResolvedModeProfile(
+                id: "subagent-explore",
+                interactionMode: .agent,
+                assemblyKind: .agentBuild,
+                allowsProactiveCompactionTriggers: true,
+                appliesAgentBuildOrchestratorHarness: true,
+                builtInSeedVersion: v,
+                semanticLayerTags: [],
+                // Read-only is a dispatch-time guarantee, not a prompt request: `bash` is withheld
+                // because redirects and heredocs would make write-prevention prompt-enforced only.
+                tools: ModeProfileToolsSlice(allow: readOnlySearchTools, deny: []),
+                skills: ModeProfileSkillsSlice(allow: []),
+                context: ModeProfileContextSlice(
+                    modeDirective: exploreDirective,
+                    includeSkills: false,
+                    omitWorkspaceConventions: true
+                ),
+                subAgents: denyAllSubAgents
+            ),
+            ResolvedModeProfile(
+                id: "subagent-plan",
+                interactionMode: .agent,
+                assemblyKind: .agentBuild,
+                allowsProactiveCompactionTriggers: true,
+                appliesAgentBuildOrchestratorHarness: true,
+                builtInSeedVersion: v,
+                semanticLayerTags: [],
+                tools: ModeProfileToolsSlice(allow: readOnlySearchTools, deny: []),
+                skills: ModeProfileSkillsSlice(allow: []),
+                context: ModeProfileContextSlice(modeDirective: planDirective),
+                subAgents: denyAllSubAgents
+            ),
+            ResolvedModeProfile(
+                id: "subagent-general",
+                interactionMode: .agent,
+                assemblyKind: .agentBuild,
+                allowsProactiveCompactionTriggers: true,
+                appliesAgentBuildOrchestratorHarness: true,
+                builtInSeedVersion: v,
+                semanticLayerTags: [],
+                // Full working surface minus delegation: the point of this role is to isolate a
+                // complex task in its own context window, not to fan out further.
+                tools: ModeProfileToolsSlice(allow: ["*"], deny: ["delegate_*"]),
+                context: ModeProfileContextSlice(modeDirective: generalPurposeDirective),
+                subAgents: denyAllSubAgents
+            ),
             memoryChatProfile(
                 id: "memory-active-recall",
                 tools: ModeProfileToolsSlice(allow: ["memory_search", "memory_get"], deny: [])
@@ -835,17 +921,15 @@ enum ModeProfileBuiltInCatalog {
                 semanticLayerTags: [],
                 tools: ModeProfileToolsSlice(
                     allow: ["read_file", "glob", "grep", "think"],
-                    deny: [
+                    // Control-plane tool names are derived, not restated: a newly classified
+                    // registration tool is withheld from this profile without an edit here.
+                    deny: ([
                         "ask_user",
                         "memory_get",
                         "memory_search",
                         "memory_write",
-                        "schedule_create",
-                        "schedule_delete",
-                        "schedule_fire_now",
-                        "schedule_list",
                         "spawn_sub_agent",
-                    ],
+                    ] + ToolControlPlaneClassification.confinedProfileDenyTokens).sorted(),
                     approvalPolicy: .never
                 ),
                 skills: ModeProfileSkillsSlice(allow: []),

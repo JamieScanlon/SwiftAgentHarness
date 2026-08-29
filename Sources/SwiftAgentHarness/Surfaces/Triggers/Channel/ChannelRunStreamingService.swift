@@ -80,7 +80,24 @@ actor ChannelRunStreamingService {
                 typingKeepalive: typingKeepalive
             )
         }
-        sessions[conversationID] = ChannelRunStreamingSession(source: source, driveTask: driveTask)
+        sessions[conversationID] = ChannelRunStreamingSession(
+            channel: target.channel,
+            source: source,
+            driveTask: driveTask
+        )
+    }
+
+    /// Tear down every live stream targeting `channel`.
+    ///
+    /// Called by the registry when it withdraws a channel's outbound capability. A stream resolves
+    /// its plugin once, in `attach`, and holds `plugin.outbound` for the life of the turn — so
+    /// without this a paused or torn-down channel kept receiving model output and typing indicators
+    /// until the turn happened to end.
+    func detachAll(channel: ChannelId) async {
+        let affected = sessions.filter { $0.value.channel == channel }.map(\.key)
+        for conversationID in affected {
+            await detach(conversationID: conversationID)
+        }
     }
 
     func detach(conversationID: UUID) async {
@@ -95,6 +112,9 @@ actor ChannelRunStreamingService {
 }
 
 private struct ChannelRunStreamingSession {
+    /// Recorded so ``ChannelRunStreamingService/detachAll(channel:)`` can find this session. The map
+    /// is keyed by conversation, and the registry only knows the channel.
+    let channel: ChannelId
     let source: CommunicationLayerConversationStreamSource
     let driveTask: Task<Void, Never>
 }

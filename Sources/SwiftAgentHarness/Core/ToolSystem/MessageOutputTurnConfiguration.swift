@@ -6,12 +6,18 @@ enum MessageOutputTurnConfiguration {
         base: AgentRuntimeTurnConfiguration,
         originSurface: String,
         originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         var configuration = base
         configuration.originSurface = originSurface
         if let originSenderID {
             configuration.originSenderID = originSenderID
+        }
+        // Only overwrite on an explicit verdict: an absent argument means "this caller has nothing
+        // to say about ownership", which must not clobber a verdict the base already carries.
+        if let originSenderIsOwner {
+            configuration.originSenderIsOwner = originSenderIsOwner
         }
         let policy = MessageOutputPolicyResolver.policy(
             originSurface: originSurface,
@@ -50,6 +56,7 @@ enum MessageOutputTurnConfiguration {
         resolvedInputTrustClass: TrustPolicyClass?,
         originSurface: String? = nil,
         originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default
     ) -> AgentRuntimeTurnConfiguration {
         let surface = originSurface?.isEmpty == false ? originSurface! : InteractiveSurfaceID.rest
@@ -63,6 +70,7 @@ enum MessageOutputTurnConfiguration {
             ),
             originSurface: surface,
             originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner,
             harness: harness
         )
     }

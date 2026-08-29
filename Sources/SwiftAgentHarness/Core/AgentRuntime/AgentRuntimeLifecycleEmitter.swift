@@ -41,7 +41,9 @@ enum AgentRuntimeLifecycleEmit: Sendable {
     case loopIterationStarted(iteration: Int, modelID: UUID)
     case loopIterationCompleted(iteration: Int, modelID: UUID)
     case modelCallStarted(iteration: Int, modelID: UUID)
-    case modelCallCompleted(iteration: Int, modelID: UUID)
+    /// `usage` is the provider's report for *this* completion, plus a catalog-rate cost when the
+    /// model carries one. Defaulted so the case stays source-compatible.
+    case modelCallCompleted(iteration: Int, modelID: UUID, usage: DelegateCompletionUsagePayload? = nil)
     case toolCallStarted(iteration: Int, modelID: UUID, toolName: String, toolCallID: String?)
     case toolCallCompleted(
         iteration: Int,
@@ -123,7 +125,7 @@ struct AgentRuntimeLifecycleEmitter {
                     source: source
                 )
             )
-        case .modelCallCompleted(let iteration, let modelID):
+        case .modelCallCompleted(let iteration, let modelID, let usage):
             await publishPayload(
                 RuntimeLifecycleEventPayload(
                     name: .modelCallCompleted,
@@ -131,6 +133,11 @@ struct AgentRuntimeLifecycleEmitter {
                     runID: runID,
                     iteration: iteration,
                     modelID: modelID,
+                    toolName: usage == nil ? nil : RuntimeLifecycleModelCompletionAudit.toolName,
+                    toolCallID: usage == nil
+                        ? nil
+                        : RuntimeLifecycleModelCompletionAudit.correlationID(runID: runID, iteration: iteration),
+                    usage: usage,
                     source: source
                 )
             )
@@ -262,5 +269,32 @@ struct AgentRuntimeLifecycleEmitter {
         default:
             return .turnCompleted
         }
+    }
+}
+
+/// How a main-loop completion is made to fit a row type shaped for tool calls.
+///
+/// The audit row (`ToolAuditLifecycleEventPayload`) requires a non-optional `toolName`, and the
+/// usage rollup deduplicates on `completionAnnounceID` → `toolCallID` → the row's own event id. A
+/// model completion has neither of the first two naturally, and the third tier deduplicates nothing
+/// — every persisted row is a distinct event id, so a replayed or re-published event would be
+/// counted twice and silently inflate the run's cost.
+///
+/// So the emitter synthesizes both: a fixed tool name, and a deterministic correlation id from
+/// `(runID, iteration)`. `iteration` is the turn loop's `for iteration in 1...maxIterations`
+/// counter, and `.modelCallCompleted` fires at most once per value — the compaction-retry path
+/// continues the outer loop rather than repeating a number — so the pair identifies a completion
+/// exactly once and re-publishing is idempotent.
+///
+/// The cleaner alternative is a dedicated `model_usage_event` derived-artifact kind, which needs a
+/// contract-matrix entry, a persister, a codec path and a second loop in the rollup. Recorded as
+/// debt rather than paid here.
+enum RuntimeLifecycleModelCompletionAudit {
+    /// Deliberately not a real tool name, and deliberately greppable — it will show up in trace-span
+    /// attributes and in anything that groups audit rows by tool.
+    static let toolName = "model_completion"
+
+    static func correlationID(runID: UUID?, iteration: Int) -> String {
+        "model:\(runID?.uuidString.lowercased() ?? "no-run"):\(iteration)"
     }
 }

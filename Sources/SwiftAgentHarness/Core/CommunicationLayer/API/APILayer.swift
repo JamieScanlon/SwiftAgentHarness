@@ -248,7 +248,8 @@ public protocol APILayerChatRuntimeManaging: AnyObject, Sendable {
         resolvedInputTrustClass: TrustPolicyClass?,
         systemReminder: String?,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws -> ChatStreamResponse
     func apiRevertToUserMessageAndStreamResponse(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse
     func apiSplitConversationAtUserMessage(conversationID: UUID, messageID: UUID, enableTools: Bool, enableAgents: Bool) async throws -> ChatStreamResponse
@@ -664,6 +665,16 @@ public actor APILayer {
         self.triggerWebhookRegistrar = registrar
     }
 
+    /// Operator channel-lifecycle routes under `/api/channels`.
+    ///
+    /// Separate from ``setTriggerWebhookRegistrar(_:)`` because the two register in different
+    /// places on purpose: webhooks go on the raw `Application` (they authenticate by HMAC and must
+    /// not require a session), while these go inside the `api` group so `ClientSessionMiddleware`
+    /// binds the principal the lifecycle authority is derived from.
+    public func setTriggerChannelAdminRegistrar(_ registrar: TriggerChannelAdminRouteRegistrar?) {
+        self.triggerChannelAdminRegistrar = registrar
+    }
+
     private var startupService: ConversationStartupService?
 
     /// Binds the harness startup service for composition-root wiring (``setMCPManager(_:)``, etc.).
@@ -1032,6 +1043,7 @@ public actor APILayer {
     private var oauthCallbackDelivery: OAuthCallbackDelivery?
 
     private var triggerWebhookRegistrar: TriggerWebhookRouteRegistrar?
+    private var triggerChannelAdminRegistrar: TriggerChannelAdminRouteRegistrar?
 
     private var contextCompactionPreviewSettings: ContextCompactionPreviewAPISettings = .disabled
     private var httpPreconditionPolicySettings: HTTPPreconditionPolicySettings = .disabled
@@ -1133,6 +1145,9 @@ public actor APILayer {
         }
         APILayerRESTModuleRegistry(modules: APILayerModuleAssembly.restModules())
             .registerAll(on: api, dependencies: dependencies)
+        // Inside `api`, unlike the webhook registrar above: these handlers derive an owner authority
+        // from the principal `ClientSessionMiddleware` binds, which is only bound on this group.
+        triggerChannelAdminRegistrar?.register(on: api, dependencies: dependencies)
     }
     
     /**

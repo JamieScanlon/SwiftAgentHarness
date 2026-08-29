@@ -18,6 +18,7 @@ public struct HarnessConfigurationSet: Sendable {
     public var modelPoolFailover: ModelPoolFailoverConfiguration
     public var modelPoolProviderPreference: ModelPoolProviderPreferenceConfiguration
     public var subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration
+    public var localAgents: LocalAgentConfiguration
 
     /// Compiled-in locked-down baseline when no host document is supplied.
     public static let lockedDownBaseline = HarnessConfigurationSet(
@@ -35,7 +36,8 @@ public struct HarnessConfigurationSet: Sendable {
         modelPoolBudget: .safeDefaults,
         modelPoolFailover: .specDefaults,
         modelPoolProviderPreference: .specDefaults,
-        subAgentCustomEndpoint: .empty
+        subAgentCustomEndpoint: .empty,
+        localAgents: .builtInDefaults
     )
 
     public init(
@@ -53,7 +55,8 @@ public struct HarnessConfigurationSet: Sendable {
         modelPoolBudget: ModelPoolBudgetConfiguration,
         modelPoolFailover: ModelPoolFailoverConfiguration,
         modelPoolProviderPreference: ModelPoolProviderPreferenceConfiguration,
-        subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration
+        subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration,
+        localAgents: LocalAgentConfiguration = .builtInDefaults
     ) {
         self.promptAssembly = promptAssembly
         self.agentHarness = agentHarness
@@ -70,6 +73,7 @@ public struct HarnessConfigurationSet: Sendable {
         self.modelPoolFailover = modelPoolFailover
         self.modelPoolProviderPreference = modelPoolProviderPreference
         self.subAgentCustomEndpoint = subAgentCustomEndpoint
+        self.localAgents = localAgents
     }
 
     /// Runs each section loader against a single parsed document (no ambient re-reads).
@@ -90,7 +94,8 @@ public struct HarnessConfigurationSet: Sendable {
             modelPoolBudget: ModelPoolBudgetConfiguration.load(from: document, logger: logger),
             modelPoolFailover: ModelPoolFailoverConfiguration.load(from: document, logger: logger),
             modelPoolProviderPreference: ModelPoolProviderPreferenceConfiguration.load(from: document, logger: logger),
-            subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration.load(from: document, logger: logger)
+            subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration.load(from: document, logger: logger),
+            localAgents: LocalAgentConfiguration.load(from: document, logger: logger)
         )
     }
 
@@ -130,7 +135,8 @@ public struct HarnessConfigurationSet: Sendable {
         modelPoolBudget: ModelPoolBudgetConfiguration? = nil,
         modelPoolFailover: ModelPoolFailoverConfiguration? = nil,
         modelPoolProviderPreference: ModelPoolProviderPreferenceConfiguration? = nil,
-        subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration? = nil
+        subAgentCustomEndpoint: SubAgentCustomEndpointConfiguration? = nil,
+        localAgents: LocalAgentConfiguration? = nil
     ) -> HarnessConfigurationSet {
         var set = lockedDownBaseline
         if let promptAssembly { set.promptAssembly = promptAssembly }
@@ -148,6 +154,7 @@ public struct HarnessConfigurationSet: Sendable {
         if let modelPoolFailover { set.modelPoolFailover = modelPoolFailover }
         if let modelPoolProviderPreference { set.modelPoolProviderPreference = modelPoolProviderPreference }
         if let subAgentCustomEndpoint { set.subAgentCustomEndpoint = subAgentCustomEndpoint }
+        if let localAgents { set.localAgents = localAgents }
         return set
     }
 }
@@ -250,6 +257,12 @@ extension HarnessConfigurationSet {
         public func withSubAgentCustomEndpoint(_ value: SubAgentCustomEndpointConfiguration) -> Builder {
             var copy = self
             copy.set.subAgentCustomEndpoint = value
+            return copy
+        }
+
+        public func withLocalAgents(_ value: LocalAgentConfiguration) -> Builder {
+            var copy = self
+            copy.set.localAgents = value
             return copy
         }
 

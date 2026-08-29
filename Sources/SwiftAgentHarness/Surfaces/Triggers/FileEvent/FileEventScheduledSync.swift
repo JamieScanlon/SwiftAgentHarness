@@ -5,10 +5,17 @@ enum FileEventScheduledFileKind {
     static let oneShotTaskIDPrefix = "file-one-shot:"
 }
 
+/// Registers future-dated `one-shot` event files as one-shot scheduled tasks, so a drop whose fire
+/// time has not arrived is deferred rather than consumed immediately.
+///
+/// Like ``FileEventPeriodicSync``, registration goes through ``TriggerRegistrationService`` rather
+/// than writing the task store directly.
 struct FileEventScheduledSync: Sendable {
     let eventsDirectory: URL
-    let taskStore: ScheduledTaskStore
+    let registration: TriggerRegistrationService
     let logger: Logger
+
+    private var authority: RegistrationAuthority { .localFileDrop() }
 
     func syncFutureOneShot(at eventURL: URL, payload: FileEventPayload) throws -> Bool {
         guard payload.type == .oneShot,
@@ -16,38 +23,48 @@ struct FileEventScheduledSync: Sendable {
               let atDate = ISO8601DateFormatter().date(from: atRaw),
               atDate > Date() else { return false }
         let trust = FileEventTrustResolver.resolve(for: eventURL)
-        let taskID = FileEventScheduledFileKind.oneShotTaskIDPrefix + eventURL.deletingPathExtension().lastPathComponent
+        let taskID = FileEventQueueLayout.taskID(
+            forSubscription: eventURL.deletingPathExtension().lastPathComponent,
+            kind: .oneShot
+        )
         let correlation = TriggerCorrelation.fromPayload(
             rootId: payload.rootId,
             parentTriggerId: payload.parentTriggerId,
             correlationId: payload.correlationId,
             fallbackTriggerID: taskID
         )
-        let task = ScheduledTask(
+        let spec = ScheduleRegistrationSpec(
             id: taskID,
             schedule: ScheduledTaskSchedule(kind: .at, at: atRaw),
             payloadKind: .agentTurn,
             payloadText: payload.text,
             recurring: false,
-            trust: trust.trust,
             conversationID: payload.conversationID,
             title: eventURL.lastPathComponent,
-            correlation: correlation
+            correlation: correlation,
+            requestedTrust: trust.trust,
+            durable: true
         )
-        switch ScheduledTaskCreateScanner.validateCreate(task: task) {
-        case .failure(let error):
+        do {
+            _ = try registration.registerSchedule(spec, authority: authority)
+            return true
+        } catch {
             logger.warning("file_event_one_shot_rejected file=\(eventURL.lastPathComponent) error=\(String(describing: error))")
             return false
-        case .success:
-            break
         }
-        _ = try taskStore.upsert(task)
-        return true
     }
 
     func removeForDeletedFile(named filename: String) throws {
         let base = (filename as NSString).deletingPathExtension
-        _ = try taskStore.delete(id: FileEventQueueLayout.periodicTaskIDPrefix + base)
-        _ = try taskStore.delete(id: FileEventScheduledFileKind.oneShotTaskIDPrefix + base)
+        // Both prefixes are probed: the file's own type is not knowable once it has been deleted,
+        // so removal has to cover either kind it might have been.
+        _ = try registration.deleteSchedule(
+            id: FileEventQueueLayout.taskID(forSubscription: base, kind: .periodic),
+            authority: authority
+        )
+        _ = try registration.deleteSchedule(
+            id: FileEventQueueLayout.taskID(forSubscription: base, kind: .oneShot),
+            authority: authority
+        )
     }
 }

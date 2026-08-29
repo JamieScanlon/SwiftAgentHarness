@@ -7,6 +7,12 @@ struct AssistantMessageAccumulator {
     private var contentBlocks: [HarnessContentBlock] = []
     private var finalResponse: LLMResponse?
 
+    /// Provider-reported usage for this completion, available once `.complete` has been consumed.
+    ///
+    /// One accumulator is constructed per loop iteration, so this is per-completion rather than
+    /// accumulated across the turn.
+    var completionMetadata: LLMMetadata? { finalResponse?.metadata }
+
     mutating func consume(_ event: ModelStreamEvent) {
         switch event {
         case .stream(let chunk):

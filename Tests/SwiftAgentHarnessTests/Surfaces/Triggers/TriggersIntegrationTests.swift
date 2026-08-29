@@ -16,7 +16,8 @@ struct TriggersIntegrationTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             conversationIDs.append(conversationID)
         }
@@ -47,13 +48,14 @@ struct TriggersIntegrationTests {
             lockURL: tmp.appendingPathComponent("lock.json"),
             logger: Logger(label: "test")
         )
-        let task = try await scheduler.createTask(
-            ScheduledTask(
+        let task = try TriggerRegistrationTestSupport.service(store: store).registerSchedule(
+            ScheduleRegistrationSpec(
                 schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
                 payloadKind: .agentTurn,
                 payloadText: "integration cron prompt",
                 recurring: false
-            )
+            ),
+            authority: .localFileDrop()
         )
         let result = try await scheduler.fireNow(id: task.id)
         #expect(result.decision == .admitted)
@@ -74,7 +76,7 @@ struct TriggersIntegrationTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: LocalDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: audit
         )
         let conversationID = UUID()

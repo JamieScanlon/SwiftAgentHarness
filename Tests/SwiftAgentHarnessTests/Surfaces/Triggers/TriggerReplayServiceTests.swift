@@ -17,7 +17,8 @@ struct TriggerReplayServiceTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             lastText = text
         }
@@ -124,7 +125,7 @@ struct TriggerReplayServiceTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: dedupe ?? ReplayDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: TriggerAuditLog(logger: Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))

@@ -21,7 +21,8 @@ struct TriggerDispatchServiceTests {
             enableTools: Bool,
             enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {
             lastConversationID = conversationID
             lastText = text
@@ -64,7 +65,7 @@ struct TriggerDispatchServiceTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: AdmitDedupe()),
             rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-            costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+            initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
             auditLog: audit
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: createConversation))

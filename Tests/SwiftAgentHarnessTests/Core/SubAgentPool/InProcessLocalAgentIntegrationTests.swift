@@ -1,0 +1,806 @@
+import EasyJSON
+import Foundation
+import SwiftAgentKit
+import SwiftAgentKitOrchestrator
+import SwiftData
+import Testing
+@testable import SwiftAgentHarness
+
+/// End-to-end cover for the in-process delegate model-turn path: one prepared launch, one lifecycle
+/// row keyed by tool-call id, one run-lane acquisition released on terminal, and no disturbance to
+/// the parent's foreground selection.
+@Suite("In-process local agent delegate")
+struct InProcessLocalAgentIntegrationTests {
+    private static let toolName = "delegate_test_agent"
+    private static let modelRef = "test/local-delegate"
+
+    private func makeDefinition(
+        toolsAllow: [String]? = nil,
+        longRunning: Bool = false,
+        runTimeoutSeconds: TimeInterval = 30
+    ) -> LocalAgentDefinition {
+        LocalAgentDefinition(
+            toolName: Self.toolName,
+            displayName: "Test Agent",
+            description: "Test in-process delegate.",
+            modeProfileID: "subagent-minimal",
+            modelRef: Self.modelRef,
+            toolsAllow: toolsAllow,
+            longRunning: longRunning,
+            runTimeoutSeconds: runTimeoutSeconds
+        )
+    }
+
+    private func makeModel() -> Model {
+        Model(
+            id: UUID(),
+            protocol: .openAIAPI,
+            modelName: "local-delegate-model",
+            serverURL: URL(string: "http://localhost:1234")!,
+            capabilities: [.completion, .tools],
+            modelProtocol: .openAIAPI
+        )
+    }
+
+    private func makeRegistryEntry(for model: Model) -> ModelRegistryEntry {
+        ModelRegistryEntry(
+            id: model.id,
+            displayName: model.modelName,
+            capabilities: [.completion, .tools],
+            providers: [
+                ProviderBinding(
+                    providerId: model.modelProtocol.rawValue,
+                    modelProtocol: model.modelProtocol,
+                    endpointModelId: model.modelName,
+                    serverURL: model.serverURL
+                ),
+            ]
+        )
+    }
+
+    private func makeToolEntry() -> ToolRegistryEntry {
+        let normalizer = ToolSchemaNormalizer()
+        // `availableTools()` is async; build the definition directly to keep this helper synchronous.
+        // Schema fidelity with the provider is asserted in InProcessLocalAgentToolProviderTests.
+        let definition = ToolDefinition(
+            name: Self.toolName,
+            description: "Test in-process delegate.",
+            parameters: [
+                .init(name: "instructions", description: "brief", type: "string", required: true),
+                .init(name: "description", description: "label", type: "string", required: false),
+            ],
+            type: .function
+        )
+        return ToolRegistryEntry(
+            descriptor: RegisteredToolDescriptor(
+                definition: definition,
+                source: .local,
+                effectClass: .mutating,
+                parallelHint: .parallelizable,
+                policyTags: InProcessLocalAgentToolProvider.policyTags(for: makeDefinition()),
+                normalizedSchema: normalizer.normalize(rawSchema: definition.inferredSchemaJSON, source: .local)
+            )
+        )
+    }
+
+    /// Builds a session whose local-agent delegate is backed by a scripted child run.
+    private func makeSession(
+        definition: LocalAgentDefinition,
+        childRun: @escaping LocalAgentChildRunPort
+    ) async throws -> (session: HarnessRuntimeSession, parent: ModelConversation) {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let model = makeModel()
+        let entry = makeRegistryEntry(for: model)
+        let session = HarnessRuntimeSession(
+            container: container,
+            rankedRegistryEntriesProvider: { _ in [entry] },
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container),
+            localAgents: LocalAgentConfiguration(definitionsByToolName: [definition.toolName: definition])
+        )
+        try await session.createConversation(with: model, userSystemPrompt: "parent")
+        let parent = try #require(await session.currentConversation())
+        await session.subAgentSpawnService.installLocalAgentChildRunPort(childRun)
+        return (session, parent)
+    }
+
+    /// Scripted child run: records the child id and prompt, then appends an assistant reply so the
+    /// spawn service's `lastAssistantText` read has something to hand back.
+    private actor ChildRunRecorder {
+        private(set) var childConversationIDs: [UUID] = []
+        private(set) var prompts: [String] = []
+
+        func record(childConversationID: UUID, prompt: String) {
+            childConversationIDs.append(childConversationID)
+            prompts.append(prompt)
+        }
+    }
+
+    private func replyingChildRun(
+        session: @escaping @Sendable () -> HarnessRuntimeSession?,
+        recorder: ChildRunRecorder,
+        reply: String
+    ) -> LocalAgentChildRunPort {
+        { childID, prompt in
+            await recorder.record(childConversationID: childID, prompt: prompt)
+            guard let session = session() else {
+                throw NSError(
+                    domain: "InProcessLocalAgentIntegrationTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "session box was nil in child run"]
+                )
+            }
+            guard var child = await session.persistenceDomain.modelConversation(id: childID) else {
+                throw NSError(
+                    domain: "InProcessLocalAgentIntegrationTests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "child conversation \(childID) missing in registry"]
+                )
+            }
+            child.messages.append(
+                Message(id: UUID(), role: .assistant, content: reply, timestamp: Date(), toolCalls: [])
+            )
+            await session.persistenceDomain.replaceConversationInRegistry(child, transcript: .authoritativeTip)
+        }
+    }
+
+    private func call(
+        instructions: String,
+        description: String? = nil,
+        runInBackground: Bool? = nil,
+        id: String
+    ) -> ToolCallRequest {
+        var arguments: [String: JSON] = ["instructions": .string(instructions)]
+        if let description {
+            arguments["description"] = .string(description)
+        }
+        if let runInBackground {
+            arguments["run_in_background"] = .boolean(runInBackground)
+        }
+        return ToolCallRequest(id: id, name: Self.toolName, arguments: .object(arguments))
+    }
+
+    // MARK: - Happy path
+
+    @Test("A delegate call spawns an isolated child and returns its last assistant text")
+    func returnsChildReport() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Refactored the parser.\n\n")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Refactor the parser.", description: "Refactor parser", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected .completed, got \(outcome)")
+            return
+        }
+        #expect(message.content == "Refactored the parser.")
+        #expect(message.toolCallId == "call-1")
+        #expect(await recorder.prompts == ["Refactor the parser."])
+    }
+
+    @Test("The child runs on the definition's model and mode profile, isolated from the parent")
+    func childUsesDefinitionCapabilities() async throws {
+        let definition = makeDefinition(toolsAllow: ["read_file"])
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Read the file.", description: "Read file", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let childID = try #require(await recorder.childConversationIDs.first)
+        let child = try #require(await session.persistenceDomain.modelConversation(id: childID))
+        #expect(child.parentConversationID == parent.id)
+        #expect(child.modeProfileID == "subagent-minimal")
+        #expect(child.model.modelName == "local-delegate-model")
+        // Layer 2 hard block: the child's tool surface comes from the definition, not the parent.
+        if case .allowlist(let tools, _)? = child.routingPrefs?.explicitToolPolicy {
+            #expect(tools == ["read_file"])
+        } else {
+            Issue.record("expected an allowlist tool policy on the child, got \(String(describing: child.routingPrefs?.explicitToolPolicy))")
+        }
+    }
+
+    @Test("The short description becomes the child's topic, not the full brief")
+    func descriptionBecomesTopic() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+        let brief = String(repeating: "a very long task brief. ", count: 40)
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: brief, description: "Refactor parser", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let childID = try #require(await recorder.childConversationIDs.first)
+        let child = try #require(await session.persistenceDomain.modelConversation(id: childID))
+        #expect(child.topic == "Refactor parser")
+    }
+
+    // MARK: - The invariants the refactor exists to protect
+
+    @Test("One delegate call produces exactly one lifecycle row, keyed by tool-call id")
+    func singleLifecycleRowPerCall() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.count == 1)
+        #expect(snapshot.entries.first?.lifecycleID == "call-1")
+        #expect(snapshot.entries.first?.phase == .done)
+        #expect(snapshot.entries.first?.toolCallID == "call-1")
+    }
+
+    @Test("The run lane is released once the delegate reaches a terminal phase")
+    func releasesRunLaneOnTerminal() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        // Two sequential calls: the second can only be admitted if the first released its slot.
+        for index in 0 ..< 2 {
+            let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+                call: call(instructions: "Do the thing.", id: "call-\(index)"),
+                conversationID: parent.id,
+                parentConversation: parent,
+                toolEntry: makeToolEntry(),
+                definition: definition
+            )
+            guard case .completed = outcome else {
+                Issue.record("call \(index) was not admitted: \(outcome)")
+                return
+            }
+        }
+        #expect(await session.subAgentSpawnService.listActiveInvocations(parentConversationID: parent.id).isEmpty)
+    }
+
+    @Test("A delegate call leaves the parent's foreground selection untouched")
+    func doesNotAdoptChildSelection() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+        let selectedBefore = await session.currentConversationID
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        #expect(await session.currentConversationID == selectedBefore)
+        #expect(await session.currentConversationID == parent.id)
+    }
+
+    @Test("longRunning:false takes the synchronous path, never a pending handle")
+    func synchronousPathForShortAgents() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        if case .pendingHandle = outcome {
+            Issue.record("short-lived in-process delegate must not return a pending handle")
+        }
+    }
+
+    // MARK: - Background delivery (longRunning)
+
+    /// The announce lands from a detached task, so poll rather than assume immediate delivery.
+    private func waitFor(
+        timeout: Duration = .seconds(5),
+        _ condition: @Sendable () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return await condition()
+    }
+
+    @Test("longRunning:true returns a handle immediately instead of blocking the turn")
+    func backgroundReturnsPendingHandle() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Background done.")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .pendingHandle(let message) = outcome else {
+            Issue.record("expected .pendingHandle for a longRunning delegate, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("call-1"))
+        // Template rule: completion is push-based and the model must not poll or fabricate.
+        #expect(message.content.contains("Do not sleep, poll"))
+    }
+
+    @Test("The completion survives the pending-handle tool row already on the transcript")
+    func completionSurvivesPendingHandleRow() async throws {
+        // The real turn loop persists the pending-handle result as a `tool` row keyed to the same
+        // tool-call id before the delegate finishes. Calling the service directly skips that, which
+        // is exactly why the duplicate-tool-result guard silently swallowed every background result
+        // in production while these tests passed. Plant the row on the durable tip (not just the
+        // in-memory registry) — append/reload paths read from tip and would otherwise drop a
+        // registry-only seed.
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "The real answer.")
+        )
+        box.value = session
+
+        _ = try await session.saveMessageToCache(
+            Message(
+                id: UUID(),
+                role: .tool,
+                content: "Delegate 'Test Agent' is running in the background (handle: call-1).",
+                timestamp: Date(),
+                toolCallId: "call-1"
+            ),
+            for: parent.id
+        )
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let landed = await waitFor {
+            let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
+            return conversation?.messages.contains { $0.content.contains("The real answer.") } ?? false
+        }
+        #expect(landed)
+        let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
+        // The result must not arrive as a second tool_result against the same tool_use.
+        #expect(conversation.messages.filter { $0.role == .tool && $0.toolCallId == "call-1" }.count == 1)
+        let notification = try #require(conversation.messages.last { $0.content.contains("The real answer.") })
+        #expect(notification.role != .tool)
+        #expect(notification.content.contains("<task-notification>"))
+    }
+
+    @Test("A background delegate announces its result into the parent conversation")
+    func backgroundAnnouncesCompletion() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Background done.")
+        )
+        box.value = session
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let delivered = await waitFor {
+            let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
+            return conversation?.messages.contains { $0.content.contains("Background done.") } ?? false
+        }
+        #expect(delivered)
+        let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
+        let notification = try #require(conversation.messages.last { $0.content.contains("Background done.") })
+        #expect(notification.role != .tool)
+        #expect(notification.content.contains("<status>completed</status>"))
+    }
+
+    @Test("A background delegate reaches a terminal lifecycle phase and releases its lane")
+    func backgroundReleasesLaneOnTerminal() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let settled = await waitFor {
+            await session.subAgentSpawnService
+                .lifecycleSnapshot(parentConversationID: parent.id)
+                .entries.first?.phase == .done
+        }
+        #expect(settled)
+        #expect(await session.subAgentSpawnService.listActiveInvocations(parentConversationID: parent.id).isEmpty)
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.count == 1)
+        #expect(snapshot.entries.first?.lifecycleID == "call-1")
+    }
+
+    @Test("A failing background delegate announces failure rather than silently dropping")
+    func backgroundAnnouncesFailure() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        // No reply appended: the run produces nothing, which is a runtime-signalled failure.
+        let (session, parent) = try await makeSession(definition: definition) { childID, prompt in
+            await recorder.record(childConversationID: childID, prompt: prompt)
+        }
+
+        _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the slow thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+
+        let delivered = await waitFor {
+            let conversation = await session.persistenceDomain.modelConversation(id: parent.id)
+            return conversation?.messages.contains { $0.content.contains("<task-notification>") } ?? false
+        }
+        #expect(delivered)
+        let conversation = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
+        let notification = try #require(conversation.messages.last { $0.content.contains("<task-notification>") })
+        #expect(notification.content.contains("<status>failed</status>"))
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.first?.phase == .failed)
+    }
+
+    @Test("Concurrent background calls to one agent get distinct handles and both results land")
+    func concurrentBackgroundCallsDoNotCollide() async throws {
+        // `planLaunch` derives its async handle from the agent id, which is the same tool name for
+        // every call; the dispatch path must key the handle to the tool call instead.
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        for index in 0 ..< 2 {
+            _ = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+                call: call(instructions: "Task \(index).", id: "call-\(index)"),
+                conversationID: parent.id,
+                parentConversation: parent,
+                toolEntry: makeToolEntry(),
+                definition: definition
+            )
+        }
+
+        let bothDelivered = await waitFor {
+            guard let conversation = await session.persistenceDomain.modelConversation(id: parent.id) else {
+                return false
+            }
+            let bodies = conversation.messages.map(\.content)
+            return bodies.contains { $0.contains("<tool-call-id>call-0</tool-call-id>") }
+                && bodies.contains { $0.contains("<tool-call-id>call-1</tool-call-id>") }
+        }
+        #expect(bothDelivered)
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(Set(snapshot.entries.map(\.lifecycleID)) == ["call-0", "call-1"])
+        #expect(await recorder.childConversationIDs.count == 2)
+    }
+
+    @Test("A per-call run_in_background:true backgrounds a synchronous agent")
+    func perCallOverrideBackgroundsSyncAgent() async throws {
+        let definition = makeDefinition(longRunning: false)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", runInBackground: true, id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .pendingHandle = outcome else {
+            Issue.record("expected the per-call override to background the run, got \(outcome)")
+            return
+        }
+    }
+
+    @Test("A per-call run_in_background:false makes a background agent wait")
+    func perCallOverrideBlocksBackgroundAgent() async throws {
+        let definition = makeDefinition(longRunning: true)
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Waited.")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", runInBackground: false, id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected the per-call override to block, got \(outcome)")
+            return
+        }
+        #expect(message.content == "Waited.")
+    }
+
+    // MARK: - Routing from the model turn
+
+    @Test("The model-turn entry point routes a configured local agent to the in-process path")
+    func modelTurnRoutesToInProcessPath() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "Routed.")
+        )
+        box.value = session
+
+        let entry = makeToolEntry()
+        let outcome = await session.subAgentSpawnService.invokeDelegateToolFromModelTurn(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            runID: nil,
+            orchestrator: SwiftAgentKitOrchestrator(
+                llm: StubTurnLoopLLM(),
+                config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+            ),
+            snapshot: RuntimeToolTurnPolicySnapshot(
+                availabilitySnapshots: [RuntimeToolAvailabilitySnapshot(entry: entry, decision: .allowedDefault)],
+                effectiveEntries: [entry],
+                dispatchContract: .conservativeDefault
+            )
+        )
+
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected the in-process path to complete, got \(outcome)")
+            return
+        }
+        #expect(message.content == "Routed.")
+        #expect(await recorder.childConversationIDs.count == 1)
+    }
+
+    @Test("A delegate tool with no matching definition is denied, not silently dropped")
+    func modelTurnDeniesUnconfiguredInProcessDelegate() async throws {
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let session = HarnessRuntimeSession(
+            container: container,
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+        )
+        try await session.createConversation(with: makeModel(), userSystemPrompt: "parent")
+        let parent = try #require(await session.currentConversation())
+
+        let entry = makeToolEntry()
+        let outcome = await session.subAgentSpawnService.invokeDelegateToolFromModelTurn(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            runID: nil,
+            orchestrator: SwiftAgentKitOrchestrator(
+                llm: StubTurnLoopLLM(),
+                config: OrchestratorConfig(streamingEnabled: true, mcpEnabled: false, a2aEnabled: false)
+            ),
+            snapshot: RuntimeToolTurnPolicySnapshot(
+                availabilitySnapshots: [RuntimeToolAvailabilitySnapshot(entry: entry, decision: .allowedDefault)],
+                effectiveEntries: [entry],
+                dispatchContract: .conservativeDefault
+            )
+        )
+        guard case .denied(let message) = outcome else {
+            Issue.record("expected .denied, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("no matching localAgents definition"))
+    }
+
+    // MARK: - Failure handling
+
+    @Test("An unresolvable model reference is denied before any child is created")
+    func deniesUnresolvableModel() async throws {
+        let definition = makeDefinition()
+        let container = try HarnessTestModelContainer.makeInMemory()
+        let session = HarnessRuntimeSession(
+            container: container,
+            rankedRegistryEntriesProvider: { _ in [] },
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container),
+            localAgents: LocalAgentConfiguration(definitionsByToolName: [definition.toolName: definition])
+        )
+        try await session.createConversation(with: makeModel(), userSystemPrompt: "parent")
+        let parent = try #require(await session.currentConversation())
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .denied(let message) = outcome else {
+            Issue.record("expected .denied, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains(Self.modelRef))
+        #expect(await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id).entries.isEmpty)
+    }
+
+    @Test("Empty instructions are denied without spawning a child")
+    func deniesEmptyInstructions() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(
+            definition: definition,
+            childRun: replyingChildRun(session: { box.value }, recorder: recorder, reply: "done")
+        )
+        box.value = session
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "   \n ", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .denied = outcome else {
+            Issue.record("expected .denied, got \(outcome)")
+            return
+        }
+        #expect(await recorder.childConversationIDs.isEmpty)
+    }
+
+    @Test("A child that produces no reply is reported as failed, and the lane is still released")
+    func failsWhenChildProducesNoReply() async throws {
+        let definition = makeDefinition()
+        let recorder = ChildRunRecorder()
+        let (session, parent) = try await makeSession(definition: definition) { childID, prompt in
+            await recorder.record(childConversationID: childID, prompt: prompt)
+        }
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected .completed carrying a failure report, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("failed"))
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.first?.phase == .failed)
+        #expect(await session.subAgentSpawnService.listActiveInvocations(parentConversationID: parent.id).isEmpty)
+    }
+
+    @Test("A child run that exceeds its budget times out rather than wedging the parent turn")
+    func timesOutSlowChild() async throws {
+        let definition = makeDefinition(runTimeoutSeconds: 0.05)
+        let (session, parent) = try await makeSession(definition: definition) { _, _ in
+            try? await Task.sleep(for: .seconds(10))
+        }
+
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-1"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected .completed carrying a timeout report, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("budget"))
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.first?.phase == .failed)
+        #expect(await session.subAgentSpawnService.listActiveInvocations(parentConversationID: parent.id).isEmpty)
+    }
+}
+
+/// Lets a scripted child-run closure reach the session that owns it (the closure is needed to build
+/// the session, so the reference can only be filled in afterwards).
+///
+/// Background (`longRunning`) delegates invoke the child-run port from an unstructured task on a
+/// different executor than the test that writes `value`, so access must be synchronized.
+private final class SessionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: HarnessRuntimeSession?
+
+    var value: HarnessRuntimeSession? {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
+    }
+}

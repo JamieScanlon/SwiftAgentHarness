@@ -240,7 +240,7 @@ struct SubAgentPoolBoundaryTests {
                 transportKind: .a2a
             ),
             ToolRegistryEntry(
-                definition: ToolDefinition(name: "delegate_local_codegen", description: "local code generation", parameters: [], type: .a2aAgent),
+                definition: ToolDefinition(name: "delegate_local_codegen", description: "local code generation", parameters: [], type: .function),
                 source: .local,
                 transportKind: .local
             ),

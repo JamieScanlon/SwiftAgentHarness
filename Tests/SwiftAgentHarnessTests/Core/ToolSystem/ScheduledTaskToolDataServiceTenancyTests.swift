@@ -43,49 +43,90 @@ private enum ScheduledTaskTenancyTestSupport {
         )
     }
 
-    static func makeScheduler(tmp: URL) -> TriggerSchedulerService {
+    struct Harness {
+        let store: ScheduledTaskStore
+        let scheduler: TriggerSchedulerService
+        let registration: TriggerRegistrationService
+    }
+
+    static func makeHarness(tmp: URL) -> Harness {
         let store = ScheduledTaskStore(fileURL: tmp.appendingPathComponent("tasks.json"))
+        // Shared, not defaulted: agent-authority registrations are session-scoped by default.
+        let sessionStore = SessionScopedScheduledTaskStore()
         let dispatch = TriggerDispatchService(
             activationPolicy: TriggerActivationPolicy(
                 idempotency: TriggerIdempotencyGate(dedupe: ScheduleTenancyDedupe()),
                 rateLimit: TriggerRateLimitGate(maxPerWindow: 100),
-                costCeiling: TriggerCostCeilingGate(maxPerWindow: 100),
+                initiatorBurst: TriggerInitiatorBurstGate(maxPerWindow: 100),
                 auditLog: TriggerAuditLog(logger: Logger(label: "test"))
             ),
             sessionRouter: TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() })),
             promptBuilder: TriggerPromptBuilder(),
             runtime: ScheduleTenancyCaptureRuntime()
         )
-        return TriggerSchedulerService(
+        let scheduler = TriggerSchedulerService(
             store: store,
+            sessionStore: sessionStore,
             dispatch: dispatch,
             lockURL: tmp.appendingPathComponent("lock.json"),
             logger: Logger(label: "test")
         )
+        return Harness(
+            store: store,
+            scheduler: scheduler,
+            registration: TriggerRegistrationTestSupport.service(store: store, sessionStore: sessionStore)
+        )
     }
 
     static func makeService(
-        scheduler: TriggerSchedulerService,
+        harness: Harness,
         catalog: ScheduleTenancyStubCatalog
     ) -> ScheduledTaskToolDataService {
-        ScheduledTaskToolDataService(scheduler: scheduler, catalog: catalog)
+        ScheduledTaskToolDataService(
+            scheduler: harness.scheduler,
+            registration: harness.registration,
+            catalog: catalog
+        )
     }
 
-    static func stampedTask(
+    /// Register a task the way an agent tool call would: owner and creating conversation are
+    /// derived from the authority, not supplied on the spec.
+    @discardableResult
+    static func registerStamped(
+        _ harness: Harness,
         id: String = UUID().uuidString,
         ownerAccountID: UUID,
         createdByConversationID: UUID,
         conversationID: String? = nil
-    ) -> ScheduledTask {
-        ScheduledTask(
-            id: id,
-            schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
-            payloadKind: .agentTurn,
-            payloadText: "follow up",
-            recurring: false,
-            conversationID: conversationID,
-            ownerAccountID: ownerAccountID,
-            createdByConversationID: createdByConversationID
+    ) throws -> ScheduledTask {
+        try harness.registration.registerSchedule(
+            ScheduleRegistrationSpec(
+                id: id,
+                schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
+                payloadKind: .agentTurn,
+                payloadText: "follow up",
+                recurring: false,
+                conversationID: conversationID
+            ),
+            authority: TriggerRegistrationTestSupport.agentAuthority(
+                conversation: createdByConversationID,
+                owner: ownerAccountID
+            )
+        )
+    }
+
+    /// A row with neither owner nor creating conversation, as written before the registration layer.
+    @discardableResult
+    static func registerUnstamped(_ harness: Harness, id: String) throws -> ScheduledTask {
+        try harness.registration.registerSchedule(
+            ScheduleRegistrationSpec(
+                id: id,
+                schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
+                payloadKind: .agentTurn,
+                payloadText: "legacy",
+                recurring: false
+            ),
+            authority: .localFileDrop()
         )
     }
 }
@@ -112,35 +153,33 @@ struct ScheduledTaskToolDataServiceTenancyTests {
             unrelatedA.id: unrelatedA,
             rootB.id: rootB,
         ])
-        let scheduler = ScheduledTaskTenancyTestSupport.makeScheduler(tmp: tmp)
-        _ = try await scheduler.createTask(ScheduledTaskTenancyTestSupport.stampedTask(
+        let harness = ScheduledTaskTenancyTestSupport.makeHarness(tmp: tmp)
+        try ScheduledTaskTenancyTestSupport.registerStamped(
+            harness,
             id: "task-root-a",
             ownerAccountID: ownerA,
             createdByConversationID: rootA.id
-        ))
-        _ = try await scheduler.createTask(ScheduledTaskTenancyTestSupport.stampedTask(
+        )
+        try ScheduledTaskTenancyTestSupport.registerStamped(
+            harness,
             id: "task-branch-a",
             ownerAccountID: ownerA,
             createdByConversationID: branchA.id
-        ))
-        _ = try await scheduler.createTask(ScheduledTaskTenancyTestSupport.stampedTask(
+        )
+        try ScheduledTaskTenancyTestSupport.registerStamped(
+            harness,
             id: "task-unrelated-a",
             ownerAccountID: ownerA,
             createdByConversationID: unrelatedA.id
-        ))
-        _ = try await scheduler.createTask(ScheduledTaskTenancyTestSupport.stampedTask(
+        )
+        try ScheduledTaskTenancyTestSupport.registerStamped(
+            harness,
             id: "task-root-b",
             ownerAccountID: ownerB,
             createdByConversationID: rootB.id
-        ))
-        _ = try await scheduler.createTask(ScheduledTask(
-            id: "legacy-unstamped",
-            schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
-            payloadKind: .agentTurn,
-            payloadText: "legacy",
-            recurring: false
-        ))
-        let service = ScheduledTaskTenancyTestSupport.makeService(scheduler: scheduler, catalog: catalog)
+        )
+        try ScheduledTaskTenancyTestSupport.registerUnstamped(harness, id: "legacy-unstamped")
+        let service = ScheduledTaskTenancyTestSupport.makeService(harness: harness, catalog: catalog)
         let scope = rootA.conversationScope()
         let listed = try await ConversationScope.withCurrent(scope) {
             try await service.listAccessibleTasks()
@@ -162,13 +201,14 @@ struct ScheduledTaskToolDataServiceTenancyTests {
         let convA = ScheduledTaskTenancyTestSupport.makeConversation(ownerAccountID: ownerA)
         let convB = ScheduledTaskTenancyTestSupport.makeConversation(ownerAccountID: ownerB)
         let catalog = ScheduleTenancyStubCatalog(conversations: [convA.id: convA, convB.id: convB])
-        let scheduler = ScheduledTaskTenancyTestSupport.makeScheduler(tmp: tmp)
-        _ = try await scheduler.createTask(ScheduledTaskTenancyTestSupport.stampedTask(
+        let harness = ScheduledTaskTenancyTestSupport.makeHarness(tmp: tmp)
+        try ScheduledTaskTenancyTestSupport.registerStamped(
+            harness,
             id: "foreign-task",
             ownerAccountID: ownerB,
             createdByConversationID: convB.id
-        ))
-        let service = ScheduledTaskTenancyTestSupport.makeService(scheduler: scheduler, catalog: catalog)
+        )
+        let service = ScheduledTaskTenancyTestSupport.makeService(harness: harness, catalog: catalog)
         let scope = convA.conversationScope()
         let deleted = try await ConversationScope.withCurrent(scope) {
             try await service.deleteTask(id: "foreign-task")
@@ -190,9 +230,9 @@ struct ScheduledTaskToolDataServiceTenancyTests {
         let convA = ScheduledTaskTenancyTestSupport.makeConversation(ownerAccountID: ownerA)
         let convB = ScheduledTaskTenancyTestSupport.makeConversation(ownerAccountID: ownerB)
         let catalog = ScheduleTenancyStubCatalog(conversations: [convA.id: convA, convB.id: convB])
-        let scheduler = ScheduledTaskTenancyTestSupport.makeScheduler(tmp: tmp)
-        let service = ScheduledTaskTenancyTestSupport.makeService(scheduler: scheduler, catalog: catalog)
-        let task = ScheduledTask(
+        let harness = ScheduledTaskTenancyTestSupport.makeHarness(tmp: tmp)
+        let service = ScheduledTaskTenancyTestSupport.makeService(harness: harness, catalog: catalog)
+        let spec = ScheduleRegistrationSpec(
             schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
             payloadKind: .agentTurn,
             payloadText: "inject",
@@ -202,7 +242,7 @@ struct ScheduledTaskToolDataServiceTenancyTests {
         let scope = convA.conversationScope()
         await #expect(throws: ScheduledTaskAccessError.notFound) {
             try await ConversationScope.withCurrent(scope) {
-                _ = try await service.createTask(task)
+                _ = try await service.createTask(spec)
             }
         }
     }
@@ -214,9 +254,9 @@ struct ScheduledTaskToolDataServiceTenancyTests {
         let owner = UUID()
         let conv = ScheduledTaskTenancyTestSupport.makeConversation(ownerAccountID: owner)
         let catalog = ScheduleTenancyStubCatalog(conversations: [conv.id: conv])
-        let scheduler = ScheduledTaskTenancyTestSupport.makeScheduler(tmp: tmp)
-        let service = ScheduledTaskTenancyTestSupport.makeService(scheduler: scheduler, catalog: catalog)
-        let task = ScheduledTask(
+        let harness = ScheduledTaskTenancyTestSupport.makeHarness(tmp: tmp)
+        let service = ScheduledTaskTenancyTestSupport.makeService(harness: harness, catalog: catalog)
+        let spec = ScheduleRegistrationSpec(
             schedule: ScheduledTaskSchedule(kind: .at, at: "2030-01-01T00:00:00Z"),
             payloadKind: .agentTurn,
             payloadText: "local",
@@ -224,7 +264,7 @@ struct ScheduledTaskToolDataServiceTenancyTests {
         )
         let scope = conv.conversationScope()
         let saved = try await ConversationScope.withCurrent(scope) {
-            try await service.createTask(task)
+            try await service.createTask(spec)
         }
         #expect(saved.conversationID == conv.id.uuidString)
         #expect(saved.createdByConversationID == conv.id)
@@ -271,7 +311,8 @@ private final class ScheduleTenancyCaptureRuntime: TriggerRuntimeDispatching, @u
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }
 

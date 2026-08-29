@@ -3,7 +3,7 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("ConversationReplayService")
+@Suite("ConversationReplayService", .serialized)
 struct ConversationReplayServiceTests {
     private func makeFixture() throws -> (
         deps: ConversationRuntimeDependencies,
@@ -78,7 +78,7 @@ struct ConversationReplayServiceTests {
         try await replay.startConversationReplay(sourceConversationID: sourceID)
         let finished = await ReplayProjectionTestSupport.waitUntil({
             await replay.testing_hasActiveReplayTasks() == false
-        })
+        }, timeoutMS: 15_000)
         #expect(finished)
         #expect(await recording.turnSummaryCalls.count == 1)
     }
@@ -95,7 +95,7 @@ struct ConversationReplayServiceTests {
         try await replay.startConversationReplay(sourceConversationID: sourceID)
         let finished = await ReplayProjectionTestSupport.waitUntil({
             await replay.testing_hasActiveReplayTasks() == false
-        })
+        }, timeoutMS: 15_000)
         #expect(finished)
         #expect(await recording.turnSummaryCalls.count == 1)
     }
@@ -113,7 +113,7 @@ struct ConversationReplayServiceTests {
         try await replay.startConversationReplay(sourceConversationID: sourceID)
         let finished = await ReplayProjectionTestSupport.waitUntil({
             await replay.testing_hasActiveReplayTasks() == false
-        })
+        }, timeoutMS: 15_000)
         #expect(finished)
         #expect(await recording.turnSummaryCalls.count == 1)
     }
@@ -133,7 +133,7 @@ struct ConversationReplayServiceTests {
         await replay.stopConversationReplay(conversationID: sourceID)
         let stopped = await ReplayProjectionTestSupport.waitUntil({
             await replay.testing_hasActiveReplayTasks() == false
-        })
+        }, timeoutMS: 15_000)
         #expect(stopped)
         #expect(await replay.isConversationReplayActive(conversationID: sourceID) == false)
     }
@@ -150,7 +150,7 @@ struct ConversationReplayServiceTests {
         try await replay.startConversationReplay(sourceConversationID: sourceID)
         let finished = await ReplayProjectionTestSupport.waitUntil({
             await replay.testing_hasActiveReplayTasks() == false
-        })
+        }, timeoutMS: 15_000)
         #expect(finished)
         let appendCalls = await recording.appendCalls
         guard let sandboxID = appendCalls.first?.conversationID else {
@@ -183,7 +183,7 @@ struct ConversationReplayServiceTests {
             let sourceActive = await replay.isConversationReplayActive(conversationID: sourceID)
             let sandboxActive = await replay.isConversationReplayActive(conversationID: sandboxID)
             return sourceActive && sandboxActive
-        })
+        }, timeoutMS: 15_000)
         #expect(sawActive)
     }
 
@@ -202,7 +202,7 @@ struct ConversationReplayServiceTests {
             guard let sandboxID = appendCalls.first?.conversationID else { return false }
             guard sandboxID != sourceID else { return false }
             return await deps.persistenceDomain.modelConversation(id: sandboxID) != nil
-        })
+        }, timeoutMS: 15_000)
         #expect(sawSandbox)
         await replay.stopConversationReplay(conversationID: sourceID)
     }

@@ -84,6 +84,40 @@ enum SubAgentTransportKind: String, Codable, Sendable, CaseIterable {
     }
 }
 
+extension SubAgentTransportKind {
+    /// Canonical transport classification for a delegate tool.
+    ///
+    /// Single source of truth. Registry rows, adapter selection, permission/trust defaults and
+    /// model-turn dispatch must all agree on this — when two call sites classified independently,
+    /// an MCP-sourced `delegate_*` tool was routed to ACP by the Pool while the spawn service
+    /// treated it as in-process.
+    ///
+    /// Precedence: an explicit adapter id wins, then declared transport/definition type, then the
+    /// execution environment's kind.
+    static func resolve(for entry: ToolRegistryEntry) -> SubAgentTransportKind {
+        let adapterKind = SubAgentTransportKind(rawOrAlias: entry.executionEnvironment.adapterID)
+        if adapterKind != .unknown {
+            return adapterKind
+        }
+        if entry.transportKind == .a2a || entry.source == .a2a || entry.definition.type == .a2aAgent {
+            return .a2a
+        }
+        if entry.transportKind == .acp || entry.definition.type == .acpAgent {
+            return .acpStdio
+        }
+        switch entry.executionEnvironment.kind {
+        case .a2a:
+            return .a2a
+        case .mcp:
+            return .acpStdio
+        case .local, .docker, .ssh:
+            return .inProcess
+        case .unknown:
+            return .unknown
+        }
+    }
+}
+
 struct SubAgentTransportCapabilities: Sendable, Equatable {
     var transportKind: SubAgentTransportKind
     var supportsStreaming: Bool
@@ -1105,20 +1139,7 @@ struct DefaultSubAgentPool: SubAgentPooling, SubAgentTransportAdapterResolving {
     }
 
     private func resolvedTransportKind(for entry: ToolRegistryEntry) -> SubAgentTransportKind {
-        let adapterKind = SubAgentTransportKind(rawOrAlias: entry.executionEnvironment.adapterID)
-        if adapterKind != .unknown {
-            return adapterKind
-        }
-        switch entry.executionEnvironment.kind {
-        case .a2a:
-            return .a2a
-        case .mcp:
-            return .acpStdio
-        case .local, .docker, .ssh:
-            return .inProcess
-        case .unknown:
-            return .unknown
-        }
+        SubAgentTransportKind.resolve(for: entry)
     }
 
     private func isRegistryEntryAllowedForRoutingContext(

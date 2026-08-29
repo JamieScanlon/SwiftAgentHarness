@@ -45,16 +45,20 @@ enum MemorySubAgentSpawnWiring {
                 )
             },
             cancelChildRun: { childID in
-                if let conversation = await persistenceDomain.modelConversation(id: childID),
-                   let runID = conversation.currentRunID {
-                    try? await HarnessEmbeddedMutation.cancelChildRun(
-                        conversationID: childID,
-                        runID: runID,
-                        fallback: {
-                            await agentRuntime.cancelSubAgentRun(conversationID: childID, runID: runID)
-                        }
+                // Prefer the spawn-service cancel: it falls back to lifecycle streaming run IDs
+                // when `conversation.currentRunID` is not yet stamped (timeout mid-setup).
+                await subAgentSpawnService.cancelChildRunForSubAgent(childConversationID: childID)
+            },
+            finishChildRunLifecycle: { childID in
+                // Drain-task cancellation alone never reaches afterTurn / generationTask. Mirror
+                // LocalAgents: always terminal-close so the run-lane is released on timeout.
+                await subAgentSpawnService.finishSubAgentLifecycleForEndedChildRun(
+                    childConversationID: childID,
+                    terminalReason: ConversationRunTerminalReason(
+                        category: .externalCancellation,
+                        detail: "memory_subagent_timeout"
                     )
-                }
+                )
             },
             lastAssistantText: { childID in
                 guard let conversation = await persistenceDomain.modelConversation(id: childID) else {

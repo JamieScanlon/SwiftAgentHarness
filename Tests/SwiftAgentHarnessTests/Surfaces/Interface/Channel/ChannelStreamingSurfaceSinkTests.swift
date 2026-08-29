@@ -26,7 +26,7 @@ struct ChannelStreamingSurfaceSinkTests {
 struct MessageToolSchemaRegistryTests {
     @Test("merged schema adds media object when descriptors registered")
     func mergedSchema() {
-        MessageToolSchemaRegistry.register(actionSchemas: [
+        MessageToolSchemaRegistry.register(surfaceID: "test-surface", actionSchemas: [
             MessageToolActionSchema(
                 action: "post",
                 mediaParams: [

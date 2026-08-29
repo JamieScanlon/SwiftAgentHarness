@@ -28,6 +28,11 @@ public struct WebhookRoute: Codable, Sendable, Equatable, Identifiable {
     public var deliveryWebhookURL: String?
     public var deliverExtra: [String: String]? = nil
     public var includeKnownPartySecurityPreamble: Bool? = nil
+    /// Who registered this route. `nil` on static config rows and on rows written before the
+    /// registration layer existed. Optional so the synthesized decoder stays back-compatible.
+    public var createdBy: RegistrationCreator?
+    public var createdAtMs: Int64?
+    public var updatedAtMs: Int64?
 
     public var id: String { name }
 
@@ -47,7 +52,10 @@ public struct WebhookRoute: Codable, Sendable, Equatable, Identifiable {
         delegate: TriggerDelegateProfile? = nil,
         deliveryWebhookURL: String? = nil,
         deliverExtra: [String: String]? = nil,
-        includeKnownPartySecurityPreamble: Bool? = nil
+        includeKnownPartySecurityPreamble: Bool? = nil,
+        createdBy: RegistrationCreator? = nil,
+        createdAtMs: Int64? = nil,
+        updatedAtMs: Int64? = nil
     ) {
         self.name = name
         self.secret = secret
@@ -65,7 +73,27 @@ public struct WebhookRoute: Codable, Sendable, Equatable, Identifiable {
         self.deliveryWebhookURL = deliveryWebhookURL
         self.deliverExtra = deliverExtra
         self.includeKnownPartySecurityPreamble = includeKnownPartySecurityPreamble
+        self.createdBy = createdBy
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
     }
+
+    /// The route as it is safe to show a caller.
+    ///
+    /// The secret is *cleared*, not masked: an empty secret means "keep the stored one" at the
+    /// registration boundary, so a redacted route that finds its way back into an update cannot
+    /// install a placeholder as the HMAC key and silently break every upstream delivery. Creator
+    /// identity is dropped too — internal conversation and account UUIDs are not the model's
+    /// business.
+    public var redacted: WebhookRoute {
+        var copy = self
+        copy.secret = ""
+        copy.createdBy = nil
+        return copy
+    }
+
+    /// Whether this route has a usable secret. A route without one cannot start.
+    public var hasSecret: Bool { !secret.isEmpty }
 }
 
 enum WebhookDeliverOnlyValidation {

@@ -113,6 +113,15 @@ public enum TriggerReplayCLI {
                     jsonOutput: jsonOutput,
                     logger: resolvedLogger
                 )
+            case "channel":
+                try runChannel(
+                    positional: Array(positional.dropFirst()),
+                    paths: paths,
+                    hasExplicitDataDirectory: dataDirectoryPath?
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                    jsonOutput: jsonOutput,
+                    logger: resolvedLogger
+                )
             default:
                 throw TriggerReplayCLIError.usage("unknown trigger subcommand: \(positional[0])")
             }
@@ -387,6 +396,141 @@ public enum TriggerReplayCLI {
         }
     }
 
+    // MARK: - Channel lifecycle
+
+    /// `trigger channel status|enable|disable <channel>`.
+    ///
+    /// The owner surface for phase 4a. Authority is `.owner` / `.cli`: running this binary against
+    /// the data directory *is* the credential, the same basis `localFileDrop` uses.
+    ///
+    /// This is a separate process from any running gateway, so a change here writes the overlay and
+    /// nothing else — `ChannelLifecycleApplierHolder` is unwired, so the result reports
+    /// `appliedToRunningProcess: false` and the output says when it takes effect. Claiming a live
+    /// pause here would be the one lie this command must not tell.
+    private static func runChannel(
+        positional: [String],
+        paths: TriggerReplayPaths,
+        hasExplicitDataDirectory: Bool,
+        jsonOutput: Bool,
+        logger: Logger
+    ) throws {
+        // `TriggerReplayPaths.resolve` falls back to a fresh temp directory when `--data-directory`
+        // is omitted. That is right for replay — a scratch run against throwaway state — and wrong
+        // here: `trigger channel disable slack` would write an overlay into /tmp, report success,
+        // exit 0, and leave the real channel ingesting. Required, not defaulted.
+        guard hasExplicitDataDirectory else {
+            throw TriggerReplayCLIError.usage(
+                "trigger channel requires --data-directory <path> (without it the change would be written to a temporary directory and silently discarded)"
+            )
+        }
+        guard let subcommand = positional.first else {
+            throw TriggerReplayCLIError.usage("usage: trigger channel status | enable <channel> | disable <channel>")
+        }
+        let stateStore = ChannelRuntimeStateStore(
+            fileURL: paths.dataDirectory.appendingPathComponent("channel_runtime_state.json")
+        )
+        let configURL = paths.dataDirectory.appendingPathComponent("channels.json")
+
+        if subcommand == "status" {
+            let loaded = ChannelConfigLoader.loadResult(from: configURL)
+            for diagnostic in loaded.diagnostics where diagnostic.isFailure {
+                fputs("warning: \(diagnostic.message)\n", stderr)
+            }
+            let overlay = (try? stateStore.load()) ?? [:]
+            let rows = ChannelId.allCases.map { channel -> TriggerChannelStatusRow in
+                let config = loaded.file.config(for: channel)
+                let disabled = overlay[channel.rawValue]?.disabled == true
+                return TriggerChannelStatusRow(
+                    channel: channel.rawValue,
+                    configured: config != nil,
+                    configEnabled: config?.enabled ?? false,
+                    runtimePaused: disabled,
+                    effectiveEnabled: (config?.enabled ?? false) && !disabled,
+                    pausedBy: overlay[channel.rawValue]?.changedBy?.auditLabel
+                )
+            }
+            printOutput(TriggerChannelStatusResult(channels: rows), json: jsonOutput)
+            // Live listener state is not knowable from another process; say where it is rather than
+            // printing a `running` column this command would have to guess at.
+            if !jsonOutput {
+                print("(live listener state: \(paths.dataDirectory.appendingPathComponent("channel-status").path)/<channel>.json)")
+            }
+            return
+        }
+
+        let enabled: Bool
+        switch subcommand {
+        case "enable", "resume": enabled = true
+        case "disable", "pause": enabled = false
+        default:
+            throw TriggerReplayCLIError.usage("unknown channel subcommand: \(subcommand)")
+        }
+        guard positional.count >= 2 else {
+            throw TriggerReplayCLIError.usage("usage: trigger channel \(subcommand) <channel>")
+        }
+        guard let channel = ChannelId(rawValue: positional[1].lowercased()) else {
+            throw TriggerReplayCLIError.usage(
+                "unknown channel: \(positional[1]) (expected one of \(ChannelId.allCases.map(\.rawValue).joined(separator: ", ")))"
+            )
+        }
+        let registration = TriggerRegistrationService(
+            store: ScheduledTaskStore(fileURL: paths.scheduledTasksURL),
+            channelState: stateStore,
+            channelConfigURL: configURL,
+            auditLog: TriggerAuditLog(
+                logger: logger,
+                jsonlURL: paths.dataDirectory.appendingPathComponent("trigger_audit.jsonl")
+            ),
+            logger: logger
+        )
+        let result = try awaitChannelLifecycle {
+            try await registration.setChannelEnabled(
+                channel: channel,
+                enabled: enabled,
+                authority: .localCLI(),
+                reason: "cli"
+            )
+        }
+        printOutput(
+            TriggerChannelLifecycleResult(
+                channel: result.entry.channel,
+                disabled: result.entry.disabled,
+                appliedToRunningProcess: result.appliedToRunningProcess,
+                message: result.summary
+            ),
+            json: jsonOutput
+        )
+    }
+
+    /// Same bridge shape as ``awaitDeliverOnly``, carrying a thrown error across rather than
+    /// swallowing it — a refused lifecycle change must not print as a success with an empty result.
+    private static func awaitChannelLifecycle(
+        _ work: @escaping @Sendable () async throws -> ChannelLifecycleResult
+    ) throws -> ChannelLifecycleResult {
+        final class ResultBox: @unchecked Sendable {
+            var value: ChannelLifecycleResult?
+            var error: Error?
+        }
+        let box = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            Task {
+                do {
+                    box.value = try await work()
+                } catch {
+                    box.error = error
+                }
+                semaphore.signal()
+            }
+        }
+        semaphore.wait()
+        if let error = box.error { throw error }
+        guard let value = box.value else {
+            throw TriggerReplayCLIError.usage("channel lifecycle change produced no result")
+        }
+        return value
+    }
+
     private static func awaitDeliverOnly(_ work: @escaping @Sendable () async -> WebhookDeliverOnlyOutcome) throws -> WebhookDeliverOnlyOutcome {
         final class ResultBox: @unchecked Sendable {
             var value: WebhookDeliverOnlyOutcome?
@@ -430,6 +574,19 @@ public enum TriggerReplayCLI {
             if let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) {
                 print(text)
             }
+        } else if let status = value as? TriggerChannelStatusResult {
+            for row in status.channels {
+                var parts = [
+                    row.channel,
+                    "config=" + (row.configured ? (row.configEnabled ? "enabled" : "disabled") : "absent"),
+                    "runtime=" + (row.runtimePaused ? "paused" : "active"),
+                    "effective=" + (row.effectiveEnabled ? "enabled" : "disabled"),
+                ]
+                if let pausedBy = row.pausedBy { parts.append("by=" + pausedBy) }
+                print(parts.joined(separator: " "))
+            }
+        } else if let lifecycle = value as? TriggerChannelLifecycleResult {
+            print(lifecycle.message)
         } else if let enqueued = value as? TriggerReplayEnqueueResult {
             print("enqueued \(enqueued.eventFile) -> \(enqueued.eventsDirectory)")
             print(enqueued.message)
@@ -463,6 +620,8 @@ public enum TriggerReplayCLI {
           trigger snapshot replay <trigger.json> [--in-process] [--json]
           trigger audit replay <trigger-id> [--in-process] [--json]
           trigger cron fire <task-id> [--in-process] [--json]
+          trigger channel status --data-directory <path> [--json]
+          trigger channel enable|disable <channel> --data-directory <path> [--json]
 
         Flags:
           --data-directory    Trigger config directory (webhooks, cron, snapshots; ephemeral temp when omitted)

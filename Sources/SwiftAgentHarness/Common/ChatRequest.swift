@@ -16,5 +16,14 @@ struct ChatRequest: Codable {
     let originSurface: String?
     /// Optional sender id for provenance.
     let originSenderID: String?
+    /// Optional sender-scoped **self-restriction**: `true` asserts the human behind this request is
+    /// *not* the conversation owner.
+    ///
+    /// Negative-only by design. This field is attacker-controllable like every other field in this
+    /// body, so it may only ever *lower* the sender's privilege. The affirmative verdict is resolved
+    /// server-side from the authenticated principal and is never read from the wire — otherwise any
+    /// caller that can reach `/api` could assert ownership and walk through control-plane tool
+    /// policy.
+    let originSenderIsNonOwner: Bool?
 }
 

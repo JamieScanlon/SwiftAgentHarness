@@ -526,7 +526,18 @@ enum AgentLoopToolDispatch {
             }
         }
         let resolvedEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries)
-        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+        // A non-owner's control-plane call must reach the gateway even when a pre-approval says
+        // otherwise. Every pre-approval here was granted by the *owner* — an `allow-once` binding
+        // from earlier in the run, or a durable "always allow" from the permission store — and none
+        // of them is a statement about whoever is speaking now. Ordering the deny rung first inside
+        // `evaluateCallGating` is not enough on its own, because this guard would skip the call.
+        // Classify the same string the rung will classify (`entry.name`), not the raw call name —
+        // otherwise a registry alias would resolve to an entry here while failing this check, which
+        // re-opens the pre-approved bypass the guard exists to close.
+        let controlPlaneSenderCheckRequired = configuration.originSenderIsOwner == false
+            && ToolControlPlaneClassification.isControlPlane(resolvedEntry?.name ?? call.name)
+        if (!bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved)
+            || controlPlaneSenderCheckRequired,
            let gateway,
            let conversation,
            let entry = resolvedEntry {
@@ -794,7 +805,18 @@ enum AgentLoopToolDispatch {
             }
         }
         let resolvedEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries)
-        if !bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved,
+        // A non-owner's control-plane call must reach the gateway even when a pre-approval says
+        // otherwise. Every pre-approval here was granted by the *owner* — an `allow-once` binding
+        // from earlier in the run, or a durable "always allow" from the permission store — and none
+        // of them is a statement about whoever is speaking now. Ordering the deny rung first inside
+        // `evaluateCallGating` is not enough on its own, because this guard would skip the call.
+        // Classify the same string the rung will classify (`entry.name`), not the raw call name —
+        // otherwise a registry alias would resolve to an entry here while failing this check, which
+        // re-opens the pre-approved bypass the guard exists to close.
+        let controlPlaneSenderCheckRequired = configuration.originSenderIsOwner == false
+            && ToolControlPlaneClassification.isControlPlane(resolvedEntry?.name ?? call.name)
+        if (!bindingPreApproved && !durableNamePreApproved && !durableRulePreApproved)
+            || controlPlaneSenderCheckRequired,
            let gateway,
            let conversation,
            let entry = resolvedEntry {

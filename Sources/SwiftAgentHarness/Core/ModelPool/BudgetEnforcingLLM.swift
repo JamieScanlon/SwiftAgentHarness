@@ -27,6 +27,9 @@ struct BudgetEnforcingLLM: LLMProtocol {
     let ownerAccountID: UUID?
     let modelCost: ModelCostBudget?
     let logger: Logger?
+    /// Reports the settled figure back to the turn loop, which stamps it on the completion's audit
+    /// row. This wrapper is the only place that knows the *dispatched* model's rates.
+    let settlementSink: ModelCompletionSettlementSink?
 
     init(
         base: any LLMProtocol,
@@ -36,7 +39,8 @@ struct BudgetEnforcingLLM: LLMProtocol {
         conversationID: UUID?,
         ownerAccountID: UUID? = nil,
         modelCost: ModelCostBudget?,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        settlementSink: ModelCompletionSettlementSink? = nil
     ) {
         self.base = base
         self.accounting = accounting
@@ -46,6 +50,7 @@ struct BudgetEnforcingLLM: LLMProtocol {
         self.ownerAccountID = ownerAccountID
         self.modelCost = modelCost
         self.logger = logger
+        self.settlementSink = settlementSink
     }
 
     var currentState: LLMRuntimeState { base.currentState }
@@ -72,14 +77,16 @@ struct BudgetEnforcingLLM: LLMProtocol {
         )
         do {
             let response = try await base.send(messages, config: config)
+            let settled = actualCostUSD(from: response.metadata)
             await ModelPoolBudgetDispatch.settle(
                 accounting: accounting,
                 policy: policy,
                 modelID: modelID,
                 conversationID: conversationID,
                 accountID: ownerAccountID,
-                actualCostUSD: actualCostUSD(from: response.metadata)
+                actualCostUSD: settled
             )
+            settlementSink?.record(conversationID: conversationID, costUSD: settled)
             return response
         } catch is CancellationError {
             // Cancellation releases any pre-authorized reservation.
@@ -91,6 +98,7 @@ struct BudgetEnforcingLLM: LLMProtocol {
                 accountID: ownerAccountID,
                 actualCostUSD: 0
             )
+            settlementSink?.record(conversationID: conversationID, costUSD: nil)
             throw CancellationError()
         } catch {
             await ModelPoolBudgetDispatch.settle(
@@ -101,6 +109,7 @@ struct BudgetEnforcingLLM: LLMProtocol {
                 accountID: ownerAccountID,
                 actualCostUSD: nil
             )
+            settlementSink?.record(conversationID: conversationID, costUSD: nil)
             throw error
         }
     }
@@ -176,14 +185,18 @@ struct BudgetEnforcingLLM: LLMProtocol {
                         }
                         continuation.yield(result)
                     }
+                    let settled = actualCostUSD(from: terminalResponse?.metadata)
                     await ModelPoolBudgetDispatch.settle(
                         accounting: accounting,
                         policy: policy,
                         modelID: modelID,
                         conversationID: conversationID,
                         accountID: ownerAccountID,
-                        actualCostUSD: actualCostUSD(from: terminalResponse?.metadata)
+                        actualCostUSD: settled
                     )
+                    // Before `finish()`: the consumer's `for try await` cannot exit until the
+                    // continuation finishes, so this write happens-before the turn loop reads it.
+                    settlementSink?.record(conversationID: conversationID, costUSD: settled)
                     continuation.finish()
                 } catch is CancellationError {
                     // Cancellation releases any pre-authorized reservation.
@@ -195,6 +208,7 @@ struct BudgetEnforcingLLM: LLMProtocol {
                         accountID: ownerAccountID,
                         actualCostUSD: 0
                     )
+                    settlementSink?.record(conversationID: conversationID, costUSD: nil)
                     continuation.finish(throwing: CancellationError())
                 } catch {
                     await ModelPoolBudgetDispatch.settle(
@@ -205,6 +219,7 @@ struct BudgetEnforcingLLM: LLMProtocol {
                         accountID: ownerAccountID,
                         actualCostUSD: nil
                     )
+                    settlementSink?.record(conversationID: conversationID, costUSD: nil)
                     continuation.finish(throwing: error)
                 }
             }
@@ -229,17 +244,14 @@ struct BudgetEnforcingLLM: LLMProtocol {
         return inputUSD + outputUSD
     }
 
+    /// Shared with the turn loop's per-completion audit stamp — see ``ModelCompletionCostMath``.
+    /// Two copies of this formula is how the budget ledger and the run rollup come to disagree.
     private func actualCostUSD(from metadata: LLMMetadata?) -> Double? {
-        guard let cost = modelCost,
-              let inputRate = cost.inputPer1MUSD,
-              let outputRate = cost.outputPer1MUSD,
-              let metadata
-        else { return nil }
-        let promptTokens = max(0, metadata.promptTokens ?? 0)
-        let completionTokens = max(0, metadata.completionTokens ?? 0)
-        let inputUSD = (Double(promptTokens) / 1_000_000.0) * inputRate
-        let outputUSD = (Double(completionTokens) / 1_000_000.0) * outputRate
-        return inputUSD + outputUSD
+        ModelCompletionCostMath.usd(
+            promptTokens: metadata?.promptTokens,
+            completionTokens: metadata?.completionTokens,
+            cost: modelCost
+        )
     }
 
     private func projectedImageCostUSD(config: ImageGenerationRequestConfig) -> Double? {

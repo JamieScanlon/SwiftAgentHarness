@@ -311,6 +311,38 @@ struct ToolCallAccumulator {
     }
 }
 
+// MARK: - DegenerateResponseGuard
+
+/// Shared "did this turn deliver anything?" check for provider adapters.
+///
+/// Every adapter previously ended its stream with an unconditional `finishSuccess` (or, worse, a
+/// bare `continuation.finish()`), so a turn that produced nothing was indistinguishable from a
+/// model that chose to say nothing. That is the DEF-135 shape; this centralises the rule so the
+/// adapters cannot drift apart on it.
+///
+/// A turn is legitimately empty only when the provider *reported a terminal stop reason* —
+/// `end_turn` with no text is rare but real. Anything else with no text, no tool calls, and no
+/// reasoning is a failure.
+enum DegenerateResponseGuard {
+    static func failure(
+        provider: String,
+        kind: DegenerateStreamError.Kind = .noOutcome,
+        text: String,
+        toolCalls: [ToolCall],
+        sawReasoning: Bool = false,
+        providerReportedStop: Bool,
+        detail: String? = nil
+    ) -> DegenerateStreamError? {
+        guard text.isEmpty, toolCalls.isEmpty, !sawReasoning else { return nil }
+        guard !providerReportedStop else { return nil }
+        return DegenerateStreamError(
+            kind: kind,
+            provider: provider,
+            detail: detail ?? "\(provider) stream produced no text, tool calls, or finish reason"
+        )
+    }
+}
+
 // MARK: - StreamCompletionEmitter
 
 /// Single source of truth for the `.complete`-once invariant on the streaming
@@ -368,9 +400,14 @@ struct StreamCompletionEmitter {
         continuation.finish(throwing: CancellationError())
     }
 
-    /// Finishes the stream with the supplied error. `LLMError` instances and
-    /// `CancellationError` pass through unchanged; every other `Error` is
-    /// wrapped as `LLMError.networkError(_:)`.
+    /// Finishes the stream with the supplied error. `LLMError`, `CancellationError`, and
+    /// ``DegenerateStreamError`` pass through unchanged; every other `Error` is wrapped as
+    /// `LLMError.networkError(_:)`.
+    ///
+    /// ``DegenerateStreamError`` is exempt from the wrap because the response arrived fine —
+    /// it was its *shape* that was unusable. Relabelling it `.networkError` would both mislead
+    /// anything that inspects the terminal error and bury the kind that callers need to tell a
+    /// truncated stream apart from a dropped connection.
     func finishFailed(with error: Error) {
         if error is CancellationError {
             continuation.finish(throwing: CancellationError())
@@ -378,6 +415,10 @@ struct StreamCompletionEmitter {
         }
         if let llmError = error as? LLMError {
             continuation.finish(throwing: llmError)
+            return
+        }
+        if let degenerate = error as? DegenerateStreamError {
+            continuation.finish(throwing: degenerate)
             return
         }
         continuation.finish(throwing: LLMError.networkError(error))

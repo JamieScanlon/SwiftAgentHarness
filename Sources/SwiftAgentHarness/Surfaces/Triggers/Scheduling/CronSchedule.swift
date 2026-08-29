@@ -37,20 +37,48 @@ struct CronSchedule {
         }
     }
 
+    /// Whether the expression pins the hour, e.g. `30 1 * * *` rather than `30 * * * *`.
+    ///
+    /// The daylight-saving fall-back rule applies only to pinned-hour jobs: a wildcard-hour job is
+    /// asking for every occurrence, and through a repeated hour both 01:xx hours are real elapsed
+    /// time. See `TriggerSchedulerService.nextFireDate`.
+    var pinsHour: Bool { !hour.isWildcard }
+
+    /// True when the two instants fall in the same local wall-clock minute.
+    ///
+    /// The fall-back test: during a fall-back the same local minute occurs twice in absolute time,
+    /// so equal wall-clock plus distinct instants means the second occurrence of one boundary.
+    static func isSameLocalMinute(_ lhs: Date, _ rhs: Date, in timeZone: TimeZone?) -> Bool {
+        var calendar = Calendar(identifier: .gregorian)
+        if let timeZone { calendar.timeZone = timeZone }
+        let fields: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute]
+        return calendar.dateComponents(fields, from: lhs) == calendar.dateComponents(fields, from: rhs)
+    }
+
+    /// Next matching instant, evaluated against wall-clock time in `timeZone`.
+    ///
+    /// `nil` means "the zone this process happens to run in", which is what every caller got before
+    /// tasks could carry a zone. That is preserved rather than switched to UTC because changing it
+    /// would silently move every existing recurring task by the deployment's offset; new tasks are
+    /// stamped with an explicit zone at registration instead.
+    func nextDate(after date: Date, in timeZone: TimeZone?) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        if let timeZone { calendar.timeZone = timeZone }
+        return nextDate(after: date, calendar: calendar)
+    }
+
     func nextDate(after date: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> Date? {
         let calendar = calendar
 
-        guard let start = calendar.date(
-            bySettingHour: calendar.component(.hour, from: date),
-            minute: calendar.component(.minute, from: date),
-            second: 0,
-            of: date
-        ) else {
-            return nil
-        }
-        guard var candidate = calendar.date(byAdding: .minute, value: 1, to: start) else {
-            return nil
-        }
+        // Floor to the minute in *absolute* time, then step one minute.
+        //
+        // This replaced `calendar.date(bySettingHour:minute:second:of:)`, which searches forward
+        // from the start of the local day and whose default `repeatedTimePolicy` is `.first`. Inside
+        // a daylight-saving repeated hour that resolved to the *earlier* of the two 01:xx instants —
+        // an hour behind the input — so the walk could re-scan time it had already passed and return
+        // a boundary at or before `date`. Every caller assumes the result is strictly later.
+        let flooredSeconds = (date.timeIntervalSince1970 / 60).rounded(.down) * 60
+        var candidate = Date(timeIntervalSince1970: flooredSeconds + 60)
 
         // 5 years of minute-resolution search space.
         let maxIterations = 60 * 24 * 366 * 5

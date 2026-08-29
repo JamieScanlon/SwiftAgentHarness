@@ -39,7 +39,8 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         let harness = AgentHarnessConfiguration.default
         let runLaneOrigin = RunLaneResolver.runLaneOrigin(originSurface: originSurface)
@@ -52,6 +53,7 @@ public final class RuntimeStreamingOrchestrationService: APILayerChatRuntimeMana
             ephemeralSystemReminder: systemReminder,
             originSurface: originSurface,
             originSenderID: originSenderID,
+            originSenderIsOwner: originSenderIsOwner,
             runLaneOrigin: runLaneOrigin
         )
         let configuration: AgentRuntimeTurnConfiguration

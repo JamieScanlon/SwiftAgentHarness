@@ -201,6 +201,7 @@ public struct ModeProfileTerminationSlice: Sendable, Equatable {
 /// Use this slice to control how a mode bounds and continues work during a turn:
 /// - ``maxIterations`` bounds inner agentic/model-tool loop steps per update.
 /// - ``stopOnApprovalRequest`` controls whether a turn should stop when any tool requires approval.
+/// - ``resumesOnDelegateCompletion`` controls whether an idle conversation wakes for a delegate result.
 /// - ``termination`` controls how a turn can naturally terminate.
 public struct ModeProfileRuntimeSlice: Sendable, Equatable {
     /// Maximum inner-loop iterations allowed for a single runtime update (single conversation turn).
@@ -214,6 +215,15 @@ public struct ModeProfileRuntimeSlice: Sendable, Equatable {
     /// - `true`: stop with `stop_on_approval_request` when approval-required tools are detected.
     /// - `false`: do not stop solely due to approval-required tools.
     public var stopOnApprovalRequest: Bool?
+    /// Whether an **idle** conversation in this mode starts a turn when an asynchronous delegate
+    /// completes (wake-on-idle). A completion landing mid-turn is always picked up by the running
+    /// turn regardless of this value — this only decides whether an idle conversation is woken.
+    ///
+    /// - `nil`: no explicit mode override; the caller falls back to the historical rule, which
+    ///   wakes agent-mode conversations only.
+    /// - `true`: wake this mode's idle conversations.
+    /// - `false`: leave the completion on the transcript for the next user turn to pick up.
+    public var resumesOnDelegateCompletion: Bool?
     /// Declarative turn-termination policy.
     public var termination: ModeProfileTerminationSlice?
 
@@ -222,14 +232,17 @@ public struct ModeProfileRuntimeSlice: Sendable, Equatable {
     /// - Parameters:
     ///   - maxIterations: Maximum inner-loop iterations per update, or `nil` for no mode cap.
     ///   - stopOnApprovalRequest: Whether approval-required tools should terminate the turn, or `nil` for default behavior.
+    ///   - resumesOnDelegateCompletion: Whether an idle conversation wakes for a delegate completion, or `nil` for default behavior.
     ///   - termination: Declarative turn-termination policy, or `nil` to use runtime defaults.
     public init(
         maxIterations: Int? = nil,
         stopOnApprovalRequest: Bool? = nil,
+        resumesOnDelegateCompletion: Bool? = nil,
         termination: ModeProfileTerminationSlice? = nil
     ) {
         self.maxIterations = maxIterations.map { max(1, $0) }
         self.stopOnApprovalRequest = stopOnApprovalRequest
+        self.resumesOnDelegateCompletion = resumesOnDelegateCompletion
         self.termination = termination
     }
 

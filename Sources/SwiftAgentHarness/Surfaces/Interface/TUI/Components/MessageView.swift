@@ -40,9 +40,17 @@ public final class MessageViewComponent: TUIComponent {
         case .tool:
             prefix = ANSIStyle.color("Tool", fg: 214)
         }
-        let body = message.content + streamingTail + (message.isStreaming ? "▌" : "")
         let header = ANSITruncate.truncate(prefix, toWidth: width)
         var lines = [ANSIStyle.finishLine(header)]
+
+        // Native rendering when the message arrived as a portable presentation; the text
+        // floor in `content` is the fallback, not the default.
+        if let presentation = message.presentation, streamingTail.isEmpty, !message.isStreaming {
+            lines.append(contentsOf: MessagePresentationTerminalRenderer.render(presentation, width: width))
+            return lines
+        }
+
+        let body = message.content + streamingTail + (message.isStreaming ? "▌" : "")
         lines.append(contentsOf: ANSIWrap.wrap(body, width: width))
         return lines
     }

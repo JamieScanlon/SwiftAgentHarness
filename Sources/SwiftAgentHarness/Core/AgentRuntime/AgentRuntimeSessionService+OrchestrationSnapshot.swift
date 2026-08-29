@@ -80,6 +80,11 @@ extension AgentRuntimeSessionService {
             snapshot.llmRequestPhase = .idle
             snapshot.currentRunID = nil
         }
+        // Set after the terminal override above, on purpose: an idle parent with a running child is
+        // exactly the state this field exists to report, so it must survive the phases being zeroed.
+        let subAgentActivity = await subAgentSpawnServiceForRuntime()?
+            .subAgentActivityPhase(conversationID: targetID)
+        snapshot.subAgentActivityPhase = subAgentActivity ?? .idle
         if let terminal = pendingTerminalReasonForSnapshot(
             conversationID: streamingConversationID,
             runID: effectiveRunID
@@ -148,6 +153,40 @@ extension AgentRuntimeSessionService {
                 )
             }
         }
+    }
+
+    /// Republishes a conversation's state on the conversation-state topic because its delegate
+    /// activity changed, for a conversation that may have no live turn at all.
+    ///
+    /// Deliberately narrower than ``emitOrchestrationStateFromLiveSources``: that function yields
+    /// into the single orchestration *stream* and takes ownership of the single-slot emission and
+    /// dedup state, both of which belong to whichever conversation is currently streaming. A
+    /// background delegate finishing on conversation A must not push A's snapshot into the stream a
+    /// client is reading for B, nor reset B's dedup. The topic refresh is conversation-addressed and
+    /// is the only channel that reaches an idle conversation's subscribers.
+    func refreshSubAgentActivityOnConversationStateTopic(conversationID: UUID) async {
+        guard let refreshHandler = orchestrationStateTopicRefreshHandler() else { return }
+        // Read the union before building anything. Every lifecycle transition calls in, but only the
+        // ones that move it are worth a topic frame — a delegate stepping queued → dispatching →
+        // running reads `working` throughout — and building a snapshot for a live turn writes the
+        // conversation back, which is not something to do on every tick for no change.
+        let resolvedPhase = await subAgentSpawnServiceForRuntime()?
+            .subAgentActivityPhase(conversationID: conversationID)
+        let phase = resolvedPhase ?? ConversationSubAgentActivityPhase.idle
+        guard lastPublishedSubAgentActivityPhase(conversationID: conversationID) != phase else { return }
+        let isTerminal = await isTerminalSnapshot(conversationID: conversationID)
+        guard let snapshot = await buildOrchestrationStateSnapshotFromSwiftAgentKit(
+            forStreamingConversation: conversationID,
+            isTerminalSnapshotAfterCompletion: isTerminal,
+            forceStreamingPhases: false
+        ) else { return }
+        // Recorded from the rebuilt snapshot rather than the value read above, so the two cannot
+        // drift if the union moved again while the snapshot was being assembled.
+        setLastPublishedSubAgentActivityPhase(snapshot.subAgentActivityPhase, conversationID: conversationID)
+        deps.logger?.debug(
+            "[AgentRuntimeSessionService] sub-agent activity refresh conversationID=\(conversationID.uuidString) phase=\(snapshot.subAgentActivityPhase.rawValue)"
+        )
+        await refreshHandler(conversationID, snapshot)
     }
 
     func recordContextSnapshot(

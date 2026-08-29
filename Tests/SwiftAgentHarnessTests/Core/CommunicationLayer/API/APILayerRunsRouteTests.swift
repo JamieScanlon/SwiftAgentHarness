@@ -83,7 +83,8 @@ private final class MutableRunsRuntimeStub: APILayerChatRuntimeManaging, Sendabl
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         _ = (
             conversationID,

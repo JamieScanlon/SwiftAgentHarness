@@ -13,7 +13,7 @@ struct FileEventScheduledSyncCorrelationTests {
         let store = ScheduledTaskStore(fileURL: taskFile)
         let sync = FileEventScheduledSync(
             eventsDirectory: dir,
-            taskStore: store,
+            registration: TriggerRegistrationTestSupport.service(store: store),
             logger: Logger(label: "test")
         )
         let eventURL = dir.appendingPathComponent("follow-up.json")

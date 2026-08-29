@@ -93,46 +93,45 @@ struct OpenShellSandboxBackendTests {
 
     @Test("finalizeExec syncs mirror on failed exec")
     func finalizeExecSyncsOnFailure() async throws {
-        await WorkspaceMirrorSync.shared.resetForTesting()
-        defer { Task { await WorkspaceMirrorSync.shared.resetForTesting() } }
+        try await WorkspaceMirrorSyncTestIsolation.withExclusiveAccess {
+            let host = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openshell-host-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: host) }
 
-        let host = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openshell-host-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: host) }
-
-        final class RecordingRunner: WorkspaceMirrorSyncRunning, @unchecked Sendable {
-            private let lock = NSLock()
-            private var _calls: [String] = []
-            var calls: [String] { lock.withLock { _calls } }
-            func run(argv: [String]) async throws -> ShellProcessRunner.RunResult {
-                lock.withLock { _calls.append(argv.joined(separator: " ")) }
-                return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
+            final class RecordingRunner: WorkspaceMirrorSyncRunning, @unchecked Sendable {
+                private let lock = NSLock()
+                private var _calls: [String] = []
+                var calls: [String] { lock.withLock { _calls } }
+                func run(argv: [String]) async throws -> ShellProcessRunner.RunResult {
+                    lock.withLock { _calls.append(argv.joined(separator: " ")) }
+                    return ShellProcessRunner.RunResult(stdout: Data(), stderr: Data(), exitCode: 0)
+                }
             }
-        }
-        let runner = RecordingRunner()
-        await WorkspaceMirrorSync.shared.setRunnerForTesting(runner)
+            let runner = RecordingRunner()
+            await WorkspaceMirrorSync.shared.setRunnerForTesting(runner)
 
-        let params = CreateSandboxBackendParams(
-            sessionKey: "sess",
-            scopeKey: "agent-1",
-            workspaceDir: host.path,
-            agentWorkspaceDir: host.path,
-            config: SandboxConfig(
-                mode: .all,
-                scope: .agent,
-                backend: "openshell",
-                sandboxingActive: true,
-                openshell: OpenShellSandboxSettings()
-            ),
-            memoryDirectory: nil
-        )
-        let handle = try OpenShellSandboxBackendHandle(params: params)
-        try await handle.finalizeExec(
-            params: SandboxFinalizeExecParams(status: .failed, exitCode: 1, timedOut: false)
-        )
-        #expect(runner.calls.count == 1)
-        #expect(runner.calls[0].contains("rsync"))
+            let params = CreateSandboxBackendParams(
+                sessionKey: "sess",
+                scopeKey: "agent-1",
+                workspaceDir: host.path,
+                agentWorkspaceDir: host.path,
+                config: SandboxConfig(
+                    mode: .all,
+                    scope: .agent,
+                    backend: "openshell",
+                    sandboxingActive: true,
+                    openshell: OpenShellSandboxSettings()
+                ),
+                memoryDirectory: nil
+            )
+            let handle = try OpenShellSandboxBackendHandle(params: params)
+            try await handle.finalizeExec(
+                params: SandboxFinalizeExecParams(status: .failed, exitCode: 1, timedOut: false)
+            )
+            #expect(runner.calls.count == 1)
+            #expect(runner.calls[0].contains("rsync"))
+        }
     }
 
     @Test("openshell config hash changes when workdir changes")

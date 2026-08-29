@@ -170,7 +170,8 @@ final class ProtocolOnlyRuntimeGatewayStub: APILayerChatRuntimeManaging, Sendabl
     func apiMessageStream(for conversationID: UUID?) async throws -> AsyncStream<[Message]> { _ = conversationID; return AsyncStream { $0.finish() } }
     func apiSendMessageAndStreamResponse(conversationID: UUID, _ text: String, images: [Message.Image], enableTools: Bool, enableAgents: Bool, expectedPreviousTailHarnessMessageID: UUID?, inputTrustRaw: String?, resolvedInputTrustClass: TrustPolicyClass? = nil, systemReminder: String?,
         originSurface: String? = nil,
-        originSenderID: String? = nil
+        originSenderID: String? = nil,
+        originSenderIsOwner: Bool? = nil
     ) async throws -> ChatStreamResponse {
         _ = (conversationID, text, images, enableTools, enableAgents, expectedPreviousTailHarnessMessageID, inputTrustRaw, resolvedInputTrustClass, systemReminder)
         throw APILayerConversationAPIError.unsupported

@@ -94,7 +94,7 @@ enum ReplayProjectionTestSupport {
 
     static func waitUntil(
         _ predicate: @escaping () async -> Bool,
-        timeoutMS: Int = 2_000
+        timeoutMS: Int = 10_000
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(Double(timeoutMS) / 1000.0)
         while Date() < deadline {

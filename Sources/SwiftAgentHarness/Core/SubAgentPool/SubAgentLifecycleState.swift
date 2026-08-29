@@ -31,6 +31,17 @@ struct SubAgentLifecycleState {
         entriesByParentConversationID.values.flatMap { $0 }
     }
 
+    /// Non-terminal invocations whose spawned child is `childConversationID`.
+    ///
+    /// `awaitingApproval` is deliberately excluded: a paused invocation is expected to resume, so
+    /// ending its lane on a turn boundary would under-count concurrency rather than leak it.
+    func activeEntries(childConversationID: UUID) -> [SubAgentLifecycleEntryPayload] {
+        let active: Set<SubAgentLifecyclePhase> = [.queued, .dispatching, .running, .completing]
+        return allEntries().filter {
+            $0.childConversationID == childConversationID && active.contains($0.phase)
+        }
+    }
+
     func startedAt(lifecycleID: String) -> Date? {
         startedAtByLifecycleID[lifecycleID]
     }
@@ -153,6 +164,55 @@ struct SubAgentLifecycleState {
                 )
             }
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Union of delegate activity across the whole subtree rooted at `conversationID`.
+    ///
+    /// Walks the parent→child conversation links carried on the entries themselves rather than the
+    /// `pathSegments` bookkeeping, so it answers correctly for any conversation in the tree — a root
+    /// or a mid-tree child — and needs no path for the conversation being asked about. Descends
+    /// through finished entries too: a background grandchild can outlive the child that spawned it.
+    func subAgentActivityPhase(conversationID: UUID) -> ConversationSubAgentActivityPhase {
+        let workingPhases: Set<SubAgentLifecyclePhase> = [.queued, .dispatching, .running, .completing]
+        var visited: Set<UUID> = [conversationID]
+        var frontier: [UUID] = [conversationID]
+        var sawWorking = false
+        while let current = frontier.popLast() {
+            for entry in entries(parentConversationID: current) {
+                if entry.phase == .awaitingApproval {
+                    // Nothing outranks it, so there is no reason to keep walking.
+                    return .awaitingApproval
+                }
+                if workingPhases.contains(entry.phase) {
+                    sawWorking = true
+                }
+                // A queued entry has no child conversation yet; it still counts as working above.
+                if let childConversationID = entry.childConversationID,
+                   visited.insert(childConversationID).inserted {
+                    frontier.append(childConversationID)
+                }
+            }
+        }
+        return sawWorking ? .working : .idle
+    }
+
+    /// Every ancestor conversation whose subtree contains `conversationID`, nearest first.
+    ///
+    /// The status is read on whatever conversation the user is watching, which for a nested delegate
+    /// is an ancestor rather than the immediate parent — so a transition has to refresh the chain,
+    /// not just one row.
+    func ancestorConversationIDs(of conversationID: UUID) -> [UUID] {
+        var ancestors: [UUID] = []
+        var seen: Set<UUID> = [conversationID]
+        var current = conversationID
+        while let parent = allEntries()
+            .first(where: { $0.childConversationID == current })?
+            .parentConversationID,
+            seen.insert(parent).inserted {
+            ancestors.append(parent)
+            current = parent
+        }
+        return ancestors
     }
 
     func entry(parentConversationID: UUID, lifecycleID: String) -> SubAgentLifecycleEntryPayload? {

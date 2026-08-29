@@ -201,7 +201,8 @@ final class ModePatchConflictRuntimeStub: APILayerChatRuntimeManaging, Sendable 
         resolvedInputTrustClass: TrustPolicyClass? = nil,
         systemReminder: String?,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws -> ChatStreamResponse {
         _ = (
             conversationID,

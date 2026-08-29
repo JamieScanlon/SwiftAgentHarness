@@ -31,25 +31,48 @@ public struct MessageToolActionSchema: Sendable, Equatable {
 public enum MessageToolSchemaRegistry {
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
-        private var actionSchemas: [MessageToolActionSchema] = []
+        private var schemasBySurface: [String: [MessageToolActionSchema]] = [:]
 
-        func set(_ schemas: [MessageToolActionSchema]) {
+        func set(_ schemas: [MessageToolActionSchema], forSurface surfaceID: String) {
             lock.lock()
             defer { lock.unlock() }
-            actionSchemas = schemas
+            if schemas.isEmpty {
+                schemasBySurface.removeValue(forKey: surfaceID)
+            } else {
+                schemasBySurface[surfaceID] = schemas
+            }
         }
 
+        func remove(surfaceID: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            schemasBySurface.removeValue(forKey: surfaceID)
+        }
+
+        /// Sorted by surface id so the merged schema is byte-stable across registration order —
+        /// this feeds a tool's JSON schema, and an unstable one churns the model's prompt cache.
         func snapshot() -> [MessageToolActionSchema] {
             lock.lock()
             defer { lock.unlock() }
-            return actionSchemas
+            return schemasBySurface.keys.sorted().flatMap { schemasBySurface[$0] ?? [] }
         }
     }
 
     private static let state = State()
 
-    public static func register(actionSchemas: [MessageToolActionSchema]) {
-        state.set(actionSchemas)
+    /// Register one surface's descriptors, replacing only that surface's entry.
+    ///
+    /// Keyed, where it used to replace the whole list. Unkeyed, there was nothing to remove *by*:
+    /// a paused channel kept advertising its media params, a second surface registering silently
+    /// wiped the first (see the note in `TUISurfacePlugin`), and runtime channel teardown was
+    /// impossible — which is what blocked phase 4b.
+    public static func register(surfaceID: String, actionSchemas: [MessageToolActionSchema]) {
+        state.set(actionSchemas, forSurface: surfaceID)
+    }
+
+    /// Withdraw a surface's descriptors. Idempotent.
+    public static func unregister(surfaceID: String) {
+        state.remove(surfaceID: surfaceID)
     }
 
     public static func mergedRawSchema(base: JSON) -> JSON {

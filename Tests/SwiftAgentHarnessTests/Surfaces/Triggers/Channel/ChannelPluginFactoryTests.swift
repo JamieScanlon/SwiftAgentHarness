@@ -64,7 +64,7 @@ struct ChannelPluginFactoryBuildTests {
         let policy = TriggerActivationPolicy(
             idempotency: TriggerIdempotencyGate(dedupe: ChannelTestDedupe()),
             rateLimit: TriggerRateLimitGate(),
-            costCeiling: TriggerCostCeilingGate(),
+            initiatorBurst: TriggerInitiatorBurstGate(),
             auditLog: TriggerAuditLog(logger: Logging.Logger(label: "test"))
         )
         let router = TriggerSessionRouter(sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }))
@@ -88,6 +88,7 @@ private struct FactoryTestNoopRuntime: TriggerRuntimeDispatching {
         enableTools: Bool,
         enableAgents: Bool,
         originSurface: String?,
-        originSenderID: String?
+        originSenderID: String?,
+        originSenderIsOwner: Bool?
     ) async throws {}
 }

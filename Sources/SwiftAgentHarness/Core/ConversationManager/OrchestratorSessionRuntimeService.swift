@@ -534,10 +534,17 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         await resumeConversationAfterPendingCompletionIfNeeded(conversationID: event.conversationID)
     }
 
+    /// Wake-on-idle for an async delegate completion. Reuses the pending-completion park/resume
+    /// path, which already no-ops when a generation task is in flight — so a completion landing
+    /// mid-turn is picked up by the running turn instead of racing it.
+    func resumeAfterDelegateCompletionIfIdle(conversationID: UUID) async {
+        await resumeConversationAfterPendingCompletionIfNeeded(conversationID: conversationID)
+    }
+
     private func resumeConversationAfterPendingCompletionIfNeeded(conversationID: UUID) async {
         await resumeConversationAfterParkIfNeeded(
             conversationID: conversationID,
-            allowedModes: [.agent],
+            eligibility: .delegateCompletionModeProfile,
             origin: .pendingCompletionResume,
             logLabel: "pending completion"
         )
@@ -562,7 +569,7 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
             )
             await resumeConversationAfterParkIfNeeded(
                 conversationID: conversationID,
-                allowedModes: [.plan],
+                eligibility: .modes([.plan]),
                 origin: .planExitDenialResume,
                 logLabel: "plan exit denial"
             )
@@ -610,16 +617,52 @@ extension OrchestratorSessionRuntimeService: OrchestratorListenerServicing {
         await messaging.update(conversation: conversation)
     }
 
+    /// How a park/resume path decides whether a conversation is eligible to be woken. Deliberately
+    /// not called *admission* — that word already means run-lane admission a few lines below.
+    private enum ParkResumeEligibility {
+        /// A fixed set of interaction modes — a protocol requirement rather than a policy choice.
+        case modes(Set<InteractionMode>)
+        /// The conversation's own mode profile decides, via `runtime.resumesOnDelegateCompletion`.
+        case delegateCompletionModeProfile
+    }
+
+    private func isEligibleToResume(
+        _ eligibility: ParkResumeEligibility,
+        conversation: ModelConversation
+    ) async -> Bool {
+        switch eligibility {
+        case .modes(let allowedModes):
+            return allowedModes.contains(conversation.interactionMode)
+        case .delegateCompletionModeProfile:
+            let resolved = await makeResolvedModeProfile(for: conversation)
+            return Self.resumesOnDelegateCompletion(
+                runtime: resolved.runtime,
+                interactionMode: conversation.interactionMode
+            )
+        }
+    }
+
+    /// Unset on the profile falls back to the rule this knob replaced — agent-mode conversations
+    /// wake, others do not. That keeps a profile which never mentions the key (including a custom
+    /// row declaring `interactionMode: agent` without extending the built-in) behaving exactly as
+    /// it did before the key existed.
+    static func resumesOnDelegateCompletion(
+        runtime: ModeProfileRuntimeSlice,
+        interactionMode: InteractionMode
+    ) -> Bool {
+        runtime.resumesOnDelegateCompletion ?? (interactionMode == .agent)
+    }
+
     private func resumeConversationAfterParkIfNeeded(
         conversationID: UUID,
-        allowedModes: Set<InteractionMode>,
+        eligibility: ParkResumeEligibility,
         origin: RunLaneOriginKind,
         logLabel: String
     ) async {
         let runtimeLifecycle = await agentRuntime.lifecycleSnapshot(for: conversationID)
         guard runtimeLifecycle.generationTask == nil else { return }
         guard var conversation = await persistenceDomain.modelConversation(id: conversationID) else { return }
-        guard allowedModes.contains(conversation.interactionMode) else { return }
+        guard await isEligibleToResume(eligibility, conversation: conversation) else { return }
         let runID = UUID()
         let sessionLaneKey = await selection.runtimeSessionLaneKey(conversationID: conversationID)
         let admissionContext = RunLaneResolver.resolve(

@@ -55,6 +55,15 @@ public actor SubAgentCompletionRuntimeService {
         )
     }
 
+    /// Ingests a completion whose payload is a full message rather than tool-result text — the
+    /// async-delegate shape, where the tool call was already answered by a pending handle.
+    func ingestCompletionAnnouncement(
+        _ announce: CompletionAnnouncePayload,
+        notification: Message
+    ) async {
+        await ingestCompletionAnnouncement(announce, toolMessage: notification)
+    }
+
     func ingestCompletionAnnouncementForAPI(
         _ announce: CompletionAnnouncePayload,
         toolMessageContent: String?
@@ -96,6 +105,12 @@ public actor SubAgentCompletionRuntimeService {
                 await subAgentCompletionService.clearPending(announceID: announce.announceID)
                 continue
             }
+            // Re-attempt the append first: a retry that only re-publishes the lifecycle event can
+            // never recover a result whose content is what failed to land.
+            let pendingNotification = await subAgentCompletionService.pendingNotification(
+                announceID: announce.announceID
+            )
+            let contentDelivered = await deliverAnnouncementContent(pendingNotification, announce: announce)
             let conversation = await deps.persistenceDomain.modelConversation(id: announce.conversationID)
             let toolName = conversation?.messages
                 .reversed()
@@ -109,6 +124,10 @@ public actor SubAgentCompletionRuntimeService {
                 toolName: toolName
             )
             let subagentPublished = await publishSubagentCompletionLifecycle(announce: announce)
+            let deliveryState = Self.resolvedDeliveryState(
+                runtimePublished: runtimePublished,
+                contentDelivered: contentDelivered
+            )
             try? await deps.persistenceDomain.routingPersistCompletionAnnounceEventAsync(
                 conversationID: announce.conversationID,
                 payload: CompletionAnnounceEventPayload(
@@ -116,14 +135,22 @@ public actor SubAgentCompletionRuntimeService {
                     runtimePublished: runtimePublished,
                     subagentPublished: subagentPublished,
                     retryCount: retries,
-                    deliveryState: runtimePublished ? "delivered" : "pending",
+                    deliveryState: deliveryState,
+                    pendingNotification: Self.persistablePendingNotification(
+                        pendingNotification,
+                        contentDelivered: contentDelivered
+                    ),
                     createdAt: Date()
                 )
             )
-            if runtimePublished {
+            if deliveryState == "delivered" {
                 await subAgentCompletionService.markDelivered(announce)
             } else {
-                await subAgentCompletionService.markPending(announce)
+                // Keep the payload for the next attempt while it is still the unresolved part.
+                await subAgentCompletionService.markPending(
+                    announce,
+                    notification: contentDelivered ? nil : pendingNotification
+                )
             }
         }
     }
@@ -131,8 +158,18 @@ public actor SubAgentCompletionRuntimeService {
     func reconcileUnresolvedCompletionAnnouncementsOnStartup() async {
         for info in await deps.persistenceDomain.listConversationInfo() {
             let unresolved = await unresolvedCompletionAnnouncements(conversationID: info.id)
-            for item in unresolved {
-                await subAgentCompletionService.markPending(item)
+            for row in unresolved {
+                // Restoring the payload is what lets a post-restart retry recover a result whose
+                // content is the half that failed. Without it the retry re-publishes the lifecycle
+                // event, never re-appends anything, and settles at `fallback`.
+                await subAgentCompletionService.markPending(
+                    row.announce,
+                    notification: row.pendingNotification?.message
+                )
+                await subAgentCompletionService.restoreRetryCount(
+                    row.retryCount,
+                    for: row.announce.announceID
+                )
             }
         }
     }
@@ -207,18 +244,7 @@ public actor SubAgentCompletionRuntimeService {
             await subAgentCompletionService.markDelivered(normalizedAnnounce)
             return
         }
-        if let toolMessage {
-            let hasExisting = await hasExistingToolCompletionMessage(
-                conversationID: normalizedAnnounce.conversationID,
-                toolCallID: normalizedAnnounce.toolCallID
-            )
-            if !hasExisting {
-            await messaging.appendMessagesToConversation(
-                [toolMessage],
-                conversationID: normalizedAnnounce.conversationID
-            )
-            }
-        }
+        let contentDelivered = await deliverAnnouncementContent(toolMessage, announce: normalizedAnnounce)
         let conversation = await deps.persistenceDomain.modelConversation(id: normalizedAnnounce.conversationID)
         let toolName = conversation?.messages
             .reversed()
@@ -233,6 +259,10 @@ public actor SubAgentCompletionRuntimeService {
             toolName: toolName
         )
         _ = await subAgentCompletionService.recordRetry(for: normalizedAnnounce.announceID)
+        let deliveryState = Self.resolvedDeliveryState(
+            runtimePublished: runtimePublished,
+            contentDelivered: contentDelivered
+        )
         try? await deps.persistenceDomain.routingPersistCompletionAnnounceEventAsync(
             conversationID: normalizedAnnounce.conversationID,
             payload: CompletionAnnounceEventPayload(
@@ -240,16 +270,86 @@ public actor SubAgentCompletionRuntimeService {
                 runtimePublished: runtimePublished,
                 subagentPublished: subagentPublished,
                 retryCount: 1,
-                deliveryState: runtimePublished ? "delivered" : "pending",
+                deliveryState: deliveryState,
+                pendingNotification: Self.persistablePendingNotification(
+                    toolMessage,
+                    contentDelivered: contentDelivered
+                ),
                 createdAt: Date()
             )
         )
-        if runtimePublished {
+        if deliveryState == "delivered" {
             await subAgentCompletionService.markDelivered(normalizedAnnounce)
         } else {
-            await subAgentCompletionService.markPending(normalizedAnnounce)
+            // Retain the payload only when it is the thing that failed, so a retry has something to
+            // re-append rather than only re-publishing the lifecycle event.
+            await subAgentCompletionService.markPending(
+                normalizedAnnounce,
+                notification: contentDelivered ? nil : toolMessage
+            )
         }
         await settleDelegateCompletionCost(normalizedAnnounce)
+    }
+
+    /// Puts the announcement's payload on the transcript if it is not already there, and reports
+    /// whether the content is present afterwards. Shared by the first attempt and by retries, so a
+    /// retry recovers content rather than only re-publishing the lifecycle event.
+    private func deliverAnnouncementContent(
+        _ message: Message?,
+        announce: CompletionAnnouncePayload
+    ) async -> Bool {
+        guard let message else { return true }
+        // A second `tool_result` against one `tool_use` is rejected by providers, so an equivalent
+        // tool row already present counts as delivered. This must not apply to notification
+        // messages, which share the tool-call id only for correlation.
+        if message.role == .tool,
+           await hasExistingToolCompletionMessage(
+               conversationID: announce.conversationID,
+               toolCallID: announce.toolCallID
+           ) {
+            return true
+        }
+        if await conversationContains(messageID: message.id, conversationID: announce.conversationID) {
+            return true
+        }
+        // The role was chosen against the tail as it stood when the announcement was built. A retry
+        // — especially one resumed after a restart — can land against a different tail, and
+        // providers reject two consecutive same-role messages.
+        var outgoing = message
+        if outgoing.role != .tool {
+            let tailRole = await deps.persistenceDomain
+                .modelConversation(id: announce.conversationID)?.messages.last?.role
+            outgoing.role = SubAgentSpawnService.completionNotificationRole(followingTailRole: tailRole)
+        }
+        await messaging.appendMessagesToConversation([outgoing], conversationID: announce.conversationID)
+        // `appendMessagesToConversation` reports no outcome, so confirm rather than assume.
+        return await conversationContains(messageID: outgoing.id, conversationID: announce.conversationID)
+    }
+
+    /// A payload is persisted only while it is the unresolved half, and only when it can be
+    /// represented losslessly — otherwise the retained copy stays in-memory only rather than a
+    /// partial one being written to the event log.
+    static func persistablePendingNotification(
+        _ message: Message?,
+        contentDelivered: Bool
+    ) -> CompletionAnnounceNotificationPayload? {
+        guard !contentDelivered, let message else { return nil }
+        return CompletionAnnounceNotificationPayload(message: message)
+    }
+
+    private func conversationContains(messageID: UUID, conversationID: UUID) async -> Bool {
+        guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID) else {
+            return false
+        }
+        return conversation.messages.contains { $0.id == messageID }
+    }
+
+    /// An announcement counts as delivered only when both channels carried it: the runtime
+    /// lifecycle event that surfaces it, and the payload actually reaching the transcript. Either
+    /// missing leaves it `pending`, which keeps it eligible for reconciliation instead of being
+    /// sealed as done.
+    static func resolvedDeliveryState(runtimePublished: Bool, contentDelivered: Bool) -> String {
+        runtimePublished && contentDelivered ? "delivered" : "pending"
     }
 
     private func publishSubagentCompletionLifecycle(announce: CompletionAnnouncePayload) async -> Bool {
@@ -321,7 +421,7 @@ public actor SubAgentCompletionRuntimeService {
         }
     }
 
-    private func unresolvedCompletionAnnouncements(conversationID: UUID) async -> [CompletionAnnouncePayload] {
+    private func unresolvedCompletionAnnouncements(conversationID: UUID) async -> [CompletionAnnounceEventPayload] {
         let (events, _) = await deps.persistenceDomain.loadConversationEventsWithFrontier(conversationID: conversationID)
         var latestByAnnounceID: [UUID: CompletionAnnounceEventPayload] = [:]
         for event in events where event.kind == ConversationEventKind.completionAnnounceEvent.rawValue {
@@ -330,7 +430,7 @@ public actor SubAgentCompletionRuntimeService {
         }
         return latestByAnnounceID.values.compactMap { payload in
             guard payload.deliveryState == "pending", payload.retryCount < completionAnnounceMaxRetryAttempts else { return nil }
-            return payload.announce
+            return payload
         }
     }
 
