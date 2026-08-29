@@ -4,5 +4,5 @@ import SwiftAgentKit
 
 /// Entry point for the Swift Agent Harness module.
 public enum SwiftAgentHarness {
-    public static var version: String { "0.8.0" }
+    public static var version: String { "1.0.0" }
 }
