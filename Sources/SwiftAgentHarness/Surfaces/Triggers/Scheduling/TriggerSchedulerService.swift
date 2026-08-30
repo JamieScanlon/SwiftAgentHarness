@@ -152,7 +152,7 @@ public actor TriggerSchedulerService {
         }
     }
 
-    private func tick() async {
+    func tick() async {
         do {
             ownsLock = try SchedulerLock.tryAcquire(lockURL: lockURL, identity: config.lockIdentity)
             guard ownsLock else { return }
@@ -186,6 +186,7 @@ public actor TriggerSchedulerService {
                 }
                 if let scheduled = nextFire(for: task, now: now), scheduled.fireAt <= now {
                     let windowMs = task.lastFiredAt ?? task.createdAt
+                    let fireResult: TriggerActivationResult
                     do {
                         // Judged against the *boundary* and this fire's own spread, not against a
                         // flat one-second window on the spread-adjusted time. The offset is re-rolled
@@ -193,7 +194,7 @@ public actor TriggerSchedulerService {
                         // elapsed time — which made a flat threshold report ~half of all on-time
                         // cron fires as `[missed]` to the agent.
                         let missed = scheduled.isMissed(now: now, tickIntervalSeconds: granularity)
-                        _ = try await fire(task: &task, missed: missed, windowMs: windowMs)
+                        fireResult = try await fire(task: &task, missed: missed, windowMs: windowMs)
                     } catch {
                         // Contain the failure to this task. Letting it escape would discard the
                         // whole delta, so tasks already delivered this tick would lose their
@@ -214,6 +215,10 @@ public actor TriggerSchedulerService {
                         }
                         continue
                     }
+                    // A non-admitted result (unauthorized routing, rate-limit, budget) did not
+                    // run a turn. Consuming the row here is how a rejected one-shot disappeared
+                    // with no visible work.
+                    guard fireResult.decision == .admitted else { continue }
                     if task.recurring {
                         result.firedAt[task.id] = Int64(now.timeIntervalSince1970 * 1000)
                     } else {

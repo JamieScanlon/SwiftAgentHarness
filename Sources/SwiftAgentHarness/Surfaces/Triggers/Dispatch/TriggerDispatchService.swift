@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import SwiftAgentKit
 
 protocol TriggerRuntimeDispatching: Sendable {
@@ -25,6 +26,7 @@ struct TriggerDispatchService: Sendable {
     let snapshotStore: TriggerSnapshotStore?
     let channelRunStreaming: ChannelRunStreamingServiceHolder?
     let lifecycleCoordinator: ChannelSessionLifecycleCoordinator?
+    let logger: Logger
 
     init(
         activationPolicy: TriggerActivationPolicy,
@@ -34,7 +36,8 @@ struct TriggerDispatchService: Sendable {
         delegatedDispatch: TriggerDelegatedDispatchService? = nil,
         snapshotStore: TriggerSnapshotStore? = nil,
         channelRunStreaming: ChannelRunStreamingServiceHolder? = nil,
-        lifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil
+        lifecycleCoordinator: ChannelSessionLifecycleCoordinator? = nil,
+        logger: Logger = Logger(label: "swift-agent-harness.triggers.dispatch")
     ) {
         self.activationPolicy = activationPolicy
         self.sessionRouter = sessionRouter
@@ -44,6 +47,7 @@ struct TriggerDispatchService: Sendable {
         self.snapshotStore = snapshotStore
         self.channelRunStreaming = channelRunStreaming
         self.lifecycleCoordinator = lifecycleCoordinator
+        self.logger = logger
     }
 
     func ingest(_ trigger: HarnessTrigger) async throws -> TriggerActivationResult {
@@ -55,12 +59,23 @@ struct TriggerDispatchService: Sendable {
         try snapshotStore?.save(resolved)
         let route = try await sessionRouter.route(resolved)
         guard let conversationID = route.conversationID else {
+            if route.routingMode == .threaded {
+                logger.warning(
+                    "trigger_threaded_route_nil_conversation id=\(resolved.id) source=\(resolved.source.rawValue)"
+                )
+            }
+            activationPolicy.auditLog.record(
+                TriggerAuditEntry.from(trigger: resolved, decision: .unauthorized)
+            )
             return TriggerActivationResult(decision: .unauthorized, sessionID: nil)
         }
         let built = promptBuilder.build(trigger: resolved)
         switch route.routingMode {
         case .delegated:
             guard let delegatedDispatch else {
+                activationPolicy.auditLog.record(
+                    TriggerAuditEntry.from(trigger: resolved, decision: .unauthorized)
+                )
                 return TriggerActivationResult(decision: .unauthorized, sessionID: nil)
             }
             // No sender verdict rides along here, and deliberately so: the child runs under the

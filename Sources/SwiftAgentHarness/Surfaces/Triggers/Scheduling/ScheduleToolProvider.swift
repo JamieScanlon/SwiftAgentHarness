@@ -24,6 +24,8 @@ public struct ScheduleToolProvider: ToolProvider {
                 parameters: [
                     .init(name: "scheduleKind", description: "at | every | cron", type: "string", required: true),
                     .init(name: "at", description: "ISO8601 for at", type: "string", required: false),
+                    .init(name: "delayMs", description: "Optional delay in milliseconds from now. Alternative to `at` for a one-shot so you do not have to invent an ISO timestamp. Ignored when `at` is set. Example: 300000 for five minutes.", type: "number", required: false),
+                    .init(name: "inSeconds", description: "Optional delay in seconds from now. Alternative to `at` for a one-shot so you do not have to invent an ISO timestamp. Ignored when `at` or `delayMs` is set. Example: 300 for five minutes.", type: "number", required: false),
                     .init(name: "intervalMs", description: "Interval ms for every", type: "number", required: false),
                     .init(name: "cronExpr", description: "Cron expression", type: "string", required: false),
                     .init(name: "timezone", description: "IANA timezone the cron wall-clock is read in, e.g. Europe/Berlin. Defaults to the harness host's zone, captured now rather than resolved at fire time. Only meaningful for cron. An unrecognised identifier is rejected rather than defaulted.", type: "string", required: false),
@@ -141,7 +143,7 @@ public struct ScheduleToolProvider: ToolProvider {
         var schedule = ScheduledTaskSchedule(kind: scheduleKind)
         switch scheduleKind {
         case .at:
-            schedule.at = extractString(from: toolCall.arguments, key: "at")
+            schedule.at = resolvedAtTimestamp(from: toolCall.arguments)
         case .every:
             if let n = extractDouble(from: toolCall.arguments, key: "intervalMs") {
                 schedule.intervalMs = Int64(n)
@@ -272,6 +274,24 @@ public struct ScheduleToolProvider: ToolProvider {
         guard let id = extractString(from: toolCall.arguments, key: "id") else { return "id required" }
         let result = try await dataService.fireNow(id: id)
         return "decision=\(result.decision.rawValue) session=\(result.sessionID?.uuidString ?? "nil")"
+    }
+
+    private func resolvedAtTimestamp(from arguments: JSON) -> String? {
+        if let at = extractString(from: arguments, key: "at"), !at.isEmpty {
+            return at
+        }
+        let delaySeconds: TimeInterval?
+        if let ms = extractDouble(from: arguments, key: "delayMs") {
+            delaySeconds = ms / 1000
+        } else if let seconds = extractDouble(from: arguments, key: "inSeconds") {
+            delaySeconds = seconds
+        } else {
+            delaySeconds = nil
+        }
+        guard let delaySeconds, delaySeconds >= 0 else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date().addingTimeInterval(delaySeconds))
     }
 
     private func extractString(from arguments: JSON, key: String) -> String? {

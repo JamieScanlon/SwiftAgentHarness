@@ -12,7 +12,11 @@ enum TriggerThreadedTargetValidator {
         guard let stampedOwnerRaw = trigger.sourceMetadata["ownerAccountID"],
               let stampedOwner = UUID(uuidString: stampedOwnerRaw) else {
             if trigger.source == .cron {
-                return false
+                if tenancyPolicy.requireAuthenticatedOwnerOnMutations { return false }
+                guard let conversation = await catalog.getConversation(id: conversationID) else {
+                    return false
+                }
+                return conversation.ownerAccountID == nil
             }
             return true
         }
