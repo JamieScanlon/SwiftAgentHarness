@@ -26,12 +26,26 @@ Implementation notes for `backends/providers/decision-models.md` and `core/model
 
 ## Not implemented (follow-ups)
 
-- **Consumers.** The gatekeeper in the permission gate, the skill pre-filter, the memory-write gate, guardrails, the injection probe, and the Pool router role are not wired to `ModelPoolDecisionDispatcher` yet. The dispatcher, policies, and receipts are ready for them.
+- **Other consumers.** The skill pre-filter, memory-write gate, guardrails, injection probe, and Pool router role are not wired to `ModelPoolDecisionDispatcher` yet. The gatekeeper is (see below).
 - **Mode and conversation role patches.** `RoleBindingResolver` accepts mode and conversation patches, but `ModeProfile.model` and conversation routing do not produce them yet.
 - **Other contracts.** `embed`, `rerank`, `render`, `transcribe`, `session`, and `parse` have profile types and well-known roles but no slots, codecs, or job/session state machines. The providers README names `embedding` and `rerank` slots; only `decision` was added.
 - **Transport details.** URLSession does not expose a keepalive interval, so the "240 s keepalive" is approximated by a dedicated, reused session plus `warm(role:request:)`. A 413 is classified `permanent` with no re-encode or drop-assets retry. A token-limit 400 retries once by splitting questions; there is no state trimming.
 - **Emulation cost.** Emulated calls settle on input tokens only, like real deciders, so a chat model's output tokens go unbilled in the decide path.
 - **Route receipt export.** Receipts go to a `RouteReceiptRecording` sink (in-memory recorder provided). Observability export and surface rendering are not wired.
+
+## Gatekeeper (classifier-assisted permission gating)
+
+Implements `tool-system/permissions.md` § Classifier-assisted gating and the gatekeeper row of decision-models § "Where the harness uses deciders". The code is `ToolApprovalClassifierGate`, hooked into the agent loop's `dispatchFn` right after the rules return *ask*.
+
+| Topic | Spec says | Implementation |
+|---|---|---|
+| Which option the bands apply to | Gate is a `choice` over `{clear, caution}`; bands test `p` (top-1) | Choice bands don't name the option, so a confident `caution` (p = 0.98) also lands in the act band. The gate allows only when the result is calibrated **and** the chosen option is `clear` **and** the verdict is `act`. This is a gap in `DecisionPolicy` for choice questions; a per-option axis (`on: "p(option)"`) would close it. |
+| "the user's messages" | Read the user's messages, never tool outputs | Only user-role messages whose trust resolves to `trusted` (`direct_user_entry`). Unstamped messages are low trust per `MessageInputTrustCodec.safePolicyClass`, so they are excluded unless the host sets `includeUnstampedUserMessages`. Harness-injected and automation messages are always excluded, as are assistant text and tool outputs. With no trusted request the gate asks without calling the decider. |
+| "tight token budget" | On the latency path of every gated call | The last 3 trusted user messages, 2,000 characters each, and a 2 s total time budget. Arguments over 4,000 serialized characters go to the human; they are never truncated, because a truncated tail could hide the risky part. |
+| Elevated tools, parent route, plan exit | Not addressed | Elevated tools ask by default (opt-in via `allowElevatedTools`). The `.parent` route always asks, since the classifier sits between the rules and the *human*. `exit_plan_mode` always asks, since it is a human review of the plan. |
+| "transcript is dumpable" | Debuggable misclassification | `ToolApprovalClassifierGate.records`: a bounded log of the exact request sent and the outcome. The `RouteReceipt` id is also embedded in the approval reason. |
+| Coverage | All gated calls | Model tool calls in the agent loop, in both wait-for-human and park (`stopOnApprovalRequest`) modes. Approval-gated calls always take the serial path, so batch dispatch is covered too. Slash-command approvals and sub-agent transport permission prompts are not routed through the gate. |
+| Wire contract | — | `approvalResolutionKind` gains `classifier` (WS schema plus the generated Python binding); `approvalSource` is `classifier` and the lifecycle `source` is `runtime.approvalClassifier`. |
 
 ## Pre-existing test flake (unrelated)
 

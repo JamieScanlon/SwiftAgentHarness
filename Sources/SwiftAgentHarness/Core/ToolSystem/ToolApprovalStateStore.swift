@@ -11,6 +11,8 @@ enum ToolApprovalResolutionKind: String, Sendable, Codable {
     case manual
     case timeoutDefault
     case runtimeAuto
+    /// Allow-once from classifier-assisted gating (the `gatekeeper` decide role).
+    case classifier
 }
 
 struct ToolApprovalResolution: Sendable, Codable, Equatable {

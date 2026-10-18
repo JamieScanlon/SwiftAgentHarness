@@ -40,6 +40,17 @@ protocol ToolApprovalRuntimeServicing: Sendable {
         isElevated: Bool,
         requestedAt: Date
     ) async -> Bool
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool
     func toolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
@@ -249,4 +260,21 @@ protocol ConversationToolDataProviding: Sendable {
 
 protocol SubAgentOrchestratorRuntimeServicing: OrchestratorRuntimeToolPolicyServicing {
     func setupOrchestrator(with selectedModel: Model, activeConversation preferredConversation: ModelConversation?) async
+}
+
+extension ToolApprovalRuntimeServicing {
+    /// Classifier-assisted gating is off unless the conformer implements it.
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool {
+        false
+    }
 }
