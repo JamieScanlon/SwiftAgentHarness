@@ -26,19 +26,35 @@ public actor ModelManager {
     private var observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)?
     private let providerPreference: ModelPoolProviderPreferenceConfiguration
     private let authProfileStore: AuthProfileStore
+    /// Discovers non-chat registry rows (today: `decide`). Defaults to the registered `decision` provider slot.
+    private let contractEntryDiscovery: @Sendable (AuthProfileStore, Logger?) async -> [ModelRegistryEntry]
 
     public init(
         logger: Logger? = nil,
         registryTopicHub: (any ModelPoolResourceTopicPublishing)? = nil,
         observedPerformanceProvider: (@Sendable (UUID) async -> ModelObservedPerformance?)? = nil,
         providerPreference: ModelPoolProviderPreferenceConfiguration? = nil,
-        authProfileStore: AuthProfileStore = .production()
+        authProfileStore: AuthProfileStore = .production(),
+        contractEntryDiscovery: (@Sendable (AuthProfileStore, Logger?) async -> [ModelRegistryEntry])? = nil
     ) {
         self.logger = logger
         self.registryTopicHub = registryTopicHub
         self.observedPerformanceProvider = observedPerformanceProvider
         self.providerPreference = providerPreference ?? ModelPoolProviderPreferenceConfiguration.specDefaults
         self.authProfileStore = authProfileStore
+        self.contractEntryDiscovery = contractEntryDiscovery ?? Self.registeredDecisionEntries
+    }
+
+    /// Rows from every `decision` provider whose lifecycle is `registered`.
+    public static func registeredDecisionEntries(
+        authStore: AuthProfileStore,
+        logger: Logger?
+    ) async -> [ModelRegistryEntry] {
+        var entries: [ModelRegistryEntry] = []
+        for provider in ProviderRegistry.registeredDecisionProviders(authStore: authStore) {
+            entries.append(contentsOf: await provider.discoverEntries(logger: logger))
+        }
+        return entries
     }
 
     /// Discovers models from Ollama and LM Studio, merges into the registry, and returns DTOs.
@@ -48,7 +64,16 @@ public actor ModelManager {
     }
 
     /// Full registry rows (preserves family / providers / cost / useClasses for routing-aware callers).
+    /// Chat-shaped surface: only entries that support the `generate` contract.
     public func getRegistryEntries() async -> [ModelRegistryEntry] {
+        await syncRegistryFromDiscovery()
+        return registryByID.values
+            .filter { $0.supports(.generate) }
+            .sorted { ($0.displayName ?? $0.id.uuidString) < ($1.displayName ?? $1.id.uuidString) }
+    }
+
+    /// Every registry row across all contracts (decide, embed, …) for contract-aware selection.
+    public func allContractEntries() async -> [ModelRegistryEntry] {
         await syncRegistryFromDiscovery()
         return registryByID.values
             .sorted { ($0.displayName ?? $0.id.uuidString) < ($1.displayName ?? $1.id.uuidString) }
@@ -63,7 +88,7 @@ public actor ModelManager {
         await syncRegistryFromDiscovery()
         switch ref {
         case .id(let id):
-            if let entry = registryByID[id] { return entry }
+            if let entry = registryByID[id], entry.supports(.generate) { return entry }
         case .slug(let slug):
             if let id = slugIndex[slug], let entry = registryByID[id] { return entry }
             if let entry = try await lazyResolveSlug(slug) { return entry }
@@ -159,6 +184,7 @@ public actor ModelManager {
                 discovered.append(entry)
             }
         }
+        discovered.append(contentsOf: await contractEntryDiscovery(authProfileStore, logger))
         registryByID = mergeDiscoveredEntries(discovered)
         if let observedPerformanceProvider {
             for id in registryByID.keys {
@@ -190,7 +216,10 @@ public actor ModelManager {
     /// Rebuilds ``slugIndex`` from the current registry. First-seen wins on collision (deterministic by UUID order).
     private func rebuildSlugIndex() {
         var index: [String: UUID] = [:]
-        let orderedEntries = registryByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        // Slugs address chat models; non-generate rows are reached through contract-aware selection.
+        let orderedEntries = registryByID.values
+            .filter { $0.supports(.generate) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
         for entry in orderedEntries {
             for slug in entry.allSlugs {
                 if let existing = index[slug], existing != entry.id {
@@ -219,6 +248,7 @@ public actor ModelManager {
 
     private func sortedModelsFromRegistry() -> [Model] {
         registryByID.values
+            .filter { $0.supports(.generate) }
             .sorted { ($0.displayName ?? $0.id.uuidString) < ($1.displayName ?? $1.id.uuidString) }
             .map { $0.toModel() }
     }
@@ -405,3 +435,5 @@ public actor ModelManager {
         }
     }
 }
+
+extension ModelManager: ContractCandidateSource {}

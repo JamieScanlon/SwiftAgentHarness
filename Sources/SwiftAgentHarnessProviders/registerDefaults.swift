@@ -5,13 +5,17 @@ public struct DefaultProviderOptions: Sendable {
     public var installBootstrapHook: Bool
     /// Host-defined API-server inference providers (any count). Empty = none registered via this path.
     public var inferenceRuntimes: [InferenceRuntimeConfig]
+    /// Host-defined decision providers (`decide` contract). Empty = no deciders; decide roles stay off.
+    public var decisionRuntimes: [DecisionRuntimeConfig]
 
     public init(
         installBootstrapHook: Bool = true,
-        inferenceRuntimes: [InferenceRuntimeConfig] = []
+        inferenceRuntimes: [InferenceRuntimeConfig] = [],
+        decisionRuntimes: [DecisionRuntimeConfig] = []
     ) {
         self.installBootstrapHook = installBootstrapHook
         self.inferenceRuntimes = inferenceRuntimes
+        self.decisionRuntimes = decisionRuntimes
     }
 }
 
@@ -29,8 +33,13 @@ public func registerDefaults(
         DefaultProviderAdapterFactories.installAll()
         if options.installBootstrapHook {
             let runtimes = options.inferenceRuntimes
+            let deciders = options.decisionRuntimes
             ProviderRegistry.installBootstrap {
-                registerDefaults(options: .init(installBootstrapHook: false, inferenceRuntimes: runtimes))
+                registerDefaults(options: .init(
+                    installBootstrapHook: false,
+                    inferenceRuntimes: runtimes,
+                    decisionRuntimes: deciders
+                ))
             }
         }
         try? registerOpenAI()
@@ -38,6 +47,9 @@ public func registerDefaults(
         try? registerOpenRouter()
         for runtime in options.inferenceRuntimes {
             try? registerInferenceRuntime(runtime)
+        }
+        for runtime in options.decisionRuntimes {
+            try? ProviderRegistry.register(runtime.registration())
         }
     }
 }

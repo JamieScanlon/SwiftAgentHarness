@@ -1,0 +1,586 @@
+import Foundation
+import Logging
+import SwiftAgentKit
+
+/// Runs the Pool's selection pipeline for `decide` roles: resolve → hard-filter → rank → cascade (one stage) →
+/// fall back (availability errors only, inside the compat group when compat-bound) → route receipt.
+public actor ModelPoolDecisionDispatcher {
+    public typealias Clock = @Sendable () -> ContinuousClock.Instant
+
+    private let candidates: any ContractCandidateSource
+    private let providers: any DecisionProviderResolving
+    private let roles: RoleBindingResolver
+    private let emulator: (any DecisionEmulationLLMProviding)?
+    private let scheduler: any ModelCallScheduling
+    private let budgetAccounting: any BudgetAccounting
+    private let budgetPolicy: BudgetPolicy
+    private let receipts: any RouteReceiptRecording
+    private let cache: DecisionResponseCache?
+    private let now: Clock
+    private let logger: Logger?
+
+    /// How many rejected candidates a receipt lists for "why not X".
+    static let rankedOutLimit = 5
+
+    public init(
+        candidates: any ContractCandidateSource,
+        providers: any DecisionProviderResolving = RegistryDecisionProviderResolver(),
+        roles: RoleBindingResolver,
+        emulator: (any DecisionEmulationLLMProviding)? = nil,
+        scheduler: any ModelCallScheduling = NoOpModelCallScheduler(),
+        budgetAccounting: any BudgetAccounting = AlwaysAllowBudgetAccounting(),
+        budgetPolicy: BudgetPolicy = .disabled,
+        receipts: any RouteReceiptRecording = NoOpRouteReceiptRecorder(),
+        cache: DecisionResponseCache? = nil,
+        now: @escaping Clock = { ContinuousClock.now },
+        logger: Logger? = nil
+    ) {
+        self.candidates = candidates
+        self.providers = providers
+        self.roles = roles
+        self.emulator = emulator
+        self.scheduler = scheduler
+        self.budgetAccounting = budgetAccounting
+        self.budgetPolicy = budgetPolicy
+        self.receipts = receipts
+        self.cache = cache
+        self.now = now
+        self.logger = logger
+    }
+
+    // MARK: - Public surface
+
+    /// Answers `request` for `role`. Never throws: failures surface as ``DecisionOutcome/error`` with the policy's
+    /// conservative ``DecisionPolicy/onError`` verdict, and every call emits a receipt.
+    public func decide(
+        _ request: DecisionRequest,
+        role: ModelRole,
+        policy: DecisionPolicy? = nil,
+        context: DecisionCallContext = DecisionCallContext()
+    ) async -> DecisionOutcome {
+        let start = now()
+        var receipt = RouteReceipt(role: role, contract: .decide, requested: context.pin ?? role.rawValue)
+
+        func fail(_ error: DecisionDispatchError) async -> DecisionOutcome {
+            receipt.latencyMs = Self.milliseconds(now() - start)
+            if case .provider(let classification, _) = error { receipt.errorClassification = classification }
+            let evaluation = policy?.evaluateFailure()
+            if let evaluation, let policy {
+                receipt.decision = RouteReceipt.Decision(evaluation: evaluation, question: policy.question)
+            }
+            await receipts.record(receipt)
+            return DecisionOutcome(result: nil, evaluation: evaluation, receipt: receipt, error: error)
+        }
+
+        do {
+            try request.validate()
+        } catch {
+            return await fail(.invalidRequest(String(describing: error)))
+        }
+        if let policy {
+            do { try policy.validate() } catch let error as DecisionPolicyValidationError {
+                return await fail(.invalidPolicy(error))
+            } catch {
+                return await fail(.invalidRequest(String(describing: error)))
+            }
+        }
+        guard let binding = roles.resolve(role, pin: context.pin) else {
+            return await fail(.roleUnbound(role))
+        }
+        guard binding.contract == .decide else {
+            return await fail(.contractMismatch(role: role, contract: binding.contract))
+        }
+
+        let entries = await candidates.allContractEntries()
+        let plan: CandidatePlan
+        switch buildPlan(request: request, binding: binding, policy: policy, context: context, entries: entries) {
+        case .success(let built): plan = built
+        case .failure(let error):
+            receipt.rankedOut = []
+            return await fail(error)
+        }
+        receipt.rankedOut = Array(plan.rejected.prefix(Self.rankedOutLimit))
+
+        // Stage 1 with fallback.
+        let stage1 = await dispatch(request, over: plan.ordered, binding: binding, context: context, receipt: &receipt)
+        guard case .success(let first) = stage1 else {
+            if case .failure(let error) = stage1 { return await fail(error) }
+            return await fail(.noCandidate(role: role, localityRestricted: binding.locality != .any))
+        }
+        apply(first, to: &receipt)
+
+        // Stage 2: at most one escalation, declared on the policy (or, without a policy, on the binding).
+        let escalation = policy?.escalate.map { RoleCascade(to: $0.to, when: $0.when) } ?? binding.cascade
+        var final = first
+        var firstStage: DecisionResult?
+        if let escalation,
+           !first.candidate.entry.isNamed(escalation.to),
+           escalation.when.matches(first.result, defaultQuestion: policy?.question) {
+            firstStage = first.result
+            let firstResolved = receipt.resolved
+            var target: [PlannedCandidate] = []
+            if let escalated = escalationCandidate(escalation.to, request: request, binding: binding, entries: entries) {
+                target = [escalated]
+            }
+            var stage2Receipt = receipt
+            let stage2 = await dispatch(request, over: target, binding: binding, context: context, receipt: &stage2Receipt)
+            receipt.fallback = stage2Receipt.fallback
+            switch stage2 {
+            case .success(let second):
+                final = second
+                apply(second, to: &receipt)
+                receipt.costUSD = Self.sum(first.costUSD, second.costUSD)
+                receipt.requestIDs = first.result.requestIDs + second.result.requestIDs
+                receipt.cascade = RouteReceipt.Cascade(
+                    escalated: true, reason: Self.describe(escalation.when), firstStage: firstResolved
+                )
+            case .failure(let error):
+                receipt.cascade = RouteReceipt.Cascade(
+                    escalated: true, reason: "stage 2 failed: \(Self.describe(escalation.when))", firstStage: firstResolved
+                )
+                receipt.costUSD = first.costUSD
+                // The escalation target is final; when it cannot answer, the call fails conservatively.
+                var outcome = await fail(error)
+                outcome.firstStage = firstStage
+                return outcome
+            }
+        } else if escalation != nil {
+            receipt.cascade = RouteReceipt.Cascade(escalated: false)
+        }
+
+        receipt.latencyMs = Self.milliseconds(now() - start)
+        var evaluation: DecisionEvaluation?
+        if let policy {
+            let evaluated = policy.evaluate(final.result)
+            evaluation = evaluated
+            receipt.decision = RouteReceipt.Decision(evaluation: evaluated, question: policy.question)
+        }
+        await receipts.record(receipt)
+        return DecisionOutcome(result: final.result, firstStage: firstStage, evaluation: evaluation, receipt: receipt)
+    }
+
+    /// Pre-connects the top candidate for `role` so the first call does not pay a cold handshake.
+    public func warm(role: ModelRole, request: DecisionRequest) async {
+        guard let binding = roles.resolve(role), binding.contract == .decide else { return }
+        let entries = await candidates.allContractEntries()
+        guard case .success(let plan) = buildPlan(
+            request: request, binding: binding, policy: nil, context: DecisionCallContext(), entries: entries
+        ), let top = plan.ordered.first, case .provider(let provider) = top.executor else { return }
+        await provider.warmConnections(target: top.target(timeBudget: nil))
+    }
+
+    // MARK: - Planning
+
+    enum Executor: Sendable {
+        case provider(any DecisionProviding)
+        case emulated(any DecisionEmulationLLMProviding, LLMEmulationDecisionCodec.Rung)
+    }
+
+    struct PlannedCandidate: Sendable {
+        var candidate: ContractCandidate
+        var executor: Executor
+        var projected: CostProjection
+
+        func target(timeBudget: Duration?) -> DecisionDispatchTarget {
+            DecisionDispatchTarget(
+                entry: candidate.entry, binding: candidate.binding, profile: candidate.profile, timeBudget: timeBudget
+            )
+        }
+    }
+
+    struct CandidatePlan: Sendable {
+        var ordered: [PlannedCandidate]
+        var rejected: [RouteReceipt.RankedOut]
+    }
+
+    nonisolated func buildPlan(
+        request: DecisionRequest,
+        binding: RoleBinding,
+        policy: DecisionPolicy?,
+        context: DecisionCallContext,
+        entries: [ModelRegistryEntry]
+    ) -> Result<CandidatePlan, DecisionDispatchError> {
+        var rejected: [RouteReceipt.RankedOut] = []
+        var ordered: [PlannedCandidate] = []
+        var seen = Set<String>()
+        func append(_ items: [PlannedCandidate]) {
+            for item in items where seen.insert(item.candidate.bindingID).inserted {
+                ordered.append(item)
+            }
+        }
+
+        // Pin first; it must satisfy the contract and minGuarantee.
+        if let pin = binding.pin {
+            let matches = entries.filter { $0.isNamed(pin) }
+            guard !matches.isEmpty else { return .failure(.pinRejected(pin: pin, reason: "not in registry")) }
+            var planned: [PlannedCandidate] = []
+            for match in matches { planned += evaluate(match, pinned: true, request: request, binding: binding, rejected: &rejected) }
+            guard !planned.isEmpty else {
+                let reason = rejected.last?.reason ?? "no serving binding"
+                return .failure(.pinRejected(pin: pin, reason: reason))
+            }
+            append(planned)
+        } else {
+            var open: [PlannedCandidate] = []
+            for entry in entries where entry.supports(.decide) { open += evaluate(entry, pinned: false, request: request, binding: binding, rejected: &rejected) }
+            append(rank(open, role: binding.role, binding: binding, context: context))
+        }
+        for reference in binding.fallback {
+            for entry in entries where entry.isNamed(reference) { append(evaluate(entry, pinned: true, request: request, binding: binding, rejected: &rejected)) }
+        }
+
+        // Compat-bound roles fall back only inside the primary's compat group.
+        if binding.isCompatBound(policy: policy), let primary = ordered.first {
+            let group = primary.candidate.entry.compatGroup
+            ordered = ordered.enumerated().compactMap { index, item in
+                if index == 0 || item.candidate.entry.id == primary.candidate.entry.id { return item }
+                if let group, item.candidate.entry.compatGroup == group { return item }
+                rejected.append(.init(modelID: item.candidate.entry.slug, reason: "outside compat group \(group ?? "none")"))
+                return nil
+            }
+        }
+        guard !ordered.isEmpty else {
+            return .failure(.noCandidate(role: binding.role, localityRestricted: binding.locality != .any))
+        }
+        return .success(CandidatePlan(ordered: ordered, rejected: rejected))
+    }
+
+    nonisolated private func evaluate(
+        _ entry: ModelRegistryEntry,
+        pinned: Bool,
+        request: DecisionRequest,
+        binding: RoleBinding,
+        rejected: inout [RouteReceipt.RankedOut]
+    ) -> [PlannedCandidate] {
+        let label = entry.slug
+        if entry.lifecycle.status == .retired {
+            rejected.append(.init(modelID: label, reason: "retired"))
+            return []
+        }
+        if entry.lifecycle.status == .deprecated && !pinned {
+            rejected.append(.init(modelID: label, reason: "deprecated (not pinned)"))
+            return []
+        }
+        if !binding.locality.admits(entry.locality) {
+            rejected.append(.init(modelID: label, reason: "locality \(binding.locality.rawValue)"))
+            return []
+        }
+        if let family = entry.family, binding.query.excludeFamilies.contains(family) {
+            rejected.append(.init(modelID: label, reason: "family \(family) excluded"))
+            return []
+        }
+        var accepted: [PlannedCandidate] = []
+        for providerBinding in entry.providers {
+            guard let planned = plan(
+                entry: entry, providerBinding: providerBinding, request: request, binding: binding,
+                allowEmulation: pinned, rejected: &rejected
+            ) else { continue }
+            accepted.append(planned)
+        }
+        return accepted
+    }
+
+    nonisolated private func plan(
+        entry: ModelRegistryEntry,
+        providerBinding: ProviderBinding,
+        request: DecisionRequest,
+        binding: RoleBinding,
+        allowEmulation: Bool,
+        rejected: inout [RouteReceipt.RankedOut]
+    ) -> PlannedCandidate? {
+        let label = "\(providerBinding.providerId)/\(providerBinding.endpointModelId)"
+        let estimatedTokens = DecisionCostEstimator.estimateInputTokens(characterCount: request.canonicalData.count)
+        let prices = entry.effectivePrices(binding: providerBinding)
+        let projected = DecisionCostEstimator.project(prices: prices, estimatedInputTokens: estimatedTokens)
+        if let cap = binding.budget?.maxUSDPerCall, let usd = projected.usd, usd > cap {
+            rejected.append(.init(modelID: label, reason: "projected $\(usd) over role cap $\(cap)"))
+            return nil
+        }
+
+        if let profile = entry.profile(for: .decide, binding: providerBinding) {
+            if let reason = filter(profile: profile, request: request, binding: binding) {
+                rejected.append(.init(modelID: label, reason: reason))
+                return nil
+            }
+            guard let provider = providers.decisionProvider(for: providerBinding) else {
+                rejected.append(.init(modelID: label, reason: "no decision provider registered"))
+                return nil
+            }
+            return PlannedCandidate(
+                candidate: ContractCandidate(entry: entry, binding: providerBinding, profile: profile),
+                executor: .provider(provider),
+                projected: projected
+            )
+        }
+
+        // Emulation over `generate` only when the model is named explicitly; the Pool never emulates silently.
+        guard allowEmulation, let generate = entry.profile(for: .generate, binding: providerBinding) else {
+            rejected.append(.init(modelID: label, reason: "no decide contract"))
+            return nil
+        }
+        guard let emulator else {
+            rejected.append(.init(modelID: label, reason: "no emulation provider"))
+            return nil
+        }
+        let rung: LLMEmulationDecisionCodec.Rung = generate.feature("logprobs") != nil ? .logprobs : .schema
+        let profile = ContractProfile(
+            contract: .decide,
+            surface: .llmEmulation,
+            interaction: [.unary],
+            input: [.text, .json],
+            output: [.distribution],
+            guarantee: rung.guarantee,
+            features: [
+                DecisionFeatureKey.questionTypes: FeatureSupport(
+                    params: ["kinds": .array([.string("yes-no"), .string("choice"), .string("score")])]
+                ),
+            ],
+            limits: ContractLimits(contextTokens: generate.limits.contextTokens, maxOptions: 255, scoreLevels: 2...10)
+        )
+        if let reason = filter(profile: profile, request: request, binding: binding) {
+            rejected.append(.init(modelID: label, reason: reason))
+            return nil
+        }
+        return PlannedCandidate(
+            candidate: ContractCandidate(entry: entry, binding: providerBinding, profile: profile),
+            executor: .emulated(emulator, rung),
+            projected: DecisionCostEstimator.project(prices: prices, estimatedInputTokens: estimatedTokens)
+        )
+    }
+
+    /// Hard filter: query facets, minGuarantee, question kinds, options, score levels, and image support.
+    nonisolated private func filter(profile: ContractProfile, request: DecisionRequest, binding: RoleBinding) -> String? {
+        var query = binding.query
+        query.contract = .decide
+        if let minGuarantee = binding.minGuarantee {
+            query.minGuarantee = max(query.minGuarantee ?? minGuarantee, minGuarantee)
+        }
+        if let reason = query.rejection(for: profile) { return reason }
+        if let reason = DecisionSurfaceOptions(profile: profile).rejection(for: request) { return reason }
+        if let need = request.scoreLevelRange, let have = profile.limits.scoreLevels,
+           need.lowerBound < have.lowerBound || need.upperBound > have.upperBound {
+            return "score levels \(need) outside \(have)"
+        }
+        return nil
+    }
+
+    /// Rank by the role's explicit preferences, language fit, projected cost, observed latency, then binding priority.
+    nonisolated private func rank(
+        _ planned: [PlannedCandidate],
+        role: ModelRole,
+        binding: RoleBinding,
+        context: DecisionCallContext
+    ) -> [PlannedCandidate] {
+        let prefer = binding.query.prefer
+        func score(_ item: PlannedCandidate) -> Double {
+            let entry = item.candidate.entry
+            var score = 0.0
+            if entry.roles.contains(role.rawValue) { score += 1000 }
+            if prefer.roles.contains(where: entry.roles.contains) { score += 500 }
+            if let useClass = prefer.useClass, entry.useClasses.contains(useClass) { score += 300 }
+            if let family = prefer.family, entry.family == family { score += 200 }
+            if let language = context.language?.lowercased() {
+                let options = DecisionSurfaceOptions(profile: item.candidate.profile)
+                if options.languagesStrong.contains(language) {
+                    score += 150
+                } else if options.languagesWeak.contains(language) {
+                    score -= 150
+                } else if !options.languagesStrong.isEmpty {
+                    score -= 75
+                }
+            }
+            if let usd = item.projected.usd {
+                if let cap = prefer.maxProjectedUSD, usd > cap { score -= 400 }
+                score -= min(100, usd * 10_000)
+            } else {
+                score -= 50
+            }
+            if let p50 = entry.performance?.p50LatencyMs {
+                let budget = prefer.maxP50Ms ?? binding.budget?.maxLatencyMs
+                if let budget, p50 > budget { score -= 300 }
+                score -= min(100, p50 / 20)
+            }
+            return score
+        }
+        return planned.enumerated().sorted { lhs, rhs in
+            let l = score(lhs.element)
+            let r = score(rhs.element)
+            if l != r { return l > r }
+            if lhs.element.candidate.binding.priority != rhs.element.candidate.binding.priority {
+                return lhs.element.candidate.binding.priority < rhs.element.candidate.binding.priority
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
+    nonisolated private func escalationCandidate(
+        _ reference: String,
+        request: DecisionRequest,
+        binding: RoleBinding,
+        entries: [ModelRegistryEntry]
+    ) -> PlannedCandidate? {
+        var ignored: [RouteReceipt.RankedOut] = []
+        for entry in entries where entry.isNamed(reference) && entry.lifecycle.status != .retired {
+            for providerBinding in entry.providers {
+                if let planned = plan(
+                    entry: entry, providerBinding: providerBinding, request: request, binding: binding,
+                    allowEmulation: true, rejected: &ignored
+                ) {
+                    return planned
+                }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Dispatch
+
+    struct StageResult: Sendable {
+        var candidate: ContractCandidate
+        var result: DecisionResult
+        var costUSD: Double?
+        var cacheHit: Bool
+    }
+
+    private func dispatch(
+        _ request: DecisionRequest,
+        over candidates: [PlannedCandidate],
+        binding: RoleBinding,
+        context: DecisionCallContext,
+        receipt: inout RouteReceipt
+    ) async -> Result<StageResult, DecisionDispatchError> {
+        var lastError: DecisionDispatchError?
+        for planned in candidates {
+            let entry = planned.candidate.entry
+            let cacheVersion = entry.lifecycle.aliasOf == nil ? planned.candidate.binding.endpointModelId : nil
+            if let cache, let cacheVersion, planned.candidate.profile.surface != .llmEmulation,
+               let cached = await cache.lookup(modelVersion: cacheVersion, request: request) {
+                return .success(StageResult(candidate: planned.candidate, result: cached, costUSD: 0, cacheHit: true))
+            }
+
+            do {
+                try await budgetAccounting.authorize(
+                    policy: budgetPolicy,
+                    modelID: entry.id,
+                    conversationID: context.conversationID,
+                    accountID: context.accountID,
+                    projectedCostUSD: planned.projected.usd
+                )
+            } catch {
+                return .failure(.budgetDenied(String(describing: error)))
+            }
+
+            let acquisition = await scheduler.acquire(
+                reservation: ModelCallReservation(
+                    modelID: entry.id,
+                    priority: binding.priority.requestPriority,
+                    conversationID: context.conversationID,
+                    ownerAccountID: context.accountID,
+                    estimatedTotalTokens: DecisionCostEstimator.estimateInputTokens(
+                        characterCount: request.canonicalData.count
+                    )
+                )
+            )
+            let outcome: Result<DecisionResult, Error>
+            do {
+                outcome = .success(try await execute(request, planned: planned, timeBudget: context.timeBudget))
+            } catch {
+                outcome = .failure(error)
+            }
+            await scheduler.release(acquisition: acquisition)
+
+            switch outcome {
+            case .success(let result):
+                let prices = entry.effectivePrices(binding: planned.candidate.binding)
+                let cost = DecisionCostEstimator.settle(prices: prices, inputTokens: result.usage.inputTokens)
+                await budgetAccounting.recordCompletion(
+                    policy: budgetPolicy, modelID: entry.id, conversationID: context.conversationID,
+                    accountID: context.accountID, actualCostUSD: cost
+                )
+                if let cache, let cacheVersion, result.calibrated {
+                    await cache.store(result, modelVersion: cacheVersion, request: request)
+                }
+                return .success(StageResult(candidate: planned.candidate, result: result, costUSD: cost, cacheHit: false))
+            case .failure(let error):
+                await budgetAccounting.recordCompletion(
+                    policy: budgetPolicy, modelID: entry.id, conversationID: context.conversationID,
+                    accountID: context.accountID, actualCostUSD: nil
+                )
+                let classification = classify(error, planned: planned)
+                logger?.warning("decide call failed on \(planned.candidate.bindingID): \(classification.rawValue)")
+                lastError = .provider(classification: classification, message: String(describing: error))
+                guard classification.isAvailabilityClass else { return .failure(lastError!) }
+                receipt.fallback.append(.init(from: planned.candidate.bindingID, reason: classification))
+            }
+        }
+        return .failure(lastError ?? .noCandidate(role: binding.role, localityRestricted: binding.locality != .any))
+    }
+
+    private func execute(
+        _ request: DecisionRequest,
+        planned: PlannedCandidate,
+        timeBudget: Duration?
+    ) async throws -> DecisionResult {
+        switch planned.executor {
+        case .provider(let provider):
+            return try await provider.decide(request, target: planned.target(timeBudget: timeBudget))
+        case .emulated(let emulator, let rung):
+            let llm = try await emulator.emulationLLM(for: planned.candidate.entry)
+            let codec = LLMEmulationDecisionCodec(
+                llm: llm, rung: rung, modelVersion: planned.candidate.binding.endpointModelId
+            )
+            return try await codec.decide(request)
+        }
+    }
+
+    private func classify(_ error: Error, planned: PlannedCandidate) -> ProviderFailoverClassification {
+        switch planned.executor {
+        case .provider(let provider): return provider.failoverError(error)
+        case .emulated: return DefaultProviderFailoverClassifier.classify(error)
+        }
+    }
+
+    private func apply(_ stage: StageResult, to receipt: inout RouteReceipt) {
+        let candidate = stage.candidate
+        receipt.resolved = RouteReceipt.Resolved(
+            modelID: candidate.entry.slug,
+            versionServed: stage.result.modelVersion,
+            bindingID: candidate.bindingID,
+            surface: candidate.profile.surface
+        )
+        if candidate.entry.lifecycle.aliasOf != nil {
+            receipt.aliasResolved = RouteReceipt.AliasResolution(
+                alias: candidate.binding.endpointModelId, to: stage.result.modelVersion
+            )
+        }
+        receipt.guarantee = stage.result.guarantee
+        receipt.costUSD = stage.costUSD
+        receipt.requestIDs = stage.result.requestIDs
+        receipt.cacheHit = stage.cacheHit
+    }
+
+    // MARK: - Helpers
+
+    static func milliseconds(_ duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15
+    }
+
+    static func sum(_ a: Double?, _ b: Double?) -> Double? {
+        guard let a, let b else { return nil }
+        return a + b
+    }
+
+    static func describe(_ condition: DeferralCondition) -> String {
+        switch condition {
+        case .pBelow(let value, _): return "p < \(value)"
+        case .marginBelow(let value, _): return "margin < \(value)"
+        case .pBetween(let low, let high, _): return "p in [\(low), \(high)]"
+        case .spreadAbove(let value, _): return "spread > \(value)"
+        case .refused: return "refused"
+        case .unavailable: return "unavailable"
+        case .any(let conditions): return "any(" + conditions.map(describe).joined(separator: ", ") + ")"
+        case .all(let conditions): return "all(" + conditions.map(describe).joined(separator: ", ") + ")"
+        }
+    }
+}
