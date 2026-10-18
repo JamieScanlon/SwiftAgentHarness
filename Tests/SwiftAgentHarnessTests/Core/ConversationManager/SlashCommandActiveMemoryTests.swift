@@ -4,7 +4,7 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
-@Suite("Slash command /active-memory", .serialized, .timeLimit(.minutes(1)))
+@Suite("Slash command /active-memory", .timeLimit(.minutes(1)))
 struct SlashCommandActiveMemoryTests {
     private static let controlOverrideEnvKey = ActiveMemoryControlStore.overrideEnvKey
 
@@ -18,36 +18,30 @@ struct SlashCommandActiveMemoryTests {
         try FileManager.default.createDirectory(at: workRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: controlRoot, withIntermediateDirectories: true)
 
-        let previousControl = ProcessInfo.processInfo.environment[controlOverrideEnvKey]
-        setenv(controlOverrideEnvKey, controlRoot.path, 1)
-        defer {
-            if let previousControl {
-                setenv(controlOverrideEnvKey, previousControl, 1)
-            } else {
-                unsetenv(controlOverrideEnvKey)
-            }
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { try? FileManager.default.removeItem(at: root) }
 
-        let container = try HarnessTestModelContainer.makeInMemory()
-        let manager = HarnessRuntimeSession(
-            container: container,
-            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
-        )
-        let model = Model(
-            protocol: .openAIAPI,
-            modelName: "slash:active-memory",
-            serverURL: URL(string: "http://localhost:1234")!,
-            capabilities: [.completion],
-            modelProtocol: .openAIAPI
-        )
-        let conversationID = try await manager.createConversation(
-            with: model,
-            userSystemPrompt: "sys",
-            cwd: workRoot.path
-        )
-        let control = ActiveMemoryControlStore(rootDirectory: controlRoot)
-        try await body(manager, conversationID, control)
+        // Task-scoped rather than setenv: other suites resolve the same key concurrently.
+        try await HarnessEnvironmentOverride.$overrides.withValue([controlOverrideEnvKey: controlRoot.path]) {
+            let container = try HarnessTestModelContainer.makeInMemory()
+            let manager = HarnessRuntimeSession(
+                container: container,
+                harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+            )
+            let model = Model(
+                protocol: .openAIAPI,
+                modelName: "slash:active-memory",
+                serverURL: URL(string: "http://localhost:1234")!,
+                capabilities: [.completion],
+                modelProtocol: .openAIAPI
+            )
+            let conversationID = try await manager.createConversation(
+                with: model,
+                userSystemPrompt: "sys",
+                cwd: workRoot.path
+            )
+            let control = ActiveMemoryControlStore(rootDirectory: controlRoot)
+            try await body(manager, conversationID, control)
+        }
     }
 
     @Test("/active-memory status reports knobs")
