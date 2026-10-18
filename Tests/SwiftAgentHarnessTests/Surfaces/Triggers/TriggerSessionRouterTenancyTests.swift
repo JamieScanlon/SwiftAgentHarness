@@ -79,7 +79,80 @@ struct TriggerSessionRouterTenancyTests {
         #expect(route.conversationID == nil)
     }
 
-    private func makeRouter(catalog: RouterTenancyStubCatalog) -> TriggerSessionRouter {
+    @Test("unstamped cron into an unowned conversation is allowed when tenancy is disabled")
+    func unstampedCronUnownedAllowedWhenTenancyDisabled() async throws {
+        let targetID = UUID()
+        let catalog = RouterTenancyStubCatalog(conversations: [
+            targetID: makeConversation(id: targetID, ownerAccountID: nil),
+        ])
+        let router = makeRouter(catalog: catalog, tenancyPolicy: .disabled)
+        let trigger = HarnessTrigger(
+            id: "cron-4",
+            source: .cron,
+            sourceMetadata: [
+                "conversationID": targetID.uuidString,
+                "cronJobId": "job-4",
+            ],
+            payload: "ping",
+            initiator: TriggerInitiator(kind: .user),
+            trust: .userDeferred,
+            routingMode: .threaded
+        )
+        let route = try await router.route(trigger)
+        #expect(route.conversationID == targetID)
+    }
+
+    @Test("unstamped cron into an unowned conversation is rejected when tenancy is required")
+    func unstampedCronRejectedWhenTenancyRequired() async throws {
+        let targetID = UUID()
+        let catalog = RouterTenancyStubCatalog(conversations: [
+            targetID: makeConversation(id: targetID, ownerAccountID: nil),
+        ])
+        let router = makeRouter(
+            catalog: catalog,
+            tenancyPolicy: TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true)
+        )
+        let trigger = HarnessTrigger(
+            id: "cron-5",
+            source: .cron,
+            sourceMetadata: [
+                "conversationID": targetID.uuidString,
+                "cronJobId": "job-5",
+            ],
+            payload: "ping",
+            initiator: TriggerInitiator(kind: .user),
+            trust: .userDeferred,
+            routingMode: .threaded
+        )
+        let route = try await router.route(trigger)
+        #expect(route.conversationID == nil)
+    }
+
+    @Test("unstamped cron into a missing conversation is rejected")
+    func unstampedCronMissingConversationRejected() async throws {
+        let targetID = UUID()
+        let catalog = RouterTenancyStubCatalog(conversations: [:])
+        let router = makeRouter(catalog: catalog)
+        let trigger = HarnessTrigger(
+            id: "cron-6",
+            source: .cron,
+            sourceMetadata: [
+                "conversationID": targetID.uuidString,
+                "cronJobId": "job-6",
+            ],
+            payload: "ping",
+            initiator: TriggerInitiator(kind: .user),
+            trust: .userDeferred,
+            routingMode: .threaded
+        )
+        let route = try await router.route(trigger)
+        #expect(route.conversationID == nil)
+    }
+
+    private func makeRouter(
+        catalog: RouterTenancyStubCatalog,
+        tenancyPolicy: TenancyPolicySettings = .disabled
+    ) -> TriggerSessionRouter {
         TriggerSessionRouter(
             sessionIndex: TriggerSessionIndex(createConversation: { _ in UUID() }),
             threadedTargetValidator: { conversationID, trigger in
@@ -87,13 +160,13 @@ struct TriggerSessionRouterTenancyTests {
                     conversationID: conversationID,
                     trigger: trigger,
                     catalog: catalog,
-                    tenancyPolicy: .disabled
+                    tenancyPolicy: tenancyPolicy
                 )
             }
         )
     }
 
-    private func makeConversation(id: UUID, ownerAccountID: UUID) -> ModelConversation {
+    private func makeConversation(id: UUID, ownerAccountID: UUID?) -> ModelConversation {
         let now = Date()
         return ModelConversation(
             id: id,

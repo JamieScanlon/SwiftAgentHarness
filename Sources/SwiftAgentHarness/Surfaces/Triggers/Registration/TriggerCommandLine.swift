@@ -186,6 +186,11 @@ enum TriggerToolArgumentBridge {
                 fields["scheduleKind"] = .string("at")
                 fields["at"] = .string(at)
                 fields["recurring"] = .boolean(false)
+            } else if line.option("in", "in-seconds", "inSeconds", "delay-ms", "delayMs") != nil {
+                fields["scheduleKind"] = .string("at")
+                fields["recurring"] = .boolean(false)
+                putNumber("delayMs", line.option("delay-ms", "delayMs"))
+                putNumber("inSeconds", line.option("in", "in-seconds", "inSeconds"))
             } else if let every = line.option("every-ms", "intervalMs"), let ms = Double(every) {
                 fields["scheduleKind"] = .string("every")
                 fields["intervalMs"] = .double(ms)

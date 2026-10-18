@@ -327,7 +327,8 @@ public enum TriggersRuntimeWiring {
             delegatedDispatch: delegatedDispatch,
             snapshotStore: TriggerSnapshotStore(dataDirectory: configuration.dataDirectory),
             channelRunStreaming: channelRunStreamingHolder,
-            lifecycleCoordinator: channelSessionLifecycleCoordinator
+            lifecycleCoordinator: channelSessionLifecycleCoordinator,
+            logger: logger
         )
         let taskStore = ScheduledTaskStore(
             fileURL: configuration.dataDirectory.appendingPathComponent("scheduled_tasks.json")
