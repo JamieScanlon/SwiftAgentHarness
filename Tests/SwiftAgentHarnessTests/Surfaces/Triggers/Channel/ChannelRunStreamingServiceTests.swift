@@ -32,9 +32,9 @@ struct ChannelRunStreamingServiceTests {
             )
         )
 
-        try? await Task.sleep(for: .milliseconds(20))
-
-        #expect(listener.typingCallCount >= 1)
+        // Transient events are not replayed, so `attach` must return with the subscription live.
+        #expect(await hub.hasSubscribers(forConversationID: conversationID))
+        #expect(await HarnessAsyncTestSupport.waitUntil { listener.typingCallCount >= 1 })
         #expect(listener.typingChatIds.allSatisfy { $0 == "C1" })
 
         await hub.broadcastTransient(
@@ -79,12 +79,71 @@ struct ChannelRunStreamingServiceTests {
             runID: runID
         )
 
-        try? await Task.sleep(for: .milliseconds(150))
-        #expect(listener.sentMessages.contains(where: { $0.text.contains("hello channel") }))
-        let typingCountAfterTurn = listener.typingCallCount
+        #expect(await HarnessAsyncTestSupport.waitUntil {
+            listener.sentMessages.contains(where: { $0.text.contains("hello channel") })
+        })
+        // Turn completion detaches the session, which must tear down the hub subscription.
+        #expect(await HarnessAsyncTestSupport.waitUntil {
+            await !hub.hasSubscribers(forConversationID: conversationID)
+        })
+
         await service.detach(conversationID: conversationID)
+        let typingCountAfterDetach = listener.typingCallCount
+        // Negative check: a regression could only make this pass spuriously, never fail spuriously.
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(listener.typingCallCount == typingCountAfterTurn)
+        #expect(listener.typingCallCount == typingCountAfterDetach)
+    }
+
+    @Test("Explicit detach before the turn ends tears down the subscription")
+    func explicitDetachTearsDownSubscription() async throws {
+        let hub = ConversationEventsTopicHub()
+        let conversationID = UUID()
+        let config = ChannelListenerConfig(enabled: true)
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: Logger(label: "test"))
+        let plugin = bundle.plugin
+        let service = ChannelRunStreamingService(
+            hub: hub,
+            pluginLookup: { _ in plugin },
+            lifecycleCoordinator: ChannelSessionLifecycleCoordinator()
+        )
+        await service.attach(
+            conversationID: conversationID,
+            target: ChannelRunStreamingTarget(channel: .slack, chatId: "C1", threadId: nil, replyToMessageId: nil)
+        )
+        #expect(await hub.hasSubscribers(forConversationID: conversationID))
+
+        await service.detach(conversationID: conversationID)
+        #expect(await !hub.hasSubscribers(forConversationID: conversationID))
+    }
+
+    @Test("A detach scoped to a replaced session leaves the newer attach running")
+    func staleSessionDetachKeepsNewerSession() async throws {
+        let hub = ConversationEventsTopicHub()
+        let conversationID = UUID()
+        let config = ChannelListenerConfig(enabled: true)
+        let bundle = try ChannelPluginFactory.build(channel: .slack, config: config, logger: Logger(label: "test"))
+        let plugin = bundle.plugin
+        let service = ChannelRunStreamingService(
+            hub: hub,
+            pluginLookup: { _ in plugin },
+            lifecycleCoordinator: ChannelSessionLifecycleCoordinator()
+        )
+        let target = ChannelRunStreamingTarget(channel: .slack, chatId: "C1", threadId: nil, replyToMessageId: nil)
+
+        await service.attach(conversationID: conversationID, target: target)
+        let firstSession = try #require(await service.sessionID(for: conversationID))
+        await service.attach(conversationID: conversationID, target: target)
+        let secondSession = try #require(await service.sessionID(for: conversationID))
+        #expect(firstSession != secondSession)
+
+        // What a late turn-end detach from the first session does.
+        await service.detach(conversationID: conversationID, sessionID: firstSession)
+        #expect(await service.sessionID(for: conversationID) == secondSession)
+        #expect(await hub.hasSubscribers(forConversationID: conversationID))
+
+        await service.detach(conversationID: conversationID, sessionID: secondSession)
+        #expect(await service.sessionID(for: conversationID) == nil)
+        #expect(await !hub.hasSubscribers(forConversationID: conversationID))
     }
 }
 

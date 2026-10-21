@@ -58,11 +58,15 @@ actor ChannelRunStreamingService {
             hub: hub,
             conversationID: conversationID
         )
+        let sessionID = UUID()
         let consumer = ChannelRunStreamingSessionConsumer(inner: engineConsumer) { [self] in
-            await self.detach(conversationID: conversationID)
+            // Runs inside `driveTask`, and detaching drains (awaits) `driveTask`, so it must not be
+            // awaited here. The session id keeps a late detach from tearing down a newer attach.
+            Task { await self.detach(conversationID: conversationID, sessionID: sessionID) }
         }
+        let events = await source.subscribedEvents()
         let driveTask = Task {
-            await source.start(driving: consumer)
+            await ConversationStreamSurfaceDriver().consume(events: events, consumer: consumer)
         }
         var typingKeepalive: ChannelTypingKeepalive?
         if plugin.capabilities.typingIndicators, let heartbeat = plugin.heartbeat {
@@ -81,6 +85,7 @@ actor ChannelRunStreamingService {
             )
         }
         sessions[conversationID] = ChannelRunStreamingSession(
+            id: sessionID,
             channel: target.channel,
             source: source,
             driveTask: driveTask
@@ -101,6 +106,17 @@ actor ChannelRunStreamingService {
     }
 
     func detach(conversationID: UUID) async {
+        await detach(conversationID: conversationID, sessionID: nil)
+    }
+
+    func sessionID(for conversationID: UUID) -> UUID? {
+        sessions[conversationID]?.id
+    }
+
+    /// Detaches only when the live session matches `sessionID` (any session when `nil`).
+    func detach(conversationID: UUID, sessionID: UUID?) async {
+        guard let current = sessions[conversationID],
+              sessionID == nil || current.id == sessionID else { return }
         guard let session = sessions.removeValue(forKey: conversationID) else { return }
         if let lifecycleCoordinator {
             _ = await lifecycleCoordinator.drainSession(conversationID: conversationID)
@@ -112,6 +128,7 @@ actor ChannelRunStreamingService {
 }
 
 private struct ChannelRunStreamingSession {
+    let id: UUID
     /// Recorded so ``ChannelRunStreamingService/detachAll(channel:)`` can find this session. The map
     /// is keyed by conversation, and the registry only knows the channel.
     let channel: ChannelId
