@@ -46,7 +46,7 @@ enum APILayerRESTRouteTestSupport {
         )
     }
 
-    static let strictTenancyAuthSettings = APIAccessTokenAuthenticationSettings(hs256Secret: "rest-coverage-test-secret")
+    static let strictTenancyAuthSettings = APIAccessTokenAuthenticationSettings(hs256Secret: "rest-coverage-test-secret-0123456789abcdef")
 
     static func configureStrictTenancyAuth(on api: APILayer) async {
         await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))

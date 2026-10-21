@@ -32,7 +32,7 @@ Implementation lives under this folder; the HTTP gateway ([`APILayer`](../API/AP
 
 ### Connection-time identity
 
-Authenticated tenancy uses **`Authorization: Bearer <JWT>`** on REST (`ClientSessionMiddleware`) and WebSocket upgrade (`/ws`). Tokens are HS256 JWTs verified with ``ServerConfig/apiAccessTokenHS256Secret``; the owner principal is the JWT **`sub`** claim (UUID string). When ``requireAuthenticatedTenantOnAPI`` is enabled, ``APILayer/start()`` fails closed unless a validator secret is configured. Deployments must strip client-origin **`Authorization`** (and legacy **`X-SAH-Authenticated-Owner`**) at the reverse proxy and inject a short-lived harness JWT minted after IdP/session validation.
+Authenticated tenancy uses **`Authorization: Bearer <JWT>`** on REST (`ClientSessionMiddleware`) and WebSocket upgrade (`/ws`). Tokens are HS256 JWTs verified with ``ServerConfig/apiAccessTokenHS256Secret``; the owner principal is the JWT **`sub`** claim (UUID string). When ``requireAuthenticatedTenantOnAPI`` is enabled, ``APILayer/start()`` fails closed unless a validator secret is configured. The secret must be at least 32 UTF-8 bytes (RFC 7518 §3.2); a shorter configured secret makes ``APILayer/start()`` throw `accessTokenSecretTooShort` and the validator reject every token. Deployments must strip client-origin **`Authorization`** (and legacy **`X-SAH-Authenticated-Owner`**) at the reverse proxy and inject a short-lived harness JWT minted after IdP/session validation.
 
 TLS/session identity at upgrade remains deployment-owned; topic checks above complement but do not replace perimeter controls.
 

@@ -5,7 +5,12 @@ import Vapor
 
 /// HS256 JWT settings for REST/WebSocket authenticated tenancy (`Authorization: Bearer`).
 public struct APIAccessTokenAuthenticationSettings: Sendable, Equatable {
-    /// Shared secret for verifying harness access JWTs (HS256).
+    /// Smallest accepted ``hs256Secret`` size in UTF-8 bytes (RFC 7518 §3.2: the HS256 key must be at
+    /// least as large as the 256-bit hash output).
+    public static let minimumHS256SecretByteCount = 32
+
+    /// Shared secret for verifying harness access JWTs (HS256). Must be at least
+    /// ``minimumHS256SecretByteCount`` UTF-8 bytes; shorter secrets authenticate nothing.
     public var hs256Secret: String
     /// When non-nil, JWT `iss` must match.
     public var issuer: String?
@@ -16,6 +21,11 @@ public struct APIAccessTokenAuthenticationSettings: Sendable, Equatable {
         self.hs256Secret = hs256Secret
         self.issuer = issuer
         self.audience = audience
+    }
+
+    /// Whether ``hs256Secret`` is long enough to be used for HS256.
+    public var meetsMinimumHS256SecretLength: Bool {
+        hs256Secret.utf8.count >= Self.minimumHS256SecretByteCount
     }
 }
 
@@ -74,7 +84,7 @@ private struct DecodedHarnessAccessTokenPayload: Decodable {
 }
 
 public struct JWTAPIAccessTokenValidator: APIAccessTokenValidating {
-    private let settings: APIAccessTokenAuthenticationSettings
+    let settings: APIAccessTokenAuthenticationSettings
 
     public init(settings: APIAccessTokenAuthenticationSettings) {
         self.settings = settings
@@ -85,6 +95,9 @@ public struct JWTAPIAccessTokenValidator: APIAccessTokenValidating {
     }
 
     static func verify(token: String, settings: APIAccessTokenAuthenticationSettings) throws -> UUID {
+        guard settings.meetsMinimumHS256SecretLength else {
+            throw APIAccessTokenValidationError.validatorNotConfigured
+        }
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3 else { throw APIAccessTokenValidationError.invalidToken }
 
@@ -170,6 +183,10 @@ public enum HarnessAPIAccessTokenFactory {
         settings: APIAccessTokenAuthenticationSettings,
         expiresAt: Date = Date().addingTimeInterval(3600)
     ) async throws -> String {
+        // JWTKit asserts on undersized HMAC keys; refuse them as the validator would.
+        guard settings.meetsMinimumHS256SecretLength else {
+            throw APIAccessTokenValidationError.validatorNotConfigured
+        }
         var payload = HarnessAPIAccessTokenPayload(
             sub: SubjectClaim(value: ownerAccountID.uuidString),
             exp: ExpirationClaim(value: expiresAt)
