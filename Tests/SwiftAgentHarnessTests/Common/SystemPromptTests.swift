@@ -73,18 +73,20 @@ struct SystemPromptConfigLoadingTests {
 
     @Test("configuration set loads skills folder path from PromptConfig")
     func loadsSkillsFolderPathFromConfigurationSet() {
-        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
-        defer { PromptConfigBundleResource.resetForTesting() }
-        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath
+        let path = PromptConfigBundleResource.withIsolatedStateForTesting {
+            PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+            return HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath
+        }
         #expect(path != nil)
         #expect(path?.isEmpty == false)
     }
 
     @Test("configuration set returns valid skills folder path")
     func skillsFolderPathValidFormat() {
-        PromptConfigBundleResource.enableTestBundleFallbackForTesting()
-        defer { PromptConfigBundleResource.resetForTesting() }
-        let path = HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath ?? ""
+        let path = PromptConfigBundleResource.withIsolatedStateForTesting {
+            PromptConfigBundleResource.enableTestBundleFallbackForTesting()
+            return HarnessConfigurationSet.resolveFromAmbient().promptAssembly.skillsFolderPath ?? ""
+        }
         #expect(path.hasPrefix("/") || path.contains("skills"))
     }
 }

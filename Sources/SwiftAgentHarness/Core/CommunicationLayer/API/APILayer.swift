@@ -935,6 +935,12 @@ public actor APILayer {
            apiAccessTokenValidator == nil {
             throw APIError.authenticationNotConfigured
         }
+        if let jwtValidator = apiAccessTokenValidator as? JWTAPIAccessTokenValidator,
+           !jwtValidator.settings.meetsMinimumHS256SecretLength {
+            throw APIError.accessTokenSecretTooShort(
+                minimumBytes: APIAccessTokenAuthenticationSettings.minimumHS256SecretByteCount
+            )
+        }
     }
 
     public func start() async throws {
@@ -1593,6 +1599,9 @@ public enum APIError: Error, Equatable {
 
     /// Thrown when strict tenancy is enabled but no access-token validator is configured
     case authenticationNotConfigured
+
+    /// Thrown when the configured HS256 access-token secret is shorter than `minimumBytes` UTF-8 bytes
+    case accessTokenSecretTooShort(minimumBytes: Int)
     
     /// Thrown when there's an error during server configuration
     case serverConfigurationError(String)
@@ -1602,6 +1611,8 @@ public enum APIError: Error, Equatable {
         case (.componentsNotInitialized, .componentsNotInitialized),
              (.authenticationNotConfigured, .authenticationNotConfigured):
             return true
+        case (.accessTokenSecretTooShort(let a), .accessTokenSecretTooShort(let b)):
+            return a == b
         case (.serverConfigurationError(let a), .serverConfigurationError(let b)):
             return a == b
         default:

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Resolves the host-provided **PromptConfig.json** used to configure the harness.
 ///
@@ -28,10 +29,35 @@ public enum PromptConfigBundleResource {
         case data(Data)
     }
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var override: Override?
-    nonisolated(unsafe) private static var registeredBundles: [Bundle] = []
-    nonisolated(unsafe) private static var testBundleFallbackEnabled = false
+    private enum EnvironmentSource {
+        case process
+        case path(String?)
+    }
+
+    private struct State {
+        var override: Override?
+        var registeredBundles: [Bundle] = []
+        var testBundleFallbackEnabled = false
+        var environment: EnvironmentSource
+    }
+
+    private final class StateBox: Sendable {
+        let state: Mutex<State>
+
+        init(environment: EnvironmentSource) {
+            state = Mutex(State(environment: environment))
+        }
+    }
+
+    private static let processState = StateBox(environment: .process)
+
+    /// Set only by ``withIsolatedStateForTesting(_:)`` so concurrently running tests never observe
+    /// each other's overrides, registered bundles, fallback flag, or environment.
+    @TaskLocal private static var isolatedState: StateBox?
+
+    private static var currentState: StateBox {
+        isolatedState ?? processState
+    }
 
     // MARK: - Host configuration
 
@@ -53,27 +79,45 @@ public enum PromptConfigBundleResource {
 
     /// Register an additional bundle to search after `Bundle.main`.
     public static func registerBundle(_ bundle: Bundle) {
-        lock.lock()
-        defer { lock.unlock() }
-        if !registeredBundles.contains(where: { $0.bundlePath == bundle.bundlePath }) {
-            registeredBundles.append(bundle)
+        currentState.state.withLock { state in
+            if !state.registeredBundles.contains(where: { $0.bundlePath == bundle.bundlePath }) {
+                state.registeredBundles.append(bundle)
+            }
         }
     }
 
     /// Clears any programmatic override and registered bundles. Intended for test isolation.
     static func resetForTesting() {
-        lock.lock()
-        defer { lock.unlock() }
-        override = nil
-        registeredBundles = []
-        testBundleFallbackEnabled = false
+        currentState.state.withLock { state in
+            state.override = nil
+            state.registeredBundles = []
+            state.testBundleFallbackEnabled = false
+        }
     }
 
     /// Enables SwiftPM test-resource discovery. This is intentionally unavailable to production callers.
     static func enableTestBundleFallbackForTesting() {
-        lock.lock()
-        defer { lock.unlock() }
-        testBundleFallbackEnabled = true
+        currentState.state.withLock { $0.testBundleFallbackEnabled = true }
+    }
+
+    /// Stands in for the ``environmentKey`` variable inside ``withIsolatedStateForTesting(_:)``.
+    static func setEnvironmentPathForTesting(_ path: String?) {
+        currentState.state.withLock { $0.environment = .path(path) }
+    }
+
+    /// Runs `body` against fresh resolver state visible only to the current task and its children.
+    ///
+    /// The isolated state starts with no override, no registered bundles, the test-bundle fallback
+    /// disabled, and no ``environmentKey`` value (see ``setEnvironmentPathForTesting(_:)``).
+    static func withIsolatedStateForTesting<T>(_ body: () throws -> T) rethrows -> T {
+        try $isolatedState.withValue(StateBox(environment: .path(nil)), operation: body)
+    }
+
+    static func withIsolatedStateForTesting<T>(
+        isolation: isolated (any Actor)? = #isolation,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        try await $isolatedState.withValue(StateBox(environment: .path(nil)), operation: body)
     }
 
     // MARK: - Resolution
@@ -103,10 +147,10 @@ public enum PromptConfigBundleResource {
     // MARK: - Internals
 
     private static func candidateURLs() -> [URL] {
-        let (override, registered, testBundleFallbackEnabled) = snapshot()
+        let state = currentState.state.withLock { $0 }
         var urls: [URL] = []
 
-        if let override {
+        if let override = state.override {
             switch override {
             case .url(let url):
                 urls.append(url)
@@ -119,27 +163,31 @@ public enum PromptConfigBundleResource {
             }
         }
 
-        if let envURL = environmentOverrideURL() {
+        if let envURL = environmentOverrideURL(state.environment) {
             urls.append(envURL)
         }
 
         for bundle in candidateBundles(
-            registered: registered,
-            includeTestBundles: testBundleFallbackEnabled
+            registered: state.registeredBundles,
+            includeTestBundles: state.testBundleFallbackEnabled
         ) {
             if let url = bundle.url(forResource: resourceName, withExtension: resourceExtension) {
                 urls.append(url)
             }
         }
-        if testBundleFallbackEnabled {
-            urls.append(contentsOf: testBundleResourceURLs())
-        }
 
         return urls
     }
 
-    private static func environmentOverrideURL() -> URL? {
-        guard let raw = ProcessInfo.processInfo.environment[environmentKey],
+    private static func environmentOverrideURL(_ source: EnvironmentSource) -> URL? {
+        let value: String?
+        switch source {
+        case .process:
+            value = ProcessInfo.processInfo.environment[environmentKey]
+        case .path(let path):
+            value = path
+        }
+        guard let raw = value,
               !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
@@ -164,10 +212,13 @@ public enum PromptConfigBundleResource {
         let mainBundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
         append(Bundle(url: mainBundleParent.appendingPathComponent(testResourceBundleSuffix)))
 
-        var executableDirectory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-        for _ in 0..<4 {
-            append(Bundle(url: executableDirectory.appendingPathComponent(testResourceBundleSuffix)))
-            executableDirectory.deleteLastPathComponent()
+        // `swiftpm-testing-helper` is argv[0]; the test binary path arrives as a later argument.
+        for argument in CommandLine.arguments {
+            var directory = URL(fileURLWithPath: argument).deletingLastPathComponent()
+            for _ in 0..<4 {
+                append(Bundle(url: directory.appendingPathComponent(testResourceBundleSuffix)))
+                directory.deleteLastPathComponent()
+            }
         }
 
         for bundle in Bundle.allBundles {
@@ -193,38 +244,11 @@ public enum PromptConfigBundleResource {
         return bundles
     }
 
-    private static func testBundleResourceURLs() -> [URL] {
-        var urls: [URL] = []
-        for argument in CommandLine.arguments {
-            var directory = URL(fileURLWithPath: argument).deletingLastPathComponent()
-            for _ in 0..<4 {
-                urls.append(
-                    directory
-                        .appendingPathComponent(testResourceBundleSuffix)
-                        .appendingPathComponent(resourceName)
-                        .appendingPathExtension(resourceExtension)
-                )
-                directory.deleteLastPathComponent()
-            }
-        }
-        return urls
-    }
-
     private static func setOverride(_ value: Override) {
-        lock.lock()
-        defer { lock.unlock() }
-        override = value
-    }
-
-    private static func snapshot() -> (Override?, [Bundle], Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (override, registeredBundles, testBundleFallbackEnabled)
+        currentState.state.withLock { $0.override = value }
     }
 
     private static func snapshotOverride() -> Override? {
-        lock.lock()
-        defer { lock.unlock() }
-        return override
+        currentState.state.withLock { $0.override }
     }
 }

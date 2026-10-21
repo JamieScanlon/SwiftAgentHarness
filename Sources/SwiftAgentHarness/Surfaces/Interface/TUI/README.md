@@ -49,6 +49,9 @@ await streaming.attach(conversationID: conversationID, app: app)
 defer { await streaming.detach(conversationID: conversationID) }
 ```
 
+`attach` returns only once the subscription is live. Transient events (deltas, lifecycle) are
+never replayed, so attach before sending the turn, not after.
+
 ### Host rules
 
 - **Send raw composer text.** The control-input boundary runs inside the send path with
