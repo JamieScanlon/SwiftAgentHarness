@@ -14,14 +14,36 @@ public struct ModelLifecycle: Sendable, Codable, Hashable {
     public var retiresAt: Date?
     /// Set when this id is a moving alias. Aliases never carry tuned thresholds.
     public var aliasOf: String?
+    /// Vendor aliases (e.g. `vendor-latest`) known to point at this pinned version. They select this entry as pins
+    /// and lookup names, but are never sent on the wire and never carry tuned thresholds.
+    public var aliases: [String]
 
-    public init(status: Status = .active, retiresAt: Date? = nil, aliasOf: String? = nil) {
+    public init(status: Status = .active, retiresAt: Date? = nil, aliasOf: String? = nil, aliases: [String] = []) {
         self.status = status
         self.retiresAt = retiresAt
         self.aliasOf = aliasOf
+        self.aliases = aliases
     }
 
     public static let active = ModelLifecycle()
+
+    private enum CodingKeys: String, CodingKey {
+        case status, retiresAt, aliasOf, aliases
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(Status.self, forKey: .status)
+        retiresAt = try container.decodeIfPresent(Date.self, forKey: .retiresAt)
+        aliasOf = try container.decodeIfPresent(String.self, forKey: .aliasOf)
+        aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+    }
+
+    /// Whether `id` follows a moving-alias naming pattern (`*-latest`, `*-preview`).
+    public static func looksLikeMovingAlias(_ id: String) -> Bool {
+        let lowered = id.lowercased()
+        return lowered == "latest" || lowered.hasSuffix("-latest") || lowered.hasSuffix("-preview")
+    }
 }
 
 /// Where a model runs, used by role locality filters (spec: `Locality`).
@@ -45,6 +67,14 @@ public extension ModelRegistryEntry {
 
     func supports(_ contract: ModelContract) -> Bool {
         profile(for: contract) != nil
+    }
+
+    /// Whether `version` names a moving alias rather than a pinned version this entry serves: a declared alias, the
+    /// entry's own id when it is configured as an alias, or a `*-latest` / `*-preview` id.
+    func isAliasName(_ version: String, binding: ProviderBinding) -> Bool {
+        if lifecycle.aliases.contains(version) { return true }
+        if lifecycle.aliasOf != nil && version == binding.endpointModelId { return true }
+        return ModelLifecycle.looksLikeMovingAlias(version)
     }
 
     /// The profile a specific binding serves: the model profile narrowed by the binding's override, if any.

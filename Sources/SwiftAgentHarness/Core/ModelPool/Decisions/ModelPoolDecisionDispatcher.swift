@@ -17,7 +17,9 @@ public actor ModelPoolDecisionDispatcher {
     private let receipts: any RouteReceiptRecording
     private let cache: DecisionResponseCache?
     private let now: Clock
-    private let logger: Logger?
+    private let logger: Logger
+    /// `(role, version)` pairs already warned about, so untuned answers log once instead of on every call.
+    private var warnedUntuned = Set<String>()
 
     /// How many rejected candidates a receipt lists for "why not X".
     static let rankedOutLimit = 5
@@ -45,7 +47,7 @@ public actor ModelPoolDecisionDispatcher {
         self.receipts = receipts
         self.cache = cache
         self.now = now
-        self.logger = logger
+        self.logger = logger ?? Logger(label: "SwiftAgentHarness.ModelPool.Decisions")
     }
 
     // MARK: - Public surface
@@ -107,7 +109,7 @@ public actor ModelPoolDecisionDispatcher {
             if case .failure(let error) = stage1 { return await fail(error) }
             return await fail(.noCandidate(role: role, localityRestricted: binding.locality != .any))
         }
-        apply(first, to: &receipt)
+        apply(first, requested: Self.requestedNames(binding, policy: policy), to: &receipt)
 
         // Stage 2: at most one escalation, declared on the policy (or, without a policy, on the binding).
         let escalation = policy?.escalate.map { RoleCascade(to: $0.to, when: $0.when) } ?? binding.cascade
@@ -128,7 +130,7 @@ public actor ModelPoolDecisionDispatcher {
             switch stage2 {
             case .success(let second):
                 final = second
-                apply(second, to: &receipt)
+                apply(second, requested: Self.requestedNames(binding, policy: policy), to: &receipt)
                 receipt.costUSD = Self.sum(first.costUSD, second.costUSD)
                 receipt.requestIDs = first.result.requestIDs + second.result.requestIDs
                 receipt.cascade = RouteReceipt.Cascade(
@@ -151,7 +153,7 @@ public actor ModelPoolDecisionDispatcher {
         receipt.latencyMs = Self.milliseconds(now() - start)
         var evaluation: DecisionEvaluation?
         if let policy {
-            let evaluated = policy.evaluate(final.result)
+            let evaluated = evaluate(final, policy: policy, role: role)
             evaluation = evaluated
             receipt.decision = RouteReceipt.Decision(evaluation: evaluated, question: policy.question)
         }
@@ -159,14 +161,83 @@ public actor ModelPoolDecisionDispatcher {
         return DecisionOutcome(result: final.result, firstStage: firstStage, evaluation: evaluation, receipt: receipt)
     }
 
-    /// Pre-connects the top candidate for `role` so the first call does not pay a cold handshake.
-    public func warm(role: ModelRole, request: DecisionRequest) async {
-        guard let binding = roles.resolve(role), binding.contract == .decide else { return }
+    /// Pre-connects the top candidate for `role` so the first call does not pay a cold handshake, then probes each
+    /// configured alias once and warns when it no longer serves the pinned version. Probes are billed calls.
+    @discardableResult
+    public func warm(role: ModelRole, request: DecisionRequest) async -> [DecisionAliasProbe] {
+        guard let binding = roles.resolve(role), binding.contract == .decide else { return [] }
         let entries = await candidates.allContractEntries()
         guard case .success(let plan) = buildPlan(
             request: request, binding: binding, policy: nil, context: DecisionCallContext(), entries: entries
-        ), let top = plan.ordered.first, case .provider(let provider) = top.executor else { return }
-        await provider.warmConnections(target: top.target(timeBudget: nil))
+        ) else { return [] }
+        if let top = plan.ordered.first, case .provider(let provider) = top.executor {
+            await provider.warmConnections(target: top.target(timeBudget: nil))
+        }
+        var probes: [DecisionAliasProbe] = []
+        for planned in plan.ordered {
+            guard case .provider(let provider) = planned.executor else { continue }
+            let pinned = planned.candidate.binding.endpointModelId
+            for alias in planned.candidate.entry.lifecycle.aliases {
+                let status: DecisionAliasProbe.Status
+                do {
+                    if let served = try await provider.probeServedVersion(alias: alias, target: planned.target(timeBudget: nil)) {
+                        status = served == pinned ? .matches : (served == alias ? .unverifiable : .drifted(servedVersion: served))
+                    } else {
+                        status = .unsupported
+                    }
+                } catch {
+                    status = .failed(String(describing: error))
+                }
+                let probe = DecisionAliasProbe(
+                    role: role, alias: alias, pinnedVersion: pinned, bindingID: planned.candidate.bindingID, status: status
+                )
+                log(probe)
+                probes.append(probe)
+            }
+        }
+        return probes
+    }
+
+    /// Checks, without any network call, that `policy`'s bands cover a version the role's candidates serve, and
+    /// logs what it finds. Run it when a threshold-bearing role is bound.
+    @discardableResult
+    public func validateBinding(role: ModelRole, policy: DecisionPolicy?) async -> DecisionBindingValidation {
+        let tuned = (policy?.tunedVersions ?? []).sorted()
+        guard let binding = roles.resolve(role), binding.contract == .decide else {
+            logger.notice("decide role=\(role) is unbound; its consuming layer is off")
+            return DecisionBindingValidation(role: role, servedVersions: [], tunedVersions: tuned, problems: [.roleUnbound])
+        }
+        let entries = await candidates.allContractEntries()
+        let served = servedCandidates(binding: binding, policy: policy, entries: entries)
+        let servedVersions = served.map(\.version).sorted()
+        var problems: [DecisionBindingValidation.Problem] = []
+        if served.isEmpty {
+            problems.append(.noCandidates)
+        }
+        for candidate in served where candidate.entry.isAliasName(candidate.version, binding: candidate.binding) {
+            problems.append(.movingAliasEndpoint(candidate.version))
+        }
+        if let policy, !policy.bands.isEmpty {
+            for key in tuned {
+                if let owner = served.first(where: { $0.entry.lifecycle.aliases.contains(key) }) {
+                    problems.append(.bandsKeyedByAlias(alias: key, pinnedVersion: owner.version))
+                } else if ModelLifecycle.looksLikeMovingAlias(key) {
+                    problems.append(.bandsKeyedByAlias(alias: key, pinnedVersion: nil))
+                }
+            }
+            let tunedSet = policy.tunedVersions
+            if !served.isEmpty, !served.contains(where: { tunedSet.contains($0.version) }) {
+                problems.append(.noTunedVersionServed(tuned: tuned, served: servedVersions))
+            } else {
+                let untuned = servedVersions.filter { !tunedSet.contains($0) }
+                if !untuned.isEmpty { problems.append(.candidatesWithoutBands(untuned)) }
+            }
+        }
+        let validation = DecisionBindingValidation(
+            role: role, servedVersions: servedVersions, tunedVersions: tuned, problems: problems
+        )
+        log(validation, policy: policy)
+        return validation
     }
 
     // MARK: - Planning
@@ -452,7 +523,8 @@ public actor ModelPoolDecisionDispatcher {
         var lastError: DecisionDispatchError?
         for planned in candidates {
             let entry = planned.candidate.entry
-            let cacheVersion = entry.lifecycle.aliasOf == nil ? planned.candidate.binding.endpointModelId : nil
+            let wireID = planned.candidate.binding.endpointModelId
+            let cacheVersion = entry.isAliasName(wireID, binding: planned.candidate.binding) ? nil : wireID
             if let cache, let cacheVersion, planned.candidate.profile.surface != .llmEmulation,
                let cached = await cache.lookup(modelVersion: cacheVersion, request: request) {
                 return .success(StageResult(candidate: planned.candidate, result: cached, costUSD: 0, cacheHit: true))
@@ -497,7 +569,8 @@ public actor ModelPoolDecisionDispatcher {
                     policy: budgetPolicy, modelID: entry.id, conversationID: context.conversationID,
                     accountID: context.accountID, actualCostUSD: cost
                 )
-                if let cache, let cacheVersion, result.calibrated {
+                if let cache, let cacheVersion, result.calibrated,
+                   !entry.isAliasName(result.modelVersion, binding: planned.candidate.binding) {
                     await cache.store(result, modelVersion: cacheVersion, request: request)
                 }
                 return .success(StageResult(candidate: planned.candidate, result: result, costUSD: cost, cacheHit: false))
@@ -507,7 +580,7 @@ public actor ModelPoolDecisionDispatcher {
                     accountID: context.accountID, actualCostUSD: nil
                 )
                 let classification = classify(error, planned: planned)
-                logger?.warning("decide call failed on \(planned.candidate.bindingID): \(classification.rawValue)")
+                logger.warning("decide call failed on \(planned.candidate.bindingID): \(classification.rawValue)")
                 lastError = .provider(classification: classification, message: String(describing: error))
                 guard classification.isAvailabilityClass else { return .failure(lastError!) }
                 receipt.fallback.append(.init(from: planned.candidate.bindingID, reason: classification))
@@ -540,7 +613,7 @@ public actor ModelPoolDecisionDispatcher {
         }
     }
 
-    private func apply(_ stage: StageResult, to receipt: inout RouteReceipt) {
+    private func apply(_ stage: StageResult, requested: [String], to receipt: inout RouteReceipt) {
         let candidate = stage.candidate
         receipt.resolved = RouteReceipt.Resolved(
             modelID: candidate.entry.slug,
@@ -548,7 +621,9 @@ public actor ModelPoolDecisionDispatcher {
             bindingID: candidate.bindingID,
             surface: candidate.profile.surface
         )
-        if candidate.entry.lifecycle.aliasOf != nil {
+        if let alias = requested.first(where: { candidate.entry.lifecycle.aliases.contains($0) }) {
+            receipt.aliasResolved = RouteReceipt.AliasResolution(alias: alias, to: candidate.binding.endpointModelId)
+        } else if candidate.entry.lifecycle.aliasOf != nil {
             receipt.aliasResolved = RouteReceipt.AliasResolution(
                 alias: candidate.binding.endpointModelId, to: stage.result.modelVersion
             )
@@ -557,6 +632,135 @@ public actor ModelPoolDecisionDispatcher {
         receipt.costUSD = stage.costUSD
         receipt.requestIDs = stage.result.requestIDs
         receipt.cacheHit = stage.cacheHit
+    }
+
+    // MARK: - Version checks
+
+    /// Evaluates `policy`, forcing an untuned verdict when the server answered as an alias (the version behind it
+    /// is unknown, so no band can apply), and warns once per `(role, version)` whenever the answer is untuned.
+    private func evaluate(_ stage: StageResult, policy: DecisionPolicy, role: ModelRole) -> DecisionEvaluation {
+        let version = stage.result.modelVersion
+        let tunedList = policy.tunedVersions.sorted()
+        if stage.candidate.entry.isAliasName(version, binding: stage.candidate.binding) {
+            warnUntunedOnce(role: role, version: version) {
+                "decide role=\(role) was answered as alias \(version), so the version that answered is unknown; " +
+                "policy is tuned for \(tunedList). Verdict forced to \(policy.onUnavailable.rawValue). " +
+                "Pin a versioned endpoint id and list the alias under aliases."
+            }
+            return DecisionEvaluation(verdict: policy.onUnavailable.verdict, reason: .untunedVersion, modelVersion: version)
+        }
+        let evaluation = policy.evaluate(stage.result)
+        if evaluation.reason == .untunedVersion {
+            warnUntunedOnce(role: role, version: version) {
+                "decide role=\(role) answered by \(version); policy is tuned for \(tunedList). " +
+                "Verdict forced to \(policy.onUnavailable.rawValue)."
+            }
+        }
+        return evaluation
+    }
+
+    private func warnUntunedOnce(role: ModelRole, version: String, _ message: () -> String) {
+        guard warnedUntuned.insert("\(role.rawValue)/\(version)").inserted else { return }
+        logger.warning("\(message())")
+    }
+
+    struct ServedCandidate: Sendable {
+        var entry: ModelRegistryEntry
+        var binding: ProviderBinding
+        var version: String
+    }
+
+    /// Request-independent view of the bindings a role can dispatch to, including the escalation target.
+    nonisolated func servedCandidates(
+        binding: RoleBinding,
+        policy: DecisionPolicy?,
+        entries: [ModelRegistryEntry]
+    ) -> [ServedCandidate] {
+        let escalation = policy?.escalate?.to ?? binding.cascade?.to
+        let named = [binding.pin].compactMap { $0 } + binding.fallback + [escalation].compactMap { $0 }
+        var pool: [(entry: ModelRegistryEntry, named: Bool)] = []
+        if binding.pin == nil {
+            pool += entries.filter { $0.supports(.decide) }.map { ($0, false) }
+        }
+        for reference in named {
+            pool += entries.filter { $0.isNamed(reference) }.map { ($0, true) }
+        }
+        var seen = Set<String>()
+        var served: [ServedCandidate] = []
+        for (entry, isNamed) in pool {
+            guard entry.lifecycle.status != .retired,
+                  entry.lifecycle.status != .deprecated || isNamed,
+                  binding.locality.admits(entry.locality),
+                  !(entry.family.map(binding.query.excludeFamilies.contains) ?? false)
+            else { continue }
+            for providerBinding in entry.providers {
+                let decide = entry.profile(for: .decide, binding: providerBinding)
+                let emulated = isNamed && decide == nil && emulator != nil
+                    && entry.profile(for: .generate, binding: providerBinding) != nil
+                guard decide != nil || emulated else { continue }
+                if let decide {
+                    var query = binding.query
+                    query.contract = .decide
+                    if let minGuarantee = binding.minGuarantee {
+                        query.minGuarantee = max(query.minGuarantee ?? minGuarantee, minGuarantee)
+                    }
+                    guard query.rejection(for: decide) == nil else { continue }
+                }
+                let key = "\(providerBinding.providerId)/\(providerBinding.endpointModelId)"
+                guard seen.insert(key).inserted else { continue }
+                served.append(ServedCandidate(entry: entry, binding: providerBinding, version: providerBinding.endpointModelId))
+            }
+        }
+        return served
+    }
+
+    static func requestedNames(_ binding: RoleBinding, policy: DecisionPolicy?) -> [String] {
+        [binding.pin].compactMap { $0 } + binding.fallback + [policy?.escalate?.to ?? binding.cascade?.to].compactMap { $0 }
+    }
+
+    private func log(_ validation: DecisionBindingValidation, policy: DecisionPolicy?) {
+        let role = validation.role
+        for problem in validation.problems {
+            switch problem {
+            case .roleUnbound:
+                logger.notice("decide role=\(role) is unbound; its consuming layer is off")
+            case .noCandidates:
+                logger.error("decide role=\(role) is bound but no registry entry can serve it; every call will fail conservatively")
+            case .noTunedVersionServed(let tuned, let served):
+                let fallback = policy?.onUnavailable.rawValue ?? "onUnavailable"
+                logger.error(
+                    "decide role=\(role) will never act: policy is tuned for \(tuned) but its candidates serve \(served); every verdict resolves to \(fallback)"
+                )
+            case .candidatesWithoutBands(let versions):
+                logger.warning("decide role=\(role): candidates \(versions) have no policy bands and will answer as untuned")
+            case .bandsKeyedByAlias(let alias, let pinned):
+                let hint = pinned.map { "key them by the pinned version \($0)" } ?? "key them by a pinned version"
+                logger.warning("decide role=\(role): policy bands are keyed by moving alias \(alias) and will never match; \(hint)")
+            case .movingAliasEndpoint(let id):
+                logger.warning(
+                    "decide role=\(role): candidate is addressed by moving alias \(id); pin the versioned id as endpointModelID and list \(id) under aliases"
+                )
+            }
+        }
+    }
+
+    private func log(_ probe: DecisionAliasProbe) {
+        switch probe.status {
+        case .matches:
+            logger.debug("decide role=\(probe.role): alias \(probe.alias) still serves pinned \(probe.pinnedVersion)")
+        case .drifted(let served):
+            logger.warning(
+                "decide role=\(probe.role): alias \(probe.alias) now serves \(served) but \(probe.bindingID) is pinned to \(probe.pinnedVersion); keep the pin, or re-tune the policy for \(served) and update the pin"
+            )
+        case .unverifiable:
+            logger.warning(
+                "decide role=\(probe.role): server echoed alias \(probe.alias) instead of a version; cannot confirm it still serves \(probe.pinnedVersion)"
+            )
+        case .failed(let message):
+            logger.warning("decide role=\(probe.role): alias probe for \(probe.alias) failed: \(message)")
+        case .unsupported:
+            logger.debug("decide role=\(probe.role): \(probe.bindingID) cannot probe alias \(probe.alias)")
+        }
     }
 
     // MARK: - Helpers

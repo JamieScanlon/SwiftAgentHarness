@@ -95,6 +95,17 @@ public struct HTTPDecisionProvider: DecisionProviding {
         _ = try? await transport.send(request)
     }
 
+    public func probeServedVersion(alias: String, target: DecisionDispatchTarget) async throws -> String? {
+        guard DecisionSurfaceOptions(profile: target.profile).sendModel else { return nil }
+        var probeTarget = target
+        probeTarget.binding.endpointModelId = alias
+        let probe = DecisionRequest(
+            state: .string("ok"),
+            questions: [DecisionQuestionItem("probe", .yesNo(instructions: .string("Does the state say ok?")))]
+        )
+        return try await decide(probe, target: probeTarget).modelVersion
+    }
+
     // MARK: - Internals
 
     private struct ChunkResponse: Sendable {

@@ -154,7 +154,7 @@ struct ToolApprovalClassifierGateTests {
         #expect(reason == .notInActBand)
     }
 
-    @Test("An answer from a version the policy is not tuned for asks")
+    @Test("An answer from a version the policy is not tuned for asks, naming the untuned version as the cause")
     func untunedVersionAsks() async {
         let provider = GatekeeperFixtures.provider(pClear: 0.99, version: "gatekeeper-2026-10")
         let gate = GatekeeperFixtures.gate(dispatcher: GatekeeperFixtures.dispatcher(provider: provider))
@@ -162,7 +162,7 @@ struct ToolApprovalClassifierGateTests {
             Issue.record("expected ask")
             return
         }
-        #expect(reason == .notInActBand)
+        #expect(reason == .untunedVersion)
         #expect(receipt?.decision?.reason == .untunedVersion)
     }
 

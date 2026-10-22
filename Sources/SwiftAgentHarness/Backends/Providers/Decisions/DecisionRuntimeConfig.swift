@@ -1,11 +1,15 @@
 import CryptoKit
 import Foundation
+import Logging
 import SwiftAgentKit
 
 /// One decision model a host serves through a ``DecisionRuntimeConfig``.
 public struct DecisionModelConfig: Sendable {
-    /// The server's own model name, always a versioned id (never a vendor alias).
+    /// The server's own versioned model id. Always what goes on the wire, and what policy bands are keyed by.
     public var endpointModelID: String
+    /// Vendor aliases this version is known by (e.g. `vendor-latest`). Accepted as pins and lookup names, recorded in
+    /// route receipts, and probed for drift at warm-up; never sent.
+    public var aliases: [String]
     public var displayName: String?
     public var family: String?
     /// The `decide` profile; defaults to the surface's reference descriptor.
@@ -21,6 +25,7 @@ public struct DecisionModelConfig: Sendable {
 
     public init(
         endpointModelID: String,
+        aliases: [String] = [],
         displayName: String? = nil,
         family: String? = nil,
         profile: ContractProfile? = nil,
@@ -32,6 +37,7 @@ public struct DecisionModelConfig: Sendable {
         performance: ModelObservedPerformance? = nil
     ) {
         self.endpointModelID = endpointModelID
+        self.aliases = aliases
         self.displayName = displayName
         self.family = family
         self.profile = profile
@@ -51,6 +57,8 @@ public struct DecisionRuntimeConfig: Sendable {
     public var label: String
     /// `.systemOne` or `.openAIDecisions`.
     public var surface: ContractSurface
+    /// The API root (`https://api.vendor.ai` or `https://api.vendor.ai/v1`). A full endpoint URL ending in the
+    /// surface's own path (`/v1/systemone`, `/v1/decisions`) is trimmed back to the root.
     public var serverURL: URL
     /// API-key env vars. Empty means a local server that needs no credential.
     public var apiKeyEnvVars: [String]
@@ -67,20 +75,38 @@ public struct DecisionRuntimeConfig: Sendable {
         self.providerID = providerID
         self.label = label
         self.surface = surface
-        self.serverURL = serverURL
+        let normalized = Self.apiRoot(for: serverURL, surface: surface)
+        if normalized != serverURL {
+            Logger(label: "SwiftAgentHarness.Providers.Decisions").debug(
+                "decision runtime \(providerID): trimmed endpoint path from serverURL \(serverURL.absoluteString) → \(normalized.absoluteString)"
+            )
+        }
+        self.serverURL = normalized
         self.apiKeyEnvVars = apiKeyEnvVars
         self.models = models
+    }
+
+    /// Strips the surface's own endpoint path from the end of `url`, so vendor docs' full endpoint URLs work as-is.
+    public static func apiRoot(for url: URL, surface: ContractSurface) -> URL {
+        let endpointPath = surface == .openAIDecisions ? "/v1/decisions" : "/v1/systemone"
+        guard url.path.hasSuffix(endpointPath) else { return url }
+        return url.deletingLastPathComponent().deletingLastPathComponent()
     }
 
     public var isLocal: Bool {
         apiKeyEnvVars.isEmpty
     }
 
+    /// ``serverURL`` trimmed to the API root, even if it was reassigned after init.
+    public var apiRoot: URL {
+        Self.apiRoot(for: serverURL, surface: surface)
+    }
+
     public func manifest() -> ProviderManifest {
         ProviderManifest(
             id: providerID,
             label: label,
-            providerEndpoints: [ProviderEndpoint(id: "\(providerID)-default", baseURL: serverURL)],
+            providerEndpoints: [ProviderEndpoint(id: "\(providerID)-default", baseURL: apiRoot)],
             providerAuthAliases: [providerID],
             providerAuthChoices: isLocal ? [] : [
                 ProviderAuthChoice(id: "api-key", label: "API Key", envVars: apiKeyEnvVars, authType: .apiKey),
@@ -102,7 +128,7 @@ public struct DecisionRuntimeConfig: Sendable {
                 providerId: providerID,
                 modelProtocol: .openAIAPI,
                 endpointModelId: model.endpointModelID,
-                serverURL: serverURL,
+                serverURL: apiRoot,
                 prices: model.prices.isEmpty ? nil : model.prices
             )
             return ModelRegistryEntry(
@@ -115,12 +141,20 @@ public struct DecisionRuntimeConfig: Sendable {
                 canonicalModelKey: "\(providerID)/\(model.endpointModelID)",
                 contracts: [profile],
                 compatGroup: model.compatGroup,
-                lifecycle: model.lifecycle,
+                lifecycle: Self.lifecycle(model),
                 prices: model.prices,
                 locality: model.locality ?? (isLocal ? .local : .vendor),
                 roles: model.roles
             )
         }
+    }
+
+    private static func lifecycle(_ model: DecisionModelConfig) -> ModelLifecycle {
+        var lifecycle = model.lifecycle
+        for alias in model.aliases where !lifecycle.aliases.contains(alias) && alias != model.endpointModelID {
+            lifecycle.aliases.append(alias)
+        }
+        return lifecycle
     }
 
     /// Deterministic UUID so registry merges and receipts stay stable across launches.

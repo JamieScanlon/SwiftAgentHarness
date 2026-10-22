@@ -182,9 +182,11 @@ public enum DecisionBodyCompression {
 }
 
 enum DecisionEndpoint {
-    /// Joins `path` onto `base`, collapsing a duplicated `v1` segment (`…/v1` + `v1/systemone`).
+    /// Joins `path` onto `base`, collapsing a duplicated `v1` segment (`…/v1` + `v1/systemone`) and leaving a base that
+    /// already ends in `path` unchanged.
     static func url(base: URL, path: String) -> URL {
         var trimmedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if base.path.hasSuffix("/" + trimmedPath) { return base }
         if base.path.hasSuffix("/v1") || base.path == "/v1", trimmedPath.hasPrefix("v1/") {
             trimmedPath = String(trimmedPath.dropFirst(3))
         }

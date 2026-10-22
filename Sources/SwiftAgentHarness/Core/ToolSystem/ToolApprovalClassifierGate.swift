@@ -10,6 +10,22 @@ public protocol ToolApprovalDecisionDispatching: Sendable {
         policy: DecisionPolicy?,
         context: DecisionCallContext
     ) async -> DecisionOutcome
+
+    /// Network-free check that the policy's bands cover a version the role's candidates serve.
+    func validateBinding(role: ModelRole, policy: DecisionPolicy?) async -> DecisionBindingValidation
+
+    /// Pre-connects and probes configured aliases for drift.
+    func warm(role: ModelRole, request: DecisionRequest) async -> [DecisionAliasProbe]
+}
+
+public extension ToolApprovalDecisionDispatching {
+    func validateBinding(role: ModelRole, policy: DecisionPolicy?) async -> DecisionBindingValidation {
+        DecisionBindingValidation(role: role, servedVersions: [], tunedVersions: [], problems: [])
+    }
+
+    func warm(role: ModelRole, request: DecisionRequest) async -> [DecisionAliasProbe] {
+        []
+    }
 }
 
 extension ModelPoolDecisionDispatcher: ToolApprovalDecisionDispatching {}
@@ -97,6 +113,9 @@ public enum ToolApprovalClassifierAskReason: String, Sendable, Equatable {
     case argumentsTooLarge = "arguments-too-large"
     case caution
     case notInActBand = "not-in-act-band"
+    /// The answering version has no bands in the policy (an unpinned alias, a version bump, or a fallback), so the
+    /// verdict was forced to `onUnavailable`. A configuration problem, not a low score.
+    case untunedVersion = "untuned-version"
     case uncalibrated
     case failed
 }
@@ -132,6 +151,8 @@ public actor ToolApprovalClassifierGate {
     public nonisolated let configuration: ToolApprovalClassifierConfiguration
     private let recordCapacity: Int
     public private(set) var records: [ToolApprovalClassifierRecord] = []
+    /// Set by the first ``validate()``; the binding check runs once per gate.
+    public private(set) var validation: DecisionBindingValidation?
 
     public init(
         dispatcher: any ToolApprovalDecisionDispatching,
@@ -143,7 +164,28 @@ public actor ToolApprovalClassifierGate {
         self.recordCapacity = max(1, recordCapacity)
     }
 
+    /// Checks once that the gatekeeper policy can act with the bound deciders, logging an error when it cannot.
+    /// Runs automatically before the first evaluation; hosts may call it at startup.
+    @discardableResult
+    public func validate() async -> DecisionBindingValidation {
+        if let validation { return validation }
+        let result = await dispatcher.validateBinding(role: configuration.role, policy: configuration.policy)
+        validation = result
+        return result
+    }
+
+    /// Startup preparation: the binding check plus a warm-up that probes configured aliases for drift.
+    /// The alias probes are billed decide calls.
+    @discardableResult
+    public func prepare() async -> (validation: DecisionBindingValidation, aliasProbes: [DecisionAliasProbe]) {
+        let validation = await validate()
+        let probe = Self.makeRequest(userRequests: ["warm-up"], toolName: "warm-up", arguments: .object([:]))
+        let probes = await dispatcher.warm(role: configuration.role, request: probe)
+        return (validation, probes)
+    }
+
     public func evaluate(_ input: ToolApprovalClassifierInput) async -> ToolApprovalClassifierOutcome {
+        if validation == nil { await validate() }
         let canonicalTool = ToolNamePolicyNormalization.canonical(input.toolName)
         if input.route != .user {
             return record(input, request: nil, .ask(.parentRoute, receipt: nil))
@@ -193,7 +235,9 @@ public actor ToolApprovalClassifierGate {
             return .ask(.caution, receipt: receipt)
         }
         guard evaluation.verdict == .act else {
-            return .ask(.notInActBand, receipt: receipt)
+            let reason: ToolApprovalClassifierAskReason =
+                evaluation.reason == .untunedVersion ? .untunedVersion : .notInActBand
+            return .ask(reason, receipt: receipt)
         }
         let p = probabilities[ToolApprovalClassifierConfiguration.clearOption] ?? evaluation.value ?? 0
         let reason = "classifier: clear p=\(String(format: "%.3f", p)) model=\(result.modelVersion) band=act receipt=\(receipt.callID.uuidString)"

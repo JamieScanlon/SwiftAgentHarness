@@ -32,6 +32,10 @@ public protocol DecisionProviding: Sendable {
 
     /// Pre-connect so the first ~100 ms call does not pay a cold TLS handshake.
     func warmConnections(target: DecisionDispatchTarget) async
+
+    /// Sends one minimal request naming `alias` instead of the pinned id and returns the version the server reports
+    /// answering, or `nil` when this binding cannot be probed. Billed like any other call.
+    func probeServedVersion(alias: String, target: DecisionDispatchTarget) async throws -> String?
 }
 
 public extension DecisionProviding {
@@ -40,6 +44,10 @@ public extension DecisionProviding {
     }
 
     func warmConnections(target: DecisionDispatchTarget) async {}
+
+    func probeServedVersion(alias: String, target: DecisionDispatchTarget) async throws -> String? {
+        nil
+    }
 }
 
 /// Errors raised by decision codecs and transports.

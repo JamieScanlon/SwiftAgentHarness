@@ -183,6 +183,7 @@ extension ModelRegistryEntry {
         if let uuid = UUID(uuidString: trimmed), uuid == id { return true }
         if allSlugs.contains(trimmed) { return true }
         if providers.contains(where: { "\($0.providerId)/\($0.endpointModelId)" == trimmed }) { return true }
+        if lifecycle.aliases.contains(trimmed) { return true }
         return canonicalModelKey == trimmed || displayName == trimmed
     }
 }
