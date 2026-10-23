@@ -25,9 +25,10 @@ The harness speaks two wire dialects: **SystemOne** (the common hosted and local
   - [Tool-output injection probe](#tool-output-injection-probe)
   - [Model routing](#model-routing)
   - [Your own decisions](#your-own-decisions)
-- Operations: [route receipts](#route-receipts), [keeping connections warm](#keeping-connections-warm), [troubleshooting](#troubleshooting), [reference](#reference)
+- Operations: [route receipts](#route-receipts), [keeping connections warm](#keeping-connections-warm), [streamed replies and untrusted links](#streamed-replies-and-untrusted-links), [troubleshooting](#troubleshooting)
+- [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps), [reference](#reference)
 
-For design background, see [DECISION_MODELS_SPEC_NOTES.md](DECISION_MODELS_SPEC_NOTES.md) and the harness-template pages `backends/providers/decision-models.md` and `core/model-pool/model-classes.md`.
+The spec is the harness-template pages `backends/providers/decision-models.md` and `core/model-pool/model-classes.md`. Where this implementation interprets or departs from them, see [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps).
 
 ---
 
@@ -630,7 +631,7 @@ let guardrails = GuardrailDecisionBattery(
 ```
 
 **Limits.**
-- The model's ordinary reply streams to surfaces as it's generated, so it isn't guarded. Only structured delivery is. This is deliberate. When the context holds external content, the harness instead rewrites the reply's remote images and data-carrying links in plain code (`agentHarness.untrustedLinkSanitizer`), which closes the leak-on-display attack without a decider call. See [DECISION_MODELS_SPEC_NOTES.md](DECISION_MODELS_SPEC_NOTES.md#streamed-assistant-text-not-guarded-by-a-decider-decision).
+- The model's ordinary reply streams to surfaces as it's generated, so it isn't guarded. Only structured delivery is. This is deliberate. When the context holds external content, the harness instead rewrites the reply's remote images and data-carrying links in plain code (`agentHarness.untrustedLinkSanitizer`), which closes the leak-on-display attack without a decider call. See [Streamed replies and untrusted links](#streamed-replies-and-untrusted-links).
 - Each inbound message and each structured delivery costs one decide call.
 
 **Diagnostics.** `guardrails.records` keeps every non-pass verdict with its direction, conversation, and receipt summary. Reviews and blocks are logged at warning level.
@@ -844,6 +845,32 @@ warmTask.cancel()
 
 It calls only the decider's `v1/models` endpoint, never a billed decide call.
 
+## Streamed replies and untrusted links
+
+The model's ordinary reply streams to surfaces as it's generated, and it is deliberately **not** checked by the `guard` battery. Outbound guardrails cover structured delivery only. The spec lists guardrails as "inbound and outbound" but doesn't say how to guard streamed text, so this is an implementation decision:
+
+- A reply goes wrong mainly when something earlier in the conversation told it to, so the defenses sit where untrusted content enters: the external-content envelope, the injection probe, permission rules, and the gatekeeper.
+- A decider check on every reply would cost a call per reply (or per chunk) and mostly check clean text. It would also have to either delay display or retract text a user may already have seen, and Slack, Telegram, and email can't take a message back.
+
+One attack gets past every input-side defense: a reply that leaks data the moment it is displayed. For example, a markdown image whose URL carries a secret is fetched by the surface with no click and no tool call. Plain code closes that hole. `UntrustedLinkSanitizer`, wired into `TurnLoop`, rewrites the reply while the model call's context holds wrapped external content:
+
+| In the reply | Becomes |
+|---|---|
+| Remote image: markdown, HTML `<img>`, or a remote reference definition | `alt (image from host not loaded)` |
+| Link, autolink, or bare URL whose URL carries data | The link text, then `(unverified link: …)` with the URL as inert code |
+| Code spans and fenced code blocks | Unchanged |
+| Relative or `data:` images, links without data, trusted hosts | Unchanged |
+
+"Carries data" means a query, a fragment, user info, a path segment of 40+ characters, or a host label of 32+ characters.
+
+- **The streamed text and the saved message match.** Text that could still become a link or image is held back only until it resolves, so the stream output always equals the rewritten saved message.
+- **When it applies:** when the envelope marker appears in the call's assembled context or in the saved transcript. File reads, `bash`, and memory search results are wrapped too, so most agentic turns qualify.
+- **Configuration:** it is on by default. PromptConfig `agentHarness.untrustedLinkSanitizer: false` turns it off, and `agentHarness.untrustedLinkTrustedHosts` exempts hosts and their subdomains.
+- **Limits:**
+  - Structured delivery through the message tool is not rewritten; use outbound guardrails there.
+  - Reasoning text is not rewritten.
+  - A stronger input-side defense, the quarantine ("dual LLM") pattern where the orchestrator only sees constrained results derived from untrusted text, is not implemented.
+
 ## Troubleshooting
 
 | Symptom or log message | Cause | Fix |
@@ -859,6 +886,46 @@ It calls only the decider's `v1/models` endpoint, never a billed decide call.
 | A use case never acts, with no log lines | The role is unbound, or the host filters the dispatcher's logger. | Run `validateBinding(role:policy:)`, and check `outcome.receipt.decision?.reason`. |
 | Every memory write is declined | The act band is too high, or the policy's `question` isn't `durable`. | Check the receipt's decision value against your bands. |
 | Guardrails block everything | The act band sits at the high end. | Violation checks need a **low** act band; see [Polarity](#polarity). |
+
+## Implementation notes and spec gaps
+
+These are behavior calls made where the spec was silent or ambiguous, plus gaps worth revisiting.
+
+**Wire and codecs**
+
+| Topic | Behavior |
+|---|---|
+| Image assets | The spec's `ImageAsset { mediaType, blobRef }` is carried as inline bytes (`data: Data`), because the decide path has no blob-store resolver. Switch to `blobRef` once one exists. |
+| `parts` image encoding | Multipart with a JSON part named `request` plus one part per asset key. The spec doesn't fix the vendor layout. |
+| `images-array` encoding | `images` is ordered by sorted asset key. State strings exactly equal to an asset key are rewritten to that integer index. |
+| Decide bindings' `ModelProtocol` | Decide-only bindings carry the placeholder `.openAIAPI`. Nothing reads it, because non-`generate` rows are filtered out of every chat path (`ModelQuery`, slug index, `getAvailableModels`, `resolve`). |
+| Logprobs emulation rung | SwiftAgentKit has no logprobs API. The codec sends `logprobs` / `top_logprobs` in `additionalParameters` and reads `modelMetadata.top_logprobs`. No adapter fills that in today, so the rung is chosen only when a `generate` profile declares a `logprobs` feature. Otherwise the schema rung is used. |
+| 413 shrink retry | Image assets are re-encoded at half size, never below the binding's image window, and retried once. Assets are never dropped, because a gating question would lose its evidence. |
+| Endpoint paths | `serverURL` is the API root. A URL ending in the surface's endpoint path is trimmed at config time, and `DecisionEndpoint.url` leaves a base that already ends in the path unchanged. Both the decide call and the `v1/models` warm-up use it. |
+
+**Selection, policy, and cost**
+
+| Topic | Behavior |
+|---|---|
+| Stage-2 failure in a cascade | The call fails conservatively with `onError`. The stage-1 answer is kept on `DecisionOutcome.firstStage`, for audit only. |
+| Fallback with no `compatGroup` | A tuned role whose primary has no `compatGroup` has no legal fallback. |
+| Fallback on `auth-error` | Not a decide fallback trigger. This follows the spec's list. The `generate` path (`ProviderFailoverBridge`) does rotate on `auth-error`, so the two paths differ. |
+| `.unavailable` deferral | Also matches any uncalibrated result. |
+| Language strengths | A ranking preference (strong +, weak −, unlisted −), not a hard filter. Emulation is never chosen implicitly. |
+| Unknown cost | Unknown projections pass the role's `maxUSDPerCall`, and `BudgetAccounting.authorize` receives `nil`, so the budget policy's `projectedCostFallback` decides. |
+| Emulation cost | Emulated calls settle input tokens plus output tokens at the chat model's output price (`DecisionCostEstimator.settleEmulated`). Cost is unknown when the chat model has no output price. |
+| Echoed aliases | A response whose `model` is an alias is treated as untuned. A name counts as an alias when declared, when configured with `aliasOf`, or when it matches `*-latest` / `*-preview`. A versioned id that ends in `-preview` would be misread; pin a different name if that comes up. |
+
+**Use cases**
+
+| Topic | Behavior |
+|---|---|
+| Gatekeeper option vs. bands | Policy bands for a choice question don't name the option, so a confident `caution` would also land in the act band. The gate therefore requires `clear` as well as `act`. A per-option axis in `DecisionPolicy` (`on: "p(option)"`) would close this gap. |
+| Gatekeeper "user's messages" | Only user messages whose trust resolves to `trusted` (`direct_user_entry`). Unstamped messages count as low trust unless `includeUnstampedUserMessages` is set. Harness-injected messages, automation messages, assistant text, and tool outputs are always excluded. |
+| Gatekeeper wire contract | `approvalResolutionKind` and `approvalSource` gain `classifier`, and the lifecycle `source` is `runtime.approvalClassifier`. |
+| Model routing scope | Only the per-turn `main` model and `decide` rank stages are routed. `compactor`, `background-small`, and `subagent` aren't resolved through role bindings in this codebase. Cache warmth is approximated by "has history on the current model", because the Pool has no per-model cache telemetry. |
+| Route receipt schema | `openapi/schemas/ws/route-receipt-wire.schema.json`. The generated Python enum was updated by hand. The bundled TUI doesn't render receipts yet. |
+| Other contracts | `embed`, `rerank`, `render`, `transcribe`, `session`, and `parse` have profile types and well-known roles but no slots, codecs, or job/session state machines. They are out of scope for this work. |
 
 ## Reference
 
