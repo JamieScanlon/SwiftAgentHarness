@@ -3,16 +3,21 @@ import Foundation
 import SwiftAgentKit
 
 enum MessageOutputPostProcessor {
+    /// - Parameter untrustedLinks: when set, remote images and data-carrying links in the text are rewritten.
     static func apply(
         envelope: HarnessMessageEnvelope,
-        policy: MessageOutputPolicy
+        policy: MessageOutputPolicy,
+        untrustedLinks: UntrustedLinkPolicy? = nil
     ) -> HarnessMessageEnvelope {
         _ = policy
         var out = envelope
-        guard out.message.content.isEmpty else { return out }
-        if let messageCall = out.message.toolCalls.first(where: { $0.name == MessageToolArgumentsParser.toolName }),
+        if out.message.content.isEmpty,
+           let messageCall = out.message.toolCalls.first(where: { $0.name == MessageToolArgumentsParser.toolName }),
            let presentation = presentation(from: messageCall) {
             out.message.content = presentation.textFallback()
+        }
+        if let untrustedLinks {
+            out = UntrustedLinkSanitizer.sanitize(out, trustedHosts: untrustedLinks.trustedHosts)
         }
         return out
     }

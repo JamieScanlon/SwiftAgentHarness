@@ -630,7 +630,7 @@ let guardrails = GuardrailDecisionBattery(
 ```
 
 **Limits.**
-- The model's ordinary reply streams to surfaces as it's generated, so it isn't guarded. Only structured delivery is.
+- The model's ordinary reply streams to surfaces as it's generated, so it isn't guarded. Only structured delivery is. This is deliberate. When the context holds external content, the harness instead rewrites the reply's remote images and data-carrying links in plain code (`agentHarness.untrustedLinkSanitizer`), which closes the leak-on-display attack without a decider call. See [DECISION_MODELS_SPEC_NOTES.md](DECISION_MODELS_SPEC_NOTES.md#streamed-assistant-text-not-guarded-by-a-decider-decision).
 - Each inbound message and each structured delivery costs one decide call.
 
 **Diagnostics.** `guardrails.records` keeps every non-pass verdict with its direction, conversation, and receipt summary. Reviews and blocks are logged at warning level.

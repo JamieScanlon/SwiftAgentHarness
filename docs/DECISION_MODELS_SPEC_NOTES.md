@@ -42,9 +42,25 @@ The decision-model follow-ups, implemented. Every consumer is off unless the hos
 | Emulation cost | — | Emulated calls settle input tokens plus output tokens at the chat model's output price (`DecisionCostEstimator.settleEmulated`). Unknown when the chat model has no output price. |
 | Receipt export | Receipts are what observability exports and surfaces render as "answered by X (fallback from Y)" | `RouteReceiptWire` on `conversation/{id}/events` as a transient `routeReceipt` event (`ConversationEventsRouteReceiptRecorder`; combine with others via `CompositeRouteReceiptRecorder`). Redacted at emit: no request or response content, and vendor request ids are SHA-256 hashed. `summary` is the "answered by X" line. Schema: `openapi/schemas/ws/route-receipt-wire.schema.json`. The generated Python enum was updated by hand to match, since regenerating needs a network install. Receipts are not yet rendered by the bundled TUI. |
 
-## Still not implemented
+## Streamed assistant text: not guarded by a decider (decision)
 
-- **Guarding streamed assistant text.** Outbound guardrails cover structured delivery only.
+The spec lists the guardrail battery as "inbound and outbound" but doesn't say how to guard text that streams to surfaces as it's generated. We decided not to run the `guard` battery on streamed assistant text. Outbound guardrails stay on structured delivery only.
+
+**Why.** The orchestrator's reply goes wrong mainly when something earlier in the conversation told it to, so the effort belongs where untrusted content enters: the external-content envelope, the injection probe, permission rules, and the gatekeeper. A decider check on every streamed reply would cost a call per reply (or per chunk), and mostly check clean text. It would also have to either delay display (buffering) or retract text a user may already have seen, and some surfaces (Slack, Telegram, email) can't take a message back.
+
+**What we do instead.** One attack still gets past every input-side defense: a reply that leaks data the moment it is displayed. An example is a markdown image whose URL carries a secret, which the surface fetches with no click and no tool call. Plain code closes that hole (`UntrustedLinkSanitizer`, wired in `TurnLoop`). While the model call's context holds wrapped external content:
+
+- remote images (markdown, HTML `<img>`, and remote reference definitions) are not loaded;
+- links, autolinks, and bare URLs whose URL carries data (a query, fragment, user info, a path segment of 40+ characters, or a host label of 32+ characters) are shown as inert code with an "unverified link" note;
+- code spans and fenced code blocks are left alone.
+
+The streamed text and the saved message are rewritten identically. Text that could still become a link or image is held back only until it resolves. It is on by default, and PromptConfig `agentHarness.untrustedLinkSanitizer` / `untrustedLinkTrustedHosts` turn it off or exempt hosts.
+
+**Known limits.**
+- "External content" means the envelope marker appears in the call's assembled context or in the saved transcript. That includes file reads, `bash`, and memory search, since those results are wrapped too, so in practice most agentic turns qualify.
+- Structured delivery through the message tool is not rewritten. It is still covered by outbound guardrails when they are configured.
+- Reasoning text is not rewritten.
+- A fuller defense on the input side, the quarantine ("dual LLM") pattern where the orchestrator only ever sees constrained results derived from untrusted text, is a separate design question.
 
 ## Out of scope
 

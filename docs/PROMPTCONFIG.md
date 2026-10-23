@@ -132,6 +132,8 @@ Agent-build loop behavior (`AgentHarnessConfiguration`). Integer keys are clampe
 | `orchestratorPoolIdleTTLSeconds` | Int | `300` | 30–86,400 | Idle seconds before a pooled orchestrator is evictable. |
 | `orchestratorPoolMaxEntries` | Int | `4` | 1–64 | Max resident orchestrator pool entries. |
 | `legacyStreamedTextSurfaces` | [String] | `[]` | — | Deprecated; kept for backward compatibility, no effect. |
+| `untrustedLinkSanitizer` | Bool | `true` | — | While the model's context holds wrapped external content, rewrite assistant text so remote images don't load and data-carrying links show as inert code. Applies to streamed and saved text. |
+| `untrustedLinkTrustedHosts` | [String] | `[]` | — | Hosts (and their subdomains) exempt from `untrustedLinkSanitizer`. |
 
 ## `toolPolicy`
 

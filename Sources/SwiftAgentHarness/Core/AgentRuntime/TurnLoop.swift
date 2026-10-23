@@ -173,6 +173,11 @@ struct TurnLoop {
             var publishedStreamDeltaThisAttempt = false
             var modelCallStartedEmitted = false
             var sawStreamComplete = false
+            let linkPolicy = untrustedLinkPolicy(
+                harness: agentHarness,
+                context: messages + conv.messages
+            )
+            var linkSanitizer = linkPolicy.map { UntrustedLinkSanitizer(trustedHosts: $0.trustedHosts) }
             // Final provider-agnostic guard: never dispatch an unrenderable array (orphaned leading
             // tool result / missing system prompt) regardless of how `messages` was assembled.
             messages = RenderableMessageInvariant.sanitizeForDispatch(messages, logger: ports.logger)
@@ -229,6 +234,7 @@ struct TurnLoop {
                     }
                     if await publishStreamDelta(
                         event,
+                        linkSanitizer: &linkSanitizer,
                         conversationID: conversationID,
                         runID: runID
                     ) {
@@ -239,12 +245,16 @@ struct TurnLoop {
                     }
                     acc.consume(event)
                 }
+                if let tail = linkSanitizer?.flush(), !tail.isEmpty {
+                    await publishDelta(.text(tail), conversationID, runID)
+                }
                 if !sawStreamComplete {
                     let userStopRequested = await ports.conversation.stopRequested(conversationID: conversationID)
                     if Task.isCancelled || userStopRequested {
                         await persistInterruptedPartialAssistantIfNeeded(
                             acc: acc,
                             messageOutputPolicy: messageOutputPolicy,
+                            linkPolicy: linkPolicy,
                             conversationID: conversationID,
                             runID: runID
                         )
@@ -261,6 +271,7 @@ struct TurnLoop {
                     await persistInterruptedPartialAssistantIfNeeded(
                         acc: acc,
                         messageOutputPolicy: messageOutputPolicy,
+                        linkPolicy: linkPolicy,
                         conversationID: conversationID,
                         runID: runID
                     )
@@ -270,6 +281,7 @@ struct TurnLoop {
                 await persistInterruptedPartialAssistantIfNeeded(
                     acc: acc,
                     messageOutputPolicy: messageOutputPolicy,
+                    linkPolicy: linkPolicy,
                     conversationID: conversationID,
                     runID: runID
                 )
@@ -292,7 +304,8 @@ struct TurnLoop {
 
             let assistantEnvelope = MessageOutputPostProcessor.apply(
                 envelope: acc.finalize(),
-                policy: messageOutputPolicy
+                policy: messageOutputPolicy,
+                untrustedLinks: linkPolicy
             )
             HarnessMessageEnvelopeStore.store(assistantEnvelope)
             let assistant = assistantEnvelope.message
@@ -718,12 +731,14 @@ struct TurnLoop {
     private func persistInterruptedPartialAssistantIfNeeded(
         acc: AssistantMessageAccumulator,
         messageOutputPolicy: MessageOutputPolicy,
+        linkPolicy: UntrustedLinkPolicy?,
         conversationID: UUID,
         runID: UUID?
     ) async {
         let assistantEnvelope = MessageOutputPostProcessor.apply(
             envelope: acc.finalize(),
-            policy: messageOutputPolicy
+            policy: messageOutputPolicy,
+            untrustedLinks: linkPolicy
         )
         guard hasPersistablePartial(assistantEnvelope) else { return }
         HarnessMessageEnvelopeStore.store(assistantEnvelope)
@@ -758,8 +773,16 @@ struct TurnLoop {
         }
     }
 
+    /// The link policy for one model call: set only when enabled and the call's context holds external content.
+    private func untrustedLinkPolicy(harness: AgentHarnessConfiguration, context: [Message]) -> UntrustedLinkPolicy? {
+        let policy = harness.untrustedLinkPolicy
+        guard policy.enabled, UntrustedLinkSanitizer.containsExternalContent(context) else { return nil }
+        return policy
+    }
+
     private func publishStreamDelta(
         _ event: ModelStreamEvent,
+        linkSanitizer: inout UntrustedLinkSanitizer?,
         conversationID: UUID,
         runID: UUID?
     ) async -> Bool {
@@ -767,12 +790,16 @@ struct TurnLoop {
         switch event {
         case .stream(let chunk):
             if !chunk.content.isEmpty {
-                await publishDelta(.text(chunk.content), conversationID, runID)
-                published = true
+                let text = linkSanitizer?.feed(chunk.content) ?? chunk.content
+                if !text.isEmpty {
+                    await publishDelta(.text(text), conversationID, runID)
+                    published = true
+                }
             }
             if let fragment = chunk.streamingFragment {
                 switch fragment {
-                case .text(let text):
+                case .text(let raw):
+                    let text = linkSanitizer?.feed(raw) ?? raw
                     if !text.isEmpty {
                         await publishDelta(.text(text), conversationID, runID)
                         published = true
