@@ -94,6 +94,39 @@ public struct ModelRole: RawRepresentable, Sendable, Codable, Hashable, Expressi
     }
 }
 
+/// Role-keyed dictionaries encode as JSON objects (`{"gatekeeper": {...}}`) rather than key/value arrays.
+extension ModelRole: CodingKeyRepresentable {
+    public var codingKey: any CodingKey {
+        RoleCodingKey(stringValue: rawValue)
+    }
+
+    public init?<T: CodingKey>(codingKey: T) {
+        self.init(rawValue: codingKey.stringValue)
+    }
+
+    private struct RoleCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+}
+
+/// Per-call role overrides from the active mode profile and the conversation (spec: resolution order).
+public struct RoleBindingPatches: Sendable, Equatable {
+    public var mode: [ModelRole: RoleBindingPatch]
+    public var conversation: [ModelRole: RoleBindingPatch]
+
+    public init(mode: [ModelRole: RoleBindingPatch] = [:], conversation: [ModelRole: RoleBindingPatch] = [:]) {
+        self.mode = mode
+        self.conversation = conversation
+    }
+
+    public static let none = RoleBindingPatches()
+
+    public var isEmpty: Bool { mode.isEmpty && conversation.isEmpty }
+}
+
 /// What an unbound role resolves to.
 public enum RoleDefault: Sendable, Equatable {
     /// The host must bind it.
@@ -280,6 +313,15 @@ public struct RoleBindingResolver: Sendable {
         self.settings = settings
         self.modePatches = modePatches
         self.conversationPatches = conversationPatches
+    }
+
+    /// This resolver with per-call patches layered over its own (the call's patch wins for a role it names).
+    public func overlaying(_ patches: RoleBindingPatches) -> RoleBindingResolver {
+        guard !patches.isEmpty else { return self }
+        var copy = self
+        copy.modePatches.merge(patches.mode) { _, call in call }
+        copy.conversationPatches.merge(patches.conversation) { _, call in call }
+        return copy
     }
 
     /// Returns `nil` when the role is unbound and its default is ``RoleDefault/off`` or ``RoleDefault/required``.

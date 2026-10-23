@@ -7,12 +7,14 @@ enum HarnessInjectedMessagePrefixes {
     static let memoryRecall = "[Memory Recall]"
     static let activeMemoryRecall = "[Active Memory Recall]"
     static let triggerProvenance = "[trigger-context]"
+    static let skillShortlist = "[Skill Shortlist]"
 
     static let coveragePrefixes: [String] = [
         memoryContext,
         memoryRecall,
         activeMemoryRecall,
         triggerProvenance,
+        skillShortlist,
     ]
 }
 

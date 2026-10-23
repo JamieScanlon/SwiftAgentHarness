@@ -66,6 +66,9 @@ protocol ToolApprovalRuntimeServicing: Sendable {
 }
 
 protocol OrchestratorRuntimeToolPolicyServicing: Sendable {
+    /// Skills the conversation's mode and routing policy allow, for the skill pre-filter.
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate]
+
     func allToolRegistryEntriesForOrchestration(orchestrator: SwiftAgentKitOrchestrator) async -> [ToolRegistryEntry]
     func buildToolTurnPolicySnapshot(
         allEntries: [ToolRegistryEntry],
@@ -260,6 +263,12 @@ protocol ConversationToolDataProviding: Sendable {
 
 protocol SubAgentOrchestratorRuntimeServicing: OrchestratorRuntimeToolPolicyServicing {
     func setupOrchestrator(with selectedModel: Model, activeConversation preferredConversation: ModelConversation?) async
+}
+
+extension OrchestratorRuntimeToolPolicyServicing {
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate] {
+        []
+    }
 }
 
 extension ToolApprovalRuntimeServicing {

@@ -13,7 +13,7 @@ This template is organized to mirror the architecture itself: the inner ring of 
 | Layer | Summary |
 |---|---|
 | [Core (spine)](./core/) | Eight-layer ring + three-Pool pattern + tool-call-vs-context-resource framing + auxiliary taxonomy. The page every other topic references. |
-| [Model Pool](./core/model-pool/) | Models-not-providers as base abstraction; registry, capability query, scheduler, lifecycle, failover, budget, cache. |
+| [Model Pool](./core/model-pool/) | Models-not-providers as base abstraction; registry, capability query, scheduler, lifecycle, failover, budget, cache. Sibling: [model-classes.md](./core/model-pool/model-classes.md) (classify by call contract — generate / decide / embed / rerank / render / transcribe / session / parse; unit-typed cost; roles as the selection surface; route receipts). |
 | [Sub-Agent Pool](./core/sub-agent-pool/) | One abstraction over internal + remote (A2A / ACP-stdio / custom) delegation. Practical patterns in `./agent-orchestration.md`. |
 | [Tool System](./core/tool-system/) | The single sanctioned path to side-effects, and the dispatch fabric for every model-invokable resource (function tools, sub-agent delegates, Skill loads, MCP-provided tools, agent-driven memory recall). Hosts the Tools and Skills registries. |
 | [Context Engine](./core/context-engine/) | What gets sent to the model on each turn. Compaction + summarization + memory injection + system-prompt assembly via a defined lifecycle. |
@@ -26,9 +26,10 @@ This template is organized to mirror the architecture itself: the inner ring of 
 
 | Backend | Summary |
 |---|---|
-| [Providers](./backends/providers/) | Provider adapters under the Model Pool: plugin shape, manifest, capability scope, auth profiles, wire codec, tool/prompt normalization. |
+| [Providers](./backends/providers/) | Provider adapters under the Model Pool: plugin shape, manifest, capability scope, auth profiles, wire codec, tool/prompt normalization. Sibling: [decision-models.md](./backends/providers/decision-models.md) (calibrated closed-question models: SystemOne and OpenAI Decisions codecs, LLM emulation, computed confidence, versioned threshold bands). |
 | [Persistence](./backends/persistence/) | Session storage, branching, transcript archiving, cross-session search. Backend driver for the Conversation Manager and Memory. |
 | [Execution Environments](./backends/execution-environments/) | Process-host backends under the Tool System: backend registry, `SandboxBackendHandle` contract, mode/scope/backend factoring, FS bridge, path policy, long-running processes, escape hatches. |
+| [Computer Use](./backends/computer-use/) | Display targets (host desktop, VM, desktop container, managed browser, device) behind one observe/act contract: control ladder, canonical action model and coordinate contract, observation receipts with effect evidence, leases and tiered grants, layered safety, bounded screenshots, CU specialist sub-agent. macOS implementation in [macos.md](./backends/computer-use/macos.md). |
 
 ### Surfaces — clients of the Communication Layer
 

@@ -145,6 +145,17 @@ struct TurnLoop {
                     )
                 }
             }
+            if isFirstModelCall, let skillShortlist = ports.skillShortlist,
+               let note = await skillShortlist(conv, runID) {
+                let shortlistMessage = HarnessInjectedMessageMetadata.systemMessage(
+                    id: UUID(),
+                    content: """
+\(HarnessInjectedMessagePrefixes.skillShortlist)
+\(note)
+"""
+                )
+                messages = [shortlistMessage] + messages
+            }
             let handle = try await ports.model.resolve(for: conv, orchestrator: orchestrator)
 
             if toolChoice == .required {

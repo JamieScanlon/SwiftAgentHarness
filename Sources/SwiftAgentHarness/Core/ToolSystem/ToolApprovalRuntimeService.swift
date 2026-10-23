@@ -293,12 +293,19 @@ actor ToolApprovalRuntimeService {
         guard let gate = deps.toolApprovalClassifierGate else { return false }
         let outcome = await gate.evaluate(ToolApprovalClassifierInput(
             conversationID: conversationID,
+            runID: runID,
             accountID: await ownerAccountID(for: conversationID),
             toolName: call.name,
             arguments: call.arguments,
             route: route,
             isElevated: isElevated,
-            transcript: transcript
+            transcript: transcript,
+            rolePatches: await DecisionRolePatchLoader.patches(
+                for: conversationID,
+                persistenceDomain: deps.persistenceDomain,
+                modeRegistry: deps.modeRegistry,
+                logger: deps.logger
+            )
         ))
         guard case .allowOnce(let reason, _) = outcome else { return false }
         let binding = ToolCallApprovalBinding.from(call: call)

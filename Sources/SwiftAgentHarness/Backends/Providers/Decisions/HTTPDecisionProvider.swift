@@ -52,7 +52,7 @@ public struct HTTPDecisionProvider: DecisionProviding {
             for (index, chunk) in chunks.enumerated() {
                 group.addTask {
                     let response = try await send(
-                        chunk, codec: codec, options: options, target: target, bearer: bearer, allowSplit: true
+                        chunk, codec: codec, options: options, target: target, bearer: bearer, allowRecovery: true
                     )
                     return (index, response)
                 }
@@ -131,6 +131,44 @@ public struct HTTPDecisionProvider: DecisionProviding {
         }
     }
 
+    /// One retry, in order of preference (spec: decision-models § Transport):
+    /// - token limit with several questions: split them across two requests;
+    /// - token limit with one question: trim the longest string in the state;
+    /// - 413 with image assets: re-encode the assets smaller.
+    static func recovery(
+        for error: DecisionProviderError,
+        chunk: DecisionRequest,
+        options: DecisionSurfaceOptions
+    ) -> [DecisionRequest]? {
+        guard case .http(let status, _, _) = error else { return nil }
+        if DecisionErrorClassifier.classify(error) == .contextOverflow {
+            if chunk.questions.count > 1 {
+                let half = chunk.questions.count / 2
+                var first = chunk
+                first.questions = Array(chunk.questions[..<half])
+                var second = chunk
+                second.questions = Array(chunk.questions[half...])
+                return [first, second]
+            }
+            guard let trimmed = DecisionStateTrimmer.trimmed(chunk.state) else { return nil }
+            var retry = chunk
+            retry.state = trimmed
+            return [retry]
+        }
+        if status == 413, !chunk.assets.isEmpty {
+            var retry = chunk
+            var shrankAny = false
+            for (key, asset) in chunk.assets {
+                if let smaller = try? DecisionImageNormalizer.shrink(asset, window: options.imageWindow) {
+                    retry.assets[key] = smaller
+                    shrankAny = true
+                }
+            }
+            return shrankAny ? [retry] : nil
+        }
+        return nil
+    }
+
     static func normalizingImages(_ request: DecisionRequest, options: DecisionSurfaceOptions) throws -> DecisionRequest {
         guard let window = options.imageWindow, !request.assets.isEmpty else { return request }
         var normalized = request
@@ -146,7 +184,7 @@ public struct HTTPDecisionProvider: DecisionProviding {
         options: DecisionSurfaceOptions,
         target: DecisionDispatchTarget,
         bearer: String?,
-        allowSplit: Bool
+        allowRecovery: Bool
     ) async throws -> [ChunkResponse] {
         let encoded = try codec.encode(chunk, modelID: target.binding.endpointModelId, options: options)
         var urlRequest = URLRequest(url: DecisionEndpoint.url(base: target.binding.serverURL, path: options.path))
@@ -175,18 +213,14 @@ public struct HTTPDecisionProvider: DecisionProviding {
             let decoded = try codec.decode(data, request: chunk, options: options)
             return [ChunkResponse(decoded: decoded, requestID: DecisionRetryExecutor.requestID(from: response))]
         } catch let error as DecisionProviderError {
-            // A token-limit 400 may be retried once by splitting the questions across two requests.
-            guard allowSplit, chunk.questions.count > 1, DecisionErrorClassifier.classify(error) == .contextOverflow else {
-                throw error
+            guard allowRecovery, let retry = Self.recovery(for: error, chunk: chunk, options: options) else { throw error }
+            var responses: [ChunkResponse] = []
+            for request in retry {
+                responses += try await send(
+                    request, codec: codec, options: options, target: target, bearer: bearer, allowRecovery: false
+                )
             }
-            let half = chunk.questions.count / 2
-            var first = chunk
-            first.questions = Array(chunk.questions[..<half])
-            var second = chunk
-            second.questions = Array(chunk.questions[half...])
-            let a = try await send(first, codec: codec, options: options, target: target, bearer: bearer, allowSplit: false)
-            let b = try await send(second, codec: codec, options: options, target: target, bearer: bearer, allowSplit: false)
-            return a + b
+            return responses
         }
     }
 }

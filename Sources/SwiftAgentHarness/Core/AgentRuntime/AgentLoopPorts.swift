@@ -43,6 +43,8 @@ struct AgentLoopPorts: Sendable {
     /// What the budget gate settled for the last completion on this conversation. `nil` in tests and
     /// in hosts that never wired it; the loop then falls back to the conversation model's rates.
     let settlementSink: ModelCompletionSettlementSink?
+    /// Skill pre-filter: a per-turn shortlist note for the first model call, or `nil` to add nothing.
+    let skillShortlist: (@Sendable (_ conversation: ModelConversation, _ runID: UUID?) async -> String?)?
 
     init(
         model: any RuntimeModelPort,
@@ -55,7 +57,8 @@ struct AgentLoopPorts: Sendable {
         modeRegistry: any ModeRegistryAccessing,
         logger: Logger?,
         reconnectMCPClient: (@Sendable (_ serverName: String) async -> Bool)? = nil,
-        settlementSink: ModelCompletionSettlementSink? = nil
+        settlementSink: ModelCompletionSettlementSink? = nil,
+        skillShortlist: (@Sendable (_ conversation: ModelConversation, _ runID: UUID?) async -> String?)? = nil
     ) {
         self.model = model
         self.context = context
@@ -68,6 +71,7 @@ struct AgentLoopPorts: Sendable {
         self.logger = logger
         self.reconnectMCPClient = reconnectMCPClient
         self.settlementSink = settlementSink
+        self.skillShortlist = skillShortlist
     }
 }
 

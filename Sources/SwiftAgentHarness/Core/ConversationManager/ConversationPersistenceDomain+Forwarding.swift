@@ -530,6 +530,18 @@ extension ConversationPersistenceDomain {
         )
     }
 
+    func updateConversationRolePatches(
+        conversationID: UUID,
+        roles: [ModelRole: RoleBindingPatch],
+        skipControlPlaneRevisionBump: Bool = false
+    ) throws {
+        try stack.conversationManager.updateConversationRolePatches(
+            conversationID: conversationID,
+            roles: roles,
+            skipControlPlaneRevisionBump: skipControlPlaneRevisionBump
+        )
+    }
+
     func recordHarnessPersistenceCwd(conversationID: UUID, cwd: String) throws -> ModelConversation {
         try stack.conversationManager.recordHarnessPersistenceCwd(conversationID: conversationID, cwd: cwd)
     }

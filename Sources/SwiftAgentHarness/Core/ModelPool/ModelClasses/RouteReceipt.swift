@@ -87,6 +87,9 @@ public struct RouteReceipt: Sendable, Equatable {
     }
 
     public var callID: UUID
+    /// Owning conversation and run, when the call was made inside one; receipts publish on that conversation's topic.
+    public var conversationID: UUID?
+    public var runID: UUID?
     public var role: ModelRole?
     public var contract: ModelContract
     /// Role, query hash, or id as asked.
@@ -111,6 +114,8 @@ public struct RouteReceipt: Sendable, Equatable {
 
     public init(
         callID: UUID = UUID(),
+        conversationID: UUID? = nil,
+        runID: UUID? = nil,
         role: ModelRole?,
         contract: ModelContract,
         requested: String,
@@ -129,6 +134,8 @@ public struct RouteReceipt: Sendable, Equatable {
         errorClassification: ProviderFailoverClassification? = nil
     ) {
         self.callID = callID
+        self.conversationID = conversationID
+        self.runID = runID
         self.role = role
         self.contract = contract
         self.requested = requested

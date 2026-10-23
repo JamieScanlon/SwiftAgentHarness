@@ -1183,6 +1183,29 @@ final class ConversationManager {
         }
     }
 
+    func updateConversationRolePatches(
+        conversationID: UUID,
+        roles: [ModelRole: RoleBindingPatch],
+        skipControlPlaneRevisionBump: Bool = false
+    ) throws {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else {
+            throw ConversationServiceError.conversationNotFound
+        }
+        var updatedConversation = conversations[index]
+        var prefs = updatedConversation.routingPrefs ?? ConversationRoutingPrefs()
+        var modelOptions = prefs.modelOptions ?? ConversationRoutingModelOptions()
+        modelOptions.roles = roles.isEmpty ? nil : roles
+        prefs.modelOptions = modelOptions
+        updatedConversation.routingPrefs = prefs
+        updatedConversation.updatedAt = Date()
+        conversations[index] = updatedConversation
+
+        try syncConversationCatalogStateToSessionBackend(conversation: updatedConversation)
+        if !skipControlPlaneRevisionBump {
+            try bumpControlPlaneRevision(conversationID: conversationID)
+        }
+    }
+
     func persistConversationMetadataToCache(conversationID: UUID, metadata: JSON?) throws {
         if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
             var updated = conversations[index]

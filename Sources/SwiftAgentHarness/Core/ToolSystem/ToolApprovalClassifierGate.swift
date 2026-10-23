@@ -2,33 +2,8 @@ import EasyJSON
 import Foundation
 import SwiftAgentKit
 
-/// The `decide` surface the classifier gate needs. ``ModelPoolDecisionDispatcher`` conforms.
-public protocol ToolApprovalDecisionDispatching: Sendable {
-    func decide(
-        _ request: DecisionRequest,
-        role: ModelRole,
-        policy: DecisionPolicy?,
-        context: DecisionCallContext
-    ) async -> DecisionOutcome
-
-    /// Network-free check that the policy's bands cover a version the role's candidates serve.
-    func validateBinding(role: ModelRole, policy: DecisionPolicy?) async -> DecisionBindingValidation
-
-    /// Pre-connects and probes configured aliases for drift.
-    func warm(role: ModelRole, request: DecisionRequest) async -> [DecisionAliasProbe]
-}
-
-public extension ToolApprovalDecisionDispatching {
-    func validateBinding(role: ModelRole, policy: DecisionPolicy?) async -> DecisionBindingValidation {
-        DecisionBindingValidation(role: role, servedVersions: [], tunedVersions: [], problems: [])
-    }
-
-    func warm(role: ModelRole, request: DecisionRequest) async -> [DecisionAliasProbe] {
-        []
-    }
-}
-
-extension ModelPoolDecisionDispatcher: ToolApprovalDecisionDispatching {}
+/// The `decide` surface the classifier gate needs (the shared ``DecisionDispatching``).
+public typealias ToolApprovalDecisionDispatching = DecisionDispatching
 
 /// Configuration for classifier-assisted gating (the `gatekeeper` role between the rules and the human).
 public struct ToolApprovalClassifierConfiguration: Sendable {
@@ -78,6 +53,7 @@ public struct ToolApprovalClassifierConfiguration: Sendable {
 /// One gated call as the classifier sees it. Tool outputs are deliberately absent: they are the injection channel.
 public struct ToolApprovalClassifierInput: Sendable {
     public var conversationID: UUID
+    public var runID: UUID?
     public var accountID: UUID?
     public var toolName: String
     public var arguments: JSON
@@ -85,23 +61,29 @@ public struct ToolApprovalClassifierInput: Sendable {
     public var isElevated: Bool
     /// The conversation transcript; only trusted user-role messages are read from it.
     public var transcript: [Message]
+    /// Mode and conversation overrides for the gatekeeper role.
+    public var rolePatches: RoleBindingPatches
 
     public init(
         conversationID: UUID,
+        runID: UUID? = nil,
         accountID: UUID? = nil,
         toolName: String,
         arguments: JSON,
         route: ToolApprovalRoute,
         isElevated: Bool,
-        transcript: [Message]
+        transcript: [Message],
+        rolePatches: RoleBindingPatches = .none
     ) {
         self.conversationID = conversationID
+        self.runID = runID
         self.accountID = accountID
         self.toolName = toolName
         self.arguments = arguments
         self.route = route
         self.isElevated = isElevated
         self.transcript = transcript
+        self.rolePatches = rolePatches
     }
 }
 
@@ -211,8 +193,10 @@ public actor ToolApprovalClassifierGate {
             policy: configuration.policy,
             context: DecisionCallContext(
                 conversationID: input.conversationID,
+                runID: input.runID,
                 accountID: input.accountID,
-                timeBudget: configuration.timeBudget
+                timeBudget: configuration.timeBudget,
+                rolePatches: input.rolePatches
             )
         )
         return record(input, request: request, Self.interpret(outcome))

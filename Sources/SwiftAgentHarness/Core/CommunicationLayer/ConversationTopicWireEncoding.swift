@@ -64,6 +64,13 @@ public enum ConversationTopicWireEncoding {
         return ConversationTopicEventPayload.modelLifecycleJSONUTF8(utf8)
     }
 
+    public static func routeReceiptPayload(_ wire: RouteReceiptWire) -> ConversationTopicEventPayload {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(wire)) ?? Data("{}".utf8)
+        return ConversationTopicEventPayload.routeReceiptJSONUTF8(String(decoding: data, as: UTF8.self))
+    }
+
     public static func runtimeLifecyclePayload(payload: RuntimeLifecycleEventPayload) -> ConversationTopicEventPayload {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

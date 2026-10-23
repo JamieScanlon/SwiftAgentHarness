@@ -61,7 +61,13 @@ public actor ModelPoolDecisionDispatcher {
         context: DecisionCallContext = DecisionCallContext()
     ) async -> DecisionOutcome {
         let start = now()
-        var receipt = RouteReceipt(role: role, contract: .decide, requested: context.pin ?? role.rawValue)
+        var receipt = RouteReceipt(
+            conversationID: context.conversationID,
+            runID: context.runID,
+            role: role,
+            contract: .decide,
+            requested: context.pin ?? role.rawValue
+        )
 
         func fail(_ error: DecisionDispatchError) async -> DecisionOutcome {
             receipt.latencyMs = Self.milliseconds(now() - start)
@@ -86,7 +92,7 @@ public actor ModelPoolDecisionDispatcher {
                 return await fail(.invalidRequest(String(describing: error)))
             }
         }
-        guard let binding = roles.resolve(role, pin: context.pin) else {
+        guard let binding = roles.overlaying(context.rolePatches).resolve(role, pin: context.pin) else {
             return await fail(.roleUnbound(role))
         }
         guard binding.contract == .decide else {
@@ -196,6 +202,32 @@ public actor ModelPoolDecisionDispatcher {
             }
         }
         return probes
+    }
+
+    /// Keeps the top candidate's connection warm until cancelled, standing in for a TCP keepalive (which URLSession does
+    /// not expose). The default interval stays under the common ~5 minute idle-close window. Run it in a task the host
+    /// owns and cancel it at shutdown; it never probes aliases and never bills a decide call.
+    public func keepWarm(role: ModelRole, interval: Duration = .seconds(240)) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
+            await warmTopCandidate(role: role)
+        }
+    }
+
+    private func warmTopCandidate(role: ModelRole) async {
+        guard let binding = roles.resolve(role), binding.contract == .decide else { return }
+        let entries = await candidates.allContractEntries()
+        let request = DecisionRequest(
+            state: .string("ok"), questions: [DecisionQuestionItem("warm", .yesNo(instructions: .string("ok?")))]
+        )
+        guard case .success(let plan) = buildPlan(
+            request: request, binding: binding, policy: nil, context: DecisionCallContext(), entries: entries
+        ), let top = plan.ordered.first, case .provider(let provider) = top.executor else { return }
+        await provider.warmConnections(target: top.target(timeBudget: nil))
     }
 
     /// Checks, without any network call, that `policy`'s bands cover a version the role's candidates serve, and
@@ -564,7 +596,9 @@ public actor ModelPoolDecisionDispatcher {
             switch outcome {
             case .success(let result):
                 let prices = entry.effectivePrices(binding: planned.candidate.binding)
-                let cost = DecisionCostEstimator.settle(prices: prices, inputTokens: result.usage.inputTokens)
+                let cost = planned.candidate.profile.surface == .llmEmulation
+                    ? DecisionCostEstimator.settleEmulated(prices: prices, usage: result.usage)
+                    : DecisionCostEstimator.settle(prices: prices, inputTokens: result.usage.inputTokens)
                 await budgetAccounting.recordCompletion(
                     policy: budgetPolicy, modelID: entry.id, conversationID: context.conversationID,
                     accountID: context.accountID, actualCostUSD: cost

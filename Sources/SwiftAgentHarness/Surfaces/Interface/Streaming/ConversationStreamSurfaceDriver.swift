@@ -73,7 +73,7 @@ public actor ConversationStreamSurfaceDriver {
         case .surfaceIntent(let intent, _, _):
             guard turnActive else { return }
             await consumer.ingest(.surfaceIntent(intent))
-        case .modelLifecycle, .checkpoint, .unknown:
+        case .modelLifecycle, .checkpoint, .routeReceipt, .unknown:
             break
         }
     }

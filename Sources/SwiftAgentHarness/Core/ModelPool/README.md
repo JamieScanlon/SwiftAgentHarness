@@ -78,7 +78,7 @@ Registry rows carry **contract profiles** (`ModelClasses/`): `generate | decide 
 
 Internal callers select by **role** (`ModelRole`, `RoleBinding`, `RoleBindingResolver`: settings → mode patch → conversation patch → per-call pin). `decide` roles (`gatekeeper`, `guard`, `router`, `skill-filter`, `memory-gate`) dispatch through `ModelPoolDecisionDispatcher` (`Decisions/`): hard filter, rank, one cascade stage derived from `DecisionPolicy.escalate`, availability-only fallback inside the compat group for threshold-bearing roles, budget, scheduler, `(version, request)` response cache, and a `RouteReceipt` per call. Gates read `DecisionOutcome.verdict`, which is never `act` on failure.
 
-Decision wire codecs (SystemOne, OpenAI Decisions, LLM emulation) live under `Backends/Providers/Decisions/` and register through the `decision` provider slot; hosts add deciders with `DecisionRuntimeConfig` (`DefaultProviderOptions.decisionRuntimes`).
+Decision wire codecs (SystemOne, OpenAI Decisions, LLM emulation) live under `Backends/Providers/Decisions/` and register through the `decision` provider slot; hosts add deciders with `DecisionRuntimeConfig` (`DefaultProviderOptions.decisionRuntimes`). Setup walkthrough: [docs/DECISION_MODELS.md](../../../../docs/DECISION_MODELS.md).
 
 ## Key types (this folder)
 

@@ -36,6 +36,8 @@ struct ConversationRuntimeDependencies {
     let visibilityGrants: ToolVisibilityGrantStore
     /// Classifier-assisted gating between the rules and the human. `nil` means the layer is off.
     let toolApprovalClassifierGate: ToolApprovalClassifierGate?
+    /// Optional `decide` consumers (memory gate, skill filter, guardrails, injection probe, router). `.none` = all off.
+    let decisionConsumers: DecisionConsumers
     let logger: Logger?
 
     init(
@@ -63,6 +65,7 @@ struct ConversationRuntimeDependencies {
         workspacePolicy: HarnessWorkspacePolicy = .default,
         visibilityGrants: ToolVisibilityGrantStore = ToolVisibilityGrantStore(),
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
         logger: Logger?
     ) {
         self.persistenceDomain = persistenceDomain
@@ -89,6 +92,7 @@ struct ConversationRuntimeDependencies {
         self.workspacePolicy = workspacePolicy
         self.visibilityGrants = visibilityGrants
         self.toolApprovalClassifierGate = toolApprovalClassifierGate
+        self.decisionConsumers = decisionConsumers
         self.logger = logger
     }
 }

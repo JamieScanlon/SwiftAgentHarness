@@ -1,10 +1,10 @@
 # Decision Models: Spec Notes
 
-Implementation notes for `backends/providers/decision-models.md` and `core/model-pool/model-classes.md`. These cover interpretation calls, deviations, and spec gaps found while implementing, collected for review.
+Implementation notes for `backends/providers/decision-models.md` and `core/model-pool/model-classes.md`. These cover interpretation calls, deviations, and spec gaps found while implementing, collected for review. For how to set up and use deciders, see [DECISION_MODELS.md](DECISION_MODELS.md).
 
 ## Source of the spec
 
-- The two pages are not in this repo's `harness-template/` copy yet. They were read from the upstream research template, which also has edits to `model-pool/README.md`, `providers/README.md`, `tool-system/permissions.md`, `tool-system/tool-use-summaries.md`, `context-engine/compaction.md`, `execution-environments/README.md`, and a new `backends/computer-use/`. The local copy was left untouched because it is treated as locked; syncing it is a separate decision.
+- The two pages (and the related edits to `model-pool/README.md`, `providers/README.md`, `tool-system/permissions.md`, `tool-system/tool-use-summaries.md`, `context-engine/compaction.md`, `execution-environments/README.md`, plus `backends/computer-use/`) are synced into this repo's `harness-template/` copy from the upstream research template.
 - The request asked for "JEV-like" models. That name does not appear in the spec. The implementation follows the spec's reference dialect, **SystemOne**, plus OpenAI Decisions.
 
 ## Interpretation calls
@@ -24,14 +24,29 @@ Implementation notes for `backends/providers/decision-models.md` and `core/model
 | Silent emulation | Emulation is a fallback when no decider is bound | A `generate` model is used for `decide` only when named by pin, fallback, or escalation target. The Pool never emulates on an open query. |
 | Unknown cost | "The budget policy decides whether unknown is allowed" | Unknown projections pass the role's `maxUSDPerCall` and reach `BudgetAccounting.authorize` as `nil`, so the existing `projectedCostFallback` decides. |
 
-## Not implemented (follow-ups)
+## Consumers, role patches, transport, and receipts
 
-- **Other consumers.** The skill pre-filter, memory-write gate, guardrails, injection probe, and Pool router role are not wired to `ModelPoolDecisionDispatcher` yet. The gatekeeper is (see below).
-- **Mode and conversation role patches.** `RoleBindingResolver` accepts mode and conversation patches, but `ModeProfile.model` and conversation routing do not produce them yet.
-- **Other contracts.** `embed`, `rerank`, `render`, `transcribe`, `session`, and `parse` have profile types and well-known roles but no slots, codecs, or job/session state machines. The providers README names `embedding` and `rerank` slots; only `decision` was added.
-- **Transport details.** URLSession does not expose a keepalive interval, so the "240 s keepalive" is approximated by a dedicated, reused session plus `warm(role:request:)`. A 413 is classified `permanent` with no re-encode or drop-assets retry. A token-limit 400 retries once by splitting questions; there is no state trimming.
-- **Emulation cost.** Emulated calls settle on input tokens only, like real deciders, so a chat model's output tokens go unbilled in the decide path.
-- **Route receipt export.** Receipts go to a `RouteReceiptRecording` sink (in-memory recorder provided). Observability export and surface rendering are not wired.
+The decision-model follow-ups, implemented. Every consumer is off unless the host passes it in `DecisionConsumers` (`HarnessRuntimeSession.makeProduction(..., decisionConsumers:)`). An unbound role turns its layer off; a bound role whose call fails takes the spec's failure default.
+
+| Topic | Spec says | Implementation |
+|---|---|---|
+| Memory-write gate | `yes-no` per candidate; failure default: don't write | `MemoryWriteDecisionGate`, called from `write_file` / `edit_file` for paths inside a memory directory (after the content scanner and the pre-compaction guard). Only the added text is judged. Anything short of `act`, or a failed call, declines the write with a message to the model. Dreaming promotions write through `AgentMemoryStore` directly and are not gated (they are deterministic and already contamination-guarded), and `bash` can still write into the memory directory. |
+| Skill pre-filter | One `choice` over skill names + a `yes-no` gate; failure default: load nothing extra | `SkillFilterDecisionGate`. Candidates are the skills the mode and routing policy allow. On `act`, the most likely skills (above a minimum share, at most three) are injected as a `[Skill Shortlist]` note on the turn's first model call. The frozen skills index in the cached prompt prefix is never rewritten, so this routes the model rather than shrinking the prompt; narrowing the index itself would break prompt caching. |
+| Guardrail battery | Several `yes-no` checks + an optional severity score in one call; failure default: review | `GuardrailDecisionBattery` with host-defined checks and a policy per check. Combined in code: any `refuse` blocks, any other non-`act` (or a check with no policy) flags for review, all `act` passes. Inbound runs before the message is saved; a block answers the turn without calling the model. Outbound runs on structured delivery (the message tool); a block withholds delivery. Review is logged and kept in `records`. The final assistant text is streamed as it is generated, so it is not guarded; only structured delivery is. Child (sub-agent) conversations are skipped. |
+| Tool-output injection probe | `yes-no` on tool output; warn, don't block | `InjectionProbeDecisionGate` as tool-result middleware at order 150, only for results the external-content envelope will wrap. `confirm` prepends a warning, `refuse` a stronger one, and a failed call also warns (the failure default). It never blocks or rewrites, and the envelope at order 200 still wraps the content. It adds one decide call per external tool result. |
+| Model router | `choice` over policy ids; failure default: role default | `ModelRouterDecisionGate` picks the turn's model among the Pool's ranked candidates (matching the current model's tools and vision capabilities). Only a calibrated `act` on a different candidate switches models, and only for that turn: the conversation's stored model is unchanged. Switching costs the warm prompt cache, so set the act band high. The router does not participate in the `decide` selection pipeline's rank stage (step 3 of model-classes § The selection pipeline); that stays static ranking. |
+| Role patches | Built-in → settings → mode patch → conversation patch → per-call pin | `ModeProfileModelSlice.roles` (PromptConfig `modeProfiles[].model.roles`) and `ConversationRoutingModelOptions.roles` (persisted with routing prefs; PATCH `routingModelOptions.roles`, where omitting leaves them and `{}` clears them). Consumers load both per call and pass them as `DecisionCallContext.rolePatches`; the dispatcher overlays them on its settings resolver, the conversation patch winning. |
+| Token-limit retry | "split the questions across requests, or trim the state, and retry once" | Several questions split in two. A single question trims the longest string in the state (head and tail kept around a visible `characters trimmed` marker). One retry either way. |
+| 413 | "permanent, unless the codec can re-encode or drop assets and retry once" | Image assets are re-encoded at half size (never below the binding's image window; JPEG also at lower quality) and retried once. Assets are never dropped, because a gating question would lose its evidence. |
+| Keepalive | "a 240 s keepalive is a common choice" | URLSession does not expose a TCP keepalive interval. `ModelPoolDecisionDispatcher.keepWarm(role:interval:)` pings the top candidate's `v1/models` every 240 s until cancelled, in a task the host owns. It never bills a decide call. |
+| Emulation cost | — | Emulated calls settle input tokens plus output tokens at the chat model's output price (`DecisionCostEstimator.settleEmulated`). Unknown when the chat model has no output price. |
+| Receipt export | Receipts are what observability exports and surfaces render as "answered by X (fallback from Y)" | `RouteReceiptWire` on `conversation/{id}/events` as a transient `routeReceipt` event (`ConversationEventsRouteReceiptRecorder`; combine with others via `CompositeRouteReceiptRecorder`). Redacted at emit: no request or response content, and vendor request ids are SHA-256 hashed. `summary` is the "answered by X" line. Schema: `openapi/schemas/ws/route-receipt-wire.schema.json`. The generated Python enum was updated by hand to match, since regenerating needs a network install. Receipts are not yet rendered by the bundled TUI. |
+
+## Still not implemented
+
+- **Other contracts.** `embed`, `rerank`, `render`, `transcribe`, `session`, and `parse` have profile types and well-known roles but no slots, codecs, or job/session state machines. Each is its own subsystem.
+- **Router in the `decide` rank stage.** The selection pipeline's optional decision-model ranking of candidates (model-classes § The selection pipeline, step 3) is not implemented; the router chooses the main model per turn instead.
+- **Guarding streamed assistant text.** Outbound guardrails cover structured delivery only.
 
 ## Gatekeeper (classifier-assisted permission gating)
 

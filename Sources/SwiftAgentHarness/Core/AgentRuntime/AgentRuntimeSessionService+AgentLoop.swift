@@ -697,8 +697,31 @@ extension AgentRuntimeSessionService {
             contextCompaction: deps.conversationTransformConfiguration.contextCompaction,
             modeRegistry: deps.modeRegistry,
             logger: deps.logger,
-            settlementSink: deps.modelCompletionSettlementSink
+            settlementSink: deps.modelCompletionSettlementSink,
+            skillShortlist: makeSkillShortlistPort()
         )
+    }
+
+    private func makeSkillShortlistPort() -> (@Sendable (ModelConversation, UUID?) async -> String?)? {
+        guard let gate = deps.decisionConsumers.skillFilter else { return nil }
+        return { [self] conversation, runID in
+            await self.skillShortlistNote(gate: gate, conversation: conversation, runID: runID)
+        }
+    }
+
+    /// The skill-filter shortlist for the turn's latest user request, as an injected note.
+    func skillShortlistNote(gate: SkillFilterDecisionGate, conversation: ModelConversation, runID: UUID?) async -> String? {
+        guard let request = conversation.messages.last(where: {
+            $0.role == .user && !HarnessInjectedMessageMetadata.isHarnessInjected($0)
+        })?.content else { return nil }
+        let candidates = await orchestratorRuntime.skillCandidates(for: conversation)
+        let patches = await DecisionRolePatchLoader.patches(
+            for: conversation, modeRegistry: deps.modeRegistry, logger: deps.logger
+        )
+        guard let shortlist = await gate.shortlist(
+            userRequest: request, skills: candidates, conversationID: conversation.id, runID: runID, rolePatches: patches
+        ) else { return nil }
+        return SkillFilterDecisionGate.reminder(for: shortlist)
     }
 }
 

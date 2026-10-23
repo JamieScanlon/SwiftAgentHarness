@@ -2815,6 +2815,38 @@ components:
       properties:
         thinkingConfig:
           $ref: "#/components/schemas/ThinkingConfig"
+        roles:
+          type: object
+          description: Per-conversation role overrides keyed by role id (for example `gatekeeper`). Omit to leave stored overrides unchanged; send `{}` to clear them.
+          additionalProperties:
+            $ref: "#/components/schemas/RoleBindingPatch"
+
+    RoleBindingPatch:
+      type: object
+      description: Partial role binding; set fields override the bound role, later layers win.
+      properties:
+        minGuarantee:
+          type: string
+          enum: [free-text, json-mode, schema-strict, logprobs, calibrated-distribution]
+        pin:
+          type: string
+        fallback:
+          type: array
+          items:
+            type: string
+        priority:
+          type: string
+          enum: [foreground, background]
+        locality:
+          type: string
+          enum: [any, local-only, no-vendor-retention]
+        budget:
+          type: object
+          properties:
+            maxUSDPerCall:
+              type: number
+            maxLatencyMs:
+              type: number
 
     ConversationPatchResponse:
       type: object

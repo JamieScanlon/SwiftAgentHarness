@@ -18,6 +18,7 @@ class SemanticKind(Enum):
     runtimeLifecycle = 'runtimeLifecycle'
     checkpoint = 'checkpoint'
     surfaceIntent = 'surfaceIntent'
+    routeReceipt = 'routeReceipt'
 
 
 class ConversationTopicEventPayload(BaseModel):
@@ -27,5 +28,5 @@ class ConversationTopicEventPayload(BaseModel):
     semanticKind: SemanticKind
     jsonUTF8: Optional[str] = Field(
         None,
-        description='Opaque JSON: message rows (messagesRefresh), orchestration snapshot (orchestration), ModelContentDeltaWire (contentDelta), ModelStatePayload (modelLifecycle), RuntimeLifecycleEventPayload (runtimeLifecycle), ConversationCheckpointTopicEventWire (checkpoint), or ClientSurfaceIntent (surfaceIntent). See model-content-delta-wire.schema.json, model-state-payload.schema.json, runtime-lifecycle-event-payload.schema.json, and client-surface-intent-wire.schema.json.',
+        description='Opaque JSON: message rows (messagesRefresh), orchestration snapshot (orchestration), ModelContentDeltaWire (contentDelta), ModelStatePayload (modelLifecycle), RuntimeLifecycleEventPayload (runtimeLifecycle), ConversationCheckpointTopicEventWire (checkpoint), ClientSurfaceIntent (surfaceIntent), or RouteReceiptWire (routeReceipt). See model-content-delta-wire.schema.json, model-state-payload.schema.json, runtime-lifecycle-event-payload.schema.json, client-surface-intent-wire.schema.json, and route-receipt-wire.schema.json.',
     )

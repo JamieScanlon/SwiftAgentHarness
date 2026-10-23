@@ -470,6 +470,13 @@ actor ConversationMessagingRuntimeService {
                     await self.applyToolResultTransform(toolCall: toolCall, result: result)
                 },
                 ToolResultMiddlewareRegistration(
+                    id: "injection-probe",
+                    stage: .runtimeDelivery,
+                    order: 150
+                ) { toolCall, result in
+                    await self.applyInjectionProbeMiddleware(toolCall: toolCall, result: result)
+                },
+                ToolResultMiddlewareRegistration(
                     id: "external-content-envelope",
                     stage: .runtimeDelivery,
                     order: 200
@@ -477,6 +484,28 @@ actor ConversationMessagingRuntimeService {
                     await self.applyExternalContentMiddleware(toolCall: toolCall, result: result)
                 },
             ]
+        )
+    }
+
+    /// Injection probe on external content only (results the envelope will wrap). It can only prepend a warning;
+    /// the envelope at order 200 still wraps the content, so caution is never removed.
+    private func applyInjectionProbeMiddleware(toolCall: ToolCall, result: ToolResult) async -> ToolResult {
+        guard let probe = deps.decisionConsumers.injectionProbe else { return result }
+        let entry = await toolEntryLookup.entry(named: toolCall.name)
+        guard ToolExternalContentPolicy.resolve(toolName: toolCall.name, entry: entry).shouldWrap else { return result }
+        let conversationID = await runtimeScopedConversationID()
+        let patches = await DecisionRolePatchLoader.patches(
+            for: conversationID, persistenceDomain: deps.persistenceDomain, modeRegistry: deps.modeRegistry, logger: deps.logger
+        )
+        guard let warning = await probe.warning(
+            toolName: toolCall.name, content: result.content, conversationID: conversationID, rolePatches: patches
+        ) else { return result }
+        return ToolResult(
+            success: result.success,
+            content: warning + "\n" + result.content,
+            metadata: result.metadata,
+            toolCallId: result.toolCallId,
+            error: result.error
         )
     }
 

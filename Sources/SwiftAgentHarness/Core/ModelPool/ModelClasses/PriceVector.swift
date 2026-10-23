@@ -156,6 +156,15 @@ public enum DecisionCostEstimator {
         return nil
     }
 
+    /// Settles a `decide` call answered by an LLM emulation. Unlike a real decider, the chat model generates output,
+    /// so output tokens are billed at its output price. Unknown when there is no input price to anchor on.
+    public static func settleEmulated(prices: PriceVector, usage: DecisionUsage) -> Double? {
+        guard let input = settle(prices: prices, inputTokens: usage.inputTokens) else { return nil }
+        guard let outputTokens = usage.outputTokens, outputTokens > 0 else { return input }
+        guard let output = prices.component(for: .outputToken, contextTokens: usage.inputTokens) else { return nil }
+        return input + Double(outputTokens) * output.usdPerUnit
+    }
+
     public static func estimateInputTokens(characterCount: Int) -> Int {
         Int((Double(characterCount) / charactersPerToken).rounded(.up))
     }

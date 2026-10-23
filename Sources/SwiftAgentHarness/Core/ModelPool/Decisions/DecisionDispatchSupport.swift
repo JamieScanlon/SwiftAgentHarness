@@ -111,6 +111,8 @@ public actor DecisionResponseCache {
 /// Per-call context for a `decide` dispatch.
 public struct DecisionCallContext: Sendable {
     public var conversationID: UUID?
+    /// The run this call belongs to; route receipts publish under it.
+    public var runID: UUID?
     public var accountID: UUID?
     /// Per-call explicit pin (last layer of role resolution).
     public var pin: String?
@@ -118,19 +120,25 @@ public struct DecisionCallContext: Sendable {
     public var language: String?
     /// Total time budget across retries.
     public var timeBudget: Duration?
+    /// Mode-profile and conversation role overrides for this call.
+    public var rolePatches: RoleBindingPatches
 
     public init(
         conversationID: UUID? = nil,
+        runID: UUID? = nil,
         accountID: UUID? = nil,
         pin: String? = nil,
         language: String? = nil,
-        timeBudget: Duration? = nil
+        timeBudget: Duration? = nil,
+        rolePatches: RoleBindingPatches = .none
     ) {
         self.conversationID = conversationID
+        self.runID = runID
         self.accountID = accountID
         self.pin = pin
         self.language = language
         self.timeBudget = timeBudget
+        self.rolePatches = rolePatches
     }
 }
 

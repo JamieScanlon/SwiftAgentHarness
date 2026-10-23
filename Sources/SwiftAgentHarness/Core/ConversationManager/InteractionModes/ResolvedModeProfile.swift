@@ -254,15 +254,19 @@ public struct ModeProfileModelSlice: Sendable, Equatable {
     public var query: String?
     public var fallback: String?
     public var thinkingConfig: ThinkingConfig?
+    /// Partial role bindings this mode applies (for example a stricter `gatekeeper` pin in an autonomous mode).
+    public var roles: [ModelRole: RoleBindingPatch]
 
     public init(
         query: String? = nil,
         fallback: String? = nil,
-        thinkingConfig: ThinkingConfig? = nil
+        thinkingConfig: ThinkingConfig? = nil,
+        roles: [ModelRole: RoleBindingPatch] = [:]
     ) {
         self.query = query
         self.fallback = fallback
         self.thinkingConfig = thinkingConfig
+        self.roles = roles
     }
 
     public static let neutral = ModeProfileModelSlice()
