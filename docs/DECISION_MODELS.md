@@ -12,8 +12,9 @@ The steps below take you from nothing to a working gatekeeper:
 4. [Bind roles](#4-bind-roles)
 5. [Build the dispatcher](#5-build-the-dispatcher)
 6. [Enable the gatekeeper](#6-enable-the-gatekeeper)
-7. [Other consumers](#7-other-consumers): memory gate, skill filter, guardrails, injection probe, router
+7. [Other consumers](#7-other-consumers): memory gate, skill filter, guardrails, injection probe
 8. [Route receipts on the event bus](#8-route-receipts-on-the-event-bus)
+9. [Model routing in the Pool](#9-model-routing-in-the-pool)
 
 For design background, see [DECISION_MODELS_SPEC_NOTES.md](DECISION_MODELS_SPEC_NOTES.md) and the harness-template pages `backends/providers/decision-models.md` and `core/model-pool/model-classes.md`.
 
@@ -286,7 +287,7 @@ Well-known `decide` roles:
 | `memoryGate` | Memory write gate | [Other consumers](#7-other-consumers) |
 | `skillFilter` | Context Engine skill pre-filter | [Other consumers](#7-other-consumers) |
 | `guardrail` (`"guard"`) | Guardrail battery and tool-output injection probe | [Other consumers](#7-other-consumers) |
-| `router` | Per-turn model choice | [Other consumers](#7-other-consumers) |
+| `router` | Model Pool rank stage | [Model routing](#9-model-routing-in-the-pool) |
 
 An unbound `decide` role turns its consuming layer off.
 
@@ -414,8 +415,7 @@ let consumers = DecisionConsumers(
         outbound: [GuardrailCheck(id: "credential", instructions: "Does the text contain a password, API key, or token?")],
         policies: ["credential": credentialPolicy]
     )),
-    injectionProbe: InjectionProbeDecisionGate(dispatcher: dispatcher, configuration: InjectionProbeConfiguration(policy: injectionPolicy)),
-    modelRouter: ModelRouterDecisionGate(dispatcher: dispatcher, configuration: ModelRouterConfiguration(policy: routerPolicy))
+    injectionProbe: InjectionProbeDecisionGate(dispatcher: dispatcher, configuration: InjectionProbeConfiguration(policy: injectionPolicy))
 )
 let (session, services) = HarnessRuntimeSession.makeProduction(
     /* … */
@@ -430,7 +430,6 @@ let (session, services) = HarnessRuntimeSession.makeProduction(
 | `SkillFilterDecisionGate` | `applies`: would a listed skill help? Plus a `skill` choice. | The top skills are injected as a `[Skill Shortlist]` note on the first model call. | Nothing added. | Load nothing extra. |
 | `GuardrailDecisionBattery` | One yes/no per check id (`yes` = violation). | That check passes. | `refuse` blocks; `confirm` flags for review. | Review. |
 | `InjectionProbeDecisionGate` | `injection`: does the content give instructions to an AI? | Nothing added. | A warning is prepended (stronger for `refuse`). | Warn. |
-| `ModelRouterDecisionGate` | `model`: a choice over ranked candidate slugs. | The turn runs on the chosen model. | The conversation's model. | The conversation's model. |
 
 Write policies with the polarity in mind. For the guardrail checks and the injection probe, P(yes) means a problem, so the act band sits at the **low** end:
 
@@ -448,7 +447,6 @@ Placement and caveats:
 - **Skill filter:** the frozen skills index in the system prompt is never changed, so prompt caching is unaffected. The shortlist steers the model; it doesn't shrink the prompt.
 - **Guardrails:** inbound runs before the message is saved, and a block answers the turn without calling the model. Outbound runs on structured delivery through the message tool; streamed assistant text is not guarded. Sub-agent conversations are skipped.
 - **Injection probe:** runs only on external content (results the envelope wraps), adds one decide call per such result, and never blocks or rewrites. The envelope still wraps the content.
-- **Router:** the conversation's stored model doesn't change. Switching models loses the warm prompt cache, so keep the act band high.
 
 ## 8. Route receipts on the event bus
 
@@ -463,6 +461,52 @@ let dispatcher = ModelPoolDecisionDispatcher(candidates: modelManager, roles: ro
 ```
 
 Each call inside a conversation emits a transient `routeReceipt` event (`RouteReceiptWire`). Its `summary` reads like `gatekeeper answered by jev-1.13.0 via typesafe/jev-1.13.0 (fallback from a/primary: transient) → act`. Receipts carry no prompt or response content, and vendor request ids are hashed. Decode them with `ConversationTopicWireDecoding.decodeEvent(line:)`, which returns `.routeReceipt(wire, seq:, turnOrdinal:)`.
+
+## 9. Model routing in the Pool
+
+Choosing a model is the Model Pool's job. Callers never pick one, and the `router` role is an input to the Pool's rank stage, not a component callers invoke. It applies in two places.
+
+**The turn's main model.** Give the session a `ModelPoolTurnSelector`. At the start of each turn the runtime asks the Pool for "the `main` model for this conversation and request" and acquires an orchestrator for whatever comes back:
+
+```swift
+let selector = ModelPoolTurnSelector(
+    modelManager: modelManager,
+    dispatcher: dispatcher,
+    configuration: ModelPoolTurnSelectorConfiguration(
+        router: ModelPoolRouterConfiguration(policy: routerPolicy),   // question: "model"
+        warmCacheMargin: 0.25
+    ),
+    receipts: receipts
+)
+let (session, services) = HarnessRuntimeSession.makeProduction(/* … */, turnModelSelector: selector)
+```
+
+The selector:
+1. Hard-filters candidates to models with the current model's tools and vision capabilities.
+2. Takes the Pool's static ranking.
+3. Asks the router to choose among the current model and the top candidates.
+
+It switches only on a calibrated `act` for a different model. When the conversation already has turns on the current model, its prompt cache is likely warm, so the router's pick must also beat the current model's probability by `warmCacheMargin`. Every selection emits a `generate` route receipt, with `routerPick` set when the router changed the model. The conversation's stored model never changes; only that turn's orchestrator does. Without a selector, every turn uses the conversation's model.
+
+**`decide` calls.** Pass `router:` to the dispatcher, and bind the `router` role to a decider that answers `choice` questions:
+
+```swift
+let dispatcher = ModelPoolDecisionDispatcher(
+    candidates: modelManager,
+    roles: RoleBindingResolver(settings: [
+        .gatekeeper: RoleBinding(role: .gatekeeper, contract: .decide),
+        .router: RoleBinding(role: .router, contract: .decide, pin: "router-model-1"),
+    ]),
+    router: ModelPoolRouterConfiguration(policy: routerPolicy)
+)
+```
+
+The router can move one candidate to the front of a role's ranking. It is skipped when:
+- the role is pinned, since a pin is the caller's explicit choice;
+- the call is the router's own, which prevents recursion;
+- fewer than two candidates survive the hard filter, which is the usual case for `decide` roles.
+
+It sees the role and its questions, never the request's state. Threshold-bearing roles still fall back only within their compat group, so the router only reorders versions your policy can act on.
 
 ## Keeping connections warm
 

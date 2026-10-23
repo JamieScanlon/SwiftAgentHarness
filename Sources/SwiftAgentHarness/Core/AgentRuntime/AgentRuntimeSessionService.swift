@@ -250,8 +250,7 @@ public actor AgentRuntimeSessionService {
         let sendingConversationID = conversation.id
 
         do {
-            let turnModel = await routedTurnModel(text: effectiveText, conversation: conversation, runID: runID)
-                ?? conversation.model
+            let turnModel = await poolSelectedTurnModel(text: effectiveText, conversation: conversation, runID: runID)
             guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
                 conversation: conversation,
                 model: turnModel
@@ -795,24 +794,22 @@ extension AgentRuntimeSessionService {
         return Self.immediateTextResponse(GuardrailDecisionBattery.blockedInboundReply(ids), conversationID: conversation.id)
     }
 
-    /// Model router: the model for this turn when the `router` role picks a different ranked candidate, else `nil`.
-    /// The conversation's stored model is unchanged; only this turn's orchestrator uses the routed model.
-    func routedTurnModel(text: String, conversation: ModelConversation, runID: UUID) async -> Model? {
-        guard let router = deps.decisionConsumers.modelRouter,
-              conversation.parentConversationID == nil,
-              let rankedProvider = deps.rankedRegistryEntriesProvider
-        else { return nil }
-        let required = Set(conversation.model.capabilities).intersection([.tools, .vision])
-        let candidates = await rankedProvider(.query(ModelQuery(mustIncludeCapabilities: required)))
+    /// Asks the Model Pool for this turn's `main` model. Selection is the Pool's job; the runtime only acquires an
+    /// orchestrator for what it returns. Without a selector, or for child conversations, the turn uses the
+    /// conversation's model. The conversation's stored model is unchanged either way.
+    func poolSelectedTurnModel(text: String, conversation: ModelConversation, runID: UUID) async -> Model {
+        guard let selector = deps.turnModelSelector, conversation.parentConversationID == nil else {
+            return conversation.model
+        }
         let patches = await DecisionRolePatchLoader.patches(for: conversation, modeRegistry: deps.modeRegistry, logger: deps.logger)
-        return await router.route(
-            userRequest: text,
-            currentSlug: conversation.model.modelName,
-            candidates: candidates,
+        return await selector.selectModel(for: TurnModelRequest(
             conversationID: conversation.id,
             runID: runID,
+            currentModel: conversation.model,
+            request: text,
+            hasHistory: conversation.messages.contains { $0.role == .assistant },
             rolePatches: patches
-        )?.toModel()
+        ))
     }
 
     static func immediateTextResponse(_ text: String, conversationID: UUID) -> ChatStreamResponse {

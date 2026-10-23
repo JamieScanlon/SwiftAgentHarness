@@ -16,6 +16,8 @@ public actor ModelPoolDecisionDispatcher {
     private let budgetPolicy: BudgetPolicy
     private let receipts: any RouteReceiptRecording
     private let cache: DecisionResponseCache?
+    /// Optional `router` role input to the rank stage. Never consulted for pinned roles or for the router's own calls.
+    private let router: ModelPoolRouter?
     private let now: Clock
     private let logger: Logger
     /// `(role, version)` pairs already warned about, so untuned answers log once instead of on every call.
@@ -34,6 +36,7 @@ public actor ModelPoolDecisionDispatcher {
         budgetPolicy: BudgetPolicy = .disabled,
         receipts: any RouteReceiptRecording = NoOpRouteReceiptRecorder(),
         cache: DecisionResponseCache? = nil,
+        router: ModelPoolRouterConfiguration? = nil,
         now: @escaping Clock = { ContinuousClock.now },
         logger: Logger? = nil
     ) {
@@ -46,6 +49,7 @@ public actor ModelPoolDecisionDispatcher {
         self.budgetPolicy = budgetPolicy
         self.receipts = receipts
         self.cache = cache
+        self.router = router.map(ModelPoolRouter.init(configuration:))
         self.now = now
         self.logger = logger ?? Logger(label: "SwiftAgentHarness.ModelPool.Decisions")
     }
@@ -108,9 +112,10 @@ public actor ModelPoolDecisionDispatcher {
             return await fail(error)
         }
         receipt.rankedOut = Array(plan.rejected.prefix(Self.rankedOutLimit))
+        let ordered = await routerRanked(plan.ordered, request: request, role: role, binding: binding, context: context, receipt: &receipt)
 
         // Stage 1 with fallback.
-        let stage1 = await dispatch(request, over: plan.ordered, binding: binding, context: context, receipt: &receipt)
+        let stage1 = await dispatch(request, over: ordered, binding: binding, context: context, receipt: &receipt)
         guard case .success(let first) = stage1 else {
             if case .failure(let error) = stage1 { return await fail(error) }
             return await fail(.noCandidate(role: role, localityRestricted: binding.locality != .any))
@@ -666,6 +671,41 @@ public actor ModelPoolDecisionDispatcher {
         receipt.costUSD = stage.costUSD
         receipt.requestIDs = stage.result.requestIDs
         receipt.cacheHit = stage.cacheHit
+    }
+
+    // MARK: - Router rank stage
+
+    /// Rank stage, step 3: when a `router` is configured and the role is not pinned, let it move one candidate to the
+    /// front. It is skipped for the router's own calls (no recursion) and when fewer than two candidates survive the
+    /// hard filter, which for most `decide` roles is the common case.
+    private func routerRanked(
+        _ ordered: [PlannedCandidate],
+        request: DecisionRequest,
+        role: ModelRole,
+        binding: RoleBinding,
+        context: DecisionCallContext,
+        receipt: inout RouteReceipt
+    ) async -> [PlannedCandidate] {
+        guard let router, role != router.configuration.role, binding.pin == nil, ordered.count >= 2 else { return ordered }
+        let candidates = ordered.map { ModelPoolRouterCandidate.describing($0.candidate.entry, id: $0.candidate.bindingID) }
+        guard let choice = await router.choose(
+            request: Self.routerSummary(of: request, role: role),
+            current: nil,
+            candidates: candidates,
+            dispatcher: self,
+            context: context
+        ), let index = ordered.firstIndex(where: { $0.candidate.bindingID == choice.id }) else { return ordered }
+        receipt.routerPick = choice.id
+        guard index > 0 else { return ordered }
+        var reordered = ordered
+        reordered.insert(reordered.remove(at: index), at: 0)
+        return reordered
+    }
+
+    /// What the router sees about a `decide` request: the role and its question kinds and instructions, not the state.
+    static func routerSummary(of request: DecisionRequest, role: ModelRole) -> String {
+        let questions = request.questions.map { "\($0.question.kind.rawValue): \(DecisionEntryText.text($0.question.instructions))" }
+        return "decide role \(role.rawValue); questions: " + questions.joined(separator: " | ")
     }
 
     // MARK: - Version checks

@@ -152,7 +152,8 @@ public actor HarnessRuntimeSession {
         workspacePolicy: HarnessWorkspacePolicy = .default,
         tenancyPolicy: TenancyPolicySettings = .disabled,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
@@ -223,7 +224,8 @@ public actor HarnessRuntimeSession {
             tenancyPolicy: tenancyPolicy,
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
-            decisionConsumers: decisionConsumers
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -246,7 +248,8 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -272,7 +275,8 @@ public actor HarnessRuntimeSession {
             tenancyPolicy: tenancyPolicy,
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
-            decisionConsumers: decisionConsumers
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -298,7 +302,8 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -330,7 +335,8 @@ public actor HarnessRuntimeSession {
             tenancyPolicy: tenancyPolicy,
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
-            decisionConsumers: decisionConsumers
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -357,7 +363,8 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -389,7 +396,8 @@ public actor HarnessRuntimeSession {
             tenancyPolicy: tenancyPolicy,
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
-            decisionConsumers: decisionConsumers
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -417,7 +425,8 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -471,6 +480,7 @@ public actor HarnessRuntimeSession {
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
             decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector,
             logger: logger
         )
         let (session, services) = HarnessRuntimeSessionFactory.makeSession(
@@ -523,7 +533,8 @@ public actor HarnessRuntimeSession {
         tenancyPolicy: TenancyPolicySettings = .disabled,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         // One sink, shared by the budget gate that prices a completion and the turn loop that
         // records what it cost. `StandardModelLLMFactory` is a struct copied several times on the
@@ -611,6 +622,7 @@ public actor HarnessRuntimeSession {
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
             decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector,
             logger: logger
         )
         let services = HarnessRuntimeSessionFactory.makeServices(
@@ -733,7 +745,8 @@ public actor HarnessRuntimeSession {
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         workspacePolicy: HarnessWorkspacePolicy = HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true),
         toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
-        decisionConsumers: DecisionConsumers = .none
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
@@ -777,7 +790,8 @@ public actor HarnessRuntimeSession {
             runtimeExecutorFactory: runtimeExecutorFactory,
             workspacePolicy: workspacePolicy,
             toolApprovalClassifierGate: toolApprovalClassifierGate,
-            decisionConsumers: decisionConsumers
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 

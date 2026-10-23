@@ -100,6 +100,8 @@ public struct RouteReceipt: Sendable, Equatable {
     public var tier: Tier
     /// Top few, for "why not X".
     public var rankedOut: [RankedOut]
+    /// The candidate the `router` role moved to the front of the ranking, when it changed the static order.
+    public var routerPick: String?
     public var cascade: Cascade?
     public var fallback: [Fallback]
     /// Rung actually delivered.
@@ -123,6 +125,7 @@ public struct RouteReceipt: Sendable, Equatable {
         aliasResolved: AliasResolution? = nil,
         tier: Tier = Tier(),
         rankedOut: [RankedOut] = [],
+        routerPick: String? = nil,
         cascade: Cascade? = nil,
         fallback: [Fallback] = [],
         guarantee: OutputGuarantee? = nil,
@@ -143,6 +146,7 @@ public struct RouteReceipt: Sendable, Equatable {
         self.aliasResolved = aliasResolved
         self.tier = tier
         self.rankedOut = rankedOut
+        self.routerPick = routerPick
         self.cascade = cascade
         self.fallback = fallback
         self.guarantee = guarantee

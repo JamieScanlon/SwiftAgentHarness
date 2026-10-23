@@ -47,7 +47,8 @@ enum DecisionConsumerResult: Sendable {
 }
 
 /// The optional `decide` consumers a host can turn on. Each is off when `nil`, and each falls back to its spec
-/// failure default when its role is bound but the call fails.
+/// failure default when its role is bound but the call fails. Model routing is not a consumer: it belongs to the
+/// Model Pool (``ModelPoolTurnSelector`` and the dispatcher's rank stage).
 public struct DecisionConsumers: Sendable {
     /// Memory: approves agent-written memory before it is stored. Failure default: don't write.
     public var memoryWriteGate: MemoryWriteDecisionGate?
@@ -57,21 +58,17 @@ public struct DecisionConsumers: Sendable {
     public var guardrails: GuardrailDecisionBattery?
     /// Input provenance: warns on likely prompt injection in external tool output. Never blocks.
     public var injectionProbe: InjectionProbeDecisionGate?
-    /// Model Pool: picks the turn's model among ranked candidates. Failure default: the conversation's model.
-    public var modelRouter: ModelRouterDecisionGate?
 
     public init(
         memoryWriteGate: MemoryWriteDecisionGate? = nil,
         skillFilter: SkillFilterDecisionGate? = nil,
         guardrails: GuardrailDecisionBattery? = nil,
-        injectionProbe: InjectionProbeDecisionGate? = nil,
-        modelRouter: ModelRouterDecisionGate? = nil
+        injectionProbe: InjectionProbeDecisionGate? = nil
     ) {
         self.memoryWriteGate = memoryWriteGate
         self.skillFilter = skillFilter
         self.guardrails = guardrails
         self.injectionProbe = injectionProbe
-        self.modelRouter = modelRouter
     }
 
     public static let none = DecisionConsumers()

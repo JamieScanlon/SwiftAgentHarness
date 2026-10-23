@@ -384,53 +384,6 @@ struct InjectionProbeDecisionGateTests {
     }
 }
 
-// MARK: - Router
-
-@Suite("Model router")
-struct ModelRouterDecisionGateTests {
-    private let candidates = [DecisionFixtures.chatModel("small-chat"), DecisionFixtures.chatModel("big-chat")]
-
-    private func router(choice: String, p: Double) -> ModelRouterDecisionGate {
-        let provider = ConsumerFixtures.provider { request in
-            guard case .choice(_, let options)? = request.questions.first?.question else { return [:] }
-            var probabilities = Dictionary(uniqueKeysWithValues: options.map { ($0.id, (1 - p) / Double(max(1, options.count - 1))) })
-            probabilities[choice] = p
-            return [ModelRouterConfiguration.questionID: .choice(choice: choice, probabilities: probabilities)]
-        }
-        return ModelRouterDecisionGate(
-            dispatcher: ConsumerFixtures.dispatcher(role: .router, provider: provider),
-            configuration: ModelRouterConfiguration(policy: ConsumerFixtures.highActs(ModelRouterConfiguration.questionID))
-        )
-    }
-
-    @Test("A confident choice of another candidate routes the turn")
-    func routes() async {
-        let chosen = await router(choice: "big-chat", p: 0.95).route(
-            userRequest: "prove this theorem", currentSlug: "small-chat", candidates: candidates, conversationID: nil
-        )
-        #expect(chosen?.slug == "big-chat")
-    }
-
-    @Test("The current model, a low-confidence pick, or too few candidates keep the conversation's model")
-    func keeps() async {
-        #expect(await router(choice: "small-chat", p: 0.95).route(userRequest: "hi", currentSlug: "small-chat", candidates: candidates, conversationID: nil) == nil)
-        #expect(await router(choice: "big-chat", p: 0.6).route(userRequest: "hi", currentSlug: "small-chat", candidates: candidates, conversationID: nil) == nil)
-        #expect(await router(choice: "big-chat", p: 0.95).route(userRequest: "hi", currentSlug: "small-chat", candidates: [candidates[0]], conversationID: nil) == nil)
-        #expect(await router(choice: "big-chat", p: 0.95).route(
-            userRequest: "hi", currentSlug: "small-chat",
-            candidates: [candidates[0], DecisionFixtures.decider("not-chat")], conversationID: nil
-        ) == nil)
-    }
-
-    @Test("Candidate descriptions name family, context, and capabilities")
-    func describe() {
-        let text = ModelRouterDecisionGate.describe(DecisionFixtures.chatModel("big-chat"))
-        #expect(text.contains("family chat"))
-        #expect(text.contains("128k context"))
-        #expect(text.contains("tools"))
-    }
-}
-
 // MARK: - Role patches
 
 @Suite("Role patches from modes and conversations")
@@ -504,74 +457,5 @@ struct RolePatchTests {
         #expect(try JSONDecoder().decode(ConversationRoutingModelOptions.self, from: data) == options)
         let legacy = try JSONDecoder().decode(ConversationRoutingModelOptions.self, from: Data(#"{"thinkingConfig": "adaptive"}"#.utf8))
         #expect(legacy.roles == nil)
-    }
-}
-
-// MARK: - Router integration
-
-/// Records which model each base LLM was built for, then returns the scripted LLM.
-private final class ModelRecordingLLMFactory: ModelLLMFactoring, Sendable {
-    let llm: any LLMProtocol
-    let names: ModelNameLog
-
-    init(llm: any LLMProtocol, names: ModelNameLog) {
-        self.llm = llm
-        self.names = names
-    }
-
-    func makeBaseLLM(
-        model: Model,
-        providerBindings: [ProviderBinding]?,
-        conversationID: UUID?,
-        ownerAccountID: UUID?,
-        systemPrompt: SystemPrompt,
-        logger: Logger?,
-        attemptObserver: (@Sendable (ModelCallAttemptObservation) async -> Void)?
-    ) -> any LLMProtocol {
-        names.append(model.modelName)
-        return llm
-    }
-}
-
-private final class ModelNameLog: Sendable {
-    private let storage = Mutex<[String]>([])
-    func append(_ name: String) { storage.withLock { $0.append(name) } }
-    var all: [String] { storage.withLock { $0 } }
-}
-
-@Suite("Model router integration")
-struct ModelRouterIntegrationTests {
-    @Test("A routed turn builds its orchestrator for the chosen model; the stored model is unchanged")
-    func routedTurn() async throws {
-        let current = ModelRegistryEntry.from(model: section6Model())
-        var bigEntry = DecisionFixtures.chatModel("big-chat")
-        bigEntry.capabilities = [.completion, .tools]
-        let big = bigEntry
-        let names = ModelNameLog()
-        let router = ModelRouterDecisionGate(
-            dispatcher: ConsumerFixtures.dispatcher(role: .router, provider: ConsumerFixtures.provider { _ in
-                [ModelRouterConfiguration.questionID: .choice(
-                    choice: "big-chat", probabilities: ["big-chat": 0.95, "section6-model": 0.05]
-                )]
-            }),
-            configuration: ModelRouterConfiguration(policy: ConsumerFixtures.highActs(ModelRouterConfiguration.questionID))
-        )
-        let manager = HarnessRuntimeSession(
-            container: try section6Container(),
-            llmFactory: ModelRecordingLLMFactory(
-                llm: ScriptedToolThenAnswerLLM(toolName: "none", toolCallID: "c1", finalAssistantText: "done"),
-                names: names
-            ),
-            rankedRegistryEntriesProvider: { _ in [current, big] },
-            harnessSessionPersistenceOverride: InMemoryHarnessSessionPersistence(),
-            decisionConsumers: DecisionConsumers(modelRouter: router)
-        )
-        try await manager.createConversation(with: section6Model(), userSystemPrompt: "router")
-        let conversationID = try #require(await manager.currentConversationID)
-        let response = try await manager.sendMessageAndStreamResponse("prove this theorem", images: [], conversationID: conversationID)
-        await awaitStreamingRunSettled(manager, response: response, timeoutMS: 15_000)
-        #expect(names.all.contains("big-chat"))
-        let stored = try #require(await manager.modelConversation(id: conversationID))
-        #expect(stored.model.modelName == "section6-model")
     }
 }

@@ -36,6 +36,7 @@ public struct RouteReceiptWire: Codable, Sendable, Equatable {
     public var resolved: Resolved?
     public var aliasResolved: [String: String]?
     public var rankedOut: [[String: String]]
+    public var routerPick: String?
     public var cascadeEscalated: Bool?
     public var cascadeReason: String?
     public var cascadeFirstStage: Resolved?
@@ -71,6 +72,7 @@ public extension RouteReceipt {
             resolved: resolved(self.resolved),
             aliasResolved: aliasResolved.map { ["alias": $0.alias, "to": $0.to] },
             rankedOut: rankedOut.map { ["modelID": $0.modelID, "reason": $0.reason] },
+            routerPick: routerPick,
             cascadeEscalated: cascade?.escalated,
             cascadeReason: cascade?.reason,
             cascadeFirstStage: resolved(cascade?.firstStage),
@@ -101,6 +103,7 @@ public extension RouteReceipt {
         var text = "\(subject) answered by \(resolved.versionServed ?? resolved.modelID) via \(resolved.bindingID)"
         var notes: [String] = []
         if let alias = aliasResolved { notes.append("alias \(alias.alias)") }
+        if routerPick != nil { notes.append("routed") }
         if !fallback.isEmpty {
             notes.append("fallback from " + fallback.map { "\($0.from): \($0.reason.rawValue)" }.joined(separator: ", "))
         }

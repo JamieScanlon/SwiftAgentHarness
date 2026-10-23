@@ -110,6 +110,10 @@
         "additionalProperties": false
       }
     },
+    "routerPick": {
+      "type": "string",
+      "description": "Candidate the router role moved to the front of the ranking."
+    },
     "cascadeEscalated": {
       "type": "boolean"
     },
