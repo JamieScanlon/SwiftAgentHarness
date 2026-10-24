@@ -1468,6 +1468,8 @@ public struct ConversationTopicEventPayload: Codable, Sendable {
         case checkpoint
         /// Client surface intent (`ClientSurfaceIntent` JSON in ``jsonUTF8``).
         case surfaceIntent
+        /// Model Pool route receipt (`RouteReceiptWire` JSON in ``jsonUTF8``): which model answered and why.
+        case routeReceipt
     }
 
     public var semanticKind: SemanticKind
@@ -1507,6 +1509,11 @@ public struct ConversationTopicEventPayload: Codable, Sendable {
     /// UTF-8 JSON encoding of ``ConversationCheckpointTopicEventWire`` (`semanticKind == .checkpoint`).
     public static func checkpointJSONUTF8(_ utf8: String) -> ConversationTopicEventPayload {
         ConversationTopicEventPayload(semanticKind: .checkpoint, jsonUTF8: utf8)
+    }
+
+    /// UTF-8 JSON encoding of ``RouteReceiptWire`` (`semanticKind == .routeReceipt`).
+    public static func routeReceiptJSONUTF8(_ utf8: String) -> ConversationTopicEventPayload {
+        ConversationTopicEventPayload(semanticKind: .routeReceipt, jsonUTF8: utf8)
     }
 
     /// UTF-8 JSON encoding of ``ClientSurfaceIntent`` (`semanticKind == .surfaceIntent`).

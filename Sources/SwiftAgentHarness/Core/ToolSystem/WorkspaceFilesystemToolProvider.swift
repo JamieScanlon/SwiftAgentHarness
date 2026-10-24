@@ -28,6 +28,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
     private let resolveSenderIdentity: @Sendable () async -> ExecSenderIdentity
     private let onMemoryWrite: (@Sendable (String) async -> Void)?
     private let validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)?
+    /// Approves writes inside a memory directory (`path`, prior content, new content); throws to decline.
+    private let validateMemoryWrite: (@Sendable (String, String?, String) async throws -> Void)?
     private let logger: Logger?
     private let bashRunnerFactory: @Sendable (ExecRuntimeContext) -> any BashShellRunning
     private let grepForceInProcess: Bool
@@ -58,6 +60,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
         validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
+        validateMemoryWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
         logger: Logger? = nil,
         grepForceInProcess: Bool = false,
         sessionStoreRoot: URL? = SessionPersistenceConfiguration.sessionStoreRoot,
@@ -73,6 +76,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             resolveSenderIdentity: resolveSenderIdentity,
             onMemoryWrite: onMemoryWrite,
             validatePreCompactionFlushWrite: validatePreCompactionFlushWrite,
+            validateMemoryWrite: validateMemoryWrite,
             logger: logger,
             bashRunnerFactory: nil,
             grepForceInProcess: grepForceInProcess,
@@ -91,6 +95,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         resolveSenderIdentity: @escaping @Sendable () async -> ExecSenderIdentity = { .cliDefault },
         onMemoryWrite: (@Sendable (String) async -> Void)? = nil,
         validatePreCompactionFlushWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
+        validateMemoryWrite: (@Sendable (String, String?, String) async throws -> Void)? = nil,
         logger: Logger? = nil,
         bashRunnerFactory: (@Sendable (ExecRuntimeContext) -> any BashShellRunning)?,
         grepForceInProcess: Bool = false,
@@ -106,6 +111,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
         self.resolveSenderIdentity = resolveSenderIdentity
         self.onMemoryWrite = onMemoryWrite
         self.validatePreCompactionFlushWrite = validatePreCompactionFlushWrite
+        self.validateMemoryWrite = validateMemoryWrite
         self.logger = logger
         self.grepForceInProcess = grepForceInProcess
         self.sessionStoreRoot = sessionStoreRoot
@@ -345,6 +351,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 priorContent: nil,
                 newContent: content
             )
+            try await validateMemoryWriteIfNeeded(path: path, priorContent: nil, newContent: content)
             try await writeFileTakingMemoryLockIfNeeded(
                 bridge: bridge,
                 rawPath: raw,
@@ -384,6 +391,7 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
                 priorContent: priorContent,
                 newContent: content
             )
+            try await validateMemoryWriteIfNeeded(path: path, priorContent: priorContent, newContent: content)
             try await writeFileTakingMemoryLockIfNeeded(
                 bridge: bridge,
                 rawPath: raw,
@@ -435,6 +443,16 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
 
     private func skillsDirectoryURL() -> URL? {
         runtimeContext.skillsDirectory.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func validateMemoryWriteIfNeeded(path: String, priorContent: String?, newContent: String) async throws {
+        guard let validateMemoryWrite,
+              let memoryDirectory = memoryDirectoryURL(),
+              AgentMemoryPathResolver.isPathInsideAnyMemoryDirectory(
+                  path, projectMemoryDirectory: memoryDirectory, userMemoryDirectory: userMemoryDirectoryURL()
+              )
+        else { return }
+        try await validateMemoryWrite(path, priorContent, newContent)
     }
 
     private func validatePreCompactionFlushWriteIfNeeded(
@@ -729,6 +747,8 @@ public struct WorkspaceFilesystemToolProvider: ToolProvider, ToolDescriptorHinti
             return message
         case let error as PreCompactionFlushWriteToolError:
             return error.message
+        case let error as MemoryWriteGateDeniedError:
+            return error.description
         case let error as MemoryWriteScanError:
             switch error {
             case .threatsDetected(let threats):

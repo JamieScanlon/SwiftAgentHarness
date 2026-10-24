@@ -34,6 +34,12 @@ struct ConversationRuntimeDependencies {
     let workspacePolicy: HarnessWorkspacePolicy
     /// Session-scoped host visibility grants (MCP / additional tool providers).
     let visibilityGrants: ToolVisibilityGrantStore
+    /// Classifier-assisted gating between the rules and the human. `nil` means the layer is off.
+    let toolApprovalClassifierGate: ToolApprovalClassifierGate?
+    /// Optional `decide` consumers (memory gate, skill filter, guardrails, injection probe, router). `.none` = all off.
+    let decisionConsumers: DecisionConsumers
+    /// Model Pool per-turn selection for the `main` role. `nil` = every turn uses the conversation's model.
+    let turnModelSelector: ModelPoolTurnSelector?
     let logger: Logger?
 
     init(
@@ -60,6 +66,9 @@ struct ConversationRuntimeDependencies {
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
         workspacePolicy: HarnessWorkspacePolicy = .default,
         visibilityGrants: ToolVisibilityGrantStore = ToolVisibilityGrantStore(),
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil,
         logger: Logger?
     ) {
         self.persistenceDomain = persistenceDomain
@@ -85,6 +94,9 @@ struct ConversationRuntimeDependencies {
         self.runtimeExecutorFactory = runtimeExecutorFactory
         self.workspacePolicy = workspacePolicy
         self.visibilityGrants = visibilityGrants
+        self.toolApprovalClassifierGate = toolApprovalClassifierGate
+        self.decisionConsumers = decisionConsumers
+        self.turnModelSelector = turnModelSelector
         self.logger = logger
     }
 }

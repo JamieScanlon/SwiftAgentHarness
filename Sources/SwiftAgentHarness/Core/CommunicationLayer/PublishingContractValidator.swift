@@ -52,6 +52,14 @@ enum PublishingContractValidator {
                 issues.append("surfaceIntent requires ClientSurfaceIntent jsonUTF8")
                 return issues
             }
+        case .routeReceipt:
+            guard let receipt = decode(payload.jsonUTF8, as: RouteReceiptWire.self) else {
+                issues.append("routeReceipt requires RouteReceiptWire jsonUTF8")
+                return issues
+            }
+            if receipt.v != 1 {
+                issues.append("routeReceipt v must be 1")
+            }
         case .streamDone:
             if payload.jsonUTF8 != nil {
                 issues.append("streamDone must not set jsonUTF8")

@@ -551,7 +551,23 @@ public actor ModeRegistryService {
         if o.keys.contains("thinkingConfig") {
             copy.thinkingConfig = parseThinkingConfig(raw: o["thinkingConfig"])
         }
+        if let roles = parseRolePatches(raw: o["roles"]) {
+            copy.roles.merge(roles) { _, overlay in overlay }
+        }
         return copy
+    }
+
+    /// `"roles": {"gatekeeper": {"pin": "jev-1.13.0"}}`. Unknown or malformed rows are ignored rather than failing the profile.
+    static func parseRolePatches(raw: JSON?) -> [ModelRole: RoleBindingPatch]? {
+        guard let raw, case .object(let rows) = raw else { return nil }
+        var patches: [ModelRole: RoleBindingPatch] = [:]
+        for (role, row) in rows {
+            guard let data = try? JSONEncoder().encode(row),
+                  let patch = try? JSONDecoder().decode(RoleBindingPatch.self, from: data)
+            else { continue }
+            patches[ModelRole(rawValue: role)] = patch
+        }
+        return patches
     }
 
     private static func parseThinkingConfig(raw: JSON?) -> ThinkingConfig? {

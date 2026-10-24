@@ -232,6 +232,10 @@ public actor AgentRuntimeSessionService {
             break
         }
 
+        if let blocked = await inboundGuardrailBlock(text: effectiveText, conversation: conversation) {
+            return blocked
+        }
+
         let runID = UUID()
         let sessionLaneKey = await sessionLaneKey(conversationID: conversation.id)
         if let admission = await acquireRunLane(
@@ -246,9 +250,10 @@ public actor AgentRuntimeSessionService {
         let sendingConversationID = conversation.id
 
         do {
+            let turnModel = await poolSelectedTurnModel(text: effectiveText, conversation: conversation, runID: runID)
             guard let acquisition = await orchestratorRuntime.acquireOrchestrator(
                 conversation: conversation,
-                model: conversation.model
+                model: turnModel
             ) else {
                 throw ConversationServiceError.failedToInitialize
             }
@@ -773,3 +778,59 @@ extension AgentRuntimeSessionService: AgentRuntimeTokenSnapshotting {}
 extension AgentRuntimeSessionService: AgentRuntimeLaneErrorMapping {}
 
 extension AgentRuntimeSessionService: AgentRuntimeStreamingServicing {}
+
+// MARK: - Decision consumers at the turn boundary
+
+extension AgentRuntimeSessionService {
+    /// Inbound guardrail battery. A `block` verdict answers the turn without calling the model or saving the
+    /// message; `review` lets it through (the battery logs and records it). Child conversations are skipped because
+    /// their input is the parent model's own output.
+    func inboundGuardrailBlock(text: String, conversation: ModelConversation) async -> ChatStreamResponse? {
+        guard let battery = deps.decisionConsumers.guardrails, conversation.parentConversationID == nil else { return nil }
+        let patches = await DecisionRolePatchLoader.patches(for: conversation, modeRegistry: deps.modeRegistry, logger: deps.logger)
+        guard case .block(let ids) = await battery.evaluate(
+            .inbound, text: text, conversationID: conversation.id, rolePatches: patches
+        ) else { return nil }
+        return Self.immediateTextResponse(GuardrailDecisionBattery.blockedInboundReply(ids), conversationID: conversation.id)
+    }
+
+    /// Asks the Model Pool for this turn's `main` model. Selection is the Pool's job; the runtime only acquires an
+    /// orchestrator for what it returns. Without a selector, or for child conversations, the turn uses the
+    /// conversation's model. The conversation's stored model is unchanged either way.
+    func poolSelectedTurnModel(text: String, conversation: ModelConversation, runID: UUID) async -> Model {
+        guard let selector = deps.turnModelSelector, conversation.parentConversationID == nil else {
+            return conversation.model
+        }
+        let patches = await DecisionRolePatchLoader.patches(for: conversation, modeRegistry: deps.modeRegistry, logger: deps.logger)
+        return await selector.selectModel(for: TurnModelRequest(
+            conversationID: conversation.id,
+            runID: runID,
+            currentModel: conversation.model,
+            request: text,
+            hasHistory: conversation.messages.contains { $0.role == .assistant },
+            rolePatches: patches
+        ))
+    }
+
+    static func immediateTextResponse(_ text: String, conversationID: UUID) -> ChatStreamResponse {
+        let (partialStream, partialContinuation) = AsyncStream.makeStream(
+            of: ChatStreamingPartial.self,
+            bufferingPolicy: .bufferingNewest(8)
+        )
+        partialContinuation.yield(.text(text))
+        partialContinuation.finish()
+        let (orchestrationStream, orchestrationContinuation) = AsyncStream.makeStream(
+            of: ConversationOrchestrationState.self,
+            bufferingPolicy: .bufferingNewest(8)
+        )
+        orchestrationContinuation.yield(
+            ConversationOrchestrationState(llmRuntimePhase: .idleReady, agenticPhase: .idle, llmRequestPhase: nil)
+        )
+        orchestrationContinuation.finish()
+        return ChatStreamResponse(
+            partialContent: partialStream,
+            orchestrationState: orchestrationStream,
+            conversationID: conversationID
+        )
+    }
+}

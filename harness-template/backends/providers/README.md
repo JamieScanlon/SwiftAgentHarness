@@ -369,6 +369,8 @@ A user-facing implication: per-agent capability resolution is an exclusive choic
 
 This is the part the other five harnesses miss entirely. They handle text inference well; speech, realtime, image gen are each ad-hoc bolt-ons in `tools/`. If the harness has any ambition beyond text-out, design these slots in from the start.
 
+**Slots register offerings; contracts define the call.** Each slot is a provider-side registration point for one of the Model Pool's call contracts ([model-classes](../../core/model-pool/model-classes.md#contracts-classify-by-the-shape-of-the-call)): text inference → `generate`; speech → `transcribe` + `render`(audio); realtime voice and transcription → `session` / streaming `transcribe`; image, video, music generation → `render`; media understanding → `generate` with media input or `parse`. Three slots the table above omits belong alongside it: **decision** (`decide` — calibrated closed-question models; codecs in [`decision-models.md`](./decision-models.md)), **embedding** (`embed`, compat-bound by embedding space), and **rerank** (`rerank`). Web fetch and web search are tool backends, not model contracts. The tool that exposes image generation to the model is a Tool System wrapper that calls the Pool by role — it never holds a provider client.
+
 ### Failover: provider classifies, Pool decides
 
 The provider knows which errors are which:
@@ -395,7 +397,7 @@ Cheap-summarizer, classifier, embedder, recall-sub-agent — all of these are Po
 
 The places `agents.defaults.compaction.model`, `agents.defaults.subagents.model`, and `active-memory.model` accept `provider/model-id` overrides is *configuration* — the user names a model; the Pool resolves it through the same provider plugins as the primary; nothing provider-specific kicks in.
 
-A useful pattern for the Pool's "any cheap text model" fallback: an explicit auxiliary-client fallback chain (e.g., OpenRouter → custom portal → direct API-key providers). Lives on the Model Pool page; flagged here as cross-reference.
+A useful pattern for the Pool's "any cheap text model" fallback: an explicit auxiliary-client fallback chain (e.g., OpenRouter → custom portal → direct API-key providers). On the Model Pool side this is a role binding's `fallback` list — see [model-classes § Roles](../../core/model-pool/model-classes.md#roles-the-selection-surface-for-internal-callers), where the cheap-summarizer slot is the `background-small` role.
 
 ### Discovery, dynamic catalogs, and the Ollama case
 

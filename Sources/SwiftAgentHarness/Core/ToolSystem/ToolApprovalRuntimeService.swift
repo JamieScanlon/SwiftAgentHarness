@@ -277,6 +277,70 @@ actor ToolApprovalRuntimeService {
         )
     }
 
+    /// Classifier-assisted gating for a call the rules resolved to *ask*. Returns `true` when the gatekeeper cleared
+    /// it, after recording an `allow-once` resolution labeled `classifier`. Never persists a durable grant.
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int? = nil,
+        modelID: UUID? = nil,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter? = nil
+    ) async -> Bool {
+        guard let gate = deps.toolApprovalClassifierGate else { return false }
+        let outcome = await gate.evaluate(ToolApprovalClassifierInput(
+            conversationID: conversationID,
+            runID: runID,
+            accountID: await ownerAccountID(for: conversationID),
+            toolName: call.name,
+            arguments: call.arguments,
+            route: route,
+            isElevated: isElevated,
+            transcript: transcript,
+            rolePatches: await DecisionRolePatchLoader.patches(
+                for: conversationID,
+                persistenceDomain: deps.persistenceDomain,
+                modeRegistry: deps.modeRegistry,
+                logger: deps.logger
+            )
+        ))
+        guard case .allowOnce(let reason, _) = outcome else { return false }
+        let binding = ToolCallApprovalBinding.from(call: call)
+        _ = await registerPendingToolApproval(
+            conversationID: conversationID,
+            runID: runID,
+            call: call,
+            route: route,
+            isElevated: isElevated
+        )
+        await applyToolApprovalResolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: binding,
+            route: route,
+            status: .approved,
+            source: ToolApprovalResolutionKind.classifier.rawValue,
+            reason: reason,
+            kind: .classifier,
+            decision: .allowOnce,
+            policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
+            publicationSource: "runtime.approvalClassifier",
+            iteration: iteration,
+            modelID: modelID,
+            approvalSpec: approvalContractSpec(
+                toolName: call.name,
+                route: route,
+                isElevated: isElevated,
+                arguments: call.arguments
+            ),
+            lifecycleEmitter: lifecycleEmitter
+        )
+        return true
+    }
+
     func toolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,

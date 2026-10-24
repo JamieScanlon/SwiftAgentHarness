@@ -50,6 +50,7 @@ class ApprovalResolutionKind(Enum):
     manual = 'manual'
     timeoutDefault = 'timeoutDefault'
     runtimeAuto = 'runtimeAuto'
+    classifier = 'classifier'
 
 
 class Usage(BaseModel):

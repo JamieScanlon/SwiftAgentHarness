@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swiftagentharness.dev/schemas/ws/route-receipt-wire.json",
+  "title": "RouteReceiptWire",
+  "description": "Model Pool route receipt (`semanticKind == routeReceipt`). Sanitized at emit: no request or response content; vendor request ids are hashed.",
+  "type": "object",
+  "required": [
+    "v",
+    "callID",
+    "contract",
+    "requested",
+    "rankedOut",
+    "fallback",
+    "latencyMs",
+    "requestIDHashes",
+    "cacheHit",
+    "summary"
+  ],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1
+    },
+    "callID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "conversationID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "runID": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "role": {
+      "type": "string"
+    },
+    "contract": {
+      "type": "string",
+      "enum": [
+        "generate",
+        "decide",
+        "embed",
+        "rerank",
+        "render",
+        "transcribe",
+        "session",
+        "parse"
+      ]
+    },
+    "requested": {
+      "type": "string"
+    },
+    "resolved": {
+      "type": "object",
+      "required": [
+        "modelID",
+        "bindingID",
+        "surface"
+      ],
+      "properties": {
+        "modelID": {
+          "type": "string"
+        },
+        "versionServed": {
+          "type": "string"
+        },
+        "bindingID": {
+          "type": "string"
+        },
+        "surface": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "aliasResolved": {
+      "type": "object",
+      "required": [
+        "alias",
+        "to"
+      ],
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rankedOut": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "modelID",
+          "reason"
+        ],
+        "properties": {
+          "modelID": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "routerPick": {
+      "type": "string",
+      "description": "Candidate the router role moved to the front of the ranking."
+    },
+    "cascadeEscalated": {
+      "type": "boolean"
+    },
+    "cascadeReason": {
+      "type": "string"
+    },
+    "cascadeFirstStage": {
+      "type": "object",
+      "required": [
+        "modelID",
+        "bindingID",
+        "surface"
+      ],
+      "properties": {
+        "modelID": {
+          "type": "string"
+        },
+        "versionServed": {
+          "type": "string"
+        },
+        "bindingID": {
+          "type": "string"
+        },
+        "surface": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "fallback": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "reason"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "guarantee": {
+      "type": "string",
+      "enum": [
+        "free-text",
+        "json-mode",
+        "schema-strict",
+        "logprobs",
+        "calibrated-distribution"
+      ]
+    },
+    "costUSD": {
+      "type": "number"
+    },
+    "latencyMs": {
+      "type": "number"
+    },
+    "requestIDHashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cacheHit": {
+      "type": "boolean"
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "question",
+        "verdict",
+        "reason"
+      ],
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "act",
+            "confirm",
+            "refuse"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "modelVersion": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "errorClassification": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string",
+      "description": "One line for surfaces: answered by X (fallback from Y)."
+    }
+  },
+  "additionalProperties": false
+}

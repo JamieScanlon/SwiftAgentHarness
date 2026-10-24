@@ -72,6 +72,14 @@ Same-binding retries use `FailoverPolicy` from `settings.modelPoolFailover` (def
 
 Bedrock and Vertex native adapters remain deferred (no `ModelProtocol` cases or wire implementations yet). Anthropic is the first cloud-native adapter in this slice; OpenAI-shaped endpoints cover many hosted proxies until Bedrock/Vertex land.
 
+## Model classes and decision models
+
+Registry rows carry **contract profiles** (`ModelClasses/`): `generate | decide | embed | rerank | render | transcribe | session | parse`, each with interaction patterns, media, a ranked `OutputGuarantee`, versioned features, and limits. Rows without explicit `contracts` synthesize a `generate` profile from the legacy chat fields, so every existing `ModelQuery` / `resolve` caller stays chat-only. `ModelManager.allContractEntries()` is the contract-aware view.
+
+Internal callers select by **role** (`ModelRole`, `RoleBinding`, `RoleBindingResolver`: settings → mode patch → conversation patch → per-call pin). `decide` roles (`gatekeeper`, `guard`, `router`, `skill-filter`, `memory-gate`) dispatch through `ModelPoolDecisionDispatcher` (`Decisions/`): hard filter, rank, one cascade stage derived from `DecisionPolicy.escalate`, availability-only fallback inside the compat group for threshold-bearing roles, budget, scheduler, `(version, request)` response cache, and a `RouteReceipt` per call. Gates read `DecisionOutcome.verdict`, which is never `act` on failure.
+
+Decision wire codecs (SystemOne, OpenAI Decisions, LLM emulation) live under `Backends/Providers/Decisions/` and register through the `decision` provider slot; hosts add deciders with `DecisionRuntimeConfig` (`DefaultProviderOptions.decisionRuntimes`). Setup walkthrough: [docs/DECISION_MODELS.md](../../../../docs/DECISION_MODELS.md).
+
 ## Key types (this folder)
 
 | Type | Role |

@@ -40,6 +40,17 @@ protocol ToolApprovalRuntimeServicing: Sendable {
         isElevated: Bool,
         requestedAt: Date
     ) async -> Bool
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool
     func toolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
@@ -55,6 +66,9 @@ protocol ToolApprovalRuntimeServicing: Sendable {
 }
 
 protocol OrchestratorRuntimeToolPolicyServicing: Sendable {
+    /// Skills the conversation's mode and routing policy allow, for the skill pre-filter.
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate]
+
     func allToolRegistryEntriesForOrchestration(orchestrator: SwiftAgentKitOrchestrator) async -> [ToolRegistryEntry]
     func buildToolTurnPolicySnapshot(
         allEntries: [ToolRegistryEntry],
@@ -249,4 +263,27 @@ protocol ConversationToolDataProviding: Sendable {
 
 protocol SubAgentOrchestratorRuntimeServicing: OrchestratorRuntimeToolPolicyServicing {
     func setupOrchestrator(with selectedModel: Model, activeConversation preferredConversation: ModelConversation?) async
+}
+
+extension OrchestratorRuntimeToolPolicyServicing {
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate] {
+        []
+    }
+}
+
+extension ToolApprovalRuntimeServicing {
+    /// Classifier-assisted gating is off unless the conformer implements it.
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool {
+        false
+    }
 }

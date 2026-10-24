@@ -567,6 +567,58 @@ public actor OrchestratorRuntimeService {
         return (batch.parameterSchemasByName, batch.strictByName)
     }
 
+    /// Skills the mode profile and routing policy allow for `conversation`, filtered the same way the system prompt
+    /// filters its skills index.
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate] {
+        guard let loader = await skillActivation.skillLoader(for: conversation.id),
+              let metadata = try? await loader.loadMetadata()
+        else { return [] }
+        let policyContext = await installedModePolicy.modePolicyContext(for: conversation)
+        return metadata
+            .filter { meta in
+                policyContext.resolvedProfile.skills.isSkillAllowed(name: meta.name, context: policyContext)
+                    && ModeProfileSkillsSlice.isSkillAllowedByRoutingPolicy(name: meta.name, conversation: conversation)
+            }
+            .map { SkillCandidate(name: $0.name, description: $0.description) }
+    }
+
+    /// Outbound guardrail check for structured delivery, or `nil` when the battery is off.
+    private func outboundGuardrailCheck() -> (@Sendable (String, UUID) async -> GuardrailVerdict)? {
+        guard let battery = deps.decisionConsumers.guardrails, !battery.configuration.outbound.isEmpty else { return nil }
+        let persistenceDomain = deps.persistenceDomain
+        let modeRegistry = deps.modeRegistry
+        let logger = deps.logger
+        return { text, conversationID in
+            let patches = await DecisionRolePatchLoader.patches(
+                for: conversationID, persistenceDomain: persistenceDomain, modeRegistry: modeRegistry, logger: logger
+            )
+            return await battery.evaluate(.outbound, text: text, conversationID: conversationID, rolePatches: patches)
+        }
+    }
+
+    /// Builds the memory-write gate check for this conversation, or `nil` when the gate is off.
+    private func memoryWriteGateValidator(
+        activeConversation: ModelConversation?
+    ) -> (@Sendable (String, String?, String) async throws -> Void)? {
+        guard let gate = deps.decisionConsumers.memoryWriteGate else { return nil }
+        let conversationID = activeConversation.map { $0.parentConversationID ?? $0.id }
+        let persistenceDomain = deps.persistenceDomain
+        let modeRegistry = deps.modeRegistry
+        let logger = deps.logger
+        return { path, priorContent, newContent in
+            let patches = await DecisionRolePatchLoader.patches(
+                for: conversationID, persistenceDomain: persistenceDomain, modeRegistry: modeRegistry, logger: logger
+            )
+            let decision = await gate.evaluate(
+                path: path, priorContent: priorContent, newContent: newContent,
+                conversationID: conversationID, rolePatches: patches
+            )
+            if case .deny(let reason) = decision {
+                throw MemoryWriteGateDeniedError(reason: reason)
+            }
+        }
+    }
+
     private func buildToolManager(
         systemPrompt: SystemPrompt,
         skillLoader: SkillLoader?,
@@ -641,6 +693,7 @@ public actor OrchestratorRuntimeService {
                 resolveDeliveryMetadata: {
                     Self.messageDeliveryMetadata(from: messageConv)
                 },
+                outboundGuardrail: outboundGuardrailCheck(),
                 logger: logger
             )
         )
@@ -805,6 +858,7 @@ public actor OrchestratorRuntimeService {
                             throw PreCompactionFlushWriteToolError(message: message)
                         }
                     },
+                    validateMemoryWrite: memoryWriteGateValidator(activeConversation: activeConversation),
                     logger: logger,
                     sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
                     sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,

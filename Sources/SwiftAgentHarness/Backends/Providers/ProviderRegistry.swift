@@ -219,6 +219,36 @@ public enum ProviderRegistry {
         }
     }
 
+    public static func decisionProvider(for providerID: ProviderID) -> (any DecisionProviding)? {
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            defer { lock.unlock() }
+            return registrations[providerID]?.decision
+        }
+    }
+
+    /// Decision providers whose lifecycle is `registered` (credentials present, not disabled).
+    public static func registeredDecisionProviders(
+        authStore: AuthProfileStore
+    ) -> [any DecisionProviding] {
+        withRegistryAccess {
+            ensureBootstrappedUnlocked()
+            lock.lock()
+            let candidates = registrations.values.compactMap { registration -> (ProviderManifest, any DecisionProviding)? in
+                guard let decision = registration.decision else { return nil }
+                return (registration.manifest, decision)
+            }
+            lock.unlock()
+            return candidates.compactMap { manifest, decision in
+                guard ProviderLifecycle.lifecycleState(for: manifest, authStore: authStore) == .registered else {
+                    return nil
+                }
+                return decision
+            }
+        }
+    }
+
     public static func manifest(forAlias alias: String) -> ProviderManifest? {
         withRegistryAccess {
             ensureBootstrappedUnlocked()

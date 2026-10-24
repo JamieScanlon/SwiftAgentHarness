@@ -16,6 +16,10 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
     public var cost: ModelCostBudget?
     /// Per-binding routing metadata (rate limits, etc.).
     public var routing: ModelRoutingMetadata?
+    /// Downward-only overrides of the entry's contract profiles for this serving endpoint (surface, limits, features).
+    public var contractOverrides: [ContractProfile]?
+    /// Per-binding unit-typed prices; wins over ``cost`` when non-empty.
+    public var prices: PriceVector?
 
     public init(
         providerId: String,
@@ -26,7 +30,9 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         authProfile: String? = nil,
         toolChoiceModesOverride: Set<ToolChoiceMode>? = nil,
         cost: ModelCostBudget? = nil,
-        routing: ModelRoutingMetadata? = nil
+        routing: ModelRoutingMetadata? = nil,
+        contractOverrides: [ContractProfile]? = nil,
+        prices: PriceVector? = nil
     ) {
         self.providerId = providerId
         self.modelProtocol = modelProtocol
@@ -37,6 +43,8 @@ public struct ProviderBinding: Sendable, Hashable, Codable {
         self.toolChoiceModesOverride = toolChoiceModesOverride
         self.cost = cost
         self.routing = routing
+        self.contractOverrides = contractOverrides
+        self.prices = prices
     }
 }
 
@@ -62,6 +70,17 @@ public struct ModelRegistryEntry: Sendable, Hashable {
     public var compat: ProviderModelCompat?
     /// Stable logical-model identity for cross-provider binding merge (family + version).
     public var canonicalModelKey: String?
+    /// Explicit contract profiles. Empty means "legacy chat row": one `generate` profile is synthesized
+    /// (see ``contractProfiles``).
+    public var contracts: [ContractProfile]
+    /// Embedding space id, or a declared "same behaviour" group that bounds compat-bound fallback.
+    public var compatGroup: String?
+    public var lifecycle: ModelLifecycle
+    /// Unit-typed prices (spec: `PriceVector`). Empty falls back to the legacy ``cost`` budget.
+    public var prices: PriceVector
+    public var locality: ModelLocality?
+    /// Roles this entry is catalogued for (spec: `routing.roles`); informs default role bindings.
+    public var roles: [String]
 
     public init(
         id: UUID,
@@ -77,7 +96,13 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         performance: ModelObservedPerformance? = nil,
         routing: ModelRoutingMetadata? = nil,
         compat: ProviderModelCompat? = nil,
-        canonicalModelKey: String? = nil
+        canonicalModelKey: String? = nil,
+        contracts: [ContractProfile] = [],
+        compatGroup: String? = nil,
+        lifecycle: ModelLifecycle = .active,
+        prices: PriceVector = [],
+        locality: ModelLocality? = nil,
+        roles: [String] = []
     ) {
         self.id = id
         self.family = family
@@ -93,6 +118,12 @@ public struct ModelRegistryEntry: Sendable, Hashable {
         self.routing = routing
         self.compat = compat
         self.canonicalModelKey = canonicalModelKey
+        self.contracts = contracts
+        self.compatGroup = compatGroup
+        self.lifecycle = lifecycle
+        self.prices = prices
+        self.locality = locality
+        self.roles = roles
     }
 
     /// Primary wire target for the shared ``Model`` DTO (lowest `priority` wins).

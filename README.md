@@ -23,7 +23,7 @@ Add SwiftAgentHarness to the `dependencies` array in your `Package.swift`, then 
 dependencies: [
     .package(
         url: "https://github.com/JamieScanlon/SwiftAgentHarness.git",
-        from: "1.0.0"
+        from: "1.1.0"
     ),
 ],
 targets: [
@@ -63,6 +63,7 @@ Start with the docs:
 
 - [Overview](./docs/OVERVIEW.md) — what SwiftAgentHarness is, the layer architecture, and the key entry-point types.
 - [Quickstart](./docs/QUICKSTART.md) — register providers, build the composition root, start the gateway, and run a first conversation.
+- [Decision models](./docs/DECISION_MODELS.md) — every way the harness uses deciders (tool-call gatekeeper, memory write gate, skill pre-filter, guardrails, injection probe, model routing, your own decisions), the shared setup, and per-use-case details.
 
 The design rationale for every layer lives in the [Agent Harness Best-Practice Template](./harness-template/README.md), included in this repository under [`harness-template/`](./harness-template/).
 
