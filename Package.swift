@@ -17,6 +17,10 @@ let package = Package(
             name: "SwiftAgentHarnessProviders",
             targets: ["SwiftAgentHarnessProviders"]
         ),
+        .library(
+            name: "SwiftAgentHarnessComputerUseMac",
+            targets: ["SwiftAgentHarnessComputerUseMac"]
+        ),
     ],
     dependencies: [
         // Pinned to the 0.25.0 tag's revision so SPM can resolve transitive prerelease deps (swift-sdk).
@@ -56,6 +60,16 @@ let package = Package(
                 .process("manifests"),
                 .process("catalogs"),
             ]
+        ),
+        // macOS display-target drivers (ScreenCaptureKit, Accessibility, input events). Linked only by hosts;
+        // the harness library stays free of these frameworks.
+        .target(
+            name: "SwiftAgentHarnessComputerUseMac",
+            dependencies: ["SwiftAgentHarness"]
+        ),
+        .testTarget(
+            name: "SwiftAgentHarnessComputerUseMacTests",
+            dependencies: ["SwiftAgentHarnessComputerUseMac", "SwiftAgentHarness"]
         ),
         .testTarget(
             name: "SwiftAgentHarnessTests",

@@ -10,6 +10,7 @@ Computer use is a **display target** (the user's desktop, a VM, a desktop contai
 - [How it fits together](#how-it-fits-together)
 - [Quick start](#quick-start)
 - [The computer-use specialist](#the-computer-use-specialist)
+- [The macOS driver](#the-macos-driver)
 - [Writing a display target](#writing-a-display-target)
 - [Grants and tiers](#grants-and-tiers)
 - [How each action is gated](#how-each-action-is-gated)
@@ -26,7 +27,7 @@ The spec is the harness-template pages `backends/computer-use/README.md` and `ba
 
 ## Status
 
-This is the platform-neutral core. Everything here builds and tests without screen-capture, accessibility, or input frameworks.
+The core in `SwiftAgentHarness` builds and tests without screen-capture, accessibility, or input frameworks. The macOS driver is a separate product, `SwiftAgentHarnessComputerUseMac`, linked only by hosts.
 
 | Area | State |
 |---|---|
@@ -37,7 +38,7 @@ This is the platform-neutral core. Everything here builds and tests without scre
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
-| macOS host-desktop and VM drivers | Not yet. They will live in a separate macOS-only target. |
+| macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
 | Vendor-native toolsets and their safety signals, live view, replay, deferred tool loading | Not yet |
 
 ## How it fits together
@@ -122,6 +123,47 @@ What happens:
 | `blocked` | Grants declined, target busy, permissions missing, model unsuitable, or stopped by the user |
 | `budget-exhausted` | The step, time, or cost budget, or the run timeout, ran out |
 | `failed` | The child failed or was cancelled |
+
+## The macOS driver
+
+`MacHostDisplayTarget` drives the user's own Mac. It runs in the spec's **in-process dev mode**: the drivers run inside the harness process and borrow its TCC grants. Run from a terminal, those are the terminal's grants, so every program run there inherits them. The production shape is a signed `LSUIElement` host app that owns its own grants and serves this contract over XPC; it isn't built yet.
+
+```swift
+import SwiftAgentHarnessComputerUseMac
+
+let mac = MacHostDisplayTarget(configuration: .init(
+    excludedBundleIDs: ["com.example.my-harness-ui"]   // never captured, never granted
+))
+// Show mac.permissionChecklist() during onboarding.
+let stopKey = MacStopKeyMonitor { Task { await session.stopComputerUse() } }
+stopKey.start()                                       // needs Input Monitoring
+
+session.installComputerUse(ComputerUseConfiguration(
+    registry: DisplayTargetRegistry(targets: [mac]),
+    defaults: ComputerUseSpecialistDefaults(target: MacHostDisplayTarget.defaultID, budgets: …, maxBudgets: …),
+    approveGrants: …
+))
+```
+
+| Piece | Behavior |
+|---|---|
+| Permissions | `MacPermissionBroker` preflights Screen Recording, Accessibility, and Post Event separately on every call, and never infers them from side effects. The checklist explains each one and deep-links to its Settings pane. It also flags that Screen Recording usually needs a relaunch. |
+| Capture | ScreenCaptureKit only. A display capture includes only the granted apps' windows, so non-granted apps and the harness's own UI never appear. The capture pipeline downscales to the session's limit. Zoom captures a region at full resolution. Images are PNG, and the geometry recorded is the rect the image was sized from. |
+| Accessibility | It reads the focused window of the frontmost granted app. AX calls run on a dedicated serial queue, never the cooperative pool, with one batched attribute read per element. Traversals are bounded by a 1 s messaging timeout, a 1.5 s deadline, and depth, node, and child budgets, and return partial trees with the reason. Chromium and Electron are asked to build their trees (`AXManualAccessibility`). |
+| Refs | An `eN` ref is valid only with its observation. Before acting, the element is re-read: a changed role or label, or a move beyond 8 pt, refuses with `escalation: observe`. Points are refused when the app has quit or restarted, checked by pid plus launch date. |
+| Delivery | It tries the accessibility action first (press, set value read back, focus, menu walk), then events posted to the target process. With `delivery: .foregroundAllowed` on the lease, it activates the app, posts global events, and restores the previous app on release, unless the user changed the frontmost app meanwhile. |
+| Input hygiene | It uses a private event source. Clicks settle 50 ms after the move, and double and triple clicks set click states. Unicode typing goes in chunks of at most 20 UTF-16 units on grapheme boundaries. Held keys and buttons are released after every batch, on takeover, and on release. Paste saves, writes, verifies, pastes, and restores the clipboard. |
+| Stop key | `MacStopKeyMonitor` is a listen-only event tap (Input Monitoring) on its own run-loop thread. It can't swallow events, and it doesn't need to: the harness never synthesizes the stop key. |
+| Evidence | Most pointer and key actions are `unverifiable`, because only a fresh observation can confirm them. A set-value that reads back is `confirmed`. A semantic call that timed out is `unverifiable` with `escalation: observe` and is never retried. |
+
+**Smoke test.** `SWIFTAGENTHARNESS_MAC_SMOKE=1 swift test --filter MacHostSmokeTests` observes the frontmost app on the real screen without sending input. Grant Screen Recording and Accessibility to the terminal first.
+
+**Verify on hardware before relying on it.** These are the spec's open questions plus this driver's:
+- capture of minimized and other-Space windows;
+- whether `SCWindow.frame` matches the captured window region exactly;
+- the per-event Unicode length on 26 and 27;
+- process-routed clicks in apps that ignore background events;
+- AX trees in Chromium and Electron apps.
 
 ## Writing a display target
 
@@ -326,4 +368,8 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Specialist delivery | Runs are synchronous: the parent's tool call waits for the result. Background runs with push delivery, available to other local agents, are not offered for computer use yet. |
 | Specialist result trust | The result is written by a model that saw untrusted screen content. The structured shape keeps screenshots and screen text out of the parent, but `result` and `evidence` are still model text and are not wrapped in the untrusted-content envelope. |
 | OpenAI-style tool images | The spec says images must travel as images, never base64 text. Chat-completions tool messages can't hold images, so a user message right after the tool run carries them, and it names the tool calls it belongs to. |
+| macOS `wait-for` | The canonical `wait-for(condition)` carries a natural-language condition the driver can't evaluate. The macOS driver waits up to 2 s and reports `unverifiable` with `escalation: observe`. |
+| macOS window exclusion | The spec hides non-granted windows during the agent's turn and restores them after. The macOS driver instead captures only granted apps' windows, which never touches the user's windows. Process-routed input still can't reach non-granted apps, because the classifier refuses them. |
+| macOS foreground delivery | Foreground delivery is used for every pointer and key action whenever the lease allows it. Background delivery can fail silently, so it can't escalate on failure. The "agent active" HUD that should announce it isn't built yet. |
+| macOS keyboard layout | Key combos map through the US ANSI layout. Text goes through Unicode typing, which is layout-independent. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |
