@@ -24,6 +24,38 @@ enum OpenAICompatibleVisionContent {
         return "data:\(mime);base64,\(imageData.base64EncodedString())"
     }
 
+    /// `data:` URL using the image's declared media type, sniffed only when it has none.
+    static func dataURL(for image: Message.Image) -> String? {
+        guard let data = image.imageData else { return nil }
+        let mime = image.mediaType ?? SessionBlobMIME.sniff(data: data, hint: nil)
+        return "data:\(mime);base64,\(data.base64EncodedString())"
+    }
+
+    /// Chat-completions tool messages carry text only, so the images a run of tool messages returned travel in one
+    /// user message placed right after the run (never between tool messages, which must follow their assistant
+    /// message contiguously).
+    struct ToolImageCarrier {
+        private(set) var pending: [(toolCallID: String, image: Message.Image)] = []
+
+        mutating func collect(_ message: Message, dispositions: [String: String]) {
+            guard message.role == .tool else { return }
+            let id = message.toolCallId ?? "unknown"
+            for image in OpenAICompatibleVisionContent.inlineImagesWithData(from: message.images, dispositions: dispositions) {
+                pending.append((id, image))
+            }
+        }
+
+        /// The carrier's text and image data URLs, or `nil` when nothing is pending. Clears the pending images.
+        mutating func flush() -> (text: String, imageURLs: [String])? {
+            guard !pending.isEmpty else { return nil }
+            var ids: [String] = []
+            for entry in pending where !ids.contains(entry.toolCallID) { ids.append(entry.toolCallID) }
+            let urls = pending.compactMap { OpenAICompatibleVisionContent.dataURL(for: $0.image) }
+            pending = []
+            return ("Images returned by tool call\(ids.count == 1 ? "" : "s") \(ids.joined(separator: ", ")):", urls)
+        }
+    }
+
     /// Compact wire diagnostics (no base64) for vision encode path debugging.
     static func logWireDiagnostics(
         adapter: String,

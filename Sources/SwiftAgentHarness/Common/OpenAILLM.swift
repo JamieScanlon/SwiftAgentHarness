@@ -338,7 +338,21 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         var openAIMessages: [ChatQuery.ChatCompletionMessageParam] = []
         openAIMessages.reserveCapacity(plan.resolvedMessages.count)
         var encodedImageURLPartCount = 0
+        var toolImages = OpenAICompatibleVisionContent.ToolImageCarrier()
+        func flushToolImages() {
+            guard let carrier = toolImages.flush() else { return }
+            var parts: [ChatQuery.ChatCompletionMessageParam.UserMessageParam.Content.ContentPart] = [
+                .text(.init(text: carrier.text))
+            ]
+            for url in carrier.imageURLs {
+                parts.append(.image(.init(imageUrl: .init(url: url, detail: .auto))))
+                encodedImageURLPartCount += 1
+            }
+            openAIMessages.append(.user(.init(content: .contentParts(parts))))
+        }
         for message in plan.resolvedMessages {
+            if message.role != .tool { flushToolImages() }
+            toolImages.collect(message, dispositions: attachmentDispositions)
             let text: String
             if message.role == .system {
                 text = message.content
@@ -380,6 +394,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                 openAIMessages.append(param)
             }
         }
+        flushToolImages()
         OpenAICompatibleVisionContent.logWireDiagnostics(
             adapter: "OpenAILLM",
             messages: plan.resolvedMessages,

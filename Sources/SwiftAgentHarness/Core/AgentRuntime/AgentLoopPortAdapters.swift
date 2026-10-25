@@ -431,6 +431,18 @@ enum AgentLoopToolDispatch {
         )
     }
 
+    /// The tool message for a completed result. Images ride along only on success, as SwiftAgentKit's own loops do.
+    static func toolResultMessage(for result: ToolResult, fallbackToolCallID: String?) -> Message {
+        var message = toolResultMessage(
+            toolCallId: result.toolCallId ?? fallbackToolCallID,
+            content: result.success ? result.content : (result.error ?? "Tool execution failed.")
+        )
+        if result.success {
+            message.images = result.messageImages
+        }
+        return message
+    }
+
     static func approvalPendingToolResultMessage(toolCallId: String?) -> Message {
         toolResultMessage(toolCallId: toolCallId, content: approvalPendingToolResultContent)
     }
@@ -589,8 +601,7 @@ enum AgentLoopToolDispatch {
         let outcome = await orchestrator.invokeTool(request)
         switch outcome {
         case .completed(let result, _):
-            let content = result.success ? result.content : (result.error ?? "Tool execution failed.")
-            return .completed(toolResultMessage(toolCallId: result.toolCallId ?? call.id, content: content))
+            return .completed(toolResultMessage(for: result, fallbackToolCallID: call.id))
         case .pending(let handle, _):
             return .pendingHandle(
                 toolResultMessage(toolCallId: call.id, content: "Pending tool handle: \(handle.handleID)")
@@ -868,8 +879,7 @@ enum AgentLoopToolDispatch {
     ) -> ToolDispatchOutcome {
         switch outcome {
         case .completed(let result, _):
-            let content = result.success ? result.content : (result.error ?? "Tool execution failed.")
-            return .completed(toolResultMessage(toolCallId: result.toolCallId ?? fallbackCall.id, content: content))
+            return .completed(toolResultMessage(for: result, fallbackToolCallID: fallbackCall.id))
         case .pending(let handle, _):
             return .pendingHandle(
                 toolResultMessage(toolCallId: fallbackCall.id, content: "Pending tool handle: \(handle.handleID)")

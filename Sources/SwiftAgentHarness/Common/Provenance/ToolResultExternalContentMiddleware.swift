@@ -28,12 +28,6 @@ enum ToolResultExternalContentMiddleware {
         logger?.debug(
             "external_content_wrap tool=\(toolCall.name) source=\(decision.source.rawValue) preamble=\(decision.includeSecurityPreamble)"
         )
-        return ToolResult(
-            success: result.success,
-            content: wrapped,
-            metadata: result.metadata,
-            toolCallId: result.toolCallId,
-            error: result.error
-        )
+        return result.replacingText(wrapped)
     }
 }

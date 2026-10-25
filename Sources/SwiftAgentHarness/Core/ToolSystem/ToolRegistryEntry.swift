@@ -30,6 +30,8 @@ struct ToolRegistryEntry: Sendable {
         case elevated
         case exactContentObservation = "exact-content-observation"
         case compactionProtected = "compaction-protected"
+        /// Images whose coordinates are mapped back through recorded geometry; resizing them misplaces every click.
+        case geometryBoundImages = "geometry-bound-images"
     }
 
     enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable {

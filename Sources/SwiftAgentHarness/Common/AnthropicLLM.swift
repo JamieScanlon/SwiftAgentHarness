@@ -443,13 +443,21 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         [
                             "type": "tool_result",
                             "tool_use_id": toolCallID,
-                            "content": message.content,
+                            "content": toolResultContent(message, dispositions: dispositions),
                         ] as [String: Any],
                     ],
                 ])
             }
         }
         return encoded
+    }
+
+    /// A tool result's text, or text plus image blocks when the tool returned images.
+    private func toolResultContent(_ message: Message, dispositions: [String: String]) -> Any {
+        let imageBlocks = AnthropicVisionContent.imageContentBlocks(from: message.images, dispositions: dispositions)
+        guard !imageBlocks.isEmpty else { return message.content }
+        let text: [[String: Any]] = message.content.isEmpty ? [] : [["type": "text", "text": message.content]]
+        return text + imageBlocks
     }
 
     private func encodeUserMessage(

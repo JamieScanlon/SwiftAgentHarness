@@ -198,7 +198,7 @@ enum ToolResultInlineImageSanitizer {
         "\(placeholder): \(reason)"
     }
 
-    private static func inferMime(from data: Data) -> String? {
+    static func inferMime(from data: Data) -> String? {
         #if canImport(CoreGraphics) && canImport(ImageIO)
         if let source = CGImageSourceCreateWithData(data as CFData, nil),
            let utType = CGImageSourceGetType(source) {
@@ -208,7 +208,7 @@ enum ToolResultInlineImageSanitizer {
         return sniffMime(from: data)
     }
 
-    private static func imageMaxPixelDimension(data: Data) -> Int? {
+    static func imageMaxPixelDimension(data: Data) -> Int? {
         #if canImport(CoreGraphics) && canImport(ImageIO)
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],

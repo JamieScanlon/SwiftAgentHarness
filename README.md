@@ -64,6 +64,7 @@ Start with the docs:
 - [Overview](./docs/OVERVIEW.md) — what SwiftAgentHarness is, the layer architecture, and the key entry-point types.
 - [Quickstart](./docs/QUICKSTART.md) — register providers, build the composition root, start the gateway, and run a first conversation.
 - [Decision models](./docs/DECISION_MODELS.md) — every way the harness uses deciders (tool-call gatekeeper, memory write gate, skill pre-filter, guardrails, injection probe, model routing, your own decisions), the shared setup, and per-use-case details.
+- [Computer use](./docs/COMPUTER_USE.md) — display targets, leases and tiered grants, per-action gating and intent checks, budgets and takeover, and the `computer_*` tool family.
 
 The design rationale for every layer lives in the [Agent Harness Best-Practice Template](./harness-template/README.md), included in this repository under [`harness-template/`](./harness-template/).
 

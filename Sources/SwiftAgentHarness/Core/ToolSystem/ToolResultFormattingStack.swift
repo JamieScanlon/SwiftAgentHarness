@@ -95,6 +95,20 @@ enum ToolResultFormattingStack {
             )
         }
         let metadataChanged = !jsonEqual(lhs: metadata, rhs: working.metadata)
+        let images = working.images
+        if !images.isEmpty {
+            let imageParts = formatImageParts(
+                images,
+                stage: stage,
+                configuration: configuration,
+                spillContext: spillContext,
+                geometryBound: ToolRegistryResultFormattingPolicy.hasGeometryBoundImages(entry: entry, toolName: toolName)
+            )
+            let unchanged = content == working.content && !metadataChanged
+                && imageParts == images.map { ToolResultContentPart.image($0) }
+            guard !unchanged else { return working }
+            return working.replacingParts([.text(content)] + imageParts, metadata: metadata)
+        }
         guard content != working.content || metadataChanged else { return working }
         return ToolResult(
             success: working.success,
@@ -103,6 +117,57 @@ enum ToolResultFormattingStack {
             toolCallId: working.toolCallId,
             error: working.error
         )
+    }
+
+    /// Image parts follow the same policy as inline data URLs: kept for vision models (rescaled when over the
+    /// caps), replaced by a marker otherwise and always at compaction. Geometry-bound images are never rescaled;
+    /// over the caps they become a marker, because a resized screenshot would misplace every click.
+    private static func formatImageParts(
+        _ images: [ToolResultImage],
+        stage: ToolResultFormattingStage,
+        configuration: ToolResultFormattingConfiguration,
+        spillContext: ToolResultFormattingSpillContext?,
+        geometryBound: Bool
+    ) -> [ToolResultContentPart] {
+        let policy = inlineImagePolicy(stage: stage, configuration: configuration, spillContext: spillContext)
+        let processor = spillContext?.imageProcessor ?? DefaultImageProcessor()
+        return images.map { image in
+            guard configuration.sanitizeInlineImagePayloads else { return .image(image) }
+            if policy.mode == .strip {
+                return .text("\(policy.placeholder): \(image.mediaType)")
+            }
+            guard let data = image.data else { return .image(image) }
+            let longEdge = [image.width, image.height].compactMap { $0 }.max()
+                ?? ToolResultInlineImageSanitizer.imageMaxPixelDimension(data: data)
+                ?? 0
+            let overDimension = policy.maxPixelDimension > 0 && longEdge > policy.maxPixelDimension
+            let overBytes = policy.maxBytes > 0 && data.count > policy.maxBytes
+            guard overDimension || overBytes else { return .image(image) }
+            if geometryBound {
+                spillContext?.logger?.warning(
+                    "[ToolResultImage] geometry-bound image over caps longEdge=\(longEdge) bytes=\(data.count); replaced with marker"
+                )
+                return .text("\(policy.placeholder): screenshot exceeds the image size cap; observe again with a smaller image limit")
+            }
+            var processed = data
+            if overDimension {
+                guard let scaled = processor.scaleImage(processed, maxPixelDimension: policy.maxPixelDimension) else {
+                    return .text("\(policy.placeholder): image exceeds dimension cap")
+                }
+                processed = scaled
+            }
+            if policy.maxBytes > 0, processed.count > policy.maxBytes {
+                guard let scaled = processor.scaleImageToFileSize(processed, maxFileSize: policy.maxBytes),
+                      scaled.count <= policy.maxBytes else {
+                    return .text("\(policy.placeholder): image exceeds byte cap")
+                }
+                processed = scaled
+            }
+            return .image(ToolResultImage(
+                data: processed,
+                mediaType: ToolResultInlineImageSanitizer.inferMime(from: processed) ?? image.mediaType
+            ))
+        }
     }
 
     static func stagePolicy(

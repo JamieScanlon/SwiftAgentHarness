@@ -183,13 +183,7 @@ enum ToolResultSpillFormatter {
                     originalByteCount: writeResult.byteCount
                 )
             )
-            let spilledResult = ToolResult(
-                success: result.success,
-                content: envelope,
-                metadata: metadata,
-                toolCallId: result.toolCallId,
-                error: result.error
-            )
+            let spilledResult = result.replacingText(envelope, metadata: metadata)
             return ApplyResult(result: spilledResult, spilled: true)
         } catch {
             spillContext.logger?.warning(

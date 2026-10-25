@@ -8,6 +8,8 @@ enum ExternalContentSourceLabel: String, Sendable {
     case channelMetadata = "channel_metadata"
     case webSearch = "web_search"
     case webFetch = "web_fetch"
+    /// Text read off a display target: accessibility trees, DOM, OCR.
+    case screen
     case unknown
 
     var humanLabel: String {
@@ -19,6 +21,7 @@ enum ExternalContentSourceLabel: String, Sendable {
         case .channelMetadata: return "Channel metadata"
         case .webSearch: return "Web search"
         case .webFetch: return "Web fetch"
+        case .screen: return "Screen content"
         case .unknown: return "Unknown external source"
         }
     }

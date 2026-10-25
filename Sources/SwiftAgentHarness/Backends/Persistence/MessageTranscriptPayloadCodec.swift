@@ -34,7 +34,7 @@ struct MessageTranscriptAttachmentWire: Codable, Sendable, Equatable {
         blobId = SessionBlobImageRef.parsePath(image.path) ?? ""
         kind = "image"
         name = image.name
-        mimeType = nil
+        mimeType = image.mediaType
         self.trust = trust
         self.attachmentId = attachmentId
     }
@@ -50,7 +50,7 @@ struct MessageTranscriptAttachmentWire: Codable, Sendable, Equatable {
 
     func asMessageImage() -> Message.Image? {
         guard !blobId.isEmpty else { return nil }
-        return Message.Image(name: name, path: SessionBlobImageRef.path(for: blobId))
+        return Message.Image(name: name, path: SessionBlobImageRef.path(for: blobId), mediaType: mimeType)
     }
 }
 

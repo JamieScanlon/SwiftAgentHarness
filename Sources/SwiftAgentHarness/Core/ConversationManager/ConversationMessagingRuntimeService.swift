@@ -79,9 +79,8 @@ actor ConversationMessagingRuntimeService {
         var messages: [Message] = []
         messages.reserveCapacity(inputMessages.count)
         var replayContext = updatedConversation.messages
-        let spillWriter = HarnessSessionPersistenceSpillWriter(
-            persistence: await persistenceDomain.harnessSessionPersistence
-        )
+        let harnessPersistence = await persistenceDomain.harnessSessionPersistence
+        let spillWriter = HarnessSessionPersistenceSpillWriter(persistence: harnessPersistence)
         let persistencePipeline = persistenceToolResultMiddlewarePipeline(
             conversationID: conversationID,
             spillWriter: spillWriter,
@@ -97,22 +96,11 @@ actor ConversationMessagingRuntimeService {
             let transformedResult = await persistencePipeline.apply(
                 stage: .persistence,
                 toolCall: toolCall,
-                result: ToolResult(
-                    success: true,
-                    content: message.content,
-                    metadata: .object([:]),
-                    toolCallId: message.toolCallId
-                )
+                result: ToolResult(toolMessage: message)
             )
-            let rewrittenMessage = Message(
-                id: message.id,
-                role: message.role,
-                content: transformedResult.content,
-                timestamp: message.timestamp,
-                images: message.images,
-                toolCalls: message.toolCalls,
-                toolCallId: message.toolCallId,
-                responseFormat: message.responseFormat
+            let rewrittenMessage = ToolMessageImageOffload.offload(
+                message.replacingToolResult(transformedResult),
+                harness: harnessPersistence
             )
             messages.append(rewrittenMessage)
             replayContext.append(rewrittenMessage)
@@ -500,13 +488,7 @@ actor ConversationMessagingRuntimeService {
         guard let warning = await probe.warning(
             toolName: toolCall.name, content: result.content, conversationID: conversationID, rolePatches: patches
         ) else { return result }
-        return ToolResult(
-            success: result.success,
-            content: warning + "\n" + result.content,
-            metadata: result.metadata,
-            toolCallId: result.toolCallId,
-            error: result.error
-        )
+        return result.replacingText(warning + "\n" + result.content)
     }
 
     private func applyExternalContentMiddleware(toolCall: ToolCall, result: ToolResult) async -> ToolResult {
@@ -541,12 +523,7 @@ actor ConversationMessagingRuntimeService {
             toolResultContent: result.content
         )
         guard content != result.content else { return result }
-        return ToolResult(
-            success: result.success,
-            content: content,
-            metadata: result.metadata,
-            toolCallId: result.toolCallId
-        )
+        return result.replacingText(content)
     }
 
     /// Applies host-registered runtime-delivery middleware (the ``registerAgentToolResultMiddleware``

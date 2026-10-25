@@ -516,7 +516,18 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
         )
         var lmStudioMessages: [LMStudioMessage] = []
         var encodedImageURLPartCount = 0
+        var toolImages = OpenAICompatibleVisionContent.ToolImageCarrier()
+        func flushToolImages() {
+            guard let carrier = toolImages.flush() else { return }
+            encodedImageURLPartCount += carrier.imageURLs.count
+            lmStudioMessages.append(LMStudioMessage(
+                role: "user",
+                content: .parts([.text(carrier.text)] + carrier.imageURLs.map { .imageURL($0) })
+            ))
+        }
         for message in plan.resolvedMessages {
+            if message.role != .tool { flushToolImages() }
+            toolImages.collect(message, dispositions: attachmentDispositions)
             switch message.role {
             case .system:
                 lmStudioMessages.append(LMStudioMessage(role: "system", content: .text(message.content)))
@@ -561,6 +572,7 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                 lmStudioMessages.append(LMStudioMessage(role: "tool", content: .text(message.content), toolCallId: message.toolCallId))
             }
         }
+        flushToolImages()
         
         // Convert tools to LM Studio format (OpenAI-compatible)
         let tools: [LMStudioTool]? = (getCapabilities().contains(.tools) || getCapabilities().contains(.unknown)) && !config.availableTools.isEmpty

@@ -10,6 +10,7 @@ struct ToolExternalContentDecision: Sendable, Equatable {
 enum ToolExternalContentPolicy {
     private static let exemptTools: Set<String> = baseExemptTools
         .union(ToolControlPlaneClassification.TriggerTools.statusOnlyResults)
+        .union(ComputerUseToolProvider.harnessToolNames)
 
     private static let baseExemptTools: Set<String> = [
         TerminationToolProvider.finishToolName,
@@ -62,6 +63,9 @@ enum ToolExternalContentPolicy {
         }
         if webSearchTools.contains(normalized) {
             return wrapDecision(source: .webSearch, from: toolName, preamble: true)
+        }
+        if ComputerUseToolProvider.screenToolNames.contains(normalized) {
+            return wrapDecision(source: .screen, from: toolName, preamble: true)
         }
         if filesystemReadTools.contains(normalized) {
             return wrapDecision(source: .api, from: toolName, preamble: false)
