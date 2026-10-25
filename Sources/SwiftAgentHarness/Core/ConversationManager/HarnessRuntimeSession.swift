@@ -843,6 +843,11 @@ public actor HarnessRuntimeSession {
         runtimeDependencies.computerUse.install(configuration, publish: publish)
     }
 
+    /// Per-conversation computer-use controls for an in-process surface: answer requests, stop, take over.
+    public nonisolated var computerUseControl: ComputerUseControlService {
+        ComputerUseControlService(installation: runtimeDependencies.computerUse)
+    }
+
     /// The computer-use kill switch: ends every live specialist session and releases its lease. Bind it to the
     /// surface's stop control and global stop key; no model-facing tool can reach it.
     public nonisolated func stopComputerUse() async {

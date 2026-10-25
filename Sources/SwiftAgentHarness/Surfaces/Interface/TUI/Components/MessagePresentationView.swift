@@ -50,6 +50,10 @@ public enum MessagePresentationTerminalRenderer: Sendable {
         case .divider:
             return [ANSIStyle.finishLine(ANSIStyle.dim(String(repeating: "─", count: width)))]
 
+        case .image(let image):
+            // Not in `capabilities`: graphics escapes break the transcript's row accounting.
+            return ANSIWrap.wrap(ANSIStyle.dim(TUITextSanitizer.sanitizeSingleLine(image.textFallback)), width: width)
+
         case .buttons(let buttons):
             guard !buttons.isEmpty else { return [] }
             let rendered = buttons

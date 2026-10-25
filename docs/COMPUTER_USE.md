@@ -39,8 +39,9 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
 | macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
-| Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done. Surfaces don't render them yet. |
-| Surface rendering (TUI requests and activity, approval-card region crops, `computer-use` surface capability), "agent active" HUD, replay | Not yet |
+| Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
+| Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
+| "Agent active" HUD on the host desktop, post-run replay | Not yet |
 | Vendor-native toolsets and their safety signals, live view, deferred tool loading | Not yet |
 
 ## How it fits together
@@ -276,7 +277,7 @@ The shared decider setup is in [Decision models](./DECISION_MODELS.md). The spec
 
 A specialist runs in a child conversation the user never opens, so everything that needs the user goes to the parent conversation, the one that called `delegate_computer_use`:
 
-- **Approval cards.** Consequential actions are confirmed through the parent conversation's approval delivery, the same `ExecApprovalDelivering` cards exec approvals use. Set `ComputerUseConfiguration.approvals` to replace it.
+- **Approval cards.** Consequential actions are confirmed through the parent conversation's approval delivery, the same `ExecApprovalDelivering` cards exec approvals use. Set `ComputerUseConfiguration.approvals` to replace it. Each card lists the action, the target element, why it needs confirming, and the intent-check verdict. When the cited observation has pixels, an `image` block carries a crop of the target region (the element's padded frame, or a box around a point, at most 480 px). Surfaces that can't show images get its alt text.
 - **Questions and handoffs.** `computer_ask_user` and `computer_handoff` publish a `computerUseRequest` surface intent on `conversation/{id}/events` and block the specialist until a client answers. When the request is resolved, times out, or the run is cancelled, a `computerUseRequestCleared` intent follows. Set `ComputerUseConfiguration.oversight` to answer in-process instead.
 - **Activity.** Every action batch, takeover change, and session end publishes a `computerUseActivity` intent with the target, step, step budget, app, action, and terminal reason. This feeds the "agent is using <target>" indicator.
 
@@ -290,6 +291,8 @@ Clients answer and steer through REST. Each route checks conversation tenancy:
 | `POST /api/conversations/{id}/computer-use/requests/{requestID}` | `{"action": "answer", "answer": "…"}`, `{"action": "hand-back", "note": "…"}` or `{"action": "decline"}`. A question takes answer or decline; a handoff takes hand-back or decline (otherwise 409). |
 | `POST /api/conversations/{id}/computer-use/stop` | Stops the conversation's sessions, declines their pending requests, and returns `lifecycleIDs` |
 | `POST /api/conversations/{id}/computer-use/takeover` | `{"on": true}`, optionally with `lifecycleID`. Returns `lifecycleIDs`, or 404 when nothing is running. |
+
+The terminal surface renders all of this: an indicator line with the target, step, app, and last action; a dialog with a text field for a question; *Hand back control* and *Decline* for a handoff; **Ctrl-T** to take over or hand back and **Ctrl-X** to stop. Pass `HarnessRuntimeSession.computerUseControl` to `RuntimeTUIHost(computerUse:)`. Surfaces that render it declare `SurfaceCapabilities.computerUse`.
 
 An unanswered question times out after 10 minutes and reports the user as unavailable. An unanswered handoff times out after 30 minutes and reports it as declined.
 
@@ -398,5 +401,8 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Oversight routing | The spec puts oversight on surfaces but doesn't say which conversation a delegated specialist's cards and questions belong to. They go to the parent, because the user never sees the child. |
 | Question and handoff timeouts | The spec gives none. A question waits 10 minutes and a handoff 30, so a run nobody watches doesn't hold its lease until the run timeout. |
 | Stop and pending requests | The spec's abort "runs the full cleanup path". Stop also declines the session's pending questions and handoffs, so a blocked specialist unblocks and reports instead of waiting out its timeout. |
-| Surface capability | The spec has surfaces declare a `computer-use` capability. No surface declares it yet; intents are published whether or not one is attached, as exec-approval intents are. |
+| Surface capability | Surfaces declare `SurfaceCapabilities.computerUse` (the terminal does; channels don't). Intents are published whether or not such a surface is attached, as exec-approval intents are. |
+| Image block | The spec wants a cropped image of the target region on approval cards, but its portable presentation vocabulary (text, context, divider, buttons, select) has no image block. `image` was added to `ApprovalBlock`, `MessageBlock`, and `approval-presentation.schema.json`, with base64 data and alt text. `SurfacePresentationCapabilities.images` gates it, and core degrades it to the alt text. |
+| Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |
+| Terminal controls | The spec asks for takeover and stop controls without naming keys. Esc is the host stop key, so the terminal uses Ctrl-T and Ctrl-X, and they work while a dialog is open. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |

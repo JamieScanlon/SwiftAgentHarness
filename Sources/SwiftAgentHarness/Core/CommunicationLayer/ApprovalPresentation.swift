@@ -41,23 +41,47 @@ public struct ApprovalButton: Codable, Sendable, Equatable {
     }
 }
 
+/// An image a surface can show inline, such as the region an action lands on. `data` travels base64-encoded;
+/// surfaces that can't show images use `alt`.
+public struct PresentationImage: Codable, Sendable, Equatable {
+    public var data: Data
+    public var mediaType: String
+    public var width: Int
+    public var height: Int
+    public var alt: String
+
+    public init(data: Data, mediaType: String, width: Int, height: Int, alt: String) {
+        self.data = data
+        self.mediaType = mediaType
+        self.width = width
+        self.height = height
+        self.alt = alt
+    }
+
+    /// The line surfaces show in its place.
+    public var textFallback: String { "[Image: \(alt)]" }
+}
+
 /// A portable presentation block. An approval request is just a sequence of these
 /// blocks, so it rides the same outbound path as any other message: render natively
 /// where possible, degrade to text everywhere else.
 public enum ApprovalBlock: Codable, Sendable, Equatable {
     case text(String)
     case context(String)
+    case image(PresentationImage)
     case buttons([ApprovalButton])
 
     private enum CodingKeys: String, CodingKey {
         case type
         case text
+        case image
         case buttons
     }
 
     private enum BlockType: String, Codable {
         case text
         case context
+        case image
         case buttons
     }
 
@@ -69,6 +93,8 @@ public enum ApprovalBlock: Codable, Sendable, Equatable {
             self = .text(try container.decode(String.self, forKey: .text))
         case .context:
             self = .context(try container.decode(String.self, forKey: .text))
+        case .image:
+            self = .image(try container.decode(PresentationImage.self, forKey: .image))
         case .buttons:
             self = .buttons(try container.decode([ApprovalButton].self, forKey: .buttons))
         }
@@ -83,6 +109,9 @@ public enum ApprovalBlock: Codable, Sendable, Equatable {
         case .context(let value):
             try container.encode(BlockType.context, forKey: .type)
             try container.encode(value, forKey: .text)
+        case .image(let image):
+            try container.encode(BlockType.image, forKey: .type)
+            try container.encode(image, forKey: .image)
         case .buttons(let buttons):
             try container.encode(BlockType.buttons, forKey: .type)
             try container.encode(buttons, forKey: .buttons)
@@ -135,6 +164,8 @@ public struct ApprovalPresentation: Codable, Sendable, Equatable {
                 lines.append(value)
             case .context(let value):
                 lines.append(value)
+            case .image(let image):
+                lines.append(image.textFallback)
             case .buttons:
                 break
             }

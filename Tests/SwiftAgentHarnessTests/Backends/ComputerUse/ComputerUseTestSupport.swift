@@ -34,6 +34,8 @@ actor FakeDisplayTarget: DisplayTarget {
 
     var observedApp: AppIdentity = ComputerUseFixtures.textEdit
     var observedURL: String?
+    /// Replaces the fixture's tiny PNG in observations, for tests that read pixels.
+    var screenshot: Data?
     var outcomes: @Sendable (ComputerAction, Int) -> ActionOutcome = { _, index in
         ActionOutcome(action: index, effect: .confirmed, evidence: "fake")
     }
@@ -60,6 +62,10 @@ actor FakeDisplayTarget: DisplayTarget {
     func setObserved(app: AppIdentity, url: String? = nil) {
         observedApp = app
         observedURL = url
+    }
+
+    func setScreenshot(_ data: Data?) {
+        screenshot = data
     }
 
     func setOutcomes(_ outcomes: @escaping @Sendable (ComputerAction, Int) -> ActionOutcome) {
@@ -94,13 +100,15 @@ actor FakeDisplayTarget: DisplayTarget {
         try await requireLease(lease)
         observeCalls.append(request)
         observationCounter += 1
-        return ComputerUseFixtures.observation(
+        var observation = ComputerUseFixtures.observation(
             id: "o_\(observationCounter)",
             app: observedApp,
             url: observedURL,
             at: now(),
             withImage: request.modes.contains(.pixels)
         )
+        if let screenshot { observation.image?.data = screenshot }
+        return observation
     }
 
     func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome] {

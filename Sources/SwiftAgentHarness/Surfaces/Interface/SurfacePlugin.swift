@@ -19,13 +19,16 @@ public struct SurfacePresentationCapabilities: Sendable, Equatable {
     public var selects: Bool
     public var context: Bool
     public var divider: Bool
+    /// Inline images. Without it an image block degrades to its alt text as context.
+    public var images: Bool
 
-    public init(supported: Bool, buttons: Bool, selects: Bool, context: Bool, divider: Bool) {
+    public init(supported: Bool, buttons: Bool, selects: Bool, context: Bool, divider: Bool, images: Bool = false) {
         self.supported = supported
         self.buttons = buttons
         self.selects = selects
         self.context = context
         self.divider = divider
+        self.images = images
     }
 
     public static let mockRich = SurfacePresentationCapabilities(
@@ -127,6 +130,8 @@ public enum SurfacePresentationFilter {
                 return capabilities.context ? block : nil
             case .divider:
                 return capabilities.divider ? block : nil
+            case .image(let image):
+                return capabilities.images ? block : .context(image.textFallback)
             case .buttons:
                 return capabilities.buttons ? block : nil
             case .select:
@@ -190,6 +195,9 @@ public struct SurfaceCapabilities: Sendable, Equatable, Codable {
     public var mediaAttachments: Bool
     public var threading: Bool
     public var typingIndicators: Bool
+    /// Renders computer-use oversight: the activity indicator, questions, handoffs, and takeover and stop
+    /// controls.
+    public var computerUse: Bool
 
     public init(
         richPresentation: Bool = false,
@@ -199,7 +207,8 @@ public struct SurfaceCapabilities: Sendable, Equatable, Codable {
         previewStreaming: Bool = false,
         mediaAttachments: Bool = false,
         threading: Bool = false,
-        typingIndicators: Bool = false
+        typingIndicators: Bool = false,
+        computerUse: Bool = false
     ) {
         self.richPresentation = richPresentation
         self.nativeApprovalCards = nativeApprovalCards
@@ -209,6 +218,7 @@ public struct SurfaceCapabilities: Sendable, Equatable, Codable {
         self.mediaAttachments = mediaAttachments
         self.threading = threading
         self.typingIndicators = typingIndicators
+        self.computerUse = computerUse
     }
 }
 

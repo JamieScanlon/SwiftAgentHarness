@@ -460,7 +460,9 @@ public actor ComputerUseSession {
             classification: classification,
             target: manifest,
             reasons: reasons,
-            intent: intent
+            intent: intent,
+            action: action,
+            observation: action.citedObservations.first.flatMap(observation)
         )
         switch await approvals.requestApproval(request, headless: false) {
         case .approved:
@@ -485,7 +487,9 @@ public actor ComputerUseSession {
         classification: ComputerUseClassification,
         target: DisplayTargetManifest,
         reasons: [String],
-        intent: ComputerUseIntentVerdict?
+        intent: ComputerUseIntentVerdict?,
+        action: ComputerAction? = nil,
+        observation: DisplayObservation? = nil
     ) -> ExecApprovalRequest {
         var location = classification.domain ?? classification.app?.bundleID ?? target.label
         if classification.domain != nil, let app = classification.app?.bundleID { location += " (\(app))" }
@@ -498,20 +502,26 @@ public actor ComputerUseSession {
             "Why confirm: \(reasons.joined(separator: "; "))",
             "Intent check: \(intent?.summary ?? "not run")",
         ]
+        var presentation = ApprovalPresentation.standard(
+            title: title,
+            context: context,
+            buttons: [
+                ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Allow this action", style: .primary),
+                ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Deny", style: .danger),
+            ]
+        )
+        if let action, let observation,
+           let region = ComputerUseTargetCrop.region(for: action, in: observation),
+           let crop = ComputerUseTargetCrop.image(of: region, in: observation, alt: "Target region: \(element) in \(location)") {
+            presentation.blocks.insert(.image(crop), at: presentation.blocks.count - 1)
+        }
         return ExecApprovalRequest(
             id: id,
             command: canonical,
             title: title,
             description: context.joined(separator: "\n"),
             allowsDurableBypass: false,
-            presentation: .standard(
-                title: title,
-                context: context,
-                buttons: [
-                    ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Allow this action", style: .primary),
-                    ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Deny", style: .danger),
-                ]
-            )
+            presentation: presentation
         )
     }
 

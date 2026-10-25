@@ -22,6 +22,7 @@ await app.setHost(RuntimeTUIHost(
     session: agentRuntimeSessionService,
     conversationID: conversationID,
     ownerAccountID: conversation.ownerAccountID,
+    computerUse: harnessRuntimeSession.computerUseControl,   // when computer use is installed
     onQuitRequested: { await app.stop(); exit(0) }
 ))
 await app.registerSurface(conversationID: conversationID)   // rich message-tool output
@@ -37,9 +38,24 @@ await app.setHost(ClosureTUIAppHost(
     cancelTurn: { await transport.cancelRun() },
     quit: { await shutdown() },
     resolveApproval: { id, action in await transport.resolveExecApproval(id, action) },
-    slashCommandRegistry: { await transport.conversationScopedRegistry() }
+    slashCommandRegistry: { await transport.conversationScopedRegistry() },
+    resolveComputerUseRequest: { id, resolution in await transport.resolveComputerUseRequest(id, resolution) },
+    stopComputerUse: { await transport.stopComputerUse() },
+    setComputerUseTakeover: { on in await transport.setComputerUseTakeover(on) }
 ))
 ```
+
+The computer-use closures map onto `POST /api/conversations/{id}/computer-use/requests/{requestID}`, `…/stop`
+and `…/takeover`.
+
+### Computer use
+
+While a computer-use specialist runs, a line above the status line shows the target, step, app, and last
+action. **Ctrl-T** takes over the screen (and hands it back) and **Ctrl-X** stops the conversation's
+sessions. Both work while a dialog is open. A question opens a dialog with a text field, and a handoff opens one
+with *Hand back control* and *Decline*. Esc or Ctrl-C declines either one. Requests that arrive while another
+dialog is open wait their turn. Approval cards show a computer-use crop as its alt-text placeholder, because the
+overlay is composited into base rows and can't hold graphics escapes.
 
 Attach the event stream per conversation:
 

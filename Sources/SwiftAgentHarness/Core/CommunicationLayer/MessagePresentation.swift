@@ -24,12 +24,14 @@ public enum MessageBlock: Codable, Sendable, Equatable {
     case text(String)
     case context(String)
     case divider
+    case image(PresentationImage)
     case buttons([ApprovalButton])
     case select(options: [MessageSelectOption], label: String?)
 
     private enum CodingKeys: String, CodingKey {
         case type
         case text
+        case image
         case buttons
         case options
         case label
@@ -39,6 +41,7 @@ public enum MessageBlock: Codable, Sendable, Equatable {
         case text
         case context
         case divider
+        case image
         case buttons
         case select
     }
@@ -53,6 +56,8 @@ public enum MessageBlock: Codable, Sendable, Equatable {
             self = .context(try container.decode(String.self, forKey: .text))
         case .divider:
             self = .divider
+        case .image:
+            self = .image(try container.decode(PresentationImage.self, forKey: .image))
         case .buttons:
             self = .buttons(try container.decode([ApprovalButton].self, forKey: .buttons))
         case .select:
@@ -74,6 +79,9 @@ public enum MessageBlock: Codable, Sendable, Equatable {
             try container.encode(value, forKey: .text)
         case .divider:
             try container.encode(BlockType.divider, forKey: .type)
+        case .image(let image):
+            try container.encode(BlockType.image, forKey: .type)
+            try container.encode(image, forKey: .image)
         case .buttons(let buttons):
             try container.encode(BlockType.buttons, forKey: .type)
             try container.encode(buttons, forKey: .buttons)
@@ -118,6 +126,8 @@ public struct MessagePresentation: Codable, Sendable, Equatable {
                 lines.append(value)
             case .divider:
                 lines.append("---")
+            case .image(let image):
+                lines.append(image.textFallback)
             case .buttons(let buttons):
                 let labels = buttons.map(\.label).joined(separator: " | ")
                 if !labels.isEmpty {
@@ -139,6 +149,7 @@ public struct MessagePresentation: Codable, Sendable, Equatable {
             switch block {
             case .text(let value): return .text(value)
             case .context(let value): return .context(value)
+            case .image(let image): return .image(image)
             case .buttons(let buttons): return .buttons(buttons)
             }
         }

@@ -43,7 +43,8 @@ public extension SurfaceCapabilities {
         previewStreaming: false,
         mediaAttachments: false,
         threading: false,
-        typingIndicators: false
+        typingIndicators: false,
+        computerUse: true
     )
 }
 

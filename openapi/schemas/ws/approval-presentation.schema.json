@@ -14,9 +14,22 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["text", "context", "buttons"]
+            "enum": ["text", "context", "image", "buttons"]
           },
           "text": { "type": "string" },
+          "image": {
+            "type": "object",
+            "description": "An image shown inline, such as the screen region a computer-use action lands on. Surfaces that can't show images render `alt`.",
+            "required": ["data", "mediaType", "width", "height", "alt"],
+            "properties": {
+              "data": { "type": "string", "contentEncoding": "base64" },
+              "mediaType": { "type": "string" },
+              "width": { "type": "integer" },
+              "height": { "type": "integer" },
+              "alt": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
           "buttons": {
             "type": "array",
             "items": {
