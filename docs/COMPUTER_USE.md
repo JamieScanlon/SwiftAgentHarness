@@ -9,6 +9,7 @@ Computer use is a **display target** (the user's desktop, a VM, a desktop contai
 - [Status](#status)
 - [How it fits together](#how-it-fits-together)
 - [Quick start](#quick-start)
+- [The computer-use specialist](#the-computer-use-specialist)
 - [Writing a display target](#writing-a-display-target)
 - [Grants and tiers](#grants-and-tiers)
 - [How each action is gated](#how-each-action-is-gated)
@@ -35,18 +36,24 @@ This is the platform-neutral core. Everything here builds and tests without scre
 | `computer_*` function-tool family with flat schemas | Done |
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
-| Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) | Not yet |
+| Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
 | macOS host-desktop and VM drivers | Not yet. They will live in a separate macOS-only target. |
 | Vendor-native toolsets and their safety signals, live view, replay, deferred tool loading | Not yet |
 
 ## How it fits together
 
 ```
-DisplayTargetRegistry ── lease(request, approve:) ──▶ ComputerUseLeaseGrant { target, lease, review }
-                                                              │
-                                     ComputerUseSession(target, lease, configuration, approvals, intentChecker, oversight)
-                                                              │
-                                     ComputerUseToolProvider(session) ──▶ HarnessToolProviderFactory
+HarnessRuntimeSession.installComputerUse(configuration)
+        │
+parent conversation ── delegate_computer_use(goal, success_criteria, constraints, apps, domains, …)
+        │
+        ▼  Sub-Agent Pool: ComputerUseTask
+DisplayTargetRegistry.lease(…, approve:)            one grant dialog; host-target and permission rules
+        │
+isolated child conversation (computer-use specialist, subagent-minimal, tools = computer_* only)
+        │      ComputerUseSession ◀── ComputerUseToolProvider(session)
+        ▼
+ComputerUseResult (JSON) ──▶ parent's tool result
 ```
 
 - **`DisplayTargetRegistry`** owns the targets and the policy that applies before any lease:
@@ -54,50 +61,67 @@ DisplayTargetRegistry ── lease(request, approve:) ──▶ ComputerUseLease
   - required platform permissions are preflighted;
   - the grant dialog is shown once;
   - unattended sessions get a short absolute expiry (20 minutes by default).
+- **The specialist** is an isolated child conversation whose only tools are the computer-use family. The parent sees a structured `ComputerUseResult`, never the child's transcript, screenshots, or screen text.
 - **`ComputerUseSession`** gates and runs each action. It also owns budgets, the kill switch, takeover, verification records, and the action log.
 - **`ComputerUseToolProvider`** is the model-facing tool family bound to one session.
 
 ## Quick start
 
 ```swift
-let registry = DisplayTargetRegistry(targets: [myTarget])
-
-let grant = try await registry.lease(
-    LeaseRequest(
+session.installComputerUse(ComputerUseConfiguration(
+    registry: DisplayTargetRegistry(targets: [myTarget]),
+    defaults: ComputerUseSpecialistDefaults(
         target: "macos-host",
-        conversationID: conversationID,
-        agentID: "cu-agent",
-        grants: [.app(bundleID: "com.apple.TextEdit", tier: .full), .domain("docs.example.com", tier: .click)],
-        budgets: ComputerUseBudgets(maxSteps: 200, maxDuration: .seconds(30 * 60), maxUSD: 2),
-        delivery: .backgroundOnly,
-        operatorInitiated: true,
-        userPresent: true
+        budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(15 * 60)),
+        maxBudgets: ComputerUseBudgets(maxSteps: 300, maxDuration: .seconds(45 * 60), maxUSD: 5)
     ),
-    approve: { review in
+    approveGrants: { review in
         // Show review.grantable (with capReason / warning) and review.blocked in one dialog.
         // Return the subset the user approved, or nil to decline.
         await presentGrantDialog(review)
-    }
-)
-
-let session = ComputerUseSession(
-    target: grant.target,
-    lease: grant.lease,
-    configuration: ComputerUseSessionConfiguration(
-        task: ComputerUseTaskContext(userRequest: ["Export the open document as PDF."]),
-        coordinateMode: .imagePixels
-    ),
+    },
     approvals: execApprovalDelivery,      // any ExecApprovalDelivering: per-action confirmation cards
     intentChecker: intentChecker,         // optional; see "The intent check"
-    oversight: oversight                  // optional ComputerUseOversight: ask_user and handoff
-)
-
-orchestratorRuntimeService.installAdditionalToolProviders { _ in
-    [ComputerUseToolProvider(session: session)]
-}
+    oversight: oversight,                 // optional ComputerUseOversight: ask_user and handoff
+    specialist: ComputerUseSpecialistProfile(modelRef: "anthropic/claude-sonnet-4-6")   // the computer-use role
+))
 ```
 
-Bind the kill switch to `session.stop()` in your surface. No model-facing tool can call it.
+Every conversation now has `delegate_computer_use`. Bind your surface's stop control and global stop key to `session.stopComputerUse()`, which ends every live specialist session; no model-facing tool can call it.
+
+A host that drives a session directly can still build one by hand: lease through `DisplayTargetRegistry.lease(_:approve:)`, create a `ComputerUseSession`, and install `ComputerUseToolProvider(session:)`.
+
+## The computer-use specialist
+
+The parent calls `delegate_computer_use` with flat arguments:
+
+| Argument | Meaning |
+|---|---|
+| `goal` | What to accomplish, stated fully. The specialist cannot see the parent conversation. |
+| `success_criteria` | One checkable criterion per line. |
+| `constraints` | Rules to keep, one per line. |
+| `apps`, `domains` | Requested grants, for example `com.apple.TextEdit:full`, `docs.example.com:click`. The user approves a subset. |
+| `target`, `max_steps`, `max_minutes` | Target id and budgets, clamped to `maxBudgets`. |
+| `return_schema` | Optional JSON Schema for the result. |
+
+What happens:
+
+1. **The task is parsed** into a `ComputerUseTask`. Malformed arguments are denied with the reason.
+2. **The model is chosen.** That's `specialist.modelRef` when set, otherwise the parent's model. Either way it must see images and call tools. The session takes its coordinate dialect and screenshot size from that model's `generate` profile.
+3. **The target is leased.** This raises the one grant dialog and applies the host-target rules. The run's origin decides presence: interactive runs have the user present, trigger and sub-agent runs don't. A non-owner sender is not operator-initiated.
+4. **The child is spawned.** It runs on `specialist.modeProfileID` (`subagent-minimal` by default), with a closed allow-list of the 15 computer tools, so it has no shell, files, or messaging. Its brief holds the goal, numbered criteria, constraints, working rules, and the return schema.
+5. **Every step restates the task.** Each computer tool result ends with a reminder of the constraints and the criteria not yet verified.
+6. **The session always ends** and the lease is released. The full action log is stored as a session blob.
+7. **The parent gets JSON.** That's `status`, `result`, `verification` (one entry per criterion), `handoff`, `actionsLog`, and `reason`.
+
+| Status | When |
+|---|---|
+| `done` | Every criterion has a `computer_verify` entry that is met |
+| `done-unverified` | Finished, but some criterion is unverified or not met |
+| `needs-user` | A handoff nobody could take, or a consequential action denied with nobody present |
+| `blocked` | Grants declined, target busy, permissions missing, model unsuitable, or stopped by the user |
+| `budget-exhausted` | The step, time, or cost budget, or the run timeout, ran out |
+| `failed` | The child failed or was cancelled |
 
 ## Writing a display target
 
@@ -200,7 +224,7 @@ The shared decider setup is in [Decision models](./DECISION_MODELS.md). The spec
 ## Budgets, kill switch, takeover
 
 - **Budgets.** `maxSteps`, `maxDuration` and `maxUSD` (fed by `session.recordCost(usd:)`) each end the session with a typed `ComputerUseTerminalReason` and release the lease. Permissions are polled before every batch, and a revoked one ends the session with `permission-revoked`.
-- **Kill switch.** `session.stop()` is the kill switch. The stop key (Escape by default; set it with `ComputerUseActionClassifier(stopKey:)`) is never synthesized, in any spelling, while a session is active.
+- **Kill switch.** `HarnessRuntimeSession.stopComputerUse()` stops every live specialist session (`ComputerUseSession.stop()` for one you drive yourself). The stop key (Escape by default; set it with `ComputerUseActionClassifier(stopKey:)`) is never synthesized, in any spelling, while a session is active.
 - **Takeover.** `session.handoff(reason:prompt:)` turns takeover on, waits for `ComputerUseOversight.handoff` to return, then turns it off. While takeover is on, observe and act are refused. Ask-user and handoff are unavailable when no user is present.
 - **Verification.** `session.verify(...)` accepts only an observation taken after the last action.
 
@@ -296,6 +320,10 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Retention defaults | The spec gives vendor guidance "keep 3, prune every ~25" and also says requests should stay under ~20 images. Those conflict: batches of 25 allow up to 27 screenshots. The defaults are keep 3, prune 15 (at most 17); a model's feature can override them. |
 | Pruned screenshot summary | The spec asks for a one-line text summary of each pruned screenshot. The marker reuses the observation's harness-written header line (id, app, window) rather than describing pixels, which would need a model call. |
 | Catalog values | The bundled catalogs don't declare `computer-use` or vision caps yet. Vendor toolset versions and image limits should be confirmed against current vendor documentation before they are added. |
-| `computer-use` role fallback | The spec binds the `computer-use` role to `main` only if `main` has the feature. Generate-side roles still aren't resolved through role bindings here, so that rule isn't enforced; it belongs with the specialist sub-agent. |
+| `computer-use` role | The spec binds the role to a model with the `computer-use` feature and falls back to `main` only if `main` has it. That would rule out the harness function-tool path, which the spec's dialect table allows for any model. Here the role is `specialist.modelRef`, falling back to the parent's model when it can see images and call tools. The feature, when present, sets the coordinate dialect and screenshot size. |
+| Constraint re-injection | The spec carries constraints into every step's context. Here every computer tool result ends with a reminder of the constraints and the unverified criteria, so they survive context pruning and compaction of earlier turns. |
+| Return schema | The final report is parsed as JSON when a schema is given. It is not validated against the schema. |
+| Specialist delivery | Runs are synchronous: the parent's tool call waits for the result. Background runs with push delivery, available to other local agents, are not offered for computer use yet. |
+| Specialist result trust | The result is written by a model that saw untrusted screen content. The structured shape keeps screenshots and screen text out of the parent, but `result` and `evidence` are still model text and are not wrapped in the untrusted-content envelope. |
 | OpenAI-style tool images | The spec says images must travel as images, never base64 text. Chat-completions tool messages can't hold images, so a user message right after the tool run carries them, and it names the tool calls it belongs to. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |

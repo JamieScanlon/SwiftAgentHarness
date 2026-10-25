@@ -28,6 +28,14 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     ]
     /// Tools whose results are harness or user text only.
     static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName]
+    /// The whole family, in the order the tools are offered.
+    static let toolNames: [String] = [
+        observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
+        menuToolName, launchToolName, openURLToolName, zoomToolName, waitForToolName, verifyToolName,
+        askUserToolName, handoffToolName,
+    ]
+
+    static let reminderHeading = "Task reminder"
 
     private let session: ComputerUseSession
 
@@ -75,6 +83,11 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         let x = ToolDefinition.Parameter(name: "x", description: Self.coordinateDescription(mode, axis: "x"), type: "number", required: false)
         let y = ToolDefinition.Parameter(name: "y", description: Self.coordinateDescription(mode, axis: "y"), type: "number", required: false)
         let requiredRef = ToolDefinition.Parameter(name: "ref", description: "Element ref from the observation's tree.", type: "string", required: true)
+        let criteria = session.configuration.task.successCriteria
+        let criterionDescription = criteria.isEmpty
+            ? "The success criterion being checked."
+            : "The success criterion being checked, copied exactly or given by number: "
+                + criteria.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "; ")
 
         return [
             ToolDefinition(
@@ -197,7 +210,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                 name: Self.verifyToolName,
                 description: "Record whether a success criterion holds, citing an observation taken after your last action. A task is not done until every criterion is verified.",
                 parameters: [
-                    .init(name: "criterion", description: "The success criterion being checked.", type: "string", required: true),
+                    .init(name: "criterion", description: criterionDescription, type: "string", required: true),
                     .init(name: "met", description: "Whether it holds.", type: "boolean", required: true),
                     .init(name: "evidence", description: "What in the observation shows it.", type: "string", required: true),
                     observation,
@@ -348,6 +361,10 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         if let terminal = batch.terminal {
             lines.append("The computer-use session has ended (\(terminal.rawValue)). No further actions will run.")
         }
+        if let reminder = await reminder() {
+            lines.append("")
+            lines.append(reminder)
+        }
         var metadata: [String: JSON] = [
             "source": .string("computer_use"),
             "action": .string(action.kind.rawValue),
@@ -373,6 +390,21 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             toolCallId: toolCall.id,
             error: error
         )
+    }
+
+    /// The task's constraints and still-unverified criteria, restated on every step.
+    private func reminder() async -> String? {
+        let constraints = session.configuration.task.constraints
+        let unverified = await session.unverifiedCriteria
+        guard !constraints.isEmpty || !unverified.isEmpty else { return nil }
+        var lines = ["\(Self.reminderHeading):"]
+        if !constraints.isEmpty {
+            lines.append("Constraints: " + constraints.joined(separator: "; "))
+        }
+        if !unverified.isEmpty {
+            lines.append("Not yet verified: " + unverified.map { "\($0.number). \($0.criterion)" }.joined(separator: "; "))
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func verify(_ arguments: Arguments, _ toolCall: ToolCall) async throws -> ToolResult {

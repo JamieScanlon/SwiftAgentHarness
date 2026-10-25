@@ -921,6 +921,18 @@ public actor OrchestratorRuntimeService {
                 pluginGroupID: context.pluginGroupID
             ))
         }
+        if let computerUse = deps.computerUse.configuration {
+            // A specialist child drives its leased session; every other conversation may delegate to one.
+            if let conversationID = activeConversation?.id,
+               let session = await deps.computerUse.sessions.session(for: conversationID) {
+                providers.append(ComputerUseToolProvider(session: session))
+            } else {
+                providers.append(ComputerUseDelegateToolProvider(
+                    targets: await computerUse.registry.manifests,
+                    defaults: computerUse.defaults
+                ))
+            }
+        }
         let runtimePipeline = await installedSessionCollaborator.runtimeToolResultMiddlewarePipeline()
         providers = providers.map { provider in
             TransformingToolProvider(

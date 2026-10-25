@@ -827,6 +827,20 @@ public actor HarnessRuntimeSession {
         await memoryService.drainPendingWork(timeoutMs: timeoutMs)
     }
 
+    /// Turns computer use on: conversations gain a `delegate_computer_use` tool that runs the computer-use
+    /// specialist against the configuration's display targets. Installing again replaces the configuration.
+    public nonisolated func installComputerUse(_ configuration: ComputerUseConfiguration) {
+        runtimeDependencies.computerUse.install(configuration)
+    }
+
+    /// The computer-use kill switch: ends every live specialist session and releases its lease. Bind it to the
+    /// surface's stop control and global stop key; no model-facing tool can reach it.
+    public nonisolated func stopComputerUse() async {
+        for session in await runtimeDependencies.computerUse.sessions.all {
+            await session.stop()
+        }
+    }
+
     internal func setDelegateCostTracker(_ tracker: (any DelegateCostTracking)?) {
         delegateCostTracker = tracker
     }

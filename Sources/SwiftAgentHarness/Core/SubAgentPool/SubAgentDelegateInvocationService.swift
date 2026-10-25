@@ -9,7 +9,8 @@ enum SubAgentDelegateInvocationService {
         runID: UUID?,
         orchestrator: SwiftAgentKitOrchestrator,
         snapshot: RuntimeToolTurnPolicySnapshot,
-        spawnService: SubAgentSpawnService
+        spawnService: SubAgentSpawnService,
+        origin: ComputerUseRunOrigin = .interactiveOwner
     ) async -> ToolDispatchOutcome? {
         guard let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
               spawnService.subAgentPool.isDelegateTool(entry: entry) else {
@@ -20,7 +21,8 @@ enum SubAgentDelegateInvocationService {
             conversationID: conversationID,
             runID: runID,
             orchestrator: orchestrator,
-            snapshot: snapshot
+            snapshot: snapshot,
+            origin: origin
         )
     }
 }

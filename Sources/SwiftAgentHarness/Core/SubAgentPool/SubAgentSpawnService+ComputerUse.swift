@@ -1,0 +1,222 @@
+import EasyJSON
+import Foundation
+import SwiftAgentKit
+
+extension SubAgentSpawnService {
+    /// Runs one delegated computer-use task: lease the target (one grant dialog), run the specialist in an
+    /// isolated child whose only tools are the computer-use family, and hand back a structured result. The
+    /// parent never sees the child's transcript, screenshots, or screen text.
+    func invokeComputerUseSpecialist(
+        call: ToolCallRequest,
+        conversationID: UUID,
+        parentConversation: ModelConversation,
+        toolEntry: ToolRegistryEntry,
+        origin: ComputerUseRunOrigin
+    ) async -> ToolDispatchOutcome {
+        guard let configuration = deps.computerUse.configuration else {
+            return .denied(AgentLoopToolDispatch.toolResultMessage(
+                toolCallId: call.id,
+                content: "Tool dispatch denied: computer use is not configured."
+            ))
+        }
+        let task: ComputerUseTask
+        do {
+            task = try ComputerUseTask(arguments: call.arguments, defaults: configuration.defaults)
+        } catch {
+            return .denied(AgentLoopToolDispatch.toolResultMessage(
+                toolCallId: call.id,
+                content: "Tool dispatch denied: \(error.message)."
+            ))
+        }
+        let reply: (ComputerUseResult) -> ToolDispatchOutcome = { result in
+            .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.jsonString))
+        }
+
+        let definition = ComputerUseDelegateToolProvider.specialistDefinition(configuration.specialist)
+        var model = parentConversation.model
+        if let modelRef = definition.modelRef {
+            guard let resolved = await resolveLocalAgentModel(modelRef) else {
+                return reply(.notStarted(.blocked, reason: "the computer-use model '\(modelRef)' did not resolve", task: task))
+            }
+            model = resolved
+        }
+        guard model.capabilities.contains(.vision), model.capabilities.contains(.tools) else {
+            return reply(.notStarted(
+                .blocked,
+                reason: "model \(model.modelName) cannot both see images and call tools; bind a computer-use model",
+                task: task
+            ))
+        }
+        let profile = await deps.registryEntryProvider?(model.id)?.profile(for: .generate)
+
+        let lifecycleID = call.id ?? "model-\(conversationID.uuidString)-\(UUID().uuidString)"
+        let grant: ComputerUseLeaseGrant
+        do {
+            grant = try await configuration.registry.lease(
+                LeaseRequest(
+                    target: task.target,
+                    conversationID: conversationID,
+                    agentID: "computer-use:\(lifecycleID)",
+                    grants: task.grants,
+                    budgets: task.budgets,
+                    operatorInitiated: origin.operatorInitiated,
+                    userPresent: origin.userPresent
+                ),
+                approve: configuration.approveGrants
+            )
+        } catch {
+            return reply(Self.leaseDenialResult(error, task: task))
+        }
+
+        let label = Self.delegateTaskLabel(from: call.arguments) ?? ComputerUseDelegateToolProvider.displayName
+        let childID: UUID
+        do {
+            childID = try await spawnLocalAgentChild(
+                conversationID: conversationID,
+                parentConversation: parentConversation,
+                toolEntry: toolEntry,
+                definition: definition,
+                instructions: task.brief,
+                label: label,
+                runInBackground: false,
+                lifecycleID: lifecycleID,
+                modelOverride: definition.modelRef == nil ? nil : model
+            )
+        } catch {
+            await grant.target.release(grant.lease, reason: .error)
+            await finishLocalAgentLifecycle(
+                lifecycleID: lifecycleID,
+                parentConversationID: conversationID,
+                childConversationID: nil,
+                delegateToolName: toolEntry.name,
+                toolCallID: call.id,
+                outcome: .failed("\(error)")
+            )
+            return reply(.notStarted(.failed, reason: "the specialist could not start: \(error)", task: task))
+        }
+
+        var sessionConfiguration = ComputerUseSessionConfiguration(
+            task: ComputerUseTaskContext(
+                userRequest: [task.goal],
+                constraints: task.constraints,
+                successCriteria: task.successCriteria
+            ),
+            model: profile
+        )
+        sessionConfiguration.conversationID = childID
+        let session = ComputerUseSession(
+            target: grant.target,
+            lease: grant.lease,
+            configuration: sessionConfiguration,
+            approvals: configuration.approvals,
+            intentChecker: configuration.intentChecker,
+            oversight: configuration.oversight
+        )
+        await deps.computerUse.sessions.register(session, for: childID)
+        let outcome = await runLocalAgentChild(
+            childConversationID: childID,
+            prompt: task.brief,
+            timeoutSeconds: min(definition.runTimeoutSeconds, task.budgets.maxDuration.timeInterval)
+        )
+        await deps.computerUse.sessions.remove(for: childID)
+        await session.end()
+
+        let result = await Self.specialistResult(
+            task: task,
+            session: session,
+            outcome: outcome,
+            actionsLogRef: await storeActionsLog(session: session)
+        )
+        await finishLocalAgentLifecycle(
+            lifecycleID: lifecycleID,
+            parentConversationID: conversationID,
+            childConversationID: childID,
+            delegateToolName: toolEntry.name,
+            toolCallID: call.id,
+            outcome: outcome
+        )
+        return reply(result)
+    }
+
+    static func specialistResult(
+        task: ComputerUseTask,
+        session: ComputerUseSession,
+        outcome: LocalAgentRunOutcome,
+        actionsLogRef: String?
+    ) async -> ComputerUseResult {
+        let child: ComputerUseChildOutcome
+        var finalText: String?
+        switch outcome {
+        case .completed(let text):
+            child = .completed
+            finalText = text
+        case .failed(let message): child = .failed(message)
+        case .timedOut: child = .timedOut
+        case .cancelled: child = .cancelled
+        }
+        var actionsLog = await session.auditSummary
+        if let actionsLogRef { actionsLog += " (full log: \(actionsLogRef))" }
+        return ComputerUseResultBuilder.build(
+            task: task,
+            verifications: await session.verifications,
+            terminal: await session.terminalReason,
+            child: child,
+            unresolvedHandoff: await session.unresolvedHandoff,
+            headlessDenials: await session.headlessDenials.map(\.canonical),
+            finalText: finalText,
+            actionsLog: actionsLog
+        )
+    }
+
+    static func leaseDenialResult(_ error: any Error, task: ComputerUseTask) -> ComputerUseResult {
+        guard let denial = error as? ComputerUseLeaseDenial else {
+            return .notStarted(.failed, reason: "\(error)", task: task)
+        }
+        switch denial {
+        case .grantsDeclined:
+            return .notStarted(.blocked, reason: "the user declined the requested app and domain grants", task: task)
+        case .hostTargetRequiresPresentOperator:
+            var result = ComputerUseResult.notStarted(
+                .needsUser,
+                reason: "the host desktop needs an operator-started run with the user present",
+                task: task
+            )
+            result.handoff = ComputerUseResult.Handoff(
+                reason: ComputerUseHandoffReason.consequential.rawValue,
+                prompt: "Run this task while you are present, or configure an isolated display target."
+            )
+            return result
+        case .targetBusy(let holder):
+            return .notStarted(.blocked, reason: "the display target is in use by \(holder)", task: task)
+        case .permissionsMissing(let permissions):
+            return .notStarted(.blocked, reason: "missing platform permissions: \(permissions.map(\.rawValue).joined(separator: ", "))", task: task)
+        case .unknownTarget(let id):
+            return .notStarted(.blocked, reason: "no display target named \(id)", task: task)
+        case .foregroundUnsupported:
+            return .notStarted(.blocked, reason: "the target does not support foreground delivery", task: task)
+        case .driverFailure(let message):
+            return .notStarted(.failed, reason: message, task: task)
+        }
+    }
+
+    /// The full action log as a session blob, kept for audit and replay.
+    private func storeActionsLog(session: ComputerUseSession) async -> String? {
+        let records = await session.auditLog
+        guard !records.isEmpty else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(records) else { return nil }
+        let harness = await deps.persistenceDomain.harnessSessionPersistence
+        guard let ref = try? harness.putBlob(
+            data: data,
+            durability: .durable,
+            originalName: "computer-use-actions-\(session.id.uuidString).json",
+            mimeType: "application/json",
+            trust: "unknown-party",
+            ttlSeconds: nil,
+            lane: .outbound
+        ) else { return nil }
+        return SessionBlobImageRef.path(for: ref.id)
+    }
+}

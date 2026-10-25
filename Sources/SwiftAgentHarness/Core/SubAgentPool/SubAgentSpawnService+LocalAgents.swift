@@ -59,52 +59,16 @@ extension SubAgentSpawnService {
 
         let childID: UUID
         do {
-            let orchestrationEntries = await subAgentPool.refreshSubAgentCatalog(conversationID: conversationID) { [orchestratorRuntime, agentRuntime] _ in
-                guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else { return [] }
-                return await orchestratorRuntime.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
-            }
-            let parentProfile = await resolvedModeProfile(for: parentConversation)
-            let parentDepth = await conversationDepth(conversationID: conversationID)
-            let preparedLaunch = try await subAgentExecutionCoordinator.prepareLaunch(
-                parentConversationID: conversationID,
+            childID = try await spawnLocalAgentChild(
+                conversationID: conversationID,
                 parentConversation: parentConversation,
-                request: SubAgentSpawnRequest(
-                    context: .isolated,
-                    taskDescription: label,
-                    prompt: instructions,
-                    subagentType: SubAgentTransportKind.inProcess.rawValue,
-                    agentID: toolEntry.name,
-                    runInBackground: runInBackground,
-                    topic: label,
-                    interactionMode: definition.modeProfileID,
-                    toolsAllow: definition.toolsAllow
-                ),
-                orchestrationEntries: orchestrationEntries,
-                modeSubAgentAllowList: parentProfile.subAgents.allow,
-                modeProfileMaxDepth: Self.effectiveMaxDepth(
-                    modeProfileMaxDepth: parentProfile.subAgents.maxDepth,
-                    definitionMaxDepth: definition.maxRecursionDepth
-                ),
-                parentDepth: parentDepth
-            )
-            // One prepared launch, one lifecycle row keyed by tool-call id, one run-lane
-            // acquisition that the terminal upsert below releases.
-            var prepared = preparedLaunch
-            if runInBackground {
-                // `planLaunch` derives the async handle from `agentID` — the delegate tool name —
-                // which collides across concurrent calls to the same agent. Key it to this tool
-                // call so completion announcements correlate to the right invocation.
-                prepared.launchPlan.asyncHandleID = lifecycleID
-            }
-            childID = try await performSpawn(
-                parentConversationID: conversationID,
-                parentConversation: parentConversation,
-                parentProfile: parentProfile,
-                parentDepth: parentDepth,
-                preparedLaunch: prepared,
-                modelOverride: modelOverride,
-                lifecycleIDOverride: lifecycleID,
-                adoptChildSelection: false
+                toolEntry: toolEntry,
+                definition: definition,
+                instructions: instructions,
+                label: label,
+                runInBackground: runInBackground,
+                lifecycleID: lifecycleID,
+                modelOverride: modelOverride
             )
         } catch {
             await finishLocalAgentLifecycle(
@@ -175,6 +139,68 @@ extension SubAgentSpawnService {
                 toolCallId: call.id,
                 content: Self.toolResultContent(for: outcome, displayName: definition.displayName)
             )
+        )
+    }
+
+    /// Spawns the isolated child for an in-process delegate on the caller's lifecycle id, under the
+    /// definition's mode profile and tool allow list.
+    func spawnLocalAgentChild(
+        conversationID: UUID,
+        parentConversation: ModelConversation,
+        toolEntry: ToolRegistryEntry,
+        definition: LocalAgentDefinition,
+        instructions: String,
+        label: String,
+        runInBackground: Bool,
+        lifecycleID: String,
+        modelOverride: Model?
+    ) async throws -> UUID {
+        let orchestrationEntries = await subAgentPool.refreshSubAgentCatalog(conversationID: conversationID) { [orchestratorRuntime, agentRuntime] _ in
+            guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else { return [] }
+            return await orchestratorRuntime.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
+        }
+        let parentProfile = await resolvedModeProfile(for: parentConversation)
+        let parentDepth = await conversationDepth(conversationID: conversationID)
+        let preparedLaunch = try await subAgentExecutionCoordinator.prepareLaunch(
+            parentConversationID: conversationID,
+            parentConversation: parentConversation,
+            request: SubAgentSpawnRequest(
+                context: .isolated,
+                taskDescription: label,
+                prompt: instructions,
+                subagentType: SubAgentTransportKind.inProcess.rawValue,
+                agentID: toolEntry.name,
+                runInBackground: runInBackground,
+                topic: label,
+                interactionMode: definition.modeProfileID,
+                toolsAllow: definition.toolsAllow
+            ),
+            orchestrationEntries: orchestrationEntries,
+            modeSubAgentAllowList: parentProfile.subAgents.allow,
+            modeProfileMaxDepth: Self.effectiveMaxDepth(
+                modeProfileMaxDepth: parentProfile.subAgents.maxDepth,
+                definitionMaxDepth: definition.maxRecursionDepth
+            ),
+            parentDepth: parentDepth
+        )
+        // One prepared launch, one lifecycle row keyed by tool-call id, one run-lane
+        // acquisition that the terminal upsert releases.
+        var prepared = preparedLaunch
+        if runInBackground {
+            // `planLaunch` derives the async handle from `agentID` — the delegate tool name —
+            // which collides across concurrent calls to the same agent. Key it to this tool
+            // call so completion announcements correlate to the right invocation.
+            prepared.launchPlan.asyncHandleID = lifecycleID
+        }
+        return try await performSpawn(
+            parentConversationID: conversationID,
+            parentConversation: parentConversation,
+            parentProfile: parentProfile,
+            parentDepth: parentDepth,
+            preparedLaunch: prepared,
+            modelOverride: modelOverride,
+            lifecycleIDOverride: lifecycleID,
+            adoptChildSelection: false
         )
     }
 
@@ -269,7 +295,7 @@ extension SubAgentSpawnService {
 
     /// Drives the child run to completion under a wall-clock budget, cancelling the child if the
     /// parent turn is cancelled or the budget expires.
-    private func runLocalAgentChild(
+    func runLocalAgentChild(
         childConversationID: UUID,
         prompt: String,
         timeoutSeconds: TimeInterval
@@ -332,7 +358,7 @@ extension SubAgentSpawnService {
         return conversation.messages.last(where: { $0.role == .assistant })?.content
     }
 
-    private func resolveLocalAgentModel(_ modelRef: String) async -> Model? {
+    func resolveLocalAgentModel(_ modelRef: String) async -> Model? {
         guard let reference = ModelReference.parse(modelRef),
               let ranked = deps.rankedRegistryEntriesProvider else {
             return nil
@@ -342,7 +368,7 @@ extension SubAgentSpawnService {
 
     /// Terminal lifecycle transition. Routing through `upsertSubAgentLifecycleEntry` is what
     /// releases the run-lane slot acquired during spawn.
-    private func finishLocalAgentLifecycle(
+    func finishLocalAgentLifecycle(
         lifecycleID: String,
         parentConversationID: UUID,
         childConversationID: UUID?,

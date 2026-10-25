@@ -1,0 +1,103 @@
+import EasyJSON
+import Foundation
+import Logging
+import SwiftAgentKit
+
+/// Publishes the computer-use specialist to parent conversations as `delegate_computer_use`.
+///
+/// Registration only: delegate calls are intercepted by the Sub-Agent Pool before provider execution, which runs
+/// the specialist in an isolated child conversation and hands back a structured ``ComputerUseResult``.
+struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
+    static let toolName = LocalAgentToolNaming.delegateToolPrefix + "computer_use"
+    static let displayName = "Computer Use"
+
+    let targets: [DisplayTargetManifest]
+    let defaults: ComputerUseSpecialistDefaults
+
+    var name: String { "ComputerUseDelegate" }
+
+    var descriptorHintsByToolName: [String: ToolDescriptorHints] {
+        [Self.toolName: ToolDescriptorHints(effectClass: .mutating, parallelHint: .serialOnly, policyTags: Self.policyTags)]
+    }
+
+    static var policyTags: [ToolPolicyTag] {
+        InProcessLocalAgentToolProvider.policyTags(for: specialistDefinition(ComputerUseSpecialistProfile()))
+    }
+
+    /// The child's capability: the computer-use family and nothing else — no shell, files, or messaging.
+    static func specialistDefinition(_ profile: ComputerUseSpecialistProfile) -> LocalAgentDefinition {
+        LocalAgentDefinition(
+            toolName: toolName,
+            displayName: displayName,
+            description: "Operates a computer screen to complete a task.",
+            modeProfileID: profile.modeProfileID,
+            modelRef: profile.modelRef,
+            toolsAllow: ComputerUseToolProvider.toolNames,
+            longRunning: false,
+            runTimeoutSeconds: profile.runTimeoutSeconds
+        )
+    }
+
+    func availableTools() async -> [ToolDefinition] {
+        let targetList = targets.map { "\($0.id) (\($0.label), \($0.isolation.rawValue))" }.joined(separator: ", ")
+        return [
+            ToolDefinition(
+                name: Self.toolName,
+                description: """
+                Hand a task that needs a computer screen to a computer-use specialist. Use this only when no API, \
+                MCP tool, or command line can do the job. The specialist works in its own conversation and cannot \
+                see this one, so the goal, criteria, and constraints must stand alone. The user approves the apps \
+                and domains before it starts. It returns JSON with status (done, done-unverified, needs-user, \
+                blocked, budget-exhausted, failed), result, verification per criterion, and any handoff the user \
+                must complete.
+                """,
+                parameters: [
+                    .init(name: "goal", description: "What to accomplish, stated fully.", type: "string", required: true),
+                    .init(
+                        name: "success_criteria",
+                        description: "One checkable criterion per line. Each is verified on screen before the task counts as done.",
+                        type: "string",
+                        required: true
+                    ),
+                    .init(name: "constraints", description: "Rules to keep throughout, one per line.", type: "string", required: false),
+                    .init(
+                        name: "apps",
+                        description: "Apps to grant, comma-separated as bundle-id:tier[:flags], tier view, click, or full; flags clipboard-read, clipboard-write, system-keys joined with +. Example: com.apple.TextEdit:full",
+                        type: "string",
+                        required: false
+                    ),
+                    .init(
+                        name: "domains",
+                        description: "Web domains to grant, comma-separated as domain:tier. Example: docs.example.com:click",
+                        type: "string",
+                        required: false
+                    ),
+                    .init(
+                        name: "target",
+                        description: "Display target id. Default \(defaults.target). Available: \(targetList.isEmpty ? "none" : targetList).",
+                        type: "string",
+                        required: false
+                    ),
+                    .init(name: "max_steps", description: "Action budget. Default \(defaults.budgets.maxSteps).", type: "integer", required: false),
+                    .init(name: "max_minutes", description: "Time budget in minutes.", type: "integer", required: false),
+                    .init(name: "return_schema", description: "Optional JSON Schema for the result.", type: "string", required: false),
+                    .init(
+                        name: InProcessLocalAgentToolProvider.descriptionParameterName,
+                        description: "Short 3-5 word label for progress display.",
+                        type: "string",
+                        required: false
+                    ),
+                ],
+                type: .function
+            ),
+        ]
+    }
+
+    func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
+        definition.name == Self.toolName ? Self.policyTags : []
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        throw InProcessLocalAgentToolProvider.Error.delegateDispatchNotIntercepted(toolCall.name)
+    }
+}

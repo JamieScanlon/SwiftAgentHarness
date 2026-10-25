@@ -1190,7 +1190,8 @@ public actor SubAgentSpawnService {
         conversationID: UUID,
         runID: UUID?,
         orchestrator: SwiftAgentKitOrchestrator,
-        snapshot: RuntimeToolTurnPolicySnapshot
+        snapshot: RuntimeToolTurnPolicySnapshot,
+        origin: ComputerUseRunOrigin = .interactiveOwner
     ) async -> ToolDispatchOutcome {
         guard let toolEntry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
               subAgentPool.isDelegateTool(entry: toolEntry) else {
@@ -1207,6 +1208,15 @@ public actor SubAgentSpawnService {
                     toolCallId: call.id,
                     content: "Tool dispatch denied: conversation not found."
                 )
+            )
+        }
+        if toolEntry.name == ComputerUseDelegateToolProvider.toolName, deps.computerUse.configuration != nil {
+            return await invokeComputerUseSpecialist(
+                call: call,
+                conversationID: conversationID,
+                parentConversation: parentConversation,
+                toolEntry: toolEntry,
+                origin: origin
             )
         }
         if let definition = localAgentDefinition(forToolName: toolEntry.name) {

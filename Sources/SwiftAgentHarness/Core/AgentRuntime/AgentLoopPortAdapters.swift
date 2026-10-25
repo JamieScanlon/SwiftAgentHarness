@@ -467,7 +467,11 @@ enum AgentLoopToolDispatch {
             runID: runID,
             orchestrator: orchestrator,
             snapshot: snapshot,
-            spawnService: spawnService
+            spawnService: spawnService,
+            origin: ComputerUseRunOrigin(
+                laneOrigin: configuration.runLaneOrigin,
+                senderIsOwner: configuration.originSenderIsOwner
+            )
            ) {
             return delegateOutcome
         }

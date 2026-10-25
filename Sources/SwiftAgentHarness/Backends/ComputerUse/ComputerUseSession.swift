@@ -6,10 +6,13 @@ public struct ComputerUseTaskContext: Sendable, Hashable {
     public var userRequest: [String]
     /// Carried verbatim; lost constraints are the most common long-horizon failure.
     public var constraints: [String]
+    /// Each must be confirmed with `computer_verify`; restated until it is.
+    public var successCriteria: [String]
 
-    public init(userRequest: [String], constraints: [String] = []) {
+    public init(userRequest: [String], constraints: [String] = [], successCriteria: [String] = []) {
         self.userRequest = userRequest
         self.constraints = constraints
+        self.successCriteria = successCriteria
     }
 }
 
@@ -189,6 +192,8 @@ public actor ComputerUseSession {
     public private(set) var verifications: [ComputerUseVerification] = []
     /// Consequential actions denied because nobody was present; surfaced on the next interactive attach.
     public private(set) var headlessDenials: [ComputerUseActionRecord] = []
+    /// The latest handoff nobody took, cleared when a later one is handed back.
+    public private(set) var unresolvedHandoff: ComputerUseHandoffRequest?
 
     public init(
         target: any DisplayTarget,
@@ -530,15 +535,42 @@ public actor ComputerUseSession {
     /// Human-only steps (logins, 2FA, CAPTCHAs, payment entry). Capture and agent input are suspended until the
     /// user hands back, so the model never sees a password being typed.
     public func handoff(reason: ComputerUseHandoffReason, prompt: String) async -> ComputerUseHandoffResult {
-        guard lease.userPresent, terminalReason == nil, let oversight else { return .unavailable }
+        let request = ComputerUseHandoffRequest(reason: reason, prompt: prompt, target: manifest.id)
+        guard lease.userPresent, terminalReason == nil, let oversight else {
+            unresolvedHandoff = request
+            return .unavailable
+        }
         do {
             try await setTakeover(true)
         } catch {
+            unresolvedHandoff = request
             return .unavailable
         }
-        let result = await oversight.handoff(ComputerUseHandoffRequest(reason: reason, prompt: prompt, target: manifest.id))
+        let result = await oversight.handoff(request)
         try? await setTakeover(false)
+        if case .handedBack = result {
+            unresolvedHandoff = nil
+        } else {
+            unresolvedHandoff = request
+        }
         return result
+    }
+
+    /// Task criteria without a verification that they are met, in task order.
+    public var unverifiedCriteria: [(number: Int, criterion: String)] {
+        configuration.task.successCriteria.enumerated().compactMap { index, criterion in
+            let met = verifications.last { ComputerUseResultBuilder.criterionMatches($0.criterion, criterion: criterion, index: index) }?.met
+            return met == true ? nil : (index + 1, criterion)
+        }
+    }
+
+    /// One line for the parent: how many actions ran and how they ended.
+    public var auditSummary: String {
+        let counts = Dictionary(grouping: auditLog, by: \.effect).mapValues(\.count)
+        let order: [ActionEffect] = [.confirmed, .unverifiable, .suspectedNoop, .partial, .refused, .notExecuted]
+        let parts = order.compactMap { effect in counts[effect].map { "\($0) \(effect.rawValue)" } }
+        let noun = auditLog.count == 1 ? "action" : "actions"
+        return parts.isEmpty ? "0 actions" : "\(auditLog.count) \(noun): " + parts.joined(separator: ", ")
     }
 
     public func verify(criterion: String, met: Bool, evidence: String, observation id: ObservationID) throws {
