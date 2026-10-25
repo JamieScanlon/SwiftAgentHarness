@@ -75,6 +75,12 @@ struct BundledCatalogSystemPromptContribution: Codable, Sendable {
     }
 }
 
+/// Vision input caps for a catalog row's `generate` profile.
+struct BundledCatalogVisionLimits: Codable, Sendable {
+    var maxImageEdgePx: Int?
+    var maxImageTokens: Int?
+}
+
 struct BundledCatalogModelRow: Codable, Sendable {
     var registryId: UUID
     var endpointModelId: String
@@ -89,6 +95,9 @@ struct BundledCatalogModelRow: Codable, Sendable {
     var canonicalModelKey: String?
     var modelFamily: String?
     var systemPromptContribution: BundledCatalogSystemPromptContribution?
+    var vision: BundledCatalogVisionLimits?
+    /// Versioned `generate` features such as `computer-use`, keyed as on the contract profile.
+    var features: [String: FeatureSupport]?
 
     func toProviderCatalogEntry() -> ProviderCatalogEntry {
         let protocolValue = ModelProtocol(rawValue: modelProtocol) ?? .openAIAPI
@@ -114,7 +123,10 @@ struct BundledCatalogModelRow: Codable, Sendable {
             },
             compat: compat,
             canonicalModelKey: canonicalModelKey,
-            modelFamily: modelFamily
+            modelFamily: modelFamily,
+            generateFeatures: features ?? [:],
+            maxImageEdgePx: vision?.maxImageEdgePx,
+            maxImageTokens: vision?.maxImageTokens
         )
     }
 }

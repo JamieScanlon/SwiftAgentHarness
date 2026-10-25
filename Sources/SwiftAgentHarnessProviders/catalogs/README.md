@@ -15,6 +15,17 @@ Optional catalog fields for cross-provider binding merge:
 
 Local API-server maps on `InferenceRuntimeConfig.modelIDMap` support the same fields on `ModelConfig`.
 
+### Generate features and vision caps
+
+Optional row fields that extend the row's synthesized `generate` contract profile:
+
+| Field | Role |
+|-------|------|
+| `vision` | `{ "maxImageEdgePx": Int, "maxImageTokens": Int }`: image input caps. Screenshots and tool images are sized to them. |
+| `features` | Versioned features keyed as on the profile, for example `"computer-use": {"supported": true, "version": "…", "params": {"coordinates": "pixels", "maxEdgePx": 1568}}`. See `docs/COMPUTER_USE.md`. |
+
+Put both under the model's entry in `overrides/{providerId}.overrides.json` so regeneration merges them into the catalog row.
+
 ## Regeneration
 
 From the repository root:

@@ -128,9 +128,15 @@ public struct DefaultContextEngine: ContextEngine, Sendable {
                 "[ContextEngine] cache TTL pruning substituted stale tool results conversation=\(request.conversation.id)"
             )
         }
+        let screenshotsPruned = applyScreenshotRetention(messages: ttlPruned.messages, request: preparedTurnRequest)
+        if screenshotsPruned.transformationKind == .cacheEditing {
+            logger?.debug(
+                "[ContextEngine] screenshot retention pruned a batch of old screenshots conversation=\(request.conversation.id)"
+            )
+        }
         let selectorConfigFingerprint = await memoryService?.recallSelectorConfigFingerprint() ?? ""
         let tier2Result = await applyTier2MemoryRecallIfNeeded(
-            into: ttlPruned.messages,
+            into: screenshotsPruned.messages,
             conversation: request.conversation,
             phase: request.phase,
             modeMemoryInjection: modeSwitches.memoryInjectionMode,
@@ -1086,6 +1092,20 @@ Durable memory snapshot generation \(memoryStoreVersion) is active for this sess
             policy: policy,
             lastLLMDate: request.lastModelRequestAtByConversationID[request.conversation.id],
             referenceInstant: ContextCacheTTLPruning.deterministicReferenceInstant(from: request.messages),
+            toolCallResolutionContext: request.messages
+        )
+    }
+
+    private func applyScreenshotRetention(
+        messages: [Message],
+        request: ContextEngineAssembleRequest
+    ) -> (messages: [Message], transformationKind: CacheProjectionTransformationKind) {
+        guard let policy = request.projectionPolicy?.screenshotRetentionPolicy else {
+            return (messages, .cacheNeutral)
+        }
+        return ContextScreenshotRetention.apply(
+            messages: messages,
+            policy: policy,
             toolCallResolutionContext: request.messages
         )
     }

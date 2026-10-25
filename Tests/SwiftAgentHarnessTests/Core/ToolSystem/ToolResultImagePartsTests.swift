@@ -43,7 +43,8 @@ struct ToolResultImagePartsTests {
         toolName: String,
         entry: ToolRegistryEntry? = nil,
         vision: Bool,
-        processor: ImageProcessing = OversizeReportingImageProcessor()
+        processor: ImageProcessing = OversizeReportingImageProcessor(),
+        modelMaxImageEdgePx: Int? = nil
     ) throws -> ToolResultFormattingSpillContext {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("tool-image-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -55,7 +56,8 @@ struct ToolResultImagePartsTests {
                 persistence: try LocalHarnessSessionPersistence(root: root, agentId: "test-agent")
             ),
             modelSupportsVision: vision,
-            imageProcessor: processor
+            imageProcessor: processor,
+            modelMaxImageEdgePx: modelMaxImageEdgePx
         )
     }
 
@@ -163,6 +165,45 @@ struct ToolResultImagePartsTests {
             spillContext: try context(toolName: ComputerUseToolProvider.observeToolName, vision: true)
         )
         #expect(byName.images.isEmpty)
+    }
+
+    @Test("A geometry-bound screenshot is held to the bound model's edge cap, not the generic one")
+    func geometryBoundUsesModelCap() throws {
+        let screenshot = ToolResult(success: true, parts: [.text("x"), ToolImageFixtures.pngPart(width: 1568, height: 980)], toolCallId: "c")
+        let withinModel = ToolResultFormattingStack.apply(
+            result: screenshot,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: try context(toolName: ComputerUseToolProvider.observeToolName, vision: true, modelMaxImageEdgePx: 1568)
+        )
+        #expect(withinModel.images.first?.data == ToolImageFixtures.tinyPNG)
+
+        let overModel = ToolResultFormattingStack.apply(
+            result: screenshot,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: try context(toolName: ComputerUseToolProvider.observeToolName, vision: true, modelMaxImageEdgePx: 1024)
+        )
+        #expect(overModel.images.isEmpty)
+    }
+
+    @Test("Ordinary images are rescaled to the tighter of the model's cap and the configured cap")
+    func ordinaryUsesTighterCap() throws {
+        let image = ToolResult(success: true, parts: [.text("x"), ToolImageFixtures.pngPart(width: 1100, height: 800)], toolCallId: "c")
+        let output = ToolResultFormattingStack.apply(
+            result: image,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: try context(toolName: "chart_tool", vision: true, modelMaxImageEdgePx: 1024)
+        )
+        #expect(output.images.first?.data == OversizeReportingImageProcessor.rescaled)
+        let generous = ToolResultFormattingStack.apply(
+            result: image,
+            stage: .runtime,
+            configuration: .default,
+            spillContext: try context(toolName: "chart_tool", vision: true, modelMaxImageEdgePx: 4000)
+        )
+        #expect(generous.images.first?.data == ToolImageFixtures.tinyPNG)
     }
 
     @Test("Image parts referenced by URL pass through untouched")

@@ -22,7 +22,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let handoffToolName = "computer_handoff"
 
     /// Tools whose results carry screen content.
-    static let screenToolNames: Set<String> = [
+    public static let screenToolNames: Set<String> = [
         observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
         menuToolName, launchToolName, openURLToolName, zoomToolName, waitForToolName,
     ]

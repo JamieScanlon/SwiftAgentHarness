@@ -76,6 +76,8 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
     let useSessionTreeProjection: Bool
     let sessionTranscriptEntries: [SessionTranscriptEntry]?
     let contextPruningPolicy: ContextPruningPolicy?
+    /// `nil` turns screenshot pruning off.
+    let screenshotRetentionPolicy: ScreenshotRetentionPolicy?
     let priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact?
     let pendingCacheBreakEvents: Set<CacheBreakEventReason>
 
@@ -92,6 +94,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         useSessionTreeProjection: Bool = false,
         sessionTranscriptEntries: [SessionTranscriptEntry]? = nil,
         contextPruningPolicy: ContextPruningPolicy? = nil,
+        screenshotRetentionPolicy: ScreenshotRetentionPolicy? = .default,
         priorAttachmentProjection: ContextEngineAttachmentProjectionArtifact? = nil,
         pendingCacheBreakEvents: Set<CacheBreakEventReason> = []
     ) {
@@ -107,6 +110,7 @@ public struct ContextEngineProjectionPolicyInput: Sendable {
         self.useSessionTreeProjection = useSessionTreeProjection
         self.sessionTranscriptEntries = sessionTranscriptEntries
         self.contextPruningPolicy = contextPruningPolicy
+        self.screenshotRetentionPolicy = screenshotRetentionPolicy
         self.priorAttachmentProjection = priorAttachmentProjection
         self.pendingCacheBreakEvents = pendingCacheBreakEvents
     }

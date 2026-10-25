@@ -35,7 +35,7 @@ public struct ComputerUseSessionConfiguration: Sendable {
         task: ComputerUseTaskContext,
         coordinateMode: ComputerUseCoordinateMode = .imagePixels,
         classifier: ComputerUseActionClassifier = ComputerUseActionClassifier(),
-        imageLimit: ObservationImageLimit? = ObservationImageLimit(longEdgePx: 1_200),
+        imageLimit: ObservationImageLimit? = ObservationImageLimit(longEdgePx: ObservationImageLimit.defaultLongEdgePx),
         retainedObservations: Int = 8,
         maxConsecutiveFailures: Int = 3,
         conversationID: UUID? = nil,

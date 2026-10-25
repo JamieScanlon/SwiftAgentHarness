@@ -750,7 +750,7 @@ actor ConversationMessagingRuntimeService {
         toolName: String,
         entry: ToolRegistryEntry?,
         spillWriter: HarnessSessionPersistenceSpillWriter,
-        modelSupportsVision: Bool
+        modelImages: ModelImageSupport
     ) -> ToolResultFormattingSpillContext {
         ToolResultFormattingSpillContext(
             conversationID: conversationID,
@@ -758,15 +758,26 @@ actor ConversationMessagingRuntimeService {
             entry: entry,
             spillWriter: spillWriter,
             logger: logger,
-            modelSupportsVision: modelSupportsVision
+            modelSupportsVision: modelImages.vision,
+            modelMaxImageEdgePx: modelImages.maxImageEdgePx
         )
     }
 
-    private func modelSupportsVision(conversationID: UUID) async -> Bool {
+    private struct ModelImageSupport {
+        var vision: Bool
+        var maxImageEdgePx: Int?
+    }
+
+    /// Vision support and image caps for the conversation's model; caps come from its registry `generate` profile.
+    private func modelImageSupport(conversationID: UUID) async -> ModelImageSupport {
         guard let conversation = await persistenceDomain.modelConversation(id: conversationID) else {
-            return false
+            return ModelImageSupport(vision: false)
         }
-        return conversation.model.capabilities.contains(.vision)
+        let profile = await deps.registryEntryProvider?(conversation.model.id)?.profile(for: .generate)
+        return ModelImageSupport(
+            vision: conversation.model.capabilities.contains(.vision),
+            maxImageEdgePx: profile?.effectiveMaxImageEdgePx
+        )
     }
 
     private func persistenceToolResultMiddlewarePipeline(
@@ -783,13 +794,13 @@ actor ConversationMessagingRuntimeService {
                     order: 100
                 ) { toolCall, result in
                     let entry = await self.toolEntryLookup.entry(named: toolCall.name)
-                    let supportsVision = await self.modelSupportsVision(conversationID: conversationID)
+                    let modelImages = await self.modelImageSupport(conversationID: conversationID)
                     let spillContext = await self.toolResultFormattingSpillContext(
                         conversationID: conversationID,
                         toolName: toolCall.name,
                         entry: entry,
                         spillWriter: spillWriter,
-                        modelSupportsVision: supportsVision
+                        modelImages: modelImages
                     )
                     return ToolResultFormattingStack.apply(
                         result: result,
@@ -820,13 +831,13 @@ actor ConversationMessagingRuntimeService {
         let spillWriter = HarnessSessionPersistenceSpillWriter(
             persistence: await persistenceDomain.harnessSessionPersistence
         )
-        let supportsVision = await modelSupportsVision(conversationID: conversationID)
+        let modelImages = await modelImageSupport(conversationID: conversationID)
         let spillContext = toolResultFormattingSpillContext(
             conversationID: conversationID,
             toolName: toolCall.name,
             entry: entry,
             spillWriter: spillWriter,
-            modelSupportsVision: supportsVision
+            modelImages: modelImages
         )
         return ToolResultFormattingStack.apply(
             result: result,

@@ -75,6 +75,8 @@ struct ToolResultFormattingSpillContext: Sendable {
     let logger: Logger?
     let modelSupportsVision: Bool
     let imageProcessor: ImageProcessing
+    /// The bound model's longest accepted image edge, when its descriptor declares one.
+    let modelMaxImageEdgePx: Int?
 
     init(
         conversationID: UUID,
@@ -83,7 +85,8 @@ struct ToolResultFormattingSpillContext: Sendable {
         spillWriter: any ToolResultSpillWriting,
         logger: Logger? = nil,
         modelSupportsVision: Bool = false,
-        imageProcessor: ImageProcessing = DefaultImageProcessor()
+        imageProcessor: ImageProcessing = DefaultImageProcessor(),
+        modelMaxImageEdgePx: Int? = nil
     ) {
         self.conversationID = conversationID
         self.toolName = toolName
@@ -92,6 +95,7 @@ struct ToolResultFormattingSpillContext: Sendable {
         self.logger = logger
         self.modelSupportsVision = modelSupportsVision
         self.imageProcessor = imageProcessor
+        self.modelMaxImageEdgePx = modelMaxImageEdgePx
     }
 }
 

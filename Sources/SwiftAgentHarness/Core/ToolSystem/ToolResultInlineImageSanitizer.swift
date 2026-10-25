@@ -15,7 +15,7 @@ enum ToolResultInlineImageSanitizer {
 
     struct Policy: Sendable {
         let mode: Mode
-        let maxPixelDimension: Int
+        var maxPixelDimension: Int
         let maxBytes: Int
         let placeholder: String
     }

@@ -129,7 +129,11 @@ enum ToolResultFormattingStack {
         spillContext: ToolResultFormattingSpillContext?,
         geometryBound: Bool
     ) -> [ToolResultContentPart] {
-        let policy = inlineImagePolicy(stage: stage, configuration: configuration, spillContext: spillContext)
+        var policy = inlineImagePolicy(stage: stage, configuration: configuration, spillContext: spillContext)
+        if geometryBound, let modelEdge = spillContext?.modelMaxImageEdgePx, modelEdge > 0 {
+            // Sized to the bound model at capture, so the model's cap is the one that applies.
+            policy.maxPixelDimension = modelEdge
+        }
         let processor = spillContext?.imageProcessor ?? DefaultImageProcessor()
         return images.map { image in
             guard configuration.sanitizeInlineImagePayloads else { return .image(image) }
@@ -257,9 +261,13 @@ enum ToolResultFormattingStack {
         case .runtime, .persistence:
             mode = spillContext?.modelSupportsVision == true ? .sanitize : .strip
         }
+        var maxPixelDimension = configuration.maxInlineImagePixelDimension
+        if let modelEdge = spillContext?.modelMaxImageEdgePx, modelEdge > 0 {
+            maxPixelDimension = maxPixelDimension > 0 ? min(maxPixelDimension, modelEdge) : modelEdge
+        }
         return ToolResultInlineImageSanitizer.Policy(
             mode: mode,
-            maxPixelDimension: configuration.maxInlineImagePixelDimension,
+            maxPixelDimension: maxPixelDimension,
             maxBytes: configuration.maxInlineImageBytes,
             placeholder: placeholder
         )

@@ -147,6 +147,7 @@ actor ContextProjectionService {
             useSessionTreeProjection: context.projectionPolicy.useSessionTreeProjection,
             sessionTranscriptEntries: context.projectionPolicy.sessionTranscriptEntries,
             contextPruningPolicy: context.projectionPolicy.contextPruningPolicy,
+            screenshotRetentionPolicy: context.projectionPolicy.screenshotRetentionPolicy,
             priorAttachmentProjection: prior,
             pendingCacheBreakEvents: breakEvents
         )

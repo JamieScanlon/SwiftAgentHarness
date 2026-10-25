@@ -16,6 +16,7 @@ Computer use is a **display target** (the user's desktop, a VM, a desktop contai
 - [Budgets, kill switch, takeover](#budgets-kill-switch-takeover)
 - [The tool family](#the-tool-family)
 - [Screenshots in tool results](#screenshots-in-tool-results)
+- [Model descriptors and the screenshot budget](#model-descriptors-and-the-screenshot-budget)
 - [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps)
 
 The spec is the harness-template pages `backends/computer-use/README.md` and `backends/computer-use/macos.md`. Where this implementation interprets or departs from them, see [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps).
@@ -33,7 +34,7 @@ This is the platform-neutral core. Everything here builds and tests without scre
 | Per-action classification, intent check on `guard`, per-action confirmation, headless denial, stop key | Done |
 | `computer_*` function-tool family with flat schemas | Done |
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
-| `computer-use` feature on model descriptors, resize to `maxImageEdgePx`, step-counted screenshot pruning | Not yet |
+| `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) | Not yet |
 | macOS host-desktop and VM drivers | Not yet. They will live in a separate macOS-only target. |
 | Vendor-native toolsets and their safety signals, live view, replay, deferred tool loading | Not yet |
@@ -216,10 +217,47 @@ The tools are `computer_observe`, `computer_click`, `computer_type`, `computer_k
 
 `computer_observe` and `computer_zoom` return the screenshot as an image part (SwiftAgentKit `ToolResultImage`) next to the text, at exactly the size recorded in its `ScreenshotGeometry`. Drivers fill `ObservationImage.data` with the encoded image as sized for the model.
 
-- **Never resized after capture.** Screen tools carry the `geometry-bound-images` policy tag. The tool-result formatting stack keeps their images untouched. If one exceeds `maxInlineImagePixelDimension` or `maxInlineImageBytes`, it is replaced by a marker telling the model to observe again, because a resized screenshot would misplace every click. `ComputerUseSessionConfiguration.imageLimit` defaults to a 1200 px long edge, the stack's default cap; raise both together.
+- **Never resized after capture.** Screen tools carry the `geometry-bound-images` policy tag. The tool-result formatting stack keeps their images untouched. If one exceeds the bound model's edge cap (or `maxInlineImagePixelDimension` when the model declares none) or `maxInlineImageBytes`, it is replaced by a marker telling the model to observe again, because a resized screenshot would misplace every click. Configure the session from the bound model (below) so screenshots are captured at the right size.
 - **Vision gating.** As with inline data URLs, a conversation whose model lacks vision gets a text marker instead of the image, and compaction always replaces images with the compaction marker.
 - **On the wire.** Anthropic gets image blocks inside the `tool_result`. OpenAI and LM Studio tool messages carry text only, so the images from a run of tool messages travel in one user message placed right after the run. Ollama already attaches images to tool messages.
 - **Persistence.** Tool images are stored as durable session blobs when the message is appended. The transcript keeps a `blob://` ref with the media type, and reloads hydrate the bytes.
+
+## Model descriptors and the screenshot budget
+
+**The `computer-use` feature.** A model's `generate` profile declares computer use as a versioned feature, read by `ComputerUseModelSupport`:
+
+```jsonc
+"computer-use": {
+  "supported": true,
+  "version": "toolset-2026-08",      // the vendor toolset
+  "params": {
+    "coordinates": "pixels",         // or "normalized-1000"
+    "maxEdgePx": 2576,               // screenshot long-edge cap
+    "keepRecentScreenshots": 3,      // optional retention overrides
+    "pruneEvery": 15
+  }
+}
+```
+
+A bundled catalog row declares it under `features`, with vision caps under `vision` (`maxImageEdgePx`, `maxImageTokens`). The row's synthesized `generate` profile then carries both. Hosts can also set `ModelRegistryEntry.contracts` directly.
+
+**Sizing to the model.** Build the session configuration from the bound model:
+
+```swift
+let profile = registryEntry.profile(for: .generate)
+let configuration = ComputerUseSessionConfiguration(task: task, model: profile)
+```
+
+That fixes the coordinate dialect from the feature, and sets the image limit to the tighter of the feature's `maxEdgePx` and the contract's `maxImageEdgePx`, plus its visual-token cap. With nothing declared, it falls back to a 1200 px long edge. The tool-result pipeline applies the same model cap: screenshots must fit it, and other images are rescaled to the tighter of the model's cap and `maxInlineImagePixelDimension`.
+
+**Retention.** `ContextScreenshotRetention` runs at projection time; the transcript keeps every screenshot.
+
+- **What counts.** Screenshots are counted across the loop, not by user turns, so pruning fires inside one long run.
+- **What's kept.** The newest `keepRecent` (3) stay in full.
+- **What's pruned.** Older ones are pruned in whole batches of `pruneBatch` (15), each replaced by a marker plus the observation's one-line summary. The tree text stays.
+- **Why batches.** Between batches the projected prefix is byte-identical, so the prompt cache holds, and it changes once per batch.
+- **Request size.** The defaults keep at most 17 screenshots in any request.
+- **Configuration.** A model's feature can override both values. `ContextEngineProjectionPolicyInput.screenshotRetentionPolicy = nil` turns pruning off.
 
 ## Implementation notes and spec gaps
 
@@ -254,6 +292,10 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Fresh observation for `verify` | Fresh means captured at or after the most recent executed action. |
 | Mixed tool results | Results that combine harness guidance with screen text are wrapped as one envelope, so the guidance lines sit inside it. The spec doesn't say how to split them. |
 | Approval surface | Confirmations reuse `ExecApprovalDelivering`, which is named for exec but is the harness's general approval delivery. |
-| Screenshot retention | Tool images are stored as durable blobs. The spec's lifecycle (durable while referenced, ephemeral TTL from lease release) and step-counted, batched pruning are not implemented yet. |
+| Screenshot blob lifecycle | Tool images are stored as durable blobs. The spec's lifecycle (durable while referenced, ephemeral TTL from lease release) is not implemented yet. |
+| Retention defaults | The spec gives vendor guidance "keep 3, prune every ~25" and also says requests should stay under ~20 images. Those conflict: batches of 25 allow up to 27 screenshots. The defaults are keep 3, prune 15 (at most 17); a model's feature can override them. |
+| Pruned screenshot summary | The spec asks for a one-line text summary of each pruned screenshot. The marker reuses the observation's harness-written header line (id, app, window) rather than describing pixels, which would need a model call. |
+| Catalog values | The bundled catalogs don't declare `computer-use` or vision caps yet. Vendor toolset versions and image limits should be confirmed against current vendor documentation before they are added. |
+| `computer-use` role fallback | The spec binds the `computer-use` role to `main` only if `main` has the feature. Generate-side roles still aren't resolved through role bindings here, so that rule isn't enforced; it belongs with the specialist sub-agent. |
 | OpenAI-style tool images | The spec says images must travel as images, never base64 text. Chat-completions tool messages can't hold images, so a user message right after the tool run carries them, and it names the tool calls it belongs to. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |
