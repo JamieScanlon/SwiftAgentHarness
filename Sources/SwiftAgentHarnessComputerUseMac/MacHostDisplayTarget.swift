@@ -15,6 +15,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// The harness's own apps: never captured and never granted, so the model cannot read its transcript,
         /// approval prompts, or the user's chat input off the screen.
         public var excludedBundleIDs: Set<String>
+        /// Called when delivery escalates to the foreground and the target activates an app (its bundle id), so
+        /// the HUD can announce it.
+        public var onForegroundDelivery: (@Sendable (String?) async -> Void)?
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
@@ -439,6 +442,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         if frontmost != pid, let frontmost {
             if restoreFrontmost == nil { restoreFrontmost = (frontmost, pid) }
             _ = await MacAppControl.activate(pid: pid)
+            await configuration.onForegroundDelivery?(await MacAppControl.runningApp(pid: pid)?.identity.bundleID)
         }
         return .foreground
     }

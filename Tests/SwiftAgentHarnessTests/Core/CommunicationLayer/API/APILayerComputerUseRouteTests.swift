@@ -148,6 +148,47 @@ struct APILayerComputerUseRouteTests {
         #expect(await session.isTakeoverActive)
     }
 
+    @Test("Replays list newest first, open as a document, and serve only their own thumbnails")
+    func replays() async throws {
+        let installation = ComputerUseInstallation()
+        let store = ReplayBlobStore()
+        let png = try ComputerUseFixtures.pngScreenshot(width: 32, height: 20)
+        var replay = ComputerUseReplay.fixture(parent: conversationID, lifecycleID: "call-1", endedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        replay.thumbnails = [ComputerUseReplayThumbnail(
+            observationID: "o_1", at: replay.startedAt, app: "com.apple.TextEdit", width: 32, height: 20, mediaType: "image/png", blobID: store.put(png)
+        )]
+        await installation.replays.record(replay, documentBlobID: "doc", loadBlob: { try store.get($0) })
+
+        try await withRoutes(installation) { app in
+            try await app.testing().test(.GET, "\(base)/replays") { res async throws in
+                #expect(res.status == .ok)
+                let rows = try #require(try json(res)["replays"] as? [[String: Any]])
+                #expect(rows.map { $0["lifecycleID"] as? String } == ["call-1"])
+                #expect(rows.first?["thumbnailCount"] as? Int == 1)
+                #expect(rows.first?["endedAt"] as? String == "2027-01-15T08:00:00Z")
+            }
+            try await app.testing().test(.GET, "\(base)/replays/call-1") { res async throws in
+                #expect(res.status == .ok)
+                let body = try json(res)
+                #expect(body["target"] as? String == "Fake VM")
+                let thumbnails = try #require(body["thumbnails"] as? [[String: Any]])
+                #expect(thumbnails.first?["observationID"] as? String == "o_1")
+            }
+            try await app.testing().test(.GET, "\(base)/replays/call-1/thumbnails/o_1") { res async throws in
+                #expect(res.status == .ok)
+                #expect(res.headers.contentType?.serialize() == "image/png")
+                #expect(Data(res.body.readableBytesView) == png)
+            }
+            try await app.testing().test(.GET, "\(base)/replays/call-1/thumbnails/o_9") { res async throws in
+                #expect(res.status == .notFound)
+            }
+            try await app.testing().test(.GET, "\(base)/replays/call-9") { res async throws in
+                #expect(res.status == .notFound)
+                #expect(try json(res)["type"] as? String == "error")
+            }
+        }
+    }
+
     @Test("Routes 404 when the host has no computer use, and 400 on a bad conversation id")
     func unavailable() async throws {
         try await withRoutes(nil) { app in

@@ -69,7 +69,8 @@ struct ComputerUseSpecialistIntegrationTests {
         script: Script,
         reply: String,
         recorder: ChildRecorder,
-        publish: ComputerUseOversightCoordinator.Publish? = nil
+        publish: ComputerUseOversightCoordinator.Publish? = nil,
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -96,7 +97,8 @@ struct ComputerUseSpecialistIntegrationTests {
                 budgets: ComputerUseBudgets(maxSteps: 40, maxDuration: .seconds(600)),
                 maxBudgets: ComputerUseBudgets(maxSteps: 200, maxDuration: .seconds(1_800))
             ),
-            approveGrants: approve
+            approveGrants: approve,
+            activityObserver: activityObserver
         )
         if let publish {
             session.installComputerUse(configuration, publish: publish)
@@ -199,6 +201,49 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(await session.runtimeDependencies.computerUse.sessions.session(for: childID) == nil)
         #expect(await recorder.prompts.first?.contains("Make the title bold in TextEdit.") == true)
         #expect(await recorder.prompts.first?.contains("1. title is bold") == true)
+    }
+
+    @Test("The host's activity observer sees the whole run, for its HUD")
+    func activityObserver() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let seen = RecordingIntentPublisher()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+            activityObserver: { await seen.publish(UUID(), .computerUseActivity($0)) }
+        )
+        _ = try await invoke(session, parent: parent)
+        let statuses = await seen.published.compactMap(\.1.computerUse?.status)
+        #expect(statuses.first == .started)
+        #expect(statuses.last == .ended)
+        #expect(statuses.contains(.acting))
+        #expect(await seen.published.allSatisfy { $0.1.computerUse?.lifecycleID == "call-cu-1" })
+    }
+
+    @Test("A finished run leaves a replay for the parent conversation, with thumbnails readable through the control plane")
+    func replayRecorded() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setScreenshot(try ComputerUseFixtures.pngScreenshot())
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder()
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        let control = session.computerUseControl
+        let summary = try #require(await control.replays(conversationID: parent.id).first)
+        #expect(summary.lifecycleID == "call-cu-1")
+        #expect(summary.thumbnailCount > 0)
+        #expect(summary.actionCount > 0)
+
+        let replay = try #require(await control.replay(conversationID: parent.id, lifecycleID: "call-cu-1"))
+        let first = try #require(replay.thumbnails.first)
+        let thumbnail = try #require(await control.replayThumbnail(conversationID: parent.id, lifecycleID: "call-cu-1", observationID: first.observationID))
+        #expect(thumbnail.width == first.width)
+        #expect(max(thumbnail.width, thumbnail.height) <= ComputerUseSessionConfiguration.defaultReplayThumbnailEdgePx)
+        // The ref in the parent's result is the stored replay document.
+        let ref = try #require((result["actionsLog"] as? String)?.components(separatedBy: "full log: ").last?.dropLast())
+        let blobID = try #require(SessionBlobImageRef.parsePath(String(ref)))
+        let harness = await session.runtimeDependencies.persistenceDomain.harnessSessionPersistence
+        let stored = try JSONDecoder.computerUseReplay.decode(ComputerUseReplay.self, from: harness.getBlob(blobId: blobID))
+        #expect(stored == replay)
     }
 
     @Test("The child runs on a narrow tool surface: the computer-use family only, no shell or files")

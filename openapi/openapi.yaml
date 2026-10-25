@@ -1884,6 +1884,93 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use/replays:
+    get:
+      operationId: listConversationComputerUseReplays
+      tags: [ComputerUse]
+      summary: Recent computer-use replays for the conversation, newest first
+      description: Held in the server process; replays from before a restart are reachable only through the replay ref in the delegate result.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Replay listing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replays]
+                properties:
+                  replays:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ComputerUseReplaySummary"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/replays/{lifecycleID}:
+    get:
+      operationId: getConversationComputerUseReplay
+      tags: [ComputerUse]
+      summary: One specialist run's action log and observation thumbnails
+      description: A record for review. It is not a script, and re-executing it is not supported.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseReplay"
+        "404":
+          description: No such replay for this conversation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/replays/{lifecycleID}/thumbnails/{observationID}:
+    get:
+      operationId: getConversationComputerUseReplayThumbnail
+      tags: [ComputerUse]
+      summary: A thumbnail the replay lists
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: observationID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image bytes
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: The replay doesn't list this observation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   securitySchemes:
     HarnessAccessBearer:
@@ -3567,6 +3654,115 @@ components:
         lifecycleID:
           type: string
           description: Limit to one session; omitted applies to every live session for the conversation.
+
+    ComputerUseReplaySummary:
+      type: object
+      required: [lifecycleID, target, startedAt, endedAt, steps, actionCount, thumbnailCount]
+      properties:
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        terminalReason:
+          type: string
+        steps:
+          type: integer
+        actionCount:
+          type: integer
+        thumbnailCount:
+          type: integer
+
+    ComputerUseReplayThumbnail:
+      type: object
+      required: [observationID, at, width, height, mediaType, blobID]
+      properties:
+        observationID:
+          type: string
+        at:
+          type: string
+          format: date-time
+        app:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        mediaType:
+          type: string
+        blobID:
+          type: string
+
+    ComputerUseActionRecord:
+      type: object
+      description: One action-log line. Typed text in `canonical` is replaced by its hash.
+      required: [step, at, kind, canonical, binding, observations, actionClass, decision, reason, effect]
+      properties:
+        step:
+          type: integer
+        at:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        canonical:
+          type: string
+        binding:
+          type: string
+        observations:
+          type: array
+          items:
+            type: string
+        actionClass:
+          type: string
+        decision:
+          type: string
+        reason:
+          type: string
+        intentVerdict:
+          type: string
+        effect:
+          type: string
+        evidence:
+          type: string
+
+    ComputerUseReplay:
+      type: object
+      required: [sessionID, parentConversationID, lifecycleID, target, startedAt, endedAt, steps, records, thumbnails]
+      properties:
+        sessionID:
+          type: string
+          format: uuid
+        parentConversationID:
+          type: string
+          format: uuid
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        terminalReason:
+          type: string
+        steps:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseActionRecord"
+        thumbnails:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseReplayThumbnail"
 
     ComputerUseSessionsChanged:
       type: object

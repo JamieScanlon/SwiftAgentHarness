@@ -66,6 +66,30 @@ public struct ComputerUseControlService: Sendable {
         return stopped
     }
 
+    /// The conversation's recent replays, newest first.
+    public func replays(conversationID: UUID) async -> [ComputerUseReplaySummary] {
+        await installation.replays.summaries(parent: conversationID)
+    }
+
+    public func replay(conversationID: UUID, lifecycleID: String) async -> ComputerUseReplay? {
+        await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID)?.replay
+    }
+
+    /// One thumbnail the replay lists; anything else in the blob store stays out of reach.
+    public func replayThumbnail(conversationID: UUID, lifecycleID: String, observationID: ObservationID) async -> PresentationImage? {
+        guard let entry = await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID),
+              let thumbnail = entry.replay.thumbnails.first(where: { $0.observationID == observationID }),
+              let data = try? entry.loadBlob(thumbnail.blobID)
+        else { return nil }
+        return PresentationImage(
+            data: data,
+            mediaType: thumbnail.mediaType,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            alt: "Observation \(observationID)"
+        )
+    }
+
     /// Takes over (or hands back) the conversation's live sessions, or just `lifecycleID`'s. Returns the lifecycle
     /// ids it changed.
     public func setTakeover(_ on: Bool, conversationID: UUID, lifecycleID: String?) async throws -> [String] {

@@ -114,9 +114,13 @@ extension SubAgentSpawnService {
             ComputerUseConversationOversight(coordinator: $0, conversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel)
         }
         var activity: (@Sendable (ComputerUseActivity) async -> Void)?
-        if let publish = deps.computerUse.publish {
+        let publish = deps.computerUse.publish
+        let observer = configuration.activityObserver
+        if publish != nil || observer != nil {
             activity = { update in
-                await publish(conversationID, .computerUseActivity(Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)))
+                let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)
+                await publish?(conversationID, .computerUseActivity(payload))
+                await observer?(payload)
             }
         }
         let session = ComputerUseSession(
@@ -145,7 +149,12 @@ extension SubAgentSpawnService {
             task: task,
             session: session,
             outcome: outcome,
-            actionsLogRef: await storeActionsLog(session: session)
+            actionsLogRef: await storeReplay(
+                session: session,
+                parentConversationID: conversationID,
+                lifecycleID: lifecycleID,
+                targetLabel: targetLabel
+            )
         )
         await finishLocalAgentLifecycle(
             lifecycleID: lifecycleID,
@@ -232,24 +241,44 @@ extension SubAgentSpawnService {
         }
     }
 
-    /// The full action log as a session blob, kept for audit and replay.
-    private func storeActionsLog(session: ComputerUseSession) async -> String? {
-        let records = await session.auditLog
-        guard !records.isEmpty else { return nil }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(records) else { return nil }
+    /// The replay (full action log plus observation thumbnails) as session blobs, for audit and post-run review.
+    /// Returns the replay document's ref.
+    private func storeReplay(
+        session: ComputerUseSession,
+        parentConversationID: UUID,
+        lifecycleID: String,
+        targetLabel: String
+    ) async -> String? {
         let harness = await deps.persistenceDomain.harnessSessionPersistence
-        guard let ref = try? harness.putBlob(
-            data: data,
-            durability: .durable,
-            originalName: "computer-use-actions-\(session.id.uuidString).json",
-            mimeType: "application/json",
-            trust: "unknown-party",
-            ttlSeconds: nil,
-            lane: .outbound
-        ) else { return nil }
+        guard let replay = try? await ComputerUseReplay(
+            session: session,
+            parentConversationID: parentConversationID,
+            lifecycleID: lifecycleID,
+            targetLabel: targetLabel,
+            storeThumbnail: { data in
+                try harness.putBlob(
+                    data: data,
+                    durability: .durable,
+                    originalName: "computer-use-thumbnail.png",
+                    mimeType: "image/png",
+                    trust: "unknown-party",
+                    ttlSeconds: nil,
+                    lane: .outbound
+                ).id
+            }
+        ), !(replay.records.isEmpty && replay.thumbnails.isEmpty),
+              let data = try? JSONEncoder.computerUseReplay.encode(replay),
+              let ref = try? harness.putBlob(
+                  data: data,
+                  durability: .durable,
+                  originalName: "computer-use-replay-\(session.id.uuidString).json",
+                  mimeType: "application/json",
+                  trust: "unknown-party",
+                  ttlSeconds: nil,
+                  lane: .outbound
+              )
+        else { return nil }
+        await deps.computerUse.replays.record(replay, documentBlobID: ref.id, loadBlob: { try harness.getBlob(blobId: $0) })
         return SessionBlobImageRef.path(for: ref.id)
     }
 }

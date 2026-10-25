@@ -1,8 +1,6 @@
 import Foundation
 #if canImport(ImageIO)
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
 #endif
 
 /// The cropped screen region an approval card shows for the action it asks about, cut from the observation the
@@ -42,8 +40,7 @@ enum ComputerUseTargetCrop {
     static func image(of region: DisplayRect, in observation: DisplayObservation, alt: String) -> PresentationImage? {
         #if canImport(ImageIO)
         guard let observationImage = observation.image, let data = observationImage.data,
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let screenshot = CGImageSourceCreateImageAtIndex(source, 0, nil)
+              let screenshot = ComputerUseImageEncoding.decode(data)
         else { return nil }
         let geometry = observationImage.geometry
         // Map through the recorded geometry, then onto the decoded bitmap in case it differs from `imageSize`.
@@ -57,28 +54,8 @@ enum ComputerUseTargetCrop {
             width: (corner.x - origin.x) * sx,
             height: (corner.y - origin.y) * sy
         ).integral.intersection(CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height))
-        guard !pixels.isNull, pixels.width >= 1, pixels.height >= 1, var crop = screenshot.cropping(to: pixels) else { return nil }
-
-        let longEdge = max(crop.width, crop.height)
-        if longEdge > maximumEdgePx {
-            let factor = Double(maximumEdgePx) / Double(longEdge)
-            let width = max(1, Int((Double(crop.width) * factor).rounded()))
-            let height = max(1, Int((Double(crop.height) * factor).rounded()))
-            guard let context = CGContext(
-                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return nil }
-            context.interpolationQuality = .high
-            context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
-            guard let scaled = context.makeImage() else { return nil }
-            crop = scaled
-        }
-
-        let encoded = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(encoded, UTType.png.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, crop, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return PresentationImage(data: encoded as Data, mediaType: "image/png", width: crop.width, height: crop.height, alt: alt)
+        guard !pixels.isNull, pixels.width >= 1, pixels.height >= 1, let crop = screenshot.cropping(to: pixels) else { return nil }
+        return ComputerUseImageEncoding.png(ComputerUseImageEncoding.scaled(crop, maxEdgePx: maximumEdgePx), alt: alt)
         #else
         return nil
         #endif

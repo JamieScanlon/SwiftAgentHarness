@@ -41,7 +41,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
 | Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
 | Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
-| "Agent active" HUD on the host desktop, post-run replay | Not yet |
+| "Agent active" HUD on the host desktop (`MacAgentActiveHUD`), post-run replays with observation thumbnails | Done. The replay index lives in the server process. |
 | Vendor-native toolsets and their safety signals, live view, deferred tool loading | Not yet |
 
 ## How it fits together
@@ -134,9 +134,12 @@ What happens:
 ```swift
 import SwiftAgentHarnessComputerUseMac
 
-let mac = MacHostDisplayTarget(configuration: .init(
+let hud = await MacAgentActiveHUD(onStop: { Task { await session.stopComputerUse() } })
+var macConfiguration = MacHostDisplayTarget.Configuration(
     excludedBundleIDs: ["com.example.my-harness-ui"]   // never captured, never granted
-))
+)
+macConfiguration.onForegroundDelivery = { app in await hud.noteForegroundDelivery(app: app) }
+let mac = MacHostDisplayTarget(configuration: macConfiguration)
 // Show mac.permissionChecklist() during onboarding.
 let stopKey = MacStopKeyMonitor { Task { await session.stopComputerUse() } }
 stopKey.start()                                       // needs Input Monitoring
@@ -144,7 +147,8 @@ stopKey.start()                                       // needs Input Monitoring
 session.installComputerUse(ComputerUseConfiguration(
     registry: DisplayTargetRegistry(targets: [mac]),
     defaults: ComputerUseSpecialistDefaults(target: MacHostDisplayTarget.defaultID, budgets: …, maxBudgets: …),
-    approveGrants: …
+    approveGrants: …,
+    activityObserver: { activity in await hud.apply(activity) }
 ))
 ```
 
@@ -156,10 +160,11 @@ session.installComputerUse(ComputerUseConfiguration(
 | Refs | An `eN` ref is valid only with its observation. Before acting, the element is re-read: a changed role or label, or a move beyond 8 pt, refuses with `escalation: observe`. Points are refused when the app has quit or restarted, checked by pid plus launch date. |
 | Delivery | It tries the accessibility action first (press, set value read back, focus, menu walk), then events posted to the target process. With `delivery: .foregroundAllowed` on the lease, it activates the app, posts global events, and restores the previous app on release, unless the user changed the frontmost app meanwhile. |
 | Input hygiene | It uses a private event source. Clicks settle 50 ms after the move, and double and triple clicks set click states. Unicode typing goes in chunks of at most 20 UTF-16 units on grapheme boundaries. Held keys and buttons are released after every batch, on takeover, and on release. Paste saves, writes, verifies, pastes, and restores the clipboard. |
+| HUD | `MacAgentActiveHUD` is a non-activating panel at the top of the main screen, on every Space, for the whole session. It says who is in control, the step, app, and last action, and how to stop. It has a Stop button, and it announces each escalation to foreground delivery. `sharingType = .none` keeps it out of every capture. |
 | Stop key | `MacStopKeyMonitor` is a listen-only event tap (Input Monitoring) on its own run-loop thread. It can't swallow events, and it doesn't need to: the harness never synthesizes the stop key. |
 | Evidence | Most pointer and key actions are `unverifiable`, because only a fresh observation can confirm them. A set-value that reads back is `confirmed`. A semantic call that timed out is `unverifiable` with `escalation: observe` and is never retried. |
 
-**Smoke test.** `SWIFTAGENTHARNESS_MAC_SMOKE=1 swift test --filter MacHostSmokeTests` observes the frontmost app on the real screen without sending input. Grant Screen Recording and Accessibility to the terminal first.
+**Smoke tests.** `SWIFTAGENTHARNESS_MAC_SMOKE=1 swift test --filter MacHostSmokeTests` observes the frontmost app on the real screen without sending input. Grant Screen Recording and Accessibility to the terminal first. The same variable enables `MacAgentActiveHUDPanelTests`, which needs a window server.
 
 **Verify on hardware before relying on it.** These are the spec's open questions plus this driver's:
 - capture of minimized and other-Space windows;
@@ -294,6 +299,18 @@ Clients answer and steer through REST. Each route checks conversation tenancy:
 
 The terminal surface renders all of this: an indicator line with the target, step, app, and last action; a dialog with a text field for a question; *Hand back control* and *Decline* for a handoff; **Ctrl-T** to take over or hand back and **Ctrl-X** to stop. Pass `HarnessRuntimeSession.computerUseControl` to `RuntimeTUIHost(computerUse:)`. Surfaces that render it declare `SurfaceCapabilities.computerUse`.
 
+### Replays
+
+When a specialist run ends, the harness stores a replay as session blobs: the full action log plus a thumbnail of each observation that had pixels. A thumbnail is at most 320 px on its long edge, a session keeps up to 120 (the first and the newest), and typed text appears only as its hash. The delegate result's `actionsLog` ends with the replay document's ref. Surfaces read replays through REST:
+
+| Route | Returns |
+|---|---|
+| `GET /api/conversations/{id}/computer-use/replays` | The conversation's recent replays, newest first |
+| `GET …/computer-use/replays/{lifecycleID}` | One replay: records and thumbnail rows |
+| `GET …/computer-use/replays/{lifecycleID}/thumbnails/{observationID}` | The thumbnail image, only for an observation that replay lists |
+
+A replay is a record for review. Re-executing its actions is a different feature and isn't offered.
+
 An unanswered question times out after 10 minutes and reports the user as unavailable. An unanswered handoff times out after 30 minutes and reports it as declined.
 
 ## The tool family
@@ -402,6 +419,9 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Question and handoff timeouts | The spec gives none. A question waits 10 minutes and a handoff 30, so a run nobody watches doesn't hold its lease until the run timeout. |
 | Stop and pending requests | The spec's abort "runs the full cleanup path". Stop also declines the session's pending questions and handoffs, so a blocked specialist unblocks and reports instead of waiting out its timeout. |
 | Surface capability | Surfaces declare `SurfaceCapabilities.computerUse` (the terminal does; channels don't). Intents are published whether or not such a surface is attached, as exec-approval intents are. |
+| Replay index | The spec doesn't say how replays are found later. The index is held in the server process, 50 per conversation. After a restart, a replay is reachable only through the ref in the delegate result. A persisted index needs a conversation-scoped store that isn't the regenerable engine-artifact cache. |
+| Replay thumbnails | They are captured as observations arrive, because the session keeps only the last few observations for citing. Like screenshots, they are stored durably. The spec's lifecycle (durable while referenced, then an ephemeral TTL, with longer retention for audit-marked sessions) isn't implemented. Recordings aren't supported by any target yet. |
+| HUD placement | The spec puts the HUD in the signed host app. In dev mode it runs in the harness process, which the capture excludes anyway. `activityObserver` and `onForegroundDelivery` feed it, so a host app can drive its own. |
 | Image block | The spec wants a cropped image of the target region on approval cards, but its portable presentation vocabulary (text, context, divider, buttons, select) has no image block. `image` was added to `ApprovalBlock`, `MessageBlock`, and `approval-presentation.schema.json`, with base64 data and alt text. `SurfacePresentationCapabilities.images` gates it, and core degrades it to the alt text. |
 | Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |
 | Terminal controls | The spec asks for takeover and stop controls without naming keys. Esc is the host stop key, so the terminal uses Ctrl-T and Ctrl-X, and they work while a dialog is open. |

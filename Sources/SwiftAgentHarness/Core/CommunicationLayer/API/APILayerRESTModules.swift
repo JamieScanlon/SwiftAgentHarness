@@ -2738,6 +2738,10 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
         var lifecycleIDs: [String]
     }
 
+    private struct ReplaysResponse: Content {
+        var replays: [ComputerUseReplaySummary]
+    }
+
     private static func unavailable() -> Response {
         APILayerRESTErrorResponse.error(status: .notFound, message: "Computer use is not available on this host")
     }
@@ -2818,6 +2822,52 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
             }
             guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
             return Self.json(SessionsChangedResponse(lifecycleIDs: await control.stop(conversationID: uuid)))
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            return Self.json(ReplaysResponse(replays: await control.replays(conversationID: uuid)))
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays", ":lifecycleID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let replay = await control.replay(conversationID: uuid, lifecycleID: lifecycleID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Computer-use replay not found")
+            }
+            return Self.json(replay)
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays", ":lifecycleID", "thumbnails", ":observationID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let observationID = req.parameters.get("observationID"),
+                  let image = await control.replayThumbnail(conversationID: uuid, lifecycleID: lifecycleID, observationID: observationID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Replay thumbnail not found")
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: .contentType, value: image.mediaType)
+            return Response(status: .ok, headers: headers, body: .init(data: image.data))
         }
 
         conversationsPath.post(":id", "computer-use", "takeover") { req async -> Response in

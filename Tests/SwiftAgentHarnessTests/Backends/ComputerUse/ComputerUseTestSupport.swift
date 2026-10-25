@@ -1,4 +1,7 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 @testable import SwiftAgentHarness
 
 /// A scripted display target. Observations get sequential ids; actions are recorded and answered by `outcomes`.
@@ -253,5 +256,25 @@ extension ComputerUseFixtures {
         }
         asking.cancel()
         throw CancellationError()
+    }
+}
+
+extension ComputerUseFixtures {
+    /// A real PNG sized as ``geometry`` says (1280×800 for a 1440×900 pt capture).
+    static func pngScreenshot(width: Int = 1280, height: Int = 800) throws -> Data {
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw CocoaError(.featureUnsupported) }
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let image = context.makeImage() else { throw CocoaError(.featureUnsupported) }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.featureUnsupported) }
+        return data as Data
     }
 }

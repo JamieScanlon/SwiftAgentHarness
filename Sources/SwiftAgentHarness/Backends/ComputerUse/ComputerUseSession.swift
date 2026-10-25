@@ -33,6 +33,11 @@ public struct ComputerUseSessionConfiguration: Sendable {
     public var runID: UUID?
     public var accountID: UUID?
     public var auditCapacity: Int
+    /// Replay thumbnails kept per session. Past it, the first and the newest are kept.
+    public var replayThumbnailCapacity: Int = 120
+    public var replayThumbnailEdgePx: Int = Self.defaultReplayThumbnailEdgePx
+
+    public static let defaultReplayThumbnailEdgePx = 320
 
     public init(
         task: ComputerUseTaskContext,
@@ -182,6 +187,7 @@ public actor ComputerUseSession {
     public nonisolated let manifest: DisplayTargetManifest
     public nonisolated let configuration: ComputerUseSessionConfiguration
     public nonisolated let coordinateCodec: ComputerUseCoordinateCodec
+    public nonisolated let startedAt: Date
 
     private let target: any DisplayTarget
     private let grants: ComputerUseGrantSet
@@ -206,6 +212,7 @@ public actor ComputerUseSession {
     public private(set) var headlessDenials: [ComputerUseActionRecord] = []
     /// The latest handoff nobody took, cleared when a later one is handed back.
     public private(set) var unresolvedHandoff: ComputerUseHandoffRequest?
+    public private(set) var replayFrames: [ComputerUseReplayFrame] = []
 
     public init(
         target: any DisplayTarget,
@@ -228,6 +235,7 @@ public actor ComputerUseSession {
         self.oversight = oversight
         self.activity = activity
         self.now = now
+        self.startedAt = now()
     }
 
     public var stepCount: Int { steps }
@@ -633,9 +641,30 @@ public actor ComputerUseSession {
     private func retain(_ observation: DisplayObservation) {
         if retained.updateValue(observation, forKey: observation.id) == nil {
             retainedOrder.append(observation.id)
+            keepReplayFrame(of: observation)
         }
         while retainedOrder.count > configuration.retainedObservations {
             retained.removeValue(forKey: retainedOrder.removeFirst())
+        }
+    }
+
+    private func keepReplayFrame(of observation: DisplayObservation) {
+        guard let data = observation.image?.data,
+              let image = ComputerUseImageEncoding.thumbnail(
+                  of: data,
+                  maxEdgePx: configuration.replayThumbnailEdgePx,
+                  alt: "Observation \(observation.id)"
+              )
+        else { return }
+        replayFrames.append(ComputerUseReplayFrame(
+            observationID: observation.id,
+            at: observation.at,
+            app: observation.target.app?.bundleID,
+            image: image
+        ))
+        let capacity = max(1, configuration.replayThumbnailCapacity)
+        if replayFrames.count > capacity {
+            replayFrames.remove(at: capacity > 1 ? 1 : 0)
         }
     }
 

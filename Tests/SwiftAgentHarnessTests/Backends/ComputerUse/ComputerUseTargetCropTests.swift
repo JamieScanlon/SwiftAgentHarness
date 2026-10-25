@@ -7,20 +7,8 @@ import UniformTypeIdentifiers
 
 @Suite("Computer use approval-card target crops")
 struct ComputerUseTargetCropTests {
-    /// A screenshot sized as the fixture geometry says (1280×800 for a 1440×900 pt capture).
-    private static func screenshot(width: Int = 1280, height: Int = 800) throws -> Data {
-        let context = try #require(CGContext(
-            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ))
-        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let image = try #require(context.makeImage())
-        let data = NSMutableData()
-        let destination = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, image, nil)
-        #expect(CGImageDestinationFinalize(destination))
-        return data as Data
+    private static func screenshot() throws -> Data {
+        try ComputerUseFixtures.pngScreenshot()
     }
 
     private static func size(of data: Data) throws -> (Int, Int) {

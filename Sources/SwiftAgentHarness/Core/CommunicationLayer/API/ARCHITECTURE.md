@@ -118,6 +118,9 @@ When session blob storage is configured, the server stores bytes in the session 
 | GET | `/api/conversations/:id/computer-use` | — | `{"pending":[ComputerUsePendingRequest],"sessions":[ComputerUseSessionStatus]}` |
 | POST | `/api/conversations/:id/computer-use/requests/:requestID` | `{"action":"answer"\|"hand-back"\|"decline","answer":<String>?,"note":<String>?}` | **200**; **400** bad body; **404** unknown request; **409** action doesn't fit the request kind. |
 | POST | `/api/conversations/:id/computer-use/stop` | — | `{"lifecycleIDs":[String]}` (empty when nothing ran) |
+| GET | `/api/conversations/:id/computer-use/replays` | — | `{"replays":[ComputerUseReplaySummary]}`, newest first (held in process) |
+| GET | `/api/conversations/:id/computer-use/replays/:lifecycleID` | — | `ComputerUseReplay`: action log plus thumbnail rows; **404** when unknown |
+| GET | `/api/conversations/:id/computer-use/replays/:lifecycleID/thumbnails/:observationID` | — | Image bytes for a thumbnail the replay lists; **404** otherwise |
 | POST | `/api/conversations/:id/computer-use/takeover` | `{"on":<Bool>,"lifecycleID":<String>?}` | `{"lifecycleIDs":[String]}`; **404** when no live session matches; **409** when the target refuses. |
 
 ### Conversations

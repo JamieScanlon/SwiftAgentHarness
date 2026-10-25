@@ -29,6 +29,9 @@ public struct ComputerUseConfiguration: Sendable {
     public var approvals: (any ExecApprovalDelivering)?
     public var intentChecker: ComputerUseIntentChecker?
     public var oversight: (any ComputerUseOversight)?
+    /// In-process observer of every specialist's activity, such as the host's "agent active" HUD. Surfaces get
+    /// the same updates as `computerUseActivity` intents on the user's conversation.
+    public var activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)?
     public var specialist: ComputerUseSpecialistProfile
 
     public init(
@@ -38,6 +41,7 @@ public struct ComputerUseConfiguration: Sendable {
         approvals: (any ExecApprovalDelivering)? = nil,
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
         specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile()
     ) {
         self.registry = registry
@@ -46,6 +50,7 @@ public struct ComputerUseConfiguration: Sendable {
         self.approvals = approvals
         self.intentChecker = intentChecker
         self.oversight = oversight
+        self.activityObserver = activityObserver
         self.specialist = specialist
     }
 }
@@ -90,6 +95,7 @@ final class ComputerUseInstallation: Sendable {
     private let coordinatorState = Mutex<ComputerUseOversightCoordinator?>(nil)
     private let publishState = Mutex<ComputerUseOversightCoordinator.Publish?>(nil)
     let sessions = ComputerUseSessionDirectory()
+    let replays = ComputerUseReplayIndex()
 
     init() {}
 
