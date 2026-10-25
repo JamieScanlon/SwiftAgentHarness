@@ -19,6 +19,14 @@ final class ReplayBlobStore: Sendable {
     }
 
     var count: Int { blobs.withLock { $0.count } }
+
+    private let expiryLog = Mutex<[String: Date?]>([:])
+
+    func setExpiry(_ id: String, _ expiresAt: Date?) {
+        expiryLog.withLock { $0[id] = expiresAt }
+    }
+
+    var expiries: [String: Date?] { expiryLog.withLock { $0 } }
 }
 
 @Suite("Computer use replays")
@@ -94,16 +102,26 @@ struct ComputerUseReplayTests {
         let store = ReplayBlobStore()
         for (offset, lifecycleID) in ["call-1", "call-2", "call-3"].enumerated() {
             let replay = ComputerUseReplay.fixture(parent: parent, lifecycleID: lifecycleID, endedAt: Date(timeIntervalSince1970: Double(offset)))
-            await index.record(replay, documentBlobID: store.put(Data(lifecycleID.utf8)), loadBlob: { try store.get($0) })
+            await index.record(.fixture(replay, store: store))
         }
-        await index.record(
-            ComputerUseReplay.fixture(parent: UUID(), lifecycleID: "call-other", endedAt: Date()),
-            documentBlobID: "x",
-            loadBlob: { try store.get($0) }
-        )
+        await index.record(.fixture(ComputerUseReplay.fixture(parent: UUID(), lifecycleID: "call-other", endedAt: Date()), store: store))
         #expect(await index.summaries(parent: parent).map(\.lifecycleID) == ["call-3", "call-2"])
         #expect(await index.entry(parent: parent, lifecycleID: "call-1") == nil)
         #expect(await index.entry(parent: parent, lifecycleID: "call-2")?.replay.lifecycleID == "call-2")
+    }
+
+    @Test("Expired replays drop out of the index")
+    func expiredHidden() async throws {
+        let clock = ComputerUseTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let index = ComputerUseReplayIndex(now: { clock.now() })
+        let parent = UUID()
+        var entry = ComputerUseReplayIndexEntry.fixture(.fixture(parent: parent, lifecycleID: "call-1", endedAt: clock.now()), store: ReplayBlobStore())
+        entry.expiresAt = clock.now().addingTimeInterval(60)
+        await index.record(entry)
+        #expect(await index.summaries(parent: parent).first?.expiresAt == entry.expiresAt)
+        clock.advance(seconds: 61)
+        #expect(await index.summaries(parent: parent).isEmpty)
+        #expect(await index.entry(parent: parent, lifecycleID: "call-1") == nil)
     }
 
     @Test("The control service serves a replay and only the thumbnails it lists")
@@ -119,7 +137,7 @@ struct ComputerUseReplayTests {
         replay.thumbnails = [ComputerUseReplayThumbnail(
             observationID: "o_1", at: Date(), app: nil, width: 32, height: 20, mediaType: "image/png", blobID: thumbnailID
         )]
-        await installation.replays.record(replay, documentBlobID: "doc", loadBlob: { try store.get($0) })
+        await installation.replays.record(.fixture(replay, store: store))
 
         #expect(await control.replays(conversationID: parent).map(\.lifecycleID) == ["call-1"])
         #expect(await control.replays(conversationID: UUID()).isEmpty)
@@ -130,6 +148,77 @@ struct ComputerUseReplayTests {
         #expect(thumbnail.mediaType == "image/png")
         #expect(await control.replayThumbnail(conversationID: parent, lifecycleID: "call-1", observationID: foreignID) == nil)
         #expect(await control.replayThumbnail(conversationID: parent, lifecycleID: "call-1", observationID: "o_2") == nil)
+    }
+
+    @Test("Marking a released run for audit moves every blob it holds to the audit retention, and unmarking moves them back")
+    func auditReleased() async throws {
+        let installation = ComputerUseInstallation()
+        installation.install(ComputerUseConfiguration(
+            registry: DisplayTargetRegistry(targets: []),
+            defaults: ComputerUseSpecialistDefaults(
+                target: "t",
+                budgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60)),
+                maxBudgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60))
+            ),
+            approveGrants: { _ in nil },
+            retention: ComputerUseRetention(afterRelease: .seconds(3_600), audit: .seconds(30 * 86_400))
+        ))
+        let control = ComputerUseControlService(installation: installation)
+        let parent = UUID()
+        let store = ReplayBlobStore()
+        let releasedAt = Date()
+        var entry = ComputerUseReplayIndexEntry.fixture(.fixture(parent: parent, lifecycleID: "call-1", endedAt: releasedAt), store: store)
+        entry.blobIDs = ["shot-1", "thumb-1", "doc"]
+        entry.releasedAt = releasedAt
+        entry.expiresAt = releasedAt.addingTimeInterval(3_600)
+        await installation.replays.record(entry)
+
+        let marked = try #require(await control.setAuditMark(true, conversationID: parent, lifecycleID: "call-1"))
+        #expect(marked.released && marked.auditMarked)
+        #expect(marked.expiresAt == releasedAt.addingTimeInterval(30 * 86_400))
+        #expect(store.expiries == ["shot-1": marked.expiresAt, "thumb-1": marked.expiresAt, "doc": marked.expiresAt])
+        #expect(await control.replays(conversationID: parent).first?.auditMarked == true)
+
+        let unmarked = try #require(await control.setAuditMark(false, conversationID: parent, lifecycleID: "call-1"))
+        #expect(unmarked.expiresAt == releasedAt.addingTimeInterval(3_600))
+        #expect(store.expiries["doc"] == releasedAt.addingTimeInterval(3_600))
+        #expect(await control.setAuditMark(true, conversationID: parent, lifecycleID: "call-9") == nil)
+    }
+
+    @Test("A live run takes the audit mark at release")
+    func auditLive() async throws {
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
+        let control = ComputerUseControlService(installation: installation)
+        let parent = UUID()
+        try await ComputerUseFixtures.registerLiveSession(in: installation, parent: parent, lifecycleID: "call-1")
+        let status = try #require(await control.setAuditMark(true, conversationID: parent, lifecycleID: "call-1"))
+        #expect(!status.released)
+        #expect(await installation.blobs.takeAuditMark(parent: parent, lifecycleID: "call-1"))
+        #expect(await !installation.blobs.takeAuditMark(parent: parent, lifecycleID: "call-1"))
+    }
+
+    @Test("Retention: the TTL runs from release, and audit retention replaces it")
+    func retentionRule() {
+        let released = Date(timeIntervalSince1970: 1_800_000_000)
+        let retention = ComputerUseRetention(afterRelease: .seconds(60), audit: nil)
+        #expect(retention.expiry(releasedAt: released, auditMarked: false) == released.addingTimeInterval(60))
+        #expect(retention.expiry(releasedAt: released, auditMarked: true) == nil)
+        #expect(ComputerUseRetention(afterRelease: .seconds(60), audit: .seconds(600)).expiry(releasedAt: released, auditMarked: true)
+            == released.addingTimeInterval(600))
+    }
+}
+
+extension ComputerUseReplayIndexEntry {
+    static func fixture(_ replay: ComputerUseReplay, store: ReplayBlobStore) -> ComputerUseReplayIndexEntry {
+        ComputerUseReplayIndexEntry(
+            replay: replay,
+            documentBlobID: "doc",
+            blobIDs: replay.thumbnails.map(\.blobID) + ["doc"],
+            releasedAt: replay.endedAt,
+            auditMarked: false,
+            expiresAt: nil,
+            access: ComputerUseBlobAccess(load: { try store.get($0) }, setExpiry: { store.setExpiry($0, $1) })
+        )
     }
 }
 

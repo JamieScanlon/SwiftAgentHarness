@@ -22,7 +22,8 @@ enum AttachmentIngestService {
         harness: any HarnessSessionPersistence,
         conversationManager: ConversationManager,
         attachmentTrustRaw: String?,
-        addedBy: ConversationAttachmentAddedBy
+        addedBy: ConversationAttachmentAddedBy,
+        keepsEphemeralBlobs: Bool = false
     ) throws -> AttachmentIngestResult {
         guard !images.isEmpty else {
             return AttachmentIngestResult(refOnlyImages: [], ingestRefs: [])
@@ -36,6 +37,13 @@ enum AttachmentIngestService {
             ?? AttachmentProvenancePolicy.defaultTrustRaw(for: addedBy)
 
         for image in images {
+            // A tool that stored its images ephemeral owns their lifecycle (computer-use screenshots expire after
+            // the run), so they are neither promoted nor registered as attachments.
+            if keepsEphemeralBlobs, let blobId = SessionBlobImageRef.parsePath(image.path),
+               let stat = try? harness.statBlob(blobId: blobId), stat.durability == .ephemeral {
+                refOnlyImages.append(Message.Image(name: image.name, path: image.path))
+                continue
+            }
             guard let resolved = try? resolveBlob(
                 for: image,
                 harness: harness,

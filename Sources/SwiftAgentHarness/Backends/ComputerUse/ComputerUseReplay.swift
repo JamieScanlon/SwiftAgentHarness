@@ -30,6 +30,9 @@ public struct ComputerUseReplaySummary: Sendable, Codable, Equatable {
     public var steps: Int
     public var actionCount: Int
     public var thumbnailCount: Int
+    public var auditMarked: Bool = false
+    /// When the replay and its images expire; `nil` while they are held.
+    public var expiresAt: Date?
 }
 
 /// What a specialist session did, for the user to review afterwards: the action log plus observation thumbnails.
@@ -111,35 +114,68 @@ extension JSONDecoder {
     static var computerUseReplay: JSONDecoder { JSONDecoder() }
 }
 
+/// Blob-store access for a replay's images, bound when the replay is recorded.
+struct ComputerUseBlobAccess: Sendable {
+    var load: @Sendable (String) throws -> Data
+    var setExpiry: @Sendable (String, Date?) throws -> Void
+}
+
 struct ComputerUseReplayIndexEntry: Sendable {
     var replay: ComputerUseReplay
     /// The stored replay document.
     var documentBlobID: String
-    var loadBlob: @Sendable (String) throws -> Data
+    /// Every blob the run's retention covers: screenshots, thumbnails, and the replay document.
+    var blobIDs: [String]
+    var releasedAt: Date
+    var auditMarked: Bool
+    var expiresAt: Date?
+    var access: ComputerUseBlobAccess
+
+    var summary: ComputerUseReplaySummary {
+        var summary = replay.summary
+        summary.auditMarked = auditMarked
+        summary.expiresAt = expiresAt
+        return summary
+    }
 }
 
-/// Recent replays per user conversation, newest first, so surfaces can list and open them.
+/// Recent replays per user conversation, newest first, so surfaces can list and open them. Expired replays drop
+/// out.
 actor ComputerUseReplayIndex {
     private let capacityPerConversation: Int
+    private let now: @Sendable () -> Date
     private var entries: [UUID: [ComputerUseReplayIndexEntry]] = [:]
 
-    init(capacityPerConversation: Int = 50) {
+    init(capacityPerConversation: Int = 50, now: @escaping @Sendable () -> Date = { Date() }) {
         self.capacityPerConversation = max(1, capacityPerConversation)
+        self.now = now
     }
 
-    func record(_ replay: ComputerUseReplay, documentBlobID: String, loadBlob: @escaping @Sendable (String) throws -> Data) {
-        var list = entries[replay.parentConversationID] ?? []
-        list.removeAll { $0.replay.lifecycleID == replay.lifecycleID }
-        list.insert(ComputerUseReplayIndexEntry(replay: replay, documentBlobID: documentBlobID, loadBlob: loadBlob), at: 0)
+    func record(_ entry: ComputerUseReplayIndexEntry) {
+        let parent = entry.replay.parentConversationID
+        var list = entries[parent] ?? []
+        list.removeAll { $0.replay.lifecycleID == entry.replay.lifecycleID }
+        list.insert(entry, at: 0)
         list.sort { $0.replay.endedAt > $1.replay.endedAt }
-        entries[replay.parentConversationID] = Array(list.prefix(capacityPerConversation))
+        entries[parent] = Array(list.prefix(capacityPerConversation))
     }
 
     func summaries(parent conversationID: UUID) -> [ComputerUseReplaySummary] {
-        (entries[conversationID] ?? []).map(\.replay.summary)
+        live(conversationID).map(\.summary)
     }
 
     func entry(parent conversationID: UUID, lifecycleID: String) -> ComputerUseReplayIndexEntry? {
-        entries[conversationID]?.first { $0.replay.lifecycleID == lifecycleID }
+        live(conversationID).first { $0.replay.lifecycleID == lifecycleID }
+    }
+
+    func updateRetention(parent conversationID: UUID, lifecycleID: String, auditMarked: Bool, expiresAt: Date?) {
+        guard let index = entries[conversationID]?.firstIndex(where: { $0.replay.lifecycleID == lifecycleID }) else { return }
+        entries[conversationID]?[index].auditMarked = auditMarked
+        entries[conversationID]?[index].expiresAt = expiresAt
+    }
+
+    private func live(_ conversationID: UUID) -> [ComputerUseReplayIndexEntry] {
+        let current = now()
+        return (entries[conversationID] ?? []).filter { entry in entry.expiresAt.map { $0 > current } ?? true }
     }
 }

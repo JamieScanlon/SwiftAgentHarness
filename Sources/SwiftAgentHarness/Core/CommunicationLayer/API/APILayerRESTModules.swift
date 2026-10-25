@@ -2738,6 +2738,10 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
         var lifecycleIDs: [String]
     }
 
+    private struct AuditBody: Content {
+        var marked: Bool
+    }
+
     private struct ReplaysResponse: Content {
         var replays: [ComputerUseReplaySummary]
     }
@@ -2868,6 +2872,25 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
             var headers = HTTPHeaders()
             headers.add(name: .contentType, value: image.mediaType)
             return Response(status: .ok, headers: headers, body: .init(data: image.data))
+        }
+
+        conversationsPath.post(":id", "computer-use", "runs", ":lifecycleID", "audit") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let body = try? req.content.decode(AuditBody.self) else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected {\"marked\": Bool}")
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let status = await control.setAuditMark(body.marked, conversationID: uuid, lifecycleID: lifecycleID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Computer-use run not found")
+            }
+            return Self.json(status)
         }
 
         conversationsPath.post(":id", "computer-use", "takeover") { req async -> Response in

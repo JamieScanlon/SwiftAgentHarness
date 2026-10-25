@@ -121,6 +121,7 @@ When session blob storage is configured, the server stores bytes in the session 
 | GET | `/api/conversations/:id/computer-use/replays` | — | `{"replays":[ComputerUseReplaySummary]}`, newest first (held in process) |
 | GET | `/api/conversations/:id/computer-use/replays/:lifecycleID` | — | `ComputerUseReplay`: action log plus thumbnail rows; **404** when unknown |
 | GET | `/api/conversations/:id/computer-use/replays/:lifecycleID/thumbnails/:observationID` | — | Image bytes for a thumbnail the replay lists; **404** otherwise |
+| POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/audit` | `{"marked":<Bool>}` | `ComputerUseAuditStatus`; **404** when no live or retained run matches |
 | POST | `/api/conversations/:id/computer-use/takeover` | `{"on":<Bool>,"lifecycleID":<String>?}` | `{"lifecycleIDs":[String]}`; **404** when no live session matches; **409** when the target refuses. |
 
 ### Conversations

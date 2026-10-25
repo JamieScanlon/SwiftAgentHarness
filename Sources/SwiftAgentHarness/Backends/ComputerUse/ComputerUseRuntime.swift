@@ -32,6 +32,7 @@ public struct ComputerUseConfiguration: Sendable {
     /// In-process observer of every specialist's activity, such as the host's "agent active" HUD. Surfaces get
     /// the same updates as `computerUseActivity` intents on the user's conversation.
     public var activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)?
+    public var retention: ComputerUseRetention
     public var specialist: ComputerUseSpecialistProfile
 
     public init(
@@ -42,6 +43,7 @@ public struct ComputerUseConfiguration: Sendable {
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,
         activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
+        retention: ComputerUseRetention = ComputerUseRetention(),
         specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile()
     ) {
         self.registry = registry
@@ -51,6 +53,7 @@ public struct ComputerUseConfiguration: Sendable {
         self.intentChecker = intentChecker
         self.oversight = oversight
         self.activityObserver = activityObserver
+        self.retention = retention
         self.specialist = specialist
     }
 }
@@ -96,6 +99,7 @@ final class ComputerUseInstallation: Sendable {
     private let publishState = Mutex<ComputerUseOversightCoordinator.Publish?>(nil)
     let sessions = ComputerUseSessionDirectory()
     let replays = ComputerUseReplayIndex()
+    let blobs = ComputerUseBlobLedger()
 
     init() {}
 
@@ -111,6 +115,17 @@ final class ComputerUseInstallation: Sendable {
     /// Publishes a surface intent to a conversation's events topic.
     var publish: ComputerUseOversightCoordinator.Publish? {
         publishState.withLock { $0 }
+    }
+
+    var retention: ComputerUseRetention {
+        configuration?.retention ?? ComputerUseRetention()
+    }
+
+    /// When images a conversation's tool results store should expire, or `nil` for the durable lane. A live
+    /// specialist's child holds them until its lease's hard expiry plus the release TTL; release moves it.
+    func toolImageExpiry(conversationID: UUID) async -> Date? {
+        guard let session = await sessions.session(for: conversationID) else { return nil }
+        return session.lease.expiresAt.addingTimeInterval(retention.afterRelease.timeInterval)
     }
 
     func install(_ configuration: ComputerUseConfiguration, publish: ComputerUseOversightCoordinator.Publish? = nil) {

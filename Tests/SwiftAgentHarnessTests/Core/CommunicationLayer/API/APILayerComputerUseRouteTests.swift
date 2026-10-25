@@ -157,7 +157,7 @@ struct APILayerComputerUseRouteTests {
         replay.thumbnails = [ComputerUseReplayThumbnail(
             observationID: "o_1", at: replay.startedAt, app: "com.apple.TextEdit", width: 32, height: 20, mediaType: "image/png", blobID: store.put(png)
         )]
-        await installation.replays.record(replay, documentBlobID: "doc", loadBlob: { try store.get($0) })
+        await installation.replays.record(.fixture(replay, store: store))
 
         try await withRoutes(installation) { app in
             try await app.testing().test(.GET, "\(base)/replays") { res async throws in
@@ -187,6 +187,41 @@ struct APILayerComputerUseRouteTests {
                 #expect(try json(res)["type"] as? String == "error")
             }
         }
+    }
+
+    @Test("POST …/runs/{lifecycleID}/audit marks a live or released run, and 404s for an unknown one")
+    func audit() async throws {
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
+        try await ComputerUseFixtures.registerLiveSession(in: installation, parent: conversationID, lifecycleID: "call-live")
+        let store = ReplayBlobStore()
+        var entry = ComputerUseReplayIndexEntry.fixture(.fixture(parent: conversationID, lifecycleID: "call-done", endedAt: Date()), store: store)
+        entry.expiresAt = Date().addingTimeInterval(3_600)
+        await installation.replays.record(entry)
+
+        try await withRoutes(installation) { app in
+            func post(_ lifecycleID: String, _ body: String, _ check: @escaping (TestingHTTPResponse) throws -> Void) async throws {
+                try await app.testing().test(.POST, "\(base)/runs/\(lifecycleID)/audit", beforeRequest: { req in
+                    req.headers.contentType = .json
+                    req.body = .init(string: body)
+                }, afterResponse: { res async throws in try check(res) })
+            }
+            try await post("call-live", #"{"marked":true}"#) { res in
+                #expect(res.status == .ok)
+                let body = try json(res)
+                #expect(body["auditMarked"] as? Bool == true)
+                #expect(body["released"] as? Bool == false)
+            }
+            try await post("call-done", #"{"marked":true}"#) { res in
+                #expect(res.status == .ok)
+                let body = try json(res)
+                #expect(body["released"] as? Bool == true)
+                #expect(body["expiresAt"] == nil, "default audit retention holds until unmarked")
+            }
+            try await post("call-nope", #"{"marked":true}"#) { res in #expect(res.status == .notFound) }
+            try await post("call-done", #"{"mark":1}"#) { res in #expect(res.status == .badRequest) }
+        }
+        #expect(await installation.blobs.takeAuditMark(parent: conversationID, lifecycleID: "call-live"))
+        #expect(store.expiries["doc"] == .some(nil))
     }
 
     @Test("Routes 404 when the host has no computer use, and 400 on a bad conversation id")

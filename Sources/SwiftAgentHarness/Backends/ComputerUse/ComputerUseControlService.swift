@@ -15,6 +15,16 @@ public struct ComputerUseControlStatus: Sendable, Codable, Equatable {
     public var sessions: [ComputerUseSessionStatus]
 }
 
+/// A run's audit mark and when its images expire.
+public struct ComputerUseAuditStatus: Sendable, Codable, Equatable {
+    public var lifecycleID: String
+    public var auditMarked: Bool
+    /// `false` while the run is live: the mark takes effect at release.
+    public var released: Bool
+    /// `nil` while held.
+    public var expiresAt: Date?
+}
+
 public enum ComputerUseRequestResolutionResult: Sendable, Equatable {
     case resolved
     case notFound
@@ -79,7 +89,7 @@ public struct ComputerUseControlService: Sendable {
     public func replayThumbnail(conversationID: UUID, lifecycleID: String, observationID: ObservationID) async -> PresentationImage? {
         guard let entry = await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID),
               let thumbnail = entry.replay.thumbnails.first(where: { $0.observationID == observationID }),
-              let data = try? entry.loadBlob(thumbnail.blobID)
+              let data = try? entry.access.load(thumbnail.blobID)
         else { return nil }
         return PresentationImage(
             data: data,
@@ -88,6 +98,24 @@ public struct ComputerUseControlService: Sendable {
             height: thumbnail.height,
             alt: "Observation \(observationID)"
         )
+    }
+
+    /// Marks a run for audit, or removes the mark. A live run takes the mark at release; a released run's images
+    /// move to the audit retention (or back to the normal one) right away. `nil` when the conversation has no
+    /// such run.
+    public func setAuditMark(_ marked: Bool, conversationID: UUID, lifecycleID: String) async -> ComputerUseAuditStatus? {
+        let live = await installation.sessions.entries(parent: conversationID)
+        if live.contains(where: { $0.lifecycleID == lifecycleID }) {
+            await installation.blobs.setAuditMark(marked, parent: conversationID, lifecycleID: lifecycleID)
+            return ComputerUseAuditStatus(lifecycleID: lifecycleID, auditMarked: marked, released: false, expiresAt: nil)
+        }
+        guard let entry = await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID) else { return nil }
+        let expiresAt = installation.retention.expiry(releasedAt: entry.releasedAt, auditMarked: marked)
+        for blobID in entry.blobIDs {
+            try? entry.access.setExpiry(blobID, expiresAt)
+        }
+        await installation.replays.updateRetention(parent: conversationID, lifecycleID: lifecycleID, auditMarked: marked, expiresAt: expiresAt)
+        return ComputerUseAuditStatus(lifecycleID: lifecycleID, auditMarked: marked, released: true, expiresAt: expiresAt)
     }
 
     /// Takes over (or hands back) the conversation's live sessions, or just `lifecycleID`'s. Returns the lifecycle

@@ -116,6 +116,22 @@ struct SessionBlobStore: Sendable {
                 try SessionPersistenceLayout.ensureSecureMediaDirectory(fileURL.deletingLastPathComponent())
                 try writeBlob(data: data, to: fileURL)
                 try writeSidecar(sidecar, nextTo: fileURL)
+            } else if var existing = try readSidecar(nextTo: fileURL) {
+                // A second holder of the same bytes extends the expiry; it never shortens the first holder's.
+                if let current = existing.expiresAt, let expiresAt, expiresAt > current {
+                    existing.expiresAt = expiresAt
+                    try writeSidecar(existing, nextTo: fileURL)
+                }
+                return SessionBlobRef(
+                    id: blobId,
+                    mimeType: existing.mimeType,
+                    size: data.count,
+                    originalName: existing.originalName,
+                    durability: .ephemeral,
+                    trust: existing.trust,
+                    createdAt: existing.createdAt,
+                    expiresAt: existing.expiresAt
+                )
             }
         }
         return SessionBlobRef(
@@ -126,6 +142,39 @@ struct SessionBlobStore: Sendable {
             durability: durability,
             trust: trust,
             createdAt: now,
+            expiresAt: expiresAt
+        )
+    }
+
+    /// Sets an ephemeral blob's expiry; `nil` holds it until set again. A durable blob is returned unchanged,
+    /// since another owner may hold the same bytes.
+    func setExpiry(blobId: String, expiresAt: Date?, now: Date = Date()) throws -> SessionBlobRef {
+        let normalized = Self.normalizeBlobId(blobId)
+        guard let location = try resolveLocation(blobId: normalized) else {
+            throw SessionPersistenceError.blobNotFound(blobId: normalized)
+        }
+        guard !location.isDurable else { return try stat(blobId: normalized, now: now) }
+        let attrs = try FileManager.default.attributesOfItem(atPath: location.fileURL.path)
+        var sidecar = try readSidecar(nextTo: location.fileURL) ?? SessionBlobSidecar(
+            mimeType: "application/octet-stream",
+            originalName: nil,
+            durability: .ephemeral,
+            trust: "unknown-party",
+            createdAt: now,
+            expiresAt: nil,
+            lane: location.lane,
+            trashedAt: nil
+        )
+        sidecar.expiresAt = expiresAt
+        try writeSidecar(sidecar, nextTo: location.fileURL)
+        return SessionBlobRef(
+            id: normalized,
+            mimeType: sidecar.mimeType,
+            size: (attrs[.size] as? NSNumber)?.intValue ?? 0,
+            originalName: sidecar.originalName,
+            durability: .ephemeral,
+            trust: sidecar.trust,
+            createdAt: sidecar.createdAt,
             expiresAt: expiresAt
         )
     }

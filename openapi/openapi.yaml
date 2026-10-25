@@ -1884,6 +1884,52 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use/runs/{lifecycleID}/audit:
+    post:
+      operationId: setConversationComputerUseAuditMark
+      tags: [ComputerUse]
+      summary: Mark a computer-use run for audit, or remove the mark
+      description: |
+        A run's screenshots, thumbnails, and replay expire a fixed time after its lease is released. A marked run
+        gets the audit retention instead, which by default holds them until the mark is removed. A live run takes
+        the mark at release; a released run's images move right away.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [marked]
+              properties:
+                marked:
+                  type: boolean
+      responses:
+        "200":
+          description: The run's audit mark and expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseAuditStatus"
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live or retained run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /conversations/{id}/computer-use/replays:
     get:
       operationId: listConversationComputerUseReplays
@@ -3677,6 +3723,28 @@ components:
           type: integer
         thumbnailCount:
           type: integer
+        auditMarked:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the replay and its images expire. Absent while they are held.
+
+    ComputerUseAuditStatus:
+      type: object
+      required: [lifecycleID, auditMarked, released]
+      properties:
+        lifecycleID:
+          type: string
+        auditMarked:
+          type: boolean
+        released:
+          type: boolean
+          description: False while the run is live; the mark takes effect at release.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Absent while the images are held.
 
     ComputerUseReplayThumbnail:
       type: object

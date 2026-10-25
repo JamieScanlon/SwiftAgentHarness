@@ -118,7 +118,12 @@ struct ComputerUseSpecialistIntegrationTests {
             }
             let tools = ComputerUseToolProvider(session: computerSession)
             for step in script {
-                await recorder.record(try await tools.executeTool(ToolCall(name: step.name, arguments: .object(step.arguments), id: UUID().uuidString)))
+                let callID = UUID().uuidString
+                let result = try await tools.executeTool(ToolCall(name: step.name, arguments: .object(step.arguments), id: callID))
+                await recorder.record(result)
+                // Persist the result as a live child loop would, so tool images take the real offload path.
+                let message = Message(id: UUID(), role: .tool, content: "", toolCallId: callID).replacingToolResult(result)
+                await session.conversationMessagingRuntimeService.appendMessagesToConversation([message], conversationID: childID)
             }
             guard var child = await session.persistenceDomain.modelConversation(id: childID) else {
                 throw NSError(domain: "ComputerUseSpecialistIntegrationTests", code: 2)
@@ -360,6 +365,55 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(statuses.contains(.acting))
         #expect(statuses.last == .ended)
         #expect(events.last { $0.1.kind == .computerUseActivity }?.1.computerUse?.lifecycleID == "call-cu-1")
+    }
+
+    @Test("At release a run's screenshots, thumbnails, and replay move from held to the release TTL")
+    func retentionAtRelease() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setScreenshot(try ComputerUseFixtures.pngScreenshot())
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder()
+        )
+        let started = Date()
+        _ = try await invoke(session, parent: parent)
+        let entry = try #require(await session.runtimeDependencies.computerUse.replays.entry(parent: parent.id, lifecycleID: "call-cu-1"))
+        // Screenshots from the child's tool results are held too, not only the replay's own blobs.
+        #expect(entry.blobIDs.count > entry.replay.thumbnails.count + 1)
+        let harness = await session.runtimeDependencies.persistenceDomain.harnessSessionPersistence
+        let ttl = ComputerUseRetention().afterRelease.timeInterval
+        for blobID in entry.blobIDs {
+            let ref = try harness.statBlob(blobId: blobID)
+            #expect(ref.durability == .ephemeral, "\(ref.originalName ?? "?") \(ref.mimeType) \(ref.size)")
+            let expiresAt = try #require(ref.expiresAt)
+            #expect(expiresAt >= started.addingTimeInterval(ttl) && expiresAt <= Date().addingTimeInterval(ttl))
+        }
+        #expect(entry.expiresAt == entry.releasedAt.addingTimeInterval(ttl))
+    }
+
+    @Test("An audit mark placed while the run is live holds its images at release")
+    func auditMarkedWhileLive() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setScreenshot(try ComputerUseFixtures.pngScreenshot())
+        let sessionBox = Box<HarnessRuntimeSession>()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+            publish: { conversationID, intent in
+                // Play the user: mark the run for audit as soon as it starts.
+                guard intent.kind == .computerUseActivity, intent.computerUse?.status == .started,
+                      let lifecycleID = intent.computerUse?.lifecycleID, let session = await sessionBox.value else { return }
+                _ = await session.computerUseControl.setAuditMark(true, conversationID: conversationID, lifecycleID: lifecycleID)
+            }
+        )
+        sessionBox.value = session
+        _ = try await invoke(session, parent: parent)
+        let summary = try #require(await session.computerUseControl.replays(conversationID: parent.id).first)
+        #expect(summary.auditMarked)
+        #expect(summary.expiresAt == nil)
+        let entry = try #require(await session.runtimeDependencies.computerUse.replays.entry(parent: parent.id, lifecycleID: "call-cu-1"))
+        let harness = await session.runtimeDependencies.persistenceDomain.harnessSessionPersistence
+        for blobID in entry.blobIDs {
+            #expect(try harness.statBlob(blobId: blobID).expiresAt == nil)
+        }
     }
 
     @Test("Without verification the run is done-unverified")

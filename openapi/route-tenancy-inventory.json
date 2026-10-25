@@ -176,6 +176,13 @@
       "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"takeover\")"
     },
     {
+      "method": "POST",
+      "path": "/api/conversations/{id}/computer-use/runs/{lifecycleID}/audit",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"audit\")"
+    },
+    {
       "method": "GET",
       "path": "/api/conversations/{id}/computer-use/replays",
       "tenancy_guard": "conversationAccess",

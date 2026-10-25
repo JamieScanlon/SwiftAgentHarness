@@ -43,6 +43,50 @@ struct AttachmentIngestServiceTests {
         #expect(reloaded.attachmentsCatalog[0].blobId == result.ingestRefs[0].blobId)
     }
 
+    @Test("A tool message's ephemeral blob stays ephemeral and unregistered; anyone else's is promoted")
+    func toolOwnedEphemeralBlobs() throws {
+        let (stack, root) = try makeStack(label: "ingest-ephemeral")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let conversation = try stack.conversationManager.createConversation(
+            with: HarnessConversationTestFixtures.makeTestModel(),
+            userSystemPrompt: "sys",
+            topic: nil,
+            description: nil,
+            metadata: nil,
+            interactionMode: .chat
+        )
+        let harness = stack.harnessSessionPersistence
+        let ref = try harness.putBlob(
+            data: Data("screenshot".utf8), durability: .ephemeral, originalName: "o_1.png", mimeType: "image/png",
+            trust: "unknown-party", ttlSeconds: 3_600, lane: .outbound
+        )
+        let image = Message.Image(name: "o_1.png", path: SessionBlobImageRef.path(for: ref.id))
+
+        let kept = try AttachmentIngestService.ingestImages(
+            conversationID: conversation.id,
+            images: [image],
+            harness: harness,
+            conversationManager: stack.conversationManager,
+            attachmentTrustRaw: nil,
+            addedBy: .agent,
+            keepsEphemeralBlobs: true
+        )
+        #expect(kept.refOnlyImages.map(\.path) == [image.path])
+        #expect(kept.ingestRefs.isEmpty)
+        #expect(try harness.statBlob(blobId: ref.id).durability == .ephemeral)
+
+        let promoted = try AttachmentIngestService.ingestImages(
+            conversationID: conversation.id,
+            images: [image],
+            harness: harness,
+            conversationManager: stack.conversationManager,
+            attachmentTrustRaw: nil,
+            addedBy: .agent
+        )
+        #expect(promoted.ingestRefs.count == 1)
+        #expect(try harness.statBlob(blobId: ref.id).durability == .durable)
+    }
+
     @Test("re-ingest same blob id reuses catalog attachment id")
     func idempotentReIngest() throws {
         let (stack, root) = try makeStack(label: "ingest-idempotent")

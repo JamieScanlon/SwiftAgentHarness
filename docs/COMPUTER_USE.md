@@ -42,6 +42,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
 | Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
 | "Agent active" HUD on the host desktop (`MacAgentActiveHUD`), post-run replays with observation thumbnails | Done. The replay index lives in the server process. |
+| Image retention: held while the run can cite them, a TTL from lease release, audit marks for longer retention | Done |
 | Vendor-native toolsets and their safety signals, live view, deferred tool loading | Not yet |
 
 ## How it fits together
@@ -311,6 +312,16 @@ When a specialist run ends, the harness stores a replay as session blobs: the fu
 
 A replay is a record for review. Re-executing its actions is a different feature and isn't offered.
 
+### Image retention
+
+A run's images are its screenshots (offloaded from the specialist's tool results), its replay thumbnails, and its replay document. While the run can still cite them they are held in the ephemeral lane, until the lease's hard expiry plus the release TTL at the latest, so a crashed run can't keep them forever. When the lease is released, the TTL starts: every image the run held then expires `ComputerUseRetention.afterRelease` later (24 hours by default), and expired blobs are swept. A run the user marks for audit gets `ComputerUseRetention.audit` from release instead. The default, `nil`, holds its images until the mark is removed:
+
+| Route | Does |
+|---|---|
+| `POST /api/conversations/{id}/computer-use/runs/{lifecycleID}/audit` | `{"marked": true}` or `false`. A live run takes the mark at release. A released run's images move to the new expiry right away. |
+
+Replay listings show `auditMarked` and `expiresAt`, and an expired replay drops out of them.
+
 An unanswered question times out after 10 minutes and reports the user as unavailable. An unanswered handoff times out after 30 minutes and reports it as declined.
 
 ## The tool family
@@ -401,7 +412,9 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Fresh observation for `verify` | Fresh means captured at or after the most recent executed action. |
 | Mixed tool results | Results that combine harness guidance with screen text are wrapped as one envelope, so the guidance lines sit inside it. The spec doesn't say how to split them. |
 | Approval surface | Confirmations reuse `ExecApprovalDelivering`, which is named for exec but is the harness's general approval delivery. |
-| Screenshot blob lifecycle | Tool images are stored as durable blobs. The spec's lifecycle (durable while referenced, ephemeral TTL from lease release) is not implemented yet. |
+| Image retention lane | The spec keeps images "in the durable lane while anything references them". Here they sit in the ephemeral lane with an expiry past the lease's hard limit, and release moves the expiry. The effect is the same, and two things are better. A crash can't leave them durable forever. And content addressing can't make retention shorten a durable copy someone else holds: the blob store never changes a durable blob's expiry, and a durable write of the same bytes takes it out of the ephemeral rules. |
+| Tool images as attachments | Saving a message normally promotes its `blob://` images to durable conversation attachments. Ephemeral images on tool messages are left alone, because the tool that stored them owns their lifecycle. Before this, every tool image was durable, so other tools are unaffected. |
+| References the spec lists | The spec holds images while the live context window, a pending approval, or replay thumbnails reference them. The context window and pending approvals both end with the lease, because the specialist's context isn't reused and approval cards carry their crop inline. Thumbnails are covered by the replay's own retention. |
 | Retention defaults | The spec gives vendor guidance "keep 3, prune every ~25" and also says requests should stay under ~20 images. Those conflict: batches of 25 allow up to 27 screenshots. The defaults are keep 3, prune 15 (at most 17); a model's feature can override them. |
 | Pruned screenshot summary | The spec asks for a one-line text summary of each pruned screenshot. The marker reuses the observation's harness-written header line (id, app, window) rather than describing pixels, which would need a model call. |
 | Catalog values | The bundled catalogs don't declare `computer-use` or vision caps yet. Vendor toolset versions and image limits should be confirmed against current vendor documentation before they are added. |
@@ -420,7 +433,9 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Stop and pending requests | The spec's abort "runs the full cleanup path". Stop also declines the session's pending questions and handoffs, so a blocked specialist unblocks and reports instead of waiting out its timeout. |
 | Surface capability | Surfaces declare `SurfaceCapabilities.computerUse` (the terminal does; channels don't). Intents are published whether or not such a surface is attached, as exec-approval intents are. |
 | Replay index | The spec doesn't say how replays are found later. The index is held in the server process, 50 per conversation. After a restart, a replay is reachable only through the ref in the delegate result. A persisted index needs a conversation-scoped store that isn't the regenerable engine-artifact cache. |
-| Replay thumbnails | They are captured as observations arrive, because the session keeps only the last few observations for citing. Like screenshots, they are stored durably. The spec's lifecycle (durable while referenced, then an ephemeral TTL, with longer retention for audit-marked sessions) isn't implemented. Recordings aren't supported by any target yet. |
+| Replay thumbnails | They are captured as observations arrive, because the session keeps only the last few observations for citing. They follow the run's image retention. Recordings aren't supported by any target yet. |
+| Audit retention | The spec says longer retention "applies only to sessions the user marks for audit" without a length. The default holds marked runs until unmarked. Set `ComputerUseRetention.audit` to bound it. Unmarking returns a run to the release TTL counted from its release, so a run unmarked after that window expires at the next sweep. |
+| Audit marks after a restart | Marks and the replay index live in the server process. After a restart, a released run's images keep the expiry they had. |
 | HUD placement | The spec puts the HUD in the signed host app. In dev mode it runs in the harness process, which the capture excludes anyway. `activityObserver` and `onForegroundDelivery` feed it, so a host app can drive its own. |
 | Image block | The spec wants a cropped image of the target region on approval cards, but its portable presentation vocabulary (text, context, divider, buttons, select) has no image block. `image` was added to `ApprovalBlock`, `MessageBlock`, and `approval-presentation.schema.json`, with base64 data and alt text. `SurfacePresentationCapabilities.images` gates it, and core degrades it to the alt text. |
 | Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |

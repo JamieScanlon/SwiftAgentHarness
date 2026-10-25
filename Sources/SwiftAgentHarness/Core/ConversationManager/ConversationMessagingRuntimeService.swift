@@ -86,6 +86,7 @@ actor ConversationMessagingRuntimeService {
             spillWriter: spillWriter,
             logger: logger
         )
+        let toolImageExpiry = await deps.computerUse.toolImageExpiry(conversationID: conversationID)
         for message in inputMessages {
             guard message.role == .tool else {
                 messages.append(message)
@@ -98,10 +99,14 @@ actor ConversationMessagingRuntimeService {
                 toolCall: toolCall,
                 result: ToolResult(toolMessage: message)
             )
-            let rewrittenMessage = ToolMessageImageOffload.offload(
+            let (rewrittenMessage, storedBlobIDs) = ToolMessageImageOffload.offload(
                 message.replacingToolResult(transformedResult),
-                harness: harnessPersistence
+                harness: harnessPersistence,
+                ephemeralUntil: toolImageExpiry
             )
+            if toolImageExpiry != nil {
+                await deps.computerUse.blobs.hold(storedBlobIDs, childConversationID: conversationID)
+            }
             messages.append(rewrittenMessage)
             replayContext.append(rewrittenMessage)
         }

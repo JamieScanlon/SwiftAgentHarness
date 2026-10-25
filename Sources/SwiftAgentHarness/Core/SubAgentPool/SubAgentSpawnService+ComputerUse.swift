@@ -149,8 +149,9 @@ extension SubAgentSpawnService {
             task: task,
             session: session,
             outcome: outcome,
-            actionsLogRef: await storeReplay(
+            actionsLogRef: await releaseRunBlobs(
                 session: session,
+                childConversationID: childID,
                 parentConversationID: conversationID,
                 lifecycleID: lifecycleID,
                 targetLabel: targetLabel
@@ -241,44 +242,64 @@ extension SubAgentSpawnService {
         }
     }
 
-    /// The replay (full action log plus observation thumbnails) as session blobs, for audit and post-run review.
-    /// Returns the replay document's ref.
-    private func storeReplay(
+    /// Stores the replay (full action log plus observation thumbnails) and starts the retention clock on every
+    /// image the run held: the release TTL, or the audit retention for a run the user marked. Returns the replay
+    /// document's ref.
+    private func releaseRunBlobs(
         session: ComputerUseSession,
+        childConversationID: UUID,
         parentConversationID: UUID,
         lifecycleID: String,
         targetLabel: String
     ) async -> String? {
         let harness = await deps.persistenceDomain.harnessSessionPersistence
+        let retention = deps.computerUse.retention
+        let releasedAt = Date()
+        let auditMarked = await deps.computerUse.blobs.takeAuditMark(parent: parentConversationID, lifecycleID: lifecycleID)
+        let expiresAt = retention.expiry(releasedAt: releasedAt, auditMarked: auditMarked)
+        var blobIDs = await deps.computerUse.blobs.takeHeld(childConversationID: childConversationID)
+        let access = ComputerUseBlobAccess(
+            load: { try harness.getBlob(blobId: $0) },
+            setExpiry: { _ = try harness.setBlobExpiry(blobId: $0, expiresAt: $1) }
+        )
+        defer {
+            for blobID in blobIDs { try? access.setExpiry(blobID, expiresAt) }
+            _ = try? harness.sweepExpiredBlobs()
+        }
+
+        let ttlSeconds = max(1, Int(retention.afterRelease.timeInterval.rounded(.up)))
+        let put: (Data, String, String) throws -> String = { data, name, mimeType in
+            try harness.putBlob(
+                data: data,
+                durability: .ephemeral,
+                originalName: name,
+                mimeType: mimeType,
+                trust: "unknown-party",
+                ttlSeconds: ttlSeconds,
+                lane: .outbound
+            ).id
+        }
         guard let replay = try? await ComputerUseReplay(
             session: session,
             parentConversationID: parentConversationID,
             lifecycleID: lifecycleID,
             targetLabel: targetLabel,
-            storeThumbnail: { data in
-                try harness.putBlob(
-                    data: data,
-                    durability: .durable,
-                    originalName: "computer-use-thumbnail.png",
-                    mimeType: "image/png",
-                    trust: "unknown-party",
-                    ttlSeconds: nil,
-                    lane: .outbound
-                ).id
-            }
+            endedAt: releasedAt,
+            storeThumbnail: { try put($0, "computer-use-thumbnail.png", "image/png") }
         ), !(replay.records.isEmpty && replay.thumbnails.isEmpty),
               let data = try? JSONEncoder.computerUseReplay.encode(replay),
-              let ref = try? harness.putBlob(
-                  data: data,
-                  durability: .durable,
-                  originalName: "computer-use-replay-\(session.id.uuidString).json",
-                  mimeType: "application/json",
-                  trust: "unknown-party",
-                  ttlSeconds: nil,
-                  lane: .outbound
-              )
+              let documentBlobID = try? put(data, "computer-use-replay-\(session.id.uuidString).json", "application/json")
         else { return nil }
-        await deps.computerUse.replays.record(replay, documentBlobID: ref.id, loadBlob: { try harness.getBlob(blobId: $0) })
-        return SessionBlobImageRef.path(for: ref.id)
+        blobIDs += replay.thumbnails.map(\.blobID) + [documentBlobID]
+        await deps.computerUse.replays.record(ComputerUseReplayIndexEntry(
+            replay: replay,
+            documentBlobID: documentBlobID,
+            blobIDs: blobIDs,
+            releasedAt: releasedAt,
+            auditMarked: auditMarked,
+            expiresAt: expiresAt,
+            access: access
+        ))
+        return SessionBlobImageRef.path(for: documentBlobID)
     }
 }
