@@ -104,15 +104,35 @@ extension SubAgentSpawnService {
             model: profile
         )
         sessionConfiguration.conversationID = childID
+        // Approvals, questions, and activity go to the user's conversation, not the specialist's child.
+        let targetLabel = grant.target.manifest.label
+        var approvals = configuration.approvals
+        if approvals == nil {
+            approvals = await orchestratorRuntime.approvalDelivery(for: parentConversation)
+        }
+        let oversight: (any ComputerUseOversight)? = configuration.oversight ?? deps.computerUse.coordinator.map {
+            ComputerUseConversationOversight(coordinator: $0, conversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel)
+        }
+        var activity: (@Sendable (ComputerUseActivity) async -> Void)?
+        if let publish = deps.computerUse.publish {
+            activity = { update in
+                await publish(conversationID, .computerUseActivity(Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)))
+            }
+        }
         let session = ComputerUseSession(
             target: grant.target,
             lease: grant.lease,
             configuration: sessionConfiguration,
-            approvals: configuration.approvals,
+            approvals: approvals,
             intentChecker: configuration.intentChecker,
-            oversight: configuration.oversight
+            oversight: oversight,
+            activity: activity
         )
-        await deps.computerUse.sessions.register(session, for: childID)
+        await deps.computerUse.sessions.register(
+            ComputerUseSessionEntry(session: session, parentConversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel),
+            for: childID
+        )
+        await session.announceStart()
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: task.brief,
@@ -136,6 +156,19 @@ extension SubAgentSpawnService {
             outcome: outcome
         )
         return reply(result)
+    }
+
+    static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String) -> ComputerUseSurfaceIntentPayload {
+        ComputerUseSurfaceIntentPayload(
+            target: target,
+            lifecycleID: lifecycleID,
+            status: activity.status,
+            step: activity.step,
+            maxSteps: activity.maxSteps,
+            app: activity.app,
+            action: activity.action?.rawValue,
+            terminalReason: activity.terminalReason?.rawValue
+        )
     }
 
     static func specialistResult(

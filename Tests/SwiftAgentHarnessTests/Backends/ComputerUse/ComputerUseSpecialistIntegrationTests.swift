@@ -68,7 +68,8 @@ struct ComputerUseSpecialistIntegrationTests {
         approve: @escaping ComputerUseGrantApprover = { $0.grantable.map(\.grant) },
         script: Script,
         reply: String,
-        recorder: ChildRecorder
+        recorder: ChildRecorder,
+        publish: ComputerUseOversightCoordinator.Publish? = nil
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -88,7 +89,7 @@ struct ComputerUseSpecialistIntegrationTests {
             rankedRegistryEntriesProvider: { _ in [entry] },
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
         )
-        session.installComputerUse(ComputerUseConfiguration(
+        let configuration = ComputerUseConfiguration(
             registry: DisplayTargetRegistry(targets: [target]),
             defaults: ComputerUseSpecialistDefaults(
                 target: target.manifest.id,
@@ -96,7 +97,12 @@ struct ComputerUseSpecialistIntegrationTests {
                 maxBudgets: ComputerUseBudgets(maxSteps: 200, maxDuration: .seconds(1_800))
             ),
             approveGrants: approve
-        ))
+        )
+        if let publish {
+            session.installComputerUse(configuration, publish: publish)
+        } else {
+            session.installComputerUse(configuration)
+        }
         try await session.createConversation(with: model, userSystemPrompt: "parent")
         let parent = try #require(await session.currentConversation())
 
@@ -271,6 +277,44 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(result["status"] as? String == "blocked")
         #expect(result["reason"] as? String == "stopped by the user")
         #expect(await target.releases == [.killSwitch])
+    }
+
+    @Test("Questions and activity go to the parent conversation, and the answer reaches the specialist")
+    func oversightRoutedToParent() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let recorder = ChildRecorder()
+        let published = RecordingIntentPublisher()
+        let sessionBox = Box<HarnessRuntimeSession>()
+        let parentBox = Box<UUID>()
+        let script: Script = [Self.observe, (ComputerUseToolProvider.askUserToolName, ["question": .string("Which document?")])]
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: script, reply: "ok", recorder: recorder,
+            publish: { conversationID, intent in
+                await published.publish(conversationID, intent)
+                // Play the user: answer the question as soon as it appears.
+                guard intent.kind == .computerUseRequest, let id = intent.computerUse?.requestID,
+                      let coordinator = await sessionBox.value?.runtimeDependencies.computerUse.coordinator else { return }
+                _ = await coordinator.resolve(id: id, conversationID: conversationID, resolution: .answered("The quarterly report"))
+            }
+        )
+        sessionBox.value = session
+        parentBox.value = parent.id
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "done-unverified")
+
+        let answer = await recorder.toolResults.last
+        #expect(answer?.content.contains("The quarterly report") == true)
+        let events = await published.published
+        #expect(events.allSatisfy { $0.0 == parent.id })
+        let kinds = events.map(\.1.kind)
+        #expect(kinds.first == .computerUseActivity)
+        #expect(kinds.contains(.computerUseRequest))
+        #expect(kinds.contains(.computerUseRequestCleared))
+        let statuses = events.compactMap { $0.1.kind == .computerUseActivity ? $0.1.computerUse?.status : nil }
+        #expect(statuses.first == .started)
+        #expect(statuses.contains(.acting))
+        #expect(statuses.last == .ended)
+        #expect(events.last { $0.1.kind == .computerUseActivity }?.1.computerUse?.lifecycleID == "call-cu-1")
     }
 
     @Test("Without verification the run is done-unverified")

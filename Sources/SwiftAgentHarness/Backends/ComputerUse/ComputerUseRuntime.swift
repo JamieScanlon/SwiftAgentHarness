@@ -50,30 +50,45 @@ public struct ComputerUseConfiguration: Sendable {
     }
 }
 
+/// One live specialist session and the user's conversation it reports to.
+struct ComputerUseSessionEntry: Sendable {
+    var session: ComputerUseSession
+    var parentConversationID: UUID
+    var lifecycleID: String
+    var targetLabel: String
+}
+
 /// Live specialist sessions, keyed by the child conversation that drives them.
 actor ComputerUseSessionDirectory {
-    private var sessions: [UUID: ComputerUseSession] = [:]
+    private var entries: [UUID: ComputerUseSessionEntry] = [:]
 
-    func register(_ session: ComputerUseSession, for conversationID: UUID) {
-        sessions[conversationID] = session
+    func register(_ entry: ComputerUseSessionEntry, for conversationID: UUID) {
+        entries[conversationID] = entry
     }
 
     func session(for conversationID: UUID) -> ComputerUseSession? {
-        sessions[conversationID]
+        entries[conversationID]?.session
     }
 
     func remove(for conversationID: UUID) {
-        sessions.removeValue(forKey: conversationID)
+        entries.removeValue(forKey: conversationID)
     }
 
     var all: [ComputerUseSession] {
-        Array(sessions.values)
+        entries.values.map(\.session)
+    }
+
+    /// Sessions working for a user's conversation.
+    func entries(parent conversationID: UUID) -> [ComputerUseSessionEntry] {
+        entries.values.filter { $0.parentConversationID == conversationID }.sorted { $0.lifecycleID < $1.lifecycleID }
     }
 }
 
-/// The host's computer-use configuration, shared by tool building and delegate dispatch.
+/// The host's computer-use configuration, shared by tool building, delegate dispatch, and the control plane.
 final class ComputerUseInstallation: Sendable {
     private let state = Mutex<ComputerUseConfiguration?>(nil)
+    private let coordinatorState = Mutex<ComputerUseOversightCoordinator?>(nil)
+    private let publishState = Mutex<ComputerUseOversightCoordinator.Publish?>(nil)
     let sessions = ComputerUseSessionDirectory()
 
     init() {}
@@ -82,8 +97,22 @@ final class ComputerUseInstallation: Sendable {
         state.withLock { $0 }
     }
 
-    func install(_ configuration: ComputerUseConfiguration) {
+    /// Questions and handoffs routed to the user's surfaces; set when computer use is installed.
+    var coordinator: ComputerUseOversightCoordinator? {
+        coordinatorState.withLock { $0 }
+    }
+
+    /// Publishes a surface intent to a conversation's events topic.
+    var publish: ComputerUseOversightCoordinator.Publish? {
+        publishState.withLock { $0 }
+    }
+
+    func install(_ configuration: ComputerUseConfiguration, publish: ComputerUseOversightCoordinator.Publish? = nil) {
         state.withLock { $0 = configuration }
+        if let publish {
+            publishState.withLock { $0 = publish }
+            coordinatorState.withLock { $0 = ComputerUseOversightCoordinator(publish: publish) }
+        }
     }
 }
 

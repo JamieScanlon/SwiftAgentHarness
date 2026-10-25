@@ -674,7 +674,7 @@ public actor TUIApp {
             // Resolved elsewhere (another surface, an expiry). Without this the modal
             // stays on screen forever with no way to dismiss it.
             dismissApproval(approvalID: intent.approvalID)
-        case .openFileForEdit:
+        case .openFileForEdit, .computerUseRequest, .computerUseRequestCleared, .computerUseActivity:
             break
         }
     }

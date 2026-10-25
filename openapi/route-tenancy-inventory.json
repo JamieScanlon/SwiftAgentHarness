@@ -148,6 +148,34 @@
       "handler_anchor": "conversationsPath.post(\":id\", \"sub-agents\", \":lifecycleID\", \"cancel\")"
     },
     {
+      "method": "GET",
+      "path": "/api/conversations/{id}/computer-use",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"computer-use\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/computer-use/requests/{requestID}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"requests\", \":requestID\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/computer-use/stop",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"stop\")"
+    },
+    {
+      "method": "POST",
+      "path": "/api/conversations/{id}/computer-use/takeover",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"takeover\")"
+    },
+    {
       "method": "POST",
       "path": "/api/conversations/{id}/completion-announcements",
       "tenancy_guard": "conversationAccess",

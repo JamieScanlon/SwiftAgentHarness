@@ -179,3 +179,71 @@ enum ComputerUseFixtures {
         )
     }
 }
+
+extension ComputerUseFixtures {
+    /// An installation with the oversight coordinator wired to `publisher`.
+    static func installation(publisher: RecordingIntentPublisher) -> ComputerUseInstallation {
+        let installation = ComputerUseInstallation()
+        installation.install(
+            ComputerUseConfiguration(
+                registry: DisplayTargetRegistry(targets: []),
+                defaults: ComputerUseSpecialistDefaults(
+                    target: FakeDisplayTarget.hostManifest.id,
+                    budgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600)),
+                    maxBudgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600))
+                ),
+                approveGrants: { _ in nil }
+            ),
+            publish: { await publisher.publish($0, $1) }
+        )
+        return installation
+    }
+
+    /// Registers a live specialist session working for `parent`, as delegate dispatch would.
+    @discardableResult
+    static func registerLiveSession(
+        in installation: ComputerUseInstallation,
+        parent: UUID,
+        lifecycleID: String
+    ) async throws -> (ComputerUseSession, FakeDisplayTarget) {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, now: { Date() })
+        let lease = try await target.lease(LeaseRequest(
+            target: target.manifest.id,
+            agentID: "computer-use:\(lifecycleID)",
+            grants: [.app(bundleID: textEdit.bundleID, tier: .full)],
+            budgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600)),
+            operatorInitiated: true,
+            userPresent: true
+        ))
+        let session = ComputerUseSession(
+            target: target,
+            lease: lease,
+            configuration: ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["Save the file."]))
+        )
+        await installation.sessions.register(
+            ComputerUseSessionEntry(session: session, parentConversationID: parent, lifecycleID: lifecycleID, targetLabel: target.manifest.label),
+            for: UUID()
+        )
+        return (session, target)
+    }
+
+    /// Starts a question from `lifecycleID` and waits until it is pending.
+    static func pendingQuestion(
+        _ question: String,
+        coordinator: ComputerUseOversightCoordinator,
+        conversationID: UUID,
+        lifecycleID: String
+    ) async throws -> (ComputerUsePendingRequest, Task<ComputerUseRequestResolution, Never>) {
+        let asking = Task {
+            await coordinator.ask(conversationID: conversationID, lifecycleID: lifecycleID, target: FakeDisplayTarget.hostManifest.label, question: question)
+        }
+        for _ in 0..<500 {
+            if let request = await coordinator.pending(conversationID: conversationID).first(where: { $0.prompt == question }) {
+                return (request, asking)
+            }
+            await Task.yield()
+        }
+        asking.cancel()
+        throw CancellationError()
+    }
+}

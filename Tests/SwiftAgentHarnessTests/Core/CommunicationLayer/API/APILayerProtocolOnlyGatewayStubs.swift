@@ -15,6 +15,7 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     private let resolveToolApprovalRouteError: APILayerConversationRouteError?
     private let previewContextCompactionResult: ContextCompactionPreviewResult?
     private let conversationsByID: [UUID: ModelConversation]
+    private let computerUse: ComputerUseControlService?
 
     init(
         defaultSystemPrompt: String = "",
@@ -27,7 +28,8 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
         branchRouteError: APILayerConversationRouteError? = nil,
         resolveToolApprovalRouteError: APILayerConversationRouteError? = nil,
         previewContextCompactionResult: ContextCompactionPreviewResult? = nil,
-        conversationsByID: [UUID: ModelConversation] = [:]
+        conversationsByID: [UUID: ModelConversation] = [:],
+        computerUse: ComputerUseControlService? = nil
     ) {
         self.defaultSystemPrompt = defaultSystemPrompt
         self.tools = tools
@@ -40,6 +42,7 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
         self.resolveToolApprovalRouteError = resolveToolApprovalRouteError
         self.previewContextCompactionResult = previewContextCompactionResult
         self.conversationsByID = conversationsByID
+        self.computerUse = computerUse
     }
 
     func apiListConversationInfo() async -> [ModelConversation] { [] }
@@ -83,6 +86,7 @@ final class ProtocolOnlyConversationGatewayStub: APILayerConversationManaging, S
     func apiListConversationTraceSpans(conversationID: UUID, limit: Int?) async throws -> ConversationTraceResponse { _ = limit; return ConversationTraceResponse(conversationID: conversationID, spans: []) }
     func apiListActiveSubAgentInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo] { _ = parentConversationID; return [] }
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws { _ = (parentConversationID, lifecycleID) }
+    func apiComputerUseControl() async -> ComputerUseControlService? { computerUse }
     func apiPushCompletionAnnouncement(conversationID: UUID, announce: CompletionAnnouncePayload, toolMessageContent: String?) async throws { _ = (conversationID, announce, toolMessageContent) }
     func apiResolveToolApproval(conversationID: UUID, runID: UUID?, toolName: String, route: ToolApprovalRoute, status: ToolApprovalResolutionStatus, source: String, reason: String?, durable: Bool, arguments: JSON?) async throws {
         _ = (conversationID, runID, toolName, route, status, source, reason, durable)

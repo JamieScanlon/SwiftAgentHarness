@@ -263,6 +263,14 @@ protocol ConversationToolDataProviding: Sendable {
 
 protocol SubAgentOrchestratorRuntimeServicing: OrchestratorRuntimeToolPolicyServicing {
     func setupOrchestrator(with selectedModel: Model, activeConversation preferredConversation: ModelConversation?) async
+    /// Approval delivery for a conversation, so a sub-agent's approvals reach the user's surfaces.
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)?
+}
+
+extension SubAgentOrchestratorRuntimeServicing {
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)? {
+        nil
+    }
 }
 
 extension OrchestratorRuntimeToolPolicyServicing {

@@ -109,6 +109,17 @@ When session blob storage is configured, the server stores bytes in the session 
 |--------|------|------|----------|
 | POST | `/api/exec-approvals/:id` | `{"approved":<Bool>,"durable":<Bool>?,"reason":<String>?}` | **200** on success; **400** + error JSON for invalid id/body; **404** when the approval id is unknown. |
 
+### Computer use (conversation-scoped)
+
+`APILayerComputerUseModule`. Every route checks conversation tenancy and returns **404** + error JSON when the host has no computer use. Requests and activity are announced as `surfaceIntent` events on `conversation/{id}/events`.
+
+| Method | Path | Body | Response |
+|--------|------|------|----------|
+| GET | `/api/conversations/:id/computer-use` | — | `{"pending":[ComputerUsePendingRequest],"sessions":[ComputerUseSessionStatus]}` |
+| POST | `/api/conversations/:id/computer-use/requests/:requestID` | `{"action":"answer"\|"hand-back"\|"decline","answer":<String>?,"note":<String>?}` | **200**; **400** bad body; **404** unknown request; **409** action doesn't fit the request kind. |
+| POST | `/api/conversations/:id/computer-use/stop` | — | `{"lifecycleIDs":[String]}` (empty when nothing ran) |
+| POST | `/api/conversations/:id/computer-use/takeover` | `{"on":<Bool>,"lifecycleID":<String>?}` | `{"lifecycleIDs":[String]}`; **404** when no live session matches; **409** when the target refuses. |
+
 ### Conversations
 
 | Method | Path | Response / notes |
@@ -316,7 +327,7 @@ Embedded mode uses the same communication-layer hubs and harness envelopes as `/
 
 - `APILayer.swift` — Vapor app, `/api` + `/ws`, OAuth route, WebSocket lifecycle and control-frame handling.
 - `APILayerModuleAssembly.swift` — REST module registry (`restModules()`).
-- `APILayerRESTModules.swift` — REST route registration and handlers (status, models, conversations, capabilities, traces, messages, upload, exec-approvals).
+- `APILayerRESTModules.swift` — REST route registration and handlers (status, models, conversations, capabilities, traces, messages, upload, exec-approvals, computer-use).
 - `APILayerWebSocketModules.swift` — `APILayerWebSocketDependencies` (shared WS handler dependencies).
 - `APILayerTransportSupport.swift` — harness error/dedupe payloads and `streamingChatResponse` (chunked REST revert stream).
 - `../WebSocketTopicSubscriptionRouter.swift` — subscribe/unsubscribe routing to communication-layer topic hubs (invoked from `APILayer` WebSocket handlers).

@@ -17,6 +17,7 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
     private let policy: any ConversationToolModePolicyServicing
     private let subAgentLifecycle: any SubAgentLifecycleOrchestrationServicing
     private let subAgentCompletion: any SubAgentCompletionIngressServicing
+    private let computerUse: ComputerUseInstallation?
 
     init(
         catalog: any ConversationCatalogServicing,
@@ -27,7 +28,8 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         residualAPI: any ConversationResidualAPIServicing,
         policy: any ConversationToolModePolicyServicing,
         subAgentLifecycle: any SubAgentLifecycleOrchestrationServicing,
-        subAgentCompletion: any SubAgentCompletionIngressServicing
+        subAgentCompletion: any SubAgentCompletionIngressServicing,
+        computerUse: ComputerUseInstallation? = nil
     ) {
         self.catalog = catalog
         self.controlPlane = controlPlane
@@ -38,6 +40,7 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         self.policy = policy
         self.subAgentLifecycle = subAgentLifecycle
         self.subAgentCompletion = subAgentCompletion
+        self.computerUse = computerUse
     }
 
     func apiListConversationInfo() async -> [ModelConversation] {
@@ -250,6 +253,10 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
             parentConversationID: parentConversationID,
             lifecycleID: lifecycleID
         )
+    }
+
+    func apiComputerUseControl() async -> ComputerUseControlService? {
+        computerUse.map(ComputerUseControlService.init)
     }
 
     func apiPushCompletionAnnouncement(

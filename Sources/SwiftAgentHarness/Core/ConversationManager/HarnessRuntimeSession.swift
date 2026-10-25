@@ -830,7 +830,17 @@ public actor HarnessRuntimeSession {
     /// Turns computer use on: conversations gain a `delegate_computer_use` tool that runs the computer-use
     /// specialist against the configuration's display targets. Installing again replaces the configuration.
     public nonisolated func installComputerUse(_ configuration: ComputerUseConfiguration) {
-        runtimeDependencies.computerUse.install(configuration)
+        let orchestrator = services.orchestratorRuntimeService
+        installComputerUse(configuration) { conversationID, intent in
+            await orchestrator.publishSurfaceIntent(intent, conversationID: conversationID)
+        }
+    }
+
+    nonisolated func installComputerUse(
+        _ configuration: ComputerUseConfiguration,
+        publish: @escaping ComputerUseOversightCoordinator.Publish
+    ) {
+        runtimeDependencies.computerUse.install(configuration, publish: publish)
     }
 
     /// The computer-use kill switch: ends every live specialist session and releases its lease. Bind it to the

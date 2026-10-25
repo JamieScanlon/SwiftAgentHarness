@@ -122,6 +122,10 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
         }
     }
 
+    func apiComputerUseControl() async -> ComputerUseControlService? {
+        await backend.apiComputerUseControl()
+    }
+
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,

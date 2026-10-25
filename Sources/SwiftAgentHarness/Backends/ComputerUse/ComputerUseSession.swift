@@ -157,6 +157,17 @@ public enum ComputerUseUserReply: Sendable, Hashable {
     case unavailable
 }
 
+/// What a session is doing, for the "agent is using <target>" indicator.
+public struct ComputerUseActivity: Sendable, Equatable {
+    public var status: ComputerUseSurfaceIntentPayload.Status
+    public var step: Int
+    public var maxSteps: Int
+    /// Bundle id or domain the latest action landed in.
+    public var app: String?
+    public var action: ComputerActionKind?
+    public var terminalReason: ComputerUseTerminalReason?
+}
+
 /// The surfaces a session reaches a person through for questions and human-only steps.
 public protocol ComputerUseOversight: Sendable {
     func askUser(_ question: String) async -> ComputerUseUserReply
@@ -177,6 +188,7 @@ public actor ComputerUseSession {
     private let approvals: (any ExecApprovalDelivering)?
     private let intentChecker: ComputerUseIntentChecker?
     private let oversight: (any ComputerUseOversight)?
+    private let activity: (@Sendable (ComputerUseActivity) async -> Void)?
     private let now: @Sendable () -> Date
 
     private var retained: [ObservationID: DisplayObservation] = [:]
@@ -202,6 +214,7 @@ public actor ComputerUseSession {
         approvals: (any ExecApprovalDelivering)? = nil,
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,
+        activity: (@Sendable (ComputerUseActivity) async -> Void)? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.target = target
@@ -213,6 +226,7 @@ public actor ComputerUseSession {
         self.approvals = approvals
         self.intentChecker = intentChecker
         self.oversight = oversight
+        self.activity = activity
         self.now = now
     }
 
@@ -346,7 +360,29 @@ public actor ComputerUseSession {
         record.effect = outcome.effect
         record.evidence = outcome.evidence
         appendAudit(record)
+        await report(.acting, action: action.kind, app: classification.domain ?? classification.app?.bundleID)
         return (outcome, record, produced)
+    }
+
+    private func report(
+        _ status: ComputerUseSurfaceIntentPayload.Status,
+        action: ComputerActionKind? = nil,
+        app: String? = nil
+    ) async {
+        guard let activity else { return }
+        await activity(ComputerUseActivity(
+            status: status,
+            step: steps,
+            maxSteps: lease.budgets.maxSteps,
+            app: app,
+            action: action,
+            terminalReason: status == .ended ? terminalReason : nil
+        ))
+    }
+
+    /// Announces the session to the user's surfaces.
+    public func announceStart() async {
+        await report(.started)
     }
 
     // MARK: - Gating
@@ -516,6 +552,7 @@ public actor ComputerUseSession {
             try? await target.takeover(lease, on: false)
         }
         await target.release(lease, reason: reason.releaseReason)
+        await report(.ended)
     }
 
     // MARK: - Oversight
@@ -525,6 +562,7 @@ public actor ComputerUseSession {
         guard on != isTakeoverActive else { return }
         try await target.takeover(lease, on: on)
         isTakeoverActive = on
+        await report(on ? .takenOver : .acting)
     }
 
     public func askUser(_ question: String) async -> ComputerUseUserReply {

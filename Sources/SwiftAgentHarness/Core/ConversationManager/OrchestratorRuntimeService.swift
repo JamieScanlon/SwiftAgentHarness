@@ -619,6 +619,65 @@ public actor OrchestratorRuntimeService {
         }
     }
 
+    /// Approval delivery for one conversation: native channel cards when its trigger came from a capable channel,
+    /// otherwise a pending approval published to the conversation's events topic.
+    func execApprovalDelivery(for activeConversation: ModelConversation?, sessionKey: String? = nil) async -> any ExecApprovalDelivering {
+        let sessionKey = sessionKey ?? activeConversation?.id.uuidString ?? UUID().uuidString
+        let conversationID = activeConversation?.id
+        let topics = topicPublication
+        let execApprovalPending: @Sendable (ExecApprovalRequest) async -> Void = { request in
+            guard let conversationID, let topics else { return }
+            let intent = ClientSurfaceIntent(
+                kind: .execApprovalRequired,
+                label: request.title,
+                approvalID: request.id,
+                command: request.command,
+                presentation: request.presentation
+            )
+            guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+            await topics.publishConversationTopicEventIfConfigured(
+                conversationID: conversationID,
+                payload: .surfaceIntentJSONUTF8(utf8)
+            )
+        }
+        let execApprovalCleared: @Sendable (String) async -> Void = { approvalID in
+            guard let conversationID, let topics else { return }
+            let intent = ClientSurfaceIntent(
+                kind: .execApprovalCleared,
+                approvalID: approvalID
+            )
+            guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+            await topics.publishConversationTopicEventIfConfigured(
+                conversationID: conversationID,
+                payload: .surfaceIntentJSONUTF8(utf8)
+            )
+        }
+        let execApprovalScope: ExecApprovalScope? = activeConversation.map {
+            ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
+        }
+        return await ExecApprovalDeliveryFactory.make(
+            scope: execApprovalScope ?? ExecApprovalScope(
+                conversationID: UUID(uuidString: sessionKey) ?? UUID(),
+                ownerAccountID: nil
+            ),
+            channelRegistry: channelRegistry,
+            metadata: activeConversation?.metadata,
+            onPending: execApprovalPending,
+            onCleared: execApprovalCleared
+        )
+    }
+
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)? {
+        await execApprovalDelivery(for: conversation)
+    }
+
+    /// Publishes a transient surface intent on a conversation's events topic.
+    func publishSurfaceIntent(_ intent: ClientSurfaceIntent, conversationID: UUID) async {
+        guard let topics = topicPublication,
+              let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+        await topics.publishConversationTopicEventIfConfigured(conversationID: conversationID, payload: .surfaceIntentJSONUTF8(utf8))
+    }
+
     private func buildToolManager(
         systemPrompt: SystemPrompt,
         skillLoader: SkillLoader?,
@@ -746,47 +805,7 @@ public actor OrchestratorRuntimeService {
             )
             let sessionKey = activeConversation?.id.uuidString ?? UUID().uuidString
             let conversationID = activeConversation?.id
-            let topics = topicPublication
-            let execApprovalPending: @Sendable (ExecApprovalRequest) async -> Void = { request in
-                guard let conversationID, let topics else { return }
-                let intent = ClientSurfaceIntent(
-                    kind: .execApprovalRequired,
-                    label: request.title,
-                    approvalID: request.id,
-                    command: request.command,
-                    presentation: request.presentation
-                )
-                guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
-                await topics.publishConversationTopicEventIfConfigured(
-                    conversationID: conversationID,
-                    payload: .surfaceIntentJSONUTF8(utf8)
-                )
-            }
-            let execApprovalCleared: @Sendable (String) async -> Void = { approvalID in
-                guard let conversationID, let topics else { return }
-                let intent = ClientSurfaceIntent(
-                    kind: .execApprovalCleared,
-                    approvalID: approvalID
-                )
-                guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
-                await topics.publishConversationTopicEventIfConfigured(
-                    conversationID: conversationID,
-                    payload: .surfaceIntentJSONUTF8(utf8)
-                )
-            }
-            let execApprovalScope: ExecApprovalScope? = activeConversation.map {
-                ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
-            }
-            let approvalDelivery = await ExecApprovalDeliveryFactory.make(
-                scope: execApprovalScope ?? ExecApprovalScope(
-                    conversationID: UUID(uuidString: sessionKey) ?? UUID(),
-                    ownerAccountID: nil
-                ),
-                channelRegistry: channelRegistry,
-                metadata: activeConversation?.metadata,
-                onPending: execApprovalPending,
-                onCleared: execApprovalCleared
-            )
+            let approvalDelivery = await execApprovalDelivery(for: activeConversation, sessionKey: sessionKey)
             let execRuntime = ExecRuntimeService(
                 workspaceRoot: workspaceRoot,
                 approvalDelivery: approvalDelivery,

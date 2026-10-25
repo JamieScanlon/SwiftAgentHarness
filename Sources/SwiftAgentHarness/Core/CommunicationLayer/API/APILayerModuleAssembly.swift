@@ -9,6 +9,7 @@ enum APILayerModuleAssembly {
             APILayerMessagesModule(),
             APILayerUploadModule(),
             APILayerExecApprovalsModule(),
+            APILayerComputerUseModule(),
         ]
     }
 }

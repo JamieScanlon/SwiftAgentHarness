@@ -50,4 +50,13 @@ import Testing
         #expect(ObjectIdentifier(owner) == ObjectIdentifier(policyRuntime))
         #expect(ObjectIdentifier(owner) != ObjectIdentifier(host))
     }
+
+    @Test func gatewayReachesTheRuntimeComputerUseInstallation() async throws {
+        let host = HarnessConversationTestFixtures.makeRuntimeSession(container: try makeContainer())
+        let services = await host.services
+        let gateway = SplitGatewayServiceFactory.makeServiceGraph(runtimeGraph: makeRuntimeGraph(services: services)).gatewayServices
+        let control = try #require(await gateway.conversation.apiComputerUseControl())
+        let installation = await services.subAgentSpawnService.deps.computerUse
+        #expect(control.installation === installation)
+    }
 }

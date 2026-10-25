@@ -39,7 +39,9 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
 | macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
-| Vendor-native toolsets and their safety signals, live view, replay, deferred tool loading | Not yet |
+| Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done. Surfaces don't render them yet. |
+| Surface rendering (TUI requests and activity, approval-card region crops, `computer-use` surface capability), "agent active" HUD, replay | Not yet |
+| Vendor-native toolsets and their safety signals, live view, deferred tool loading | Not yet |
 
 ## How it fits together
 
@@ -266,9 +268,30 @@ The shared decider setup is in [Decision models](./DECISION_MODELS.md). The spec
 ## Budgets, kill switch, takeover
 
 - **Budgets.** `maxSteps`, `maxDuration` and `maxUSD` (fed by `session.recordCost(usd:)`) each end the session with a typed `ComputerUseTerminalReason` and release the lease. Permissions are polled before every batch, and a revoked one ends the session with `permission-revoked`.
-- **Kill switch.** `HarnessRuntimeSession.stopComputerUse()` stops every live specialist session (`ComputerUseSession.stop()` for one you drive yourself). The stop key (Escape by default; set it with `ComputerUseActionClassifier(stopKey:)`) is never synthesized, in any spelling, while a session is active.
-- **Takeover.** `session.handoff(reason:prompt:)` turns takeover on, waits for `ComputerUseOversight.handoff` to return, then turns it off. While takeover is on, observe and act are refused. Ask-user and handoff are unavailable when no user is present.
+- **Kill switch.** `HarnessRuntimeSession.stopComputerUse()` stops every live specialist session, and `POST /api/conversations/{id}/computer-use/stop` stops one conversation's (`ComputerUseSession.stop()` for one you drive yourself). The stop key (Escape by default; set it with `ComputerUseActionClassifier(stopKey:)`) is never synthesized, in any spelling, while a session is active.
+- **Takeover.** `session.handoff(reason:prompt:)` turns takeover on, waits for `ComputerUseOversight.handoff` to return, then turns it off. The user can also take over at any time with `POST …/computer-use/takeover`. While takeover is on, observe and act are refused. Ask-user and handoff are unavailable when no user is present.
 - **Verification.** `session.verify(...)` accepts only an observation taken after the last action.
+
+## Oversight surfaces
+
+A specialist runs in a child conversation the user never opens, so everything that needs the user goes to the parent conversation, the one that called `delegate_computer_use`:
+
+- **Approval cards.** Consequential actions are confirmed through the parent conversation's approval delivery, the same `ExecApprovalDelivering` cards exec approvals use. Set `ComputerUseConfiguration.approvals` to replace it.
+- **Questions and handoffs.** `computer_ask_user` and `computer_handoff` publish a `computerUseRequest` surface intent on `conversation/{id}/events` and block the specialist until a client answers. When the request is resolved, times out, or the run is cancelled, a `computerUseRequestCleared` intent follows. Set `ComputerUseConfiguration.oversight` to answer in-process instead.
+- **Activity.** Every action batch, takeover change, and session end publishes a `computerUseActivity` intent with the target, step, step budget, app, action, and terminal reason. This feeds the "agent is using <target>" indicator.
+
+All three use the `surfaceIntent` semantic kind. The payload is the `computerUse` object in [`client-surface-intent-wire.schema.json`](../openapi/schemas/ws/client-surface-intent-wire.schema.json).
+
+Clients answer and steer through REST. Each route checks conversation tenancy:
+
+| Route | Does |
+|---|---|
+| `GET /api/conversations/{id}/computer-use` | Lists pending requests and live sessions (`lifecycleID`, target, step, `maxSteps`, `takenOver`) |
+| `POST /api/conversations/{id}/computer-use/requests/{requestID}` | `{"action": "answer", "answer": "…"}`, `{"action": "hand-back", "note": "…"}` or `{"action": "decline"}`. A question takes answer or decline; a handoff takes hand-back or decline (otherwise 409). |
+| `POST /api/conversations/{id}/computer-use/stop` | Stops the conversation's sessions, declines their pending requests, and returns `lifecycleIDs` |
+| `POST /api/conversations/{id}/computer-use/takeover` | `{"on": true}`, optionally with `lifecycleID`. Returns `lifecycleIDs`, or 404 when nothing is running. |
+
+An unanswered question times out after 10 minutes and reports the user as unavailable. An unanswered handoff times out after 30 minutes and reports it as declined.
 
 ## The tool family
 
@@ -372,4 +395,8 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | macOS window exclusion | The spec hides non-granted windows during the agent's turn and restores them after. The macOS driver instead captures only granted apps' windows, which never touches the user's windows. Process-routed input still can't reach non-granted apps, because the classifier refuses them. |
 | macOS foreground delivery | Foreground delivery is used for every pointer and key action whenever the lease allows it. Background delivery can fail silently, so it can't escalate on failure. The "agent active" HUD that should announce it isn't built yet. |
 | macOS keyboard layout | Key combos map through the US ANSI layout. Text goes through Unicode typing, which is layout-independent. |
+| Oversight routing | The spec puts oversight on surfaces but doesn't say which conversation a delegated specialist's cards and questions belong to. They go to the parent, because the user never sees the child. |
+| Question and handoff timeouts | The spec gives none. A question waits 10 minutes and a handoff 30, so a run nobody watches doesn't hold its lease until the run timeout. |
+| Stop and pending requests | The spec's abort "runs the full cleanup path". Stop also declines the session's pending questions and handoffs, so a blocked specialist unblocks and reports instead of waiting out its timeout. |
+| Surface capability | The spec has surfaces declare a `computer-use` capability. No surface declares it yet; intents are published whether or not one is attached, as exec-approval intents are. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |

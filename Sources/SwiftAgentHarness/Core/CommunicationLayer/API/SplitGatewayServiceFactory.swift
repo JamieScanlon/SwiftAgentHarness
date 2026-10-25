@@ -9,6 +9,7 @@ public struct HarnessRuntimeGraph {
     let subAgentLifecycleHost: any SubAgentLifecycleOrchestrationHosting
     let subAgentCompletionHost: any SubAgentCompletionIngressHosting
     let subAgentCompletion: any SubAgentCompletionIngressServicing
+    var computerUse: ComputerUseInstallation?
 }
 
 /// Explicit gateway service instances built without a monolithic host owner.
@@ -23,6 +24,7 @@ public struct HarnessServiceGraph {
     let subAgentLifecycle: any SubAgentLifecycleOrchestrationServicing
     let subAgentCompletion: any SubAgentCompletionIngressServicing
     let runtime: any APILayerChatRuntimeManaging
+    var computerUse: ComputerUseInstallation?
 
     var conversationAdapter: APILayerConversationAdapter {
         APILayerConversationAdapter(
@@ -34,7 +36,8 @@ public struct HarnessServiceGraph {
             residualAPI: residualAPI,
             policy: policy,
             subAgentLifecycle: subAgentLifecycle,
-            subAgentCompletion: subAgentCompletion
+            subAgentCompletion: subAgentCompletion,
+            computerUse: computerUse
         )
     }
 
@@ -70,7 +73,8 @@ public enum SplitGatewayServiceFactory {
             runtime: runtime ?? makeRuntimeBackend(
                 agentRuntime: runtimeGraph.agentRuntime,
                 conversationReplay: runtimeGraph.conversationReplay
-            )
+            ),
+            computerUse: runtimeGraph.computerUse
         )
     }
 
@@ -112,7 +116,8 @@ public enum SplitGatewayServiceFactory {
             toolPolicyOwner: services.conversationToolModePolicyRuntimeService,
             subAgentLifecycleHost: subAgentLifecycleHost,
             subAgentCompletionHost: subAgentCompletionHost,
-            subAgentCompletion: subAgentCompletion
+            subAgentCompletion: subAgentCompletion,
+            computerUse: services.subAgentSpawnService.deps.computerUse
         )
     }
 
@@ -130,7 +135,8 @@ public enum SplitGatewayServiceFactory {
             toolPolicyOwner: await host.conversationToolModePolicyRuntimeService,
             subAgentLifecycleHost: subAgentLifecycleHost,
             subAgentCompletionHost: subAgentCompletionHost,
-            subAgentCompletion: subAgentCompletion
+            subAgentCompletion: subAgentCompletion,
+            computerUse: host.runtimeDependencies.computerUse
         )
     }
 

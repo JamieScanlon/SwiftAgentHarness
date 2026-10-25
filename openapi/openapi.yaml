@@ -118,6 +118,11 @@ tags:
     description: File upload for chat attachments
   - name: ExecApprovals
     description: Exec-approval resolution and durable command grants
+  - name: ComputerUse
+    description: |
+      User controls over computer-use specialists working for a conversation. Requests and activity are
+      announced on `conversation/{id}/events` as `surfaceIntent` events (`computerUseRequest`,
+      `computerUseRequestCleared`, `computerUseActivity`); these routes answer and steer them.
 
 paths:
   /status:
@@ -1739,6 +1744,146 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use:
+    get:
+      operationId: getConversationComputerUse
+      tags: [ComputerUse]
+      summary: Pending computer-use questions and handoffs, and live specialist sessions
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: What is waiting on the user and what is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseControlStatus"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/requests/{requestID}:
+    post:
+      operationId: resolveComputerUseRequest
+      tags: [ComputerUse]
+      summary: Answer a question, hand control back after a handoff, or decline
+      description: |
+        A question takes `answer` (with a non-empty `answer`) or `decline`; a handoff takes `hand-back`
+        (optionally with a `note`) or `decline`. The waiting specialist resumes with the result.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: requestID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComputerUseRequestResolution"
+      responses:
+        "200":
+          description: Resolution accepted
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such pending request for this conversation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The action does not fit the request kind
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/stop:
+    post:
+      operationId: stopConversationComputerUse
+      tags: [ComputerUse]
+      summary: Kill switch for the conversation's computer-use sessions
+      description: |
+        Ends every live specialist session working for the conversation, releases its display-target lease, and
+        declines its pending requests. Idempotent: returns an empty list when nothing is running.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: The sessions that were stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseSessionsChanged"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/takeover:
+    post:
+      operationId: setConversationComputerUseTakeover
+      tags: [ComputerUse]
+      summary: Take over the screen from a computer-use specialist, or hand it back
+      description: While taken over, the specialist's capture and input are suspended.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComputerUseTakeoverRequest"
+      responses:
+        "200":
+          description: The sessions whose takeover state was set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseSessionsChanged"
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No live session (or none with `lifecycleID`), or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The display target refused the takeover
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   securitySchemes:
     HarnessAccessBearer:
@@ -3342,6 +3487,95 @@ components:
           items:
             type: string
           description: Command names with durable grants, sorted ascending.
+
+    ComputerUsePendingRequest:
+      type: object
+      required: [id, kind, conversationID, prompt, target, createdAt]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [question, handoff]
+        conversationID:
+          type: string
+          format: uuid
+          description: The user's conversation, which delegated the task.
+        lifecycleID:
+          type: string
+          description: The delegate call that started the specialist.
+        prompt:
+          type: string
+        reason:
+          type: string
+          description: Why a handoff is needed (login, 2fa, captcha, payment, ambiguous, consequential).
+        target:
+          type: string
+          description: The display target's label.
+        createdAt:
+          type: string
+          format: date-time
+
+    ComputerUseSessionStatus:
+      type: object
+      required: [lifecycleID, target, step, maxSteps, takenOver]
+      properties:
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        step:
+          type: integer
+        maxSteps:
+          type: integer
+        takenOver:
+          type: boolean
+
+    ComputerUseControlStatus:
+      type: object
+      required: [pending, sessions]
+      properties:
+        pending:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUsePendingRequest"
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseSessionStatus"
+
+    ComputerUseRequestResolution:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [answer, hand-back, decline]
+        answer:
+          type: string
+          description: Required (non-empty) with `answer`.
+        note:
+          type: string
+          description: Optional with `hand-back`.
+
+    ComputerUseTakeoverRequest:
+      type: object
+      required: ["on"]
+      properties:
+        "on":
+          type: boolean
+        lifecycleID:
+          type: string
+          description: Limit to one session; omitted applies to every live session for the conversation.
+
+    ComputerUseSessionsChanged:
+      type: object
+      required: [lifecycleIDs]
+      properties:
+        lifecycleIDs:
+          type: array
+          items:
+            type: string
 
     ExecApprovalResolutionRequest:
       type: object

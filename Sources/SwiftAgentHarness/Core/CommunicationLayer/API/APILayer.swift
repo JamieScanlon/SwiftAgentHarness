@@ -92,6 +92,8 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     func apiListConversationTraceSpans(conversationID: UUID, limit: Int?) async throws -> ConversationTraceResponse
     func apiListActiveSubAgentInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo]
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws
+    /// Controls for the computer-use specialists working for a conversation; nil when the host has no computer use.
+    func apiComputerUseControl() async -> ComputerUseControlService?
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,
@@ -498,6 +500,10 @@ extension APILayerConversationManaging {
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws {
         let _ = (parentConversationID, lifecycleID)
         throw APILayerConversationAPIError.unsupported
+    }
+
+    func apiComputerUseControl() async -> ComputerUseControlService? {
+        nil
     }
 
     func apiPushCompletionAnnouncement(
