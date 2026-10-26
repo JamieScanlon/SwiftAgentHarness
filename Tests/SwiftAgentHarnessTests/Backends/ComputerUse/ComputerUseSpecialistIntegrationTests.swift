@@ -421,6 +421,36 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(entry.expiresAt == entry.releasedAt.addingTimeInterval(ttl))
     }
 
+    @Test("After a restart, replays are rediscovered from the parent's delegate results and can still be audit-marked")
+    func replaysSurviveRestart() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setScreenshot(try ComputerUseFixtures.pngScreenshot())
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder()
+        )
+        let (outcome, _) = try await invoke(session, parent: parent)
+        // The delegate result lands in the parent's transcript, as the agent loop would append it.
+        guard case .completed(let message) = outcome else { Issue.record("expected a result"); return }
+        await session.conversationMessagingRuntimeService.appendMessagesToConversation([message], conversationID: parent.id)
+        let original = try #require(await session.runtimeDependencies.computerUse.replays.entry(parent: parent.id, lifecycleID: "call-cu-1"))
+
+        // A fresh index, as after a restart, rebuilt from durable state only.
+        let installation = await session.runtimeDependencies.computerUse
+        let restarted = ComputerUseReplayIndex()
+        restarted.setDiscovery(ComputerUseReplayDiscovery.discovery(
+            persistence: await session.runtimeDependencies.persistenceDomain,
+            installation: installation
+        ))
+        let entry = try #require(await restarted.entry(parent: parent.id, lifecycleID: "call-cu-1"))
+        #expect(entry.replay == original.replay)
+        #expect(Set(entry.blobIDs) == Set(original.blobIDs))
+        #expect(!entry.auditMarked)
+        let expiresAt = try #require(entry.expiresAt)
+        #expect(abs(expiresAt.timeIntervalSince(try #require(original.expiresAt))) < 1)
+        let thumbnail = try #require(entry.replay.thumbnails.first)
+        #expect(try entry.access.load(thumbnail.blobID).isEmpty == false)
+    }
+
     @Test("An audit mark placed while the run is live holds its images at release")
     func auditMarkedWhileLive() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })

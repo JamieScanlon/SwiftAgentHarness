@@ -1935,7 +1935,7 @@ paths:
       operationId: listConversationComputerUseReplays
       tags: [ComputerUse]
       summary: Recent computer-use replays for the conversation, newest first
-      description: Held in the server process; replays from before a restart are reachable only through the replay ref in the delegate result.
+      description: After a restart the listing is rebuilt from the conversation's delegate results, whose actionsLog names each stored replay. Expired replays are left out.
       parameters:
         - $ref: "#/components/parameters/ConversationId"
       responses:

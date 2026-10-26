@@ -1,4 +1,5 @@
 import Foundation
+import SwiftAgentKit
 import Synchronization
 import Testing
 @testable import SwiftAgentHarness
@@ -197,6 +198,61 @@ struct ComputerUseReplayTests {
         #expect(await !installation.blobs.takeAuditMark(parent: parent, lifecycleID: "call-1"))
     }
 
+    @Test("Discovery runs once per conversation, and entries recorded in this process win")
+    func discoveryMerges() async throws {
+        let index = ComputerUseReplayIndex()
+        let parent = UUID()
+        let store = ReplayBlobStore()
+        let calls = DiscoveryCounter()
+        var stale = ComputerUseReplayIndexEntry.fixture(.fixture(parent: parent, lifecycleID: "call-1", endedAt: Date(timeIntervalSince1970: 10)), store: store)
+        stale.replay.target = "rediscovered"
+        let older = ComputerUseReplayIndexEntry.fixture(.fixture(parent: parent, lifecycleID: "call-0", endedAt: Date(timeIntervalSince1970: 5)), store: store)
+        let rediscovered = [stale, older]
+        index.setDiscovery { conversationID in
+            await calls.increment()
+            return conversationID == parent ? rediscovered : []
+        }
+        var live = ComputerUseReplayIndexEntry.fixture(.fixture(parent: parent, lifecycleID: "call-1", endedAt: Date(timeIntervalSince1970: 10)), store: store)
+        live.replay.target = "this process"
+        await index.record(live)
+
+        #expect(await index.summaries(parent: parent).map(\.lifecycleID) == ["call-1", "call-0"])
+        #expect(await index.entry(parent: parent, lifecycleID: "call-1")?.replay.target == "this process")
+        _ = await index.summaries(parent: parent)
+        #expect(await calls.count == 1)
+    }
+
+    @Test("Discovery finds replay documents through delegate results and reads their retention")
+    func discoveryParses() throws {
+        let harness = InMemoryHarnessSessionPersistence()
+        let retention = ComputerUseRetention(afterRelease: .seconds(3_600))
+        let endedAt = Date()
+        func stored(_ lifecycleID: String, expiresAt: Date?) throws -> Message {
+            var replay = ComputerUseReplay.fixture(parent: UUID(), lifecycleID: lifecycleID, endedAt: endedAt)
+            replay.screenshotBlobIDs = ["shot-\(lifecycleID)"]
+            let ref = try harness.putBlob(
+                data: JSONEncoder.computerUseReplay.encode(replay), durability: .ephemeral, originalName: nil,
+                mimeType: "application/json", trust: "unknown-party", ttlSeconds: 3_600, lane: .outbound
+            )
+            _ = try harness.setBlobExpiry(blobId: ref.id, expiresAt: expiresAt)
+            let result = #"{"status":"done","actionsLog":"3 actions: observe, click, observe (full log: \#(SessionBlobImageRef.path(for: ref.id)))"}"#
+            return Message(id: UUID(), role: .tool, content: result, toolCallId: lifecycleID)
+        }
+        let messages = [
+            Message(id: UUID(), role: .user, content: "Bold the title"),
+            try stored("call-normal", expiresAt: endedAt.addingTimeInterval(3_600)),
+            try stored("call-audited", expiresAt: nil),
+            try stored("call-expired", expiresAt: Date().addingTimeInterval(-1)),
+            Message(id: UUID(), role: .tool, content: #"{"status":"done","actionsLog":"no actions"}"#, toolCallId: "x"),
+        ]
+        let entries = ComputerUseReplayDiscovery.entries(messages: messages, harness: harness, retention: retention)
+        #expect(entries.map(\.replay.lifecycleID) == ["call-normal", "call-audited"])
+        #expect(entries.map(\.auditMarked) == [false, true])
+        #expect(entries.first?.blobIDs.first == "shot-call-normal")
+        #expect(entries.first?.blobIDs.last == entries.first?.documentBlobID)
+        #expect(ComputerUseReplayDiscovery.replayDocumentBlobID(inToolResult: "not json") == nil)
+    }
+
     @Test("Retention: the TTL runs from release, and audit retention replaces it")
     func retentionRule() {
         let released = Date(timeIntervalSince1970: 1_800_000_000)
@@ -237,4 +293,9 @@ extension ComputerUseReplay {
             thumbnails: []
         )
     }
+}
+
+private actor DiscoveryCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

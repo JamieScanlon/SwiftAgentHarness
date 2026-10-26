@@ -840,7 +840,12 @@ public actor HarnessRuntimeSession {
         _ configuration: ComputerUseConfiguration,
         publish: @escaping ComputerUseOversightCoordinator.Publish
     ) {
-        runtimeDependencies.computerUse.install(configuration, publish: publish)
+        let installation = runtimeDependencies.computerUse
+        installation.install(configuration, publish: publish)
+        installation.replays.setDiscovery(ComputerUseReplayDiscovery.discovery(
+            persistence: runtimeDependencies.persistenceDomain,
+            installation: installation
+        ))
     }
 
     /// Per-conversation computer-use controls for an in-process surface: answer requests, stop, take over.

@@ -279,15 +279,16 @@ extension SubAgentSpawnService {
                 lane: .outbound
             ).id
         }
-        guard let replay = try? await ComputerUseReplay(
+        guard var replay = try? await ComputerUseReplay(
             session: session,
             parentConversationID: parentConversationID,
             lifecycleID: lifecycleID,
             targetLabel: targetLabel,
             endedAt: releasedAt,
             storeThumbnail: { try put($0, "computer-use-thumbnail.png", "image/png") }
-        ), !(replay.records.isEmpty && replay.thumbnails.isEmpty),
-              let data = try? JSONEncoder.computerUseReplay.encode(replay),
+        ), !(replay.records.isEmpty && replay.thumbnails.isEmpty) else { return nil }
+        replay.screenshotBlobIDs = blobIDs
+        guard let data = try? JSONEncoder.computerUseReplay.encode(replay),
               let documentBlobID = try? put(data, "computer-use-replay-\(session.id.uuidString).json", "application/json")
         else { return nil }
         blobIDs += replay.thumbnails.map(\.blobID) + [documentBlobID]

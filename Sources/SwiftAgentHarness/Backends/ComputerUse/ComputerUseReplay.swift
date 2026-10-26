@@ -1,4 +1,6 @@
 import Foundation
+import SwiftAgentKit
+import Synchronization
 
 /// A thumbnail the session keeps of one observation, for the post-run replay. Observations themselves are
 /// dropped once they fall out of the citing window.
@@ -48,6 +50,8 @@ public struct ComputerUseReplay: Sendable, Codable, Equatable {
     public var steps: Int
     public var records: [ComputerUseActionRecord]
     public var thumbnails: [ComputerUseReplayThumbnail]
+    /// The run's screenshot blobs, which follow the replay's retention.
+    public var screenshotBlobIDs: [String] = []
 
     public var summary: ComputerUseReplaySummary {
         ComputerUseReplaySummary(
@@ -142,30 +146,58 @@ struct ComputerUseReplayIndexEntry: Sendable {
 /// Recent replays per user conversation, newest first, so surfaces can list and open them. Expired replays drop
 /// out.
 actor ComputerUseReplayIndex {
+    typealias Discovery = @Sendable (UUID) async -> [ComputerUseReplayIndexEntry]
+
     private let capacityPerConversation: Int
     private let now: @Sendable () -> Date
     private var entries: [UUID: [ComputerUseReplayIndexEntry]] = [:]
+    private var discovered: Set<UUID> = []
+    /// Rebuilds a conversation's replays from durable state, so they outlive the process. Run once per
+    /// conversation, on first access.
+    private nonisolated let discovery = Mutex<Discovery?>(nil)
 
     init(capacityPerConversation: Int = 50, now: @escaping @Sendable () -> Date = { Date() }) {
         self.capacityPerConversation = max(1, capacityPerConversation)
         self.now = now
     }
 
+    nonisolated func setDiscovery(_ discover: Discovery?) {
+        discovery.withLock { $0 = discover }
+    }
+
     func record(_ entry: ComputerUseReplayIndexEntry) {
-        let parent = entry.replay.parentConversationID
+        insert([entry], parent: entry.replay.parentConversationID, replacing: true)
+    }
+
+    func summaries(parent conversationID: UUID) async -> [ComputerUseReplaySummary] {
+        await discoverIfNeeded(conversationID)
+        return live(conversationID).map(\.summary)
+    }
+
+    func entry(parent conversationID: UUID, lifecycleID: String) async -> ComputerUseReplayIndexEntry? {
+        await discoverIfNeeded(conversationID)
+        return live(conversationID).first { $0.replay.lifecycleID == lifecycleID }
+    }
+
+    private func discoverIfNeeded(_ conversationID: UUID) async {
+        guard !discovered.contains(conversationID), let discover = discovery.withLock({ $0 }) else { return }
+        discovered.insert(conversationID)
+        insert(await discover(conversationID), parent: conversationID, replacing: false)
+    }
+
+    /// Entries recorded in this process win over rediscovered ones for the same run.
+    private func insert(_ new: [ComputerUseReplayIndexEntry], parent: UUID, replacing: Bool) {
         var list = entries[parent] ?? []
-        list.removeAll { $0.replay.lifecycleID == entry.replay.lifecycleID }
-        list.insert(entry, at: 0)
+        for entry in new {
+            let existing = list.firstIndex { $0.replay.lifecycleID == entry.replay.lifecycleID }
+            if let existing {
+                guard replacing else { continue }
+                list.remove(at: existing)
+            }
+            list.append(entry)
+        }
         list.sort { $0.replay.endedAt > $1.replay.endedAt }
         entries[parent] = Array(list.prefix(capacityPerConversation))
-    }
-
-    func summaries(parent conversationID: UUID) -> [ComputerUseReplaySummary] {
-        live(conversationID).map(\.summary)
-    }
-
-    func entry(parent conversationID: UUID, lifecycleID: String) -> ComputerUseReplayIndexEntry? {
-        live(conversationID).first { $0.replay.lifecycleID == lifecycleID }
     }
 
     func updateRetention(parent conversationID: UUID, lifecycleID: String, auditMarked: Bool, expiresAt: Date?) {
@@ -177,5 +209,72 @@ actor ComputerUseReplayIndex {
     private func live(_ conversationID: UUID) -> [ComputerUseReplayIndexEntry] {
         let current = now()
         return (entries[conversationID] ?? []).filter { entry in entry.expiresAt.map { $0 > current } ?? true }
+    }
+}
+
+/// Rebuilds a conversation's replays from its delegate results: each result's `actionsLog` names the stored
+/// replay document, which in turn names every blob the run's retention covers.
+enum ComputerUseReplayDiscovery {
+    /// Discovery over the parent conversation's messages, with the installation's current retention.
+    static func discovery(
+        persistence: ConversationPersistenceDomain,
+        installation: ComputerUseInstallation
+    ) -> ComputerUseReplayIndex.Discovery {
+        { [weak installation] conversationID in
+            guard let installation, let conversation = await persistence.modelConversation(id: conversationID) else { return [] }
+            return entries(
+                messages: conversation.messages,
+                harness: await persistence.harnessSessionPersistence,
+                retention: installation.retention
+            )
+        }
+    }
+
+    static func entries(
+        messages: [Message],
+        harness: any HarnessSessionPersistence,
+        retention: ComputerUseRetention
+    ) -> [ComputerUseReplayIndexEntry] {
+        let access = ComputerUseBlobAccess(
+            load: { try harness.getBlob(blobId: $0) },
+            setExpiry: { _ = try harness.setBlobExpiry(blobId: $0, expiresAt: $1) }
+        )
+        return messages.compactMap { message -> ComputerUseReplayIndexEntry? in
+            guard message.role == .tool,
+                  let documentBlobID = replayDocumentBlobID(inToolResult: message.content),
+                  let data = try? harness.getBlob(blobId: documentBlobID),
+                  let replay = try? JSONDecoder.computerUseReplay.decode(ComputerUseReplay.self, from: data),
+                  let stat = try? harness.statBlob(blobId: documentBlobID)
+            else { return nil }
+            let normalExpiry = retention.expiry(releasedAt: replay.endedAt, auditMarked: false)
+            let auditMarked = stat.durability == .ephemeral && !Self.same(stat.expiresAt, normalExpiry)
+            return ComputerUseReplayIndexEntry(
+                replay: replay,
+                documentBlobID: documentBlobID,
+                blobIDs: replay.screenshotBlobIDs + replay.thumbnails.map(\.blobID) + [documentBlobID],
+                releasedAt: replay.endedAt,
+                auditMarked: auditMarked,
+                expiresAt: stat.expiresAt,
+                access: access
+            )
+        }
+    }
+
+    /// The replay document a delegate result's `actionsLog` points at.
+    static func replayDocumentBlobID(inToolResult content: String) -> String? {
+        guard let data = content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let actionsLog = object["actionsLog"] as? String,
+              let match = actionsLog.firstMatch(of: /full log: (blob:\/\/[0-9a-fA-F]{64})/)
+        else { return nil }
+        return SessionBlobImageRef.parsePath(String(match.output.1))
+    }
+
+    private static func same(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case (let a?, let b?): return abs(a.timeIntervalSince(b)) < 1
+        default: return false
+        }
     }
 }
