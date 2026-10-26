@@ -41,10 +41,14 @@ public enum ObservationScope: Sendable, Codable, Hashable {
 public struct ObservationImageLimit: Sendable, Codable, Hashable {
     public var longEdgePx: Int
     public var maxVisualTokens: Int?
+    /// Most pixels in one image. Vendors that reject large images instead of downscaling them cap the area as
+    /// well as the edge.
+    public var maxPixels: Int?
 
-    public init(longEdgePx: Int, maxVisualTokens: Int? = nil) {
+    public init(longEdgePx: Int, maxVisualTokens: Int? = nil, maxPixels: Int? = nil) {
         self.longEdgePx = longEdgePx
         self.maxVisualTokens = maxVisualTokens
+        self.maxPixels = maxPixels
     }
 }
 

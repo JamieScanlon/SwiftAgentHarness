@@ -11,6 +11,14 @@
       "modelProtocol": "anthropic",
       "capabilities": ["completion", "tools", "vision", "thinking"],
       "maxContextLength": 200000,
+      "vision": { "maxImageEdgePx": 1568 },
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer_20251124",
+          "params": { "coordinates": "pixels", "maxEdgePx": 1568, "maxPixels": 1150000, "betaHeader": "computer-use-2025-11-24" }
+        }
+      },
       "maxOutputTokens": 64000,
       "cost": {
         "inputPer1MUSD": 15.0,
@@ -31,6 +39,14 @@
       "modelProtocol": "anthropic",
       "capabilities": ["completion", "tools", "vision", "thinking"],
       "maxContextLength": 200000,
+      "vision": { "maxImageEdgePx": 1568 },
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer_20251124",
+          "params": { "coordinates": "pixels", "maxEdgePx": 1568, "maxPixels": 1150000, "betaHeader": "computer-use-2025-11-24" }
+        }
+      },
       "maxOutputTokens": 64000,
       "cost": {
         "inputPer1MUSD": 3.0,
@@ -51,6 +67,14 @@
       "modelProtocol": "anthropic",
       "capabilities": ["completion", "tools", "vision"],
       "maxContextLength": 200000,
+      "vision": { "maxImageEdgePx": 1568 },
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer_20250124",
+          "params": { "coordinates": "pixels", "maxEdgePx": 1568, "maxPixels": 1150000, "betaHeader": "computer-use-2025-01-24" }
+        }
+      },
       "maxOutputTokens": 8192,
       "cost": {
         "inputPer1MUSD": 0.8,

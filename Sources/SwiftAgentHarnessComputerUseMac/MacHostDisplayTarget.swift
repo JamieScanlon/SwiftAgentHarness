@@ -179,7 +179,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
             processStart = running.launchDate
             bounds = MacCoordinateSpace.cgRect(window.bounds)
             if wantsPixels, let windowID = CGWindowID(window.windowID) {
-                let shot = try await capture.captureWindow(windowID: windowID, maxLongEdge: request.maxImage?.longEdgePx)
+                let shot = try await capture.captureWindow(
+                    windowID: windowID,
+                    maxLongEdge: request.maxImage?.longEdgePx,
+                    maxPixels: request.maxImage?.maxPixels
+                )
                 image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
                 bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
             }
@@ -196,7 +200,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
                     displayID: displayID,
                     grantedBundleIDs: grantedApps,
                     excludedBundleIDs: configuration.excludedBundleIDs,
-                    maxLongEdge: request.maxImage?.longEdgePx
+                    maxLongEdge: request.maxImage?.longEdgePx,
+                    maxPixels: request.maxImage?.maxPixels
                 )
                 image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
                 bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)

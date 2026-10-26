@@ -104,6 +104,9 @@ extension SubAgentSpawnService {
             model: profile
         )
         sessionConfiguration.conversationID = childID
+        sessionConfiguration.clampImageLimit(
+            toLongEdge: deps.conversationTransformConfiguration.toolResultFormatting.maxInlineImagePixelDimension
+        )
         // Approvals, questions, and activity go to the user's conversation, not the specialist's child.
         let targetLabel = grant.target.manifest.label
         var approvals = configuration.approvals

@@ -22,7 +22,7 @@ Optional row fields that extend the row's synthesized `generate` contract profil
 | Field | Role |
 |-------|------|
 | `vision` | `{ "maxImageEdgePx": Int, "maxImageTokens": Int }`: image input caps. Screenshots and tool images are sized to them. |
-| `features` | Versioned features keyed as on the profile, for example `"computer-use": {"supported": true, "version": "…", "params": {"coordinates": "pixels", "maxEdgePx": 1568}}`. See `docs/COMPUTER_USE.md`. |
+| `features` | Versioned features keyed as on the profile, for example `"computer-use": {"supported": true, "version": "…", "params": {"coordinates": "pixels", "maxEdgePx": 1568, "maxPixels": 1150000}}`. `maxPixels` caps a screenshot's area; `betaHeader` records the vendor toolset's header. See `docs/COMPUTER_USE.md`. |
 
 Put both under the model's entry in `overrides/{providerId}.overrides.json` so regeneration merges them into the catalog row.
 

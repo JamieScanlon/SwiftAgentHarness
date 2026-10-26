@@ -66,6 +66,46 @@ struct ComputerUseModelSupportTests {
         #expect(ObservationImageLimit(model: profile()).longEdgePx == ObservationImageLimit.defaultLongEdgePx)
     }
 
+    @Test("A pixel-area cap rides along, for vendors that reject large images instead of downscaling")
+    func pixelCap() throws {
+        let feature = FeatureSupport(version: "computer_20251124", params: ["maxEdgePx": .integer(1568), "maxPixels": .integer(1_150_000)])
+        let support = try #require(ComputerUseModelSupport(profile: profile(feature: feature)))
+        #expect(support.maxPixels == 1_150_000)
+        #expect(ObservationImageLimit(model: profile(feature: feature)) == ObservationImageLimit(longEdgePx: 1568, maxPixels: 1_150_000))
+    }
+
+    @Test("The bundled catalogs declare computer use for the Claude models, with Anthropic's documented limits")
+    func bundledCatalogs() throws {
+        ProviderTestManifestSupport.activateProviderResources()
+        func support(_ provider: ProviderID, _ model: String) throws -> ComputerUseModelSupport? {
+            let entry = try #require(try ProviderCatalogLoader.decodeBundledCatalog(for: provider).first { $0.endpointModelId == model })
+            let registry = entry.toRegistryEntry(providerID: provider, serverURL: URL(string: "https://example.com")!)
+            return registry.profile(for: .generate).flatMap(ComputerUseModelSupport.init(profile:))
+        }
+        for model in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+            let cu = try #require(try support("anthropic", model))
+            #expect(cu.version == "computer_20251124")
+            #expect(cu.coordinateMode == .imagePixels)
+            #expect(cu.maxImageEdgePx == 1568)
+            #expect(cu.maxPixels == 1_150_000)
+        }
+        #expect(try support("anthropic", "claude-haiku-4-5")?.version == "computer_20250124")
+        #expect(try support("openrouter", "anthropic/claude-sonnet-4-6")?.maxImageEdgePx == 1568)
+        #expect(try support("openai", "gpt-4o") == nil)
+    }
+
+    @Test("Screenshots are capped at the pipeline's inline-image edge, so they are never turned into markers")
+    func pipelineClamp() {
+        let feature = FeatureSupport(version: "computer_20251124", params: ["maxEdgePx": .integer(1568), "maxPixels": .integer(1_150_000)])
+        var configuration = ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["x"]), model: profile(feature: feature))
+        configuration.clampImageLimit(toLongEdge: 1_200)
+        #expect(configuration.imageLimit == ObservationImageLimit(longEdgePx: 1_200, maxPixels: 1_150_000))
+        configuration.clampImageLimit(toLongEdge: 2_000)
+        #expect(configuration.imageLimit?.longEdgePx == 1_200)
+        configuration.clampImageLimit(toLongEdge: 0)
+        #expect(configuration.imageLimit?.longEdgePx == 1_200)
+    }
+
     @Test("A session configured from the bound model takes its coordinate dialect and image limit")
     func sessionFromModel() {
         let feature = FeatureSupport(version: "cu-2026", params: ["coordinates": .string("normalized-1000"), "maxEdgePx": .integer(1400)])

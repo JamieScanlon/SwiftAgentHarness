@@ -36,7 +36,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Per-action classification, intent check on `guard`, per-action confirmation, headless denial, stop key | Done |
 | `computer_*` function-tool family with flat schemas | Done |
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
-| `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx`, step-counted screenshot pruning | Done. Bundled catalogs don't declare the feature yet. |
+| `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx` and `maxPixels`, step-counted screenshot pruning | Done. The bundled Claude entries declare it with Anthropic's documented values. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
 | macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
 | Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
@@ -358,6 +358,7 @@ The tools are `computer_observe`, `computer_click`, `computer_type`, `computer_k
   "params": {
     "coordinates": "pixels",         // or "normalized-1000"
     "maxEdgePx": 2576,               // screenshot long-edge cap
+    "maxPixels": 3750000,            // screenshot area cap, for vendors that reject larger images
     "keepRecentScreenshots": 3,      // optional retention overrides
     "pruneEvery": 15
   }
@@ -396,7 +397,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Type name | The spec's `Observation` is `DisplayObservation`, because `Observation` collides with Swift's Observation module, which SwiftData's `@Model` expands into. |
 | `LeaseRequest` fields | The spec's request has no initiator or presence fields, but its rules depend on both: non-operator work never gets a host target, host targets need a present user, and unattended sessions get a short expiry. `operatorInitiated` and `userPresent` were added. |
 | `humanPresence` values | The manifest example shows only `shared`. `none` was added for VMs, containers, and managed browsers. |
-| Registry | The spec says display targets register in the same backend registry as sandboxes. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. Reusing sandbox pruning and observer-token machinery is still to do. |
+| Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes, and the host desktop isn't one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
 
 **Grants and classification**
 
@@ -422,7 +423,9 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | References the spec lists | The spec holds images while the live context window, a pending approval, or replay thumbnails reference them. The context window and pending approvals both end with the lease, because the specialist's context isn't reused and approval cards carry their crop inline. Thumbnails are covered by the replay's own retention. |
 | Retention defaults | The spec gives vendor guidance "keep 3, prune every ~25" and also says requests should stay under ~20 images. Those conflict: batches of 25 allow up to 27 screenshots. The defaults are keep 3, prune 15 (at most 17); a model's feature can override them. |
 | Pruned screenshot summary | The spec asks for a one-line text summary of each pruned screenshot. The marker reuses the observation's harness-written header line (id, app, window) rather than describing pixels, which would need a model call. |
-| Catalog values | The bundled catalogs don't declare `computer-use` or vision caps yet. Vendor toolset versions and image limits should be confirmed against current vendor documentation before they are added. |
+| Catalog values | Checked against Anthropic's computer-use docs (October 2026). Claude Opus 4.6 and Sonnet 4.6 take `computer_20251124` (beta `computer-use-2025-11-24`), and Haiku 4.5 takes `computer_20250124` (`computer-use-2025-01-24`). All three take screenshot-pixel coordinates and images of at most 1,568 px and about 1.15 MP. The bundled entries, including OpenRouter's Sonnet 4.6, declare these. `version` and `betaHeader` are informational until vendor-native toolsets exist; the harness drives every model through its own function tools. Newer models (Opus 4.7 and the Claude 5 family) allow 2,576 px and 4,784 visual tokens, about 3.75 MP, through `computer_toolset_20260801`. Host catalogs that list them should declare those values. OpenAI's and Gemini's computer use run through dedicated models, so their bundled entries don't declare the feature. |
+| Pixel-area cap | The spec sizes screenshots by long edge and visual-token cap. Anthropic also rejects images over about 1.15 MP on earlier models, and a 16:10 capture at 1,568 px is 1.54 MP. So the feature carries `maxPixels`, and capture fits both caps, rounding down when the area binds. |
+| Pipeline cap | Screenshots are never resized after capture. So the session also clamps them to the tool-result pipeline's `maxInlineImagePixelDimension` (1,200 px by default), or a model-sized screenshot would reach the model as a marker. Raise that setting to use a model's full limit. |
 | `computer-use` role | The spec binds the role to a model with the `computer-use` feature and falls back to `main` only if `main` has it. That would rule out the harness function-tool path, which the spec's dialect table allows for any model. Here the role is `specialist.modelRef`, falling back to the parent's model when it can see images and call tools. The feature, when present, sets the coordinate dialect and screenshot size. |
 | Constraint re-injection | The spec carries constraints into every step's context. Here every computer tool result ends with a reminder of the constraints and the unverified criteria, so they survive context pruning and compaction of earlier turns. |
 | Return schema | The final report is parsed as JSON when a schema is given. It is not validated against the schema. |

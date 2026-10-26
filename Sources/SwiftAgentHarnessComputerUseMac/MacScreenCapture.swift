@@ -8,24 +8,29 @@ import SwiftAgentHarness
 import UniformTypeIdentifiers
 
 enum MacCaptureSizing {
-    /// Pixels to capture for a rect in points: native resolution at most, scaled down to the long-edge cap.
-    static func pixelSize(for rect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?) -> ImagePixelSize {
+    /// Pixels to capture for a rect in points: native resolution at most, scaled down to the long-edge and
+    /// pixel-area caps.
+    static func pixelSize(for rect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?, maxPixels: Int? = nil) -> ImagePixelSize {
         let longEdge = max(rect.width, rect.height)
         guard longEdge > 0 else { return ImagePixelSize(width: 0, height: 0) }
         var scale = max(nativeScale, 1)
         if let maxLongEdge, maxLongEdge > 0 {
             scale = min(scale, CGFloat(maxLongEdge) / longEdge)
         }
-        return ImagePixelSize(
-            width: max(1, Int((rect.width * scale).rounded())),
-            height: max(1, Int((rect.height * scale).rounded()))
-        )
+        var areaBound = false
+        if let maxPixels, maxPixels > 0, rect.width * rect.height * scale * scale > CGFloat(maxPixels) {
+            scale = (CGFloat(maxPixels) / (rect.width * rect.height)).squareRoot()
+            areaBound = true
+        }
+        // Rounding up could cross a vendor's hard pixel limit, so an area-bound size rounds down.
+        let round: (CGFloat) -> Int = areaBound ? { Int($0.rounded(.down)) } : { Int($0.rounded()) }
+        return ImagePixelSize(width: max(1, round(rect.width * scale)), height: max(1, round(rect.height * scale)))
     }
 
-    static func geometry(capturedRect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?) -> ScreenshotGeometry {
+    static func geometry(capturedRect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?, maxPixels: Int? = nil) -> ScreenshotGeometry {
         ScreenshotGeometry(
             capturedRect: DisplayRect(capturedRect),
-            imageSize: pixelSize(for: capturedRect, nativeScale: nativeScale, maxLongEdge: maxLongEdge),
+            imageSize: pixelSize(for: capturedRect, nativeScale: nativeScale, maxLongEdge: maxLongEdge, maxPixels: maxPixels),
             scaleFactor: Double(nativeScale)
         )
     }
@@ -80,7 +85,8 @@ actor MacScreenCapture {
         displayID: CGDirectDisplayID?,
         grantedBundleIDs: Set<String>,
         excludedBundleIDs: Set<String>,
-        maxLongEdge: Int?
+        maxLongEdge: Int?,
+        maxPixels: Int? = nil
     ) async throws -> Capture {
         let content = try await content()
         guard let display = content.displays.first(where: { displayID == nil ? CGDisplayIsMain($0.displayID) != 0 : $0.displayID == displayID })
@@ -89,17 +95,17 @@ actor MacScreenCapture {
         let apps = content.applications.filter { included.contains($0.bundleIdentifier) }
         guard !apps.isEmpty else { throw MacCaptureError.nothingGrantedOnScreen }
         let filter = SCContentFilter(display: display, including: apps, exceptingWindows: [])
-        return try await capture(filter: filter, rect: display.frame, scale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge)
+        return try await capture(filter: filter, rect: display.frame, scale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge, maxPixels: maxPixels)
     }
 
     /// One window, including when it is occluded or not frontmost.
-    func captureWindow(windowID: CGWindowID, maxLongEdge: Int?) async throws -> Capture {
+    func captureWindow(windowID: CGWindowID, maxLongEdge: Int?, maxPixels: Int? = nil) async throws -> Capture {
         let content = try await content()
         guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
             throw MacCaptureError.windowGone(String(windowID))
         }
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        return try await capture(filter: filter, rect: window.frame, scale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge)
+        return try await capture(filter: filter, rect: window.frame, scale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge, maxPixels: maxPixels)
     }
 
     /// A region of a display at full resolution, for zoom. Coordinates stay in the global space.
@@ -129,9 +135,10 @@ actor MacScreenCapture {
         rect: CGRect,
         scale: CGFloat,
         maxLongEdge: Int?,
+        maxPixels: Int? = nil,
         sourceRect: CGRect? = nil
     ) async throws -> Capture {
-        let geometry = MacCaptureSizing.geometry(capturedRect: rect, nativeScale: scale, maxLongEdge: maxLongEdge)
+        let geometry = MacCaptureSizing.geometry(capturedRect: rect, nativeScale: scale, maxLongEdge: maxLongEdge, maxPixels: maxPixels)
         let configuration = SCStreamConfiguration()
         // Width and height are pixels; sizing here makes the capture pipeline do the downscale.
         configuration.width = geometry.imageSize.width

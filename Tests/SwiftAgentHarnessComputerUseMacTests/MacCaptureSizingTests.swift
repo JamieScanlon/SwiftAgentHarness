@@ -13,6 +13,16 @@ struct MacCaptureSizingTests {
         #expect(size == ImagePixelSize(width: 1200, height: 779))
     }
 
+    @Test("A pixel-area cap shrinks the capture below it, keeping the aspect ratio")
+    func pixelCap() {
+        let size = MacCaptureSizing.pixelSize(
+            for: CGRect(x: 0, y: 0, width: 1512, height: 982), nativeScale: 2, maxLongEdge: 1568, maxPixels: 1_150_000
+        )
+        #expect(size.width * size.height <= 1_150_000)
+        #expect(size.width >= 1_320 && size.width <= 1_331)
+        #expect(abs(Double(size.width) / Double(size.height) - 1512.0 / 982.0) < 0.01)
+    }
+
     @Test("It never upscales past the display's native resolution")
     func neverUpscales() {
         let size = MacCaptureSizing.pixelSize(for: CGRect(x: 0, y: 0, width: 400, height: 300), nativeScale: 1, maxLongEdge: 1568)
