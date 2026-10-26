@@ -43,7 +43,8 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
 | "Agent active" HUD on the host desktop (`MacAgentActiveHUD`), post-run replays with observation thumbnails | Done. The replay index lives in the server process. |
 | Image retention: held while the run can cite them, a TTL from lease release, audit marks for longer retention | Done |
-| Vendor-native toolsets and their safety signals, live view, deferred tool loading | Not yet |
+| Deferred loading: the parent finds `delegate_computer_use` through `tool_search` | Done |
+| Vendor-native toolsets and their safety signals, live view | Not yet |
 
 ## How it fits together
 
@@ -98,7 +99,9 @@ A host that drives a session directly can still build one by hand: lease through
 
 ## The computer-use specialist
 
-The parent calls `delegate_computer_use` with flat arguments:
+The parent doesn't see `delegate_computer_use` at first. It is deferred: the parent is offered `tool_search`, and a search such as "click through a desktop app" loads the delegate for the rest of the conversation. A model with an MCP tool or command for the job sees that first, and the delegate's schema stays out of the prompt until it's needed. The specialist child sees its computer tools directly. See the Tool System README's "Deferred tool loading" section.
+
+Once loaded, the parent calls `delegate_computer_use` with flat arguments:
 
 | Argument | Meaning |
 |---|---|
@@ -440,4 +443,6 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Image block | The spec wants a cropped image of the target region on approval cards, but its portable presentation vocabulary (text, context, divider, buttons, select) has no image block. `image` was added to `ApprovalBlock`, `MessageBlock`, and `approval-presentation.schema.json`, with base64 data and alt text. `SurfacePresentationCapabilities.images` gates it, and core degrades it to the alt text. |
 | Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |
 | Terminal controls | The spec asks for takeover and stop controls without naming keys. Esc is the host stop key, so the terminal uses Ctrl-T and Ctrl-X, and they work while a dialog is open. |
+| Deferred loading mechanism | The spec defers `computer.*` tools with `defer_loading` and names `searchHint` and `shouldDefer`/`alwaysLoad` registry fields, but no search tool. Here a harness `tool_search` does the search, so it works with every provider. Vendor-side tool search isn't used. Deferral is a `defer-loading` policy tag and the hint a `search-hint:` tag, because SwiftAgentKit descriptors carry no other extensible fields. Tools without the tag load as before, which is the `alwaysLoad` default. |
+| What is deferred | The spec says to keep computer-use schemas "deferred or searchable in the parent and loaded only in the sub-agent". The parent already never sees the `computer_*` tools, only the delegate, so the delegate is the deferred tool. The child loads the computer tools directly. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |

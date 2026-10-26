@@ -32,6 +32,8 @@ struct ToolRegistryEntry: Sendable {
         case compactionProtected = "compaction-protected"
         /// Images whose coordinates are mapped back through recorded geometry; resizing them misplaces every click.
         case geometryBoundImages = "geometry-bound-images"
+        /// Kept out of the model's tool list until `tool_search` loads it for the conversation.
+        case deferLoading = "defer-loading"
     }
 
     enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable {
@@ -79,6 +81,8 @@ struct ToolRegistryEntry: Sendable {
     let maxResultSizeBeforeSpill: Int?
     /// When true, oversized results are not spilled (self-bounding read tools).
     let spillExempt: Bool
+    /// Keywords `tool_search` matches besides the name and description.
+    let searchHint: String?
 
     var name: String { definition.name }
     var description: String { definition.description }
@@ -101,9 +105,11 @@ struct ToolRegistryEntry: Sendable {
         canonicalParametersSchema: JSON? = nil,
         aliases: [String]? = nil,
         maxResultSizeBeforeSpill: Int? = nil,
-        spillExempt: Bool? = nil
+        spillExempt: Bool? = nil,
+        searchHint: String? = nil
     ) {
         self.definition = definition
+        self.searchHint = searchHint
         self.source = source
         self.transportKind = transportKind
         self.effectClass = effectClass
@@ -258,7 +264,8 @@ struct ToolRegistryEntry: Sendable {
             canonicalParametersSchema: descriptor.normalizedSchema.schema,
             aliases: aliases,
             maxResultSizeBeforeSpill: nil,
-            spillExempt: ToolRegistrySpillPolicy.isSpillExempt(toolName: descriptor.definition.name)
+            spillExempt: ToolRegistrySpillPolicy.isSpillExempt(toolName: descriptor.definition.name),
+            searchHint: DeferredToolLoading.searchHint(fromPolicyTags: descriptor.policyTags)
         )
     }
 

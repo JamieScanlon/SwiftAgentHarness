@@ -4,7 +4,7 @@ import Foundation
 /// Harness-owned conversation metadata keys that clients and model tools must not write.
 public enum ConversationHarnessMetadataKeys {
     private static let clientWriteDeniedPrefixes = ["subAgent"]
-    private static let clientWriteDeniedExactKeys: Set<String> = ["_transformDebug"]
+    private static let clientWriteDeniedExactKeys: Set<String> = ["_transformDebug", DeferredToolLoading.metadataKey]
 
     public static func isClientWriteDenied(_ key: String) -> Bool {
         if clientWriteDeniedExactKeys.contains(key) { return true }

@@ -36,6 +36,8 @@ struct ConversationRuntimeDependencies {
     let visibilityGrants: ToolVisibilityGrantStore
     /// Filled by ``HarnessRuntimeSession/installComputerUse(_:)``; empty until then.
     let computerUse: ComputerUseInstallation
+    /// Each conversation's deferred tools `tool_search` can load, refreshed with every turn snapshot.
+    let deferredTools = DeferredToolCatalog()
     /// Classifier-assisted gating between the rules and the human. `nil` means the layer is off.
     let toolApprovalClassifierGate: ToolApprovalClassifierGate?
     /// Optional `decide` consumers (memory gate, skill filter, guardrails, injection probe, router). `.none` = all off.

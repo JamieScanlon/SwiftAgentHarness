@@ -762,6 +762,16 @@ public actor OrchestratorRuntimeService {
                 logger: logger
             )
         )
+        let searchConv = activeConversation
+        providers.append(
+            ToolSearchToolProvider(
+                resolveConversationID: { ConversationScope.current?.selfID ?? searchConv?.id },
+                catalog: deps.deferredTools,
+                load: { [weak self] conversationID, names in
+                    await self?.persistLoadedDeferredTools(names, conversationID: conversationID)
+                }
+            )
+        )
         let modeConv = activeConversation
         providers.append(
             ModeTransitionToolProvider(
@@ -965,6 +975,13 @@ public actor OrchestratorRuntimeService {
             providers: providers,
             descriptorValidationMode: toolDescriptorValidationMode(deps.toolPolicy.descriptorValidationMode)
         )
+    }
+
+    internal func testing_buildToolManager(
+        systemPrompt: SystemPrompt,
+        activeConversation: ModelConversation?
+    ) async -> ToolManager {
+        await buildToolManager(systemPrompt: systemPrompt, skillLoader: nil, activeConversation: activeConversation)
     }
 
     internal func testing_buildToolManagerToolNames(

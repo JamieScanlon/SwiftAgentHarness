@@ -76,6 +76,17 @@ At boot, the host app typically:
 - **Gateway (enforced):** `ToolPolicyConfiguration` allowlists in **PromptConfig.json**; per-conversation **disabled** tool names; **send** options (`enableTools`, `enableAgents` for A2A tool names); registration-time **`ToolVisibilityGrant`** (defaults `.inheritModeLists`; dual opt-in `.grant` + `allowsHostGrants: true` = host co-authors that mode's allow list — **not** a separate intersecting scope; deny/routing still intersect afterward; machine profiles never opt in). Mode allow lists may also use MCP name globs / group aliases such as `"mcp__<server>__*"` or `group:mcp`. The model cannot “talk its way” into a blocked tool if it is not in the filtered set passed to the orchestrator.
 - **Prompt-only:** system prompt / skills text that *discourages* tool use is **not** a substitute for the allowlist; both layers are recommended (harness: prompt injection does not defeat Gateway policy).
 
+## Deferred tool loading
+
+A tool whose descriptor carries the `defer-loading` policy tag stays out of the model's tool list until the model loads it with `tool_search`. This keeps a large schema out of the prompt, and lets a cheaper tool for the job be seen first. Add `search-hint:<keywords>` to give the search words that aren't in the name or description.
+
+- **Policy decides first.** Deferral applies to a tool the conversation would otherwise be offered. Its decision becomes `deferredUntilLoaded`, a hold rather than a policy block. A tool the mode or allow-list blocks is no candidate, so a search can't reveal it.
+- **`tool_search` is offered only while something is deferred.** It ranks candidates by query words: name 3, search hint 2, description 1, with an exact name loading just that tool. Matches are recorded in conversation metadata (`loadedDeferredToolNames`, which clients can't write). The snapshot is rebuilt before every model call, so loaded tools are callable on the next step and stay loaded for the conversation.
+- **Never stranded.** If policy blocks `tool_search` itself, nothing is deferred.
+- **Cache cost.** Loading a tool changes the tool list once, which re-writes the prompt cache from the tools onward.
+
+`DeferredToolLoading.resolve` applies these rules for both the model-facing snapshot (`buildToolTurnPolicySnapshot`) and the gateway's `effectiveEntriesForConversation`. `delegate_computer_use` is the first deferred tool.
+
 ## Halting-tool contract
 
 - Loop-halting tool semantics are defined on `ToolRegistryEntry.haltsLoop`, not mode-name branches in runtime code.

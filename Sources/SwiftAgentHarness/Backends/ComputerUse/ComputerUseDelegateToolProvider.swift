@@ -10,6 +10,8 @@ import SwiftAgentKit
 struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
     static let toolName = LocalAgentToolNaming.delegateToolPrefix + "computer_use"
     static let displayName = "Computer Use"
+    /// What `tool_search` matches besides the description.
+    static let searchHint = "computer use desktop app application GUI screen window click type mouse keyboard"
 
     let targets: [DisplayTargetManifest]
     let defaults: ComputerUseSpecialistDefaults
@@ -20,8 +22,10 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
         [Self.toolName: ToolDescriptorHints(effectClass: .mutating, parallelHint: .serialOnly, policyTags: Self.policyTags)]
     }
 
+    /// Deferred: the parent sees `tool_search` first, so a cheaper channel for the job wins.
     static var policyTags: [ToolPolicyTag] {
         InProcessLocalAgentToolProvider.policyTags(for: specialistDefinition(ComputerUseSpecialistProfile()))
+            + [DeferredToolLoading.deferLoadingTag, DeferredToolLoading.searchHintTag(searchHint)]
     }
 
     /// The child's capability: the computer-use family and nothing else — no shell, files, or messaging.

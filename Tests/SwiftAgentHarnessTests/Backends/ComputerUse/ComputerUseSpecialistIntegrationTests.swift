@@ -310,6 +310,37 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(!childTools.contains(ComputerUseDelegateToolProvider.toolName))
     }
 
+    @Test("Parents are offered tool_search, not the delegate, until a search loads it")
+    func delegateDeferred() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let (session, parent) = try await makeSession(model: makeModel(), target: target, script: [], reply: "ok", recorder: ChildRecorder())
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let runtime = await session.orchestratorRuntimeService
+        let manager = await runtime.testing_buildToolManager(systemPrompt: prompt, activeConversation: parent)
+        let entries = OrchestrationToolCatalog.registryEntries(from: await manager.allRegisteredToolsAsync())
+        let configuration = HarnessRuntimeSession.Configuration(enableTools: true, enableAgents: true)
+
+        let before = await runtime.buildToolTurnPolicySnapshot(allEntries: entries, conversation: parent, configuration: configuration)
+        let beforeNames = before.effectiveEntries.map(\.name)
+        #expect(beforeNames.contains(DeferredToolLoading.searchToolName))
+        #expect(!beforeNames.contains(ComputerUseDelegateToolProvider.toolName))
+        #expect(before.availabilitySnapshots.first { $0.entry.name == ComputerUseDelegateToolProvider.toolName }?.decision.blockReason
+            == .deferredUntilLoaded)
+
+        let found = try await manager.executeTool(ToolCall(
+            name: DeferredToolLoading.searchToolName,
+            arguments: .object(["query": .string("click through a desktop app")]),
+            id: "search-1"
+        ))
+        #expect(found.content.contains(ComputerUseDelegateToolProvider.toolName))
+
+        let reloaded = try #require(await session.persistenceDomain.modelConversation(id: parent.id))
+        let after = await runtime.buildToolTurnPolicySnapshot(allEntries: entries, conversation: reloaded, configuration: configuration)
+        let afterNames = after.effectiveEntries.map(\.name)
+        #expect(afterNames.contains(ComputerUseDelegateToolProvider.toolName))
+        #expect(!afterNames.contains(DeferredToolLoading.searchToolName), "nothing left to search for")
+    }
+
     @Test("The host's kill switch stops a running specialist and blocks it")
     func killSwitch() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })

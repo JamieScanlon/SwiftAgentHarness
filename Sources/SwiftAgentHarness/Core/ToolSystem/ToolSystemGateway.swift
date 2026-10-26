@@ -103,6 +103,22 @@ struct ToolAvailabilityDecision: Sendable, Equatable {
         )
     }
 
+    /// The same decision, held back until `tool_search` loads the tool.
+    func deferredUntilLoaded() -> Self {
+        Self(
+            allowed: false,
+            blockReason: .deferredUntilLoaded,
+            isSensitive: isSensitive,
+            requiresEscalation: requiresEscalation,
+            requiresApproval: requiresApproval,
+            isElevated: isElevated,
+            approvalGranted: approvalGranted,
+            approvalRoute: approvalRoute,
+            delegationPermissionPolicy: delegationPermissionPolicy,
+            delegationTrustLevel: delegationTrustLevel
+        )
+    }
+
     static func allowed(_ facts: AvailabilityFacts) -> Self {
         Self(
             allowed: true,
@@ -336,8 +352,8 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         }
         guard configuration.enableTools else { return [] }
         let groupIndex = ToolPolicyGroupIndex.build(from: entries)
-        return entries.filter { entry in
-            let decision = evaluateAvailability(
+        let decisions = entries.map { entry in
+            (entry: entry, decision: evaluateAvailability(
                 entry: entry,
                 conversation: conversation,
                 modePolicyContext: modePolicyContext,
@@ -346,9 +362,12 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
                 trustPolicy: trustPolicy,
                 subAgentToolClassifier: subAgentToolClassifier,
                 groupIndex: groupIndex
-            )
-            return decision.isAdvertisedToModel
-        }.sorted { $0.name < $1.name }
+            ))
+        }
+        return DeferredToolLoading.resolve(decisions, conversation: conversation)
+            .filter { $0.decision.isAdvertisedToModel }
+            .map(\.entry)
+            .sorted { $0.name < $1.name }
     }
 
     func availableToolsForAPI(
