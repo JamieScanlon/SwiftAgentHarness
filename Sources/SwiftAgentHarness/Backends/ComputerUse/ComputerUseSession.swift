@@ -198,6 +198,7 @@ public actor ComputerUseSession {
     private let now: @Sendable () -> Date
 
     private var retained: [ObservationID: DisplayObservation] = [:]
+    private var refs = ComputerUseRefStabilizer()
     private var retainedOrder: [ObservationID] = []
     private var history: [ComputerUseProposedAction] = []
     private var steps = 0
@@ -338,7 +339,16 @@ public actor ComputerUseSession {
             switch action {
             case .observe(var request):
                 if request.maxImage == nil { request.maxImage = configuration.imageLimit }
-                let observation = try await target.observe(lease, request)
+                // The session diffs on its own stable refs; drivers always return the full tree.
+                let diffBase = request.diffAgainst
+                request.diffAgainst = nil
+                var observation = refs.stabilize(try await target.observe(lease, request))
+                if let diffBase, let current = observation.tree {
+                    let text = retained[diffBase]?.tree.map {
+                        ComputerUseTreeDiff.render(base: $0, baseID: diffBase, current: current)
+                    } ?? ComputerUseTreeDiff.unavailable(baseID: diffBase, current: current)
+                    observation.tree?.diff = ObservationTreeDiff(base: diffBase, text: text)
+                }
                 retain(observation)
                 produced = observation
                 outcome = ActionOutcome(action: index, effect: .confirmed, observation: observation.id)
@@ -348,7 +358,10 @@ public actor ComputerUseSession {
                 produced = observation
                 outcome = ActionOutcome(action: index, effect: .confirmed, observation: observation.id)
             default:
-                let outcomes = try await target.act(lease, ActionBatch([action]))
+                let driverAction = action.mappingElementRefs { ref, observation in
+                    refs.driverRef(ref, observation: observation) ?? ref
+                }
+                let outcomes = try await target.act(lease, ActionBatch([driverAction]))
                 var first = outcomes.first ?? ActionOutcome(action: 0, effect: .unverifiable, evidence: "driver reported no outcome")
                 first.action = index
                 outcome = first
@@ -644,7 +657,9 @@ public actor ComputerUseSession {
             keepReplayFrame(of: observation)
         }
         while retainedOrder.count > configuration.retainedObservations {
-            retained.removeValue(forKey: retainedOrder.removeFirst())
+            let evicted = retainedOrder.removeFirst()
+            retained.removeValue(forKey: evicted)
+            refs.forget(evicted)
         }
     }
 

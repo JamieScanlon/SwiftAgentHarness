@@ -524,7 +524,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         }
         if let tree = observation.tree {
             if let truncated = tree.truncated { lines.append("Tree is partial: \(truncated)") }
-            lines.append(tree.text)
+            lines.append(tree.diff?.text ?? tree.text)
         }
         return lines.joined(separator: "\n")
     }

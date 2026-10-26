@@ -170,12 +170,16 @@ public struct ObservationTree: Sendable, Codable, Hashable {
     public var capturedAt: Date
     /// Why the tree is partial, when a traversal budget or deadline cut it short.
     public var truncated: String?
+    /// Set when the observation asked to diff against an earlier one: what the model sees instead of `text`.
+    /// `text` stays the full tree, as the base for later diffs.
+    public var diff: ObservationTreeDiff?
 
-    public init(text: String, elements: [String: ElementRef], capturedAt: Date, truncated: String? = nil) {
+    public init(text: String, elements: [String: ElementRef], capturedAt: Date, truncated: String? = nil, diff: ObservationTreeDiff? = nil) {
         self.text = text
         self.elements = elements
         self.capturedAt = capturedAt
         self.truncated = truncated
+        self.diff = diff
     }
 }
 

@@ -39,6 +39,8 @@ actor FakeDisplayTarget: DisplayTarget {
     var observedURL: String?
     /// Replaces the fixture's tiny PNG in observations, for tests that read pixels.
     var screenshot: Data?
+    /// Trees for successive observations, in place of the fixture's.
+    var trees: [ObservationTree] = []
     var outcomes: @Sendable (ComputerAction, Int) -> ActionOutcome = { _, index in
         ActionOutcome(action: index, effect: .confirmed, evidence: "fake")
     }
@@ -69,6 +71,10 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func setScreenshot(_ data: Data?) {
         screenshot = data
+    }
+
+    func setTrees(_ trees: [ObservationTree]) {
+        self.trees = trees
     }
 
     func setOutcomes(_ outcomes: @escaping @Sendable (ComputerAction, Int) -> ActionOutcome) {
@@ -111,6 +117,9 @@ actor FakeDisplayTarget: DisplayTarget {
             withImage: request.modes.contains(.pixels)
         )
         if let screenshot { observation.image?.data = screenshot }
+        if request.modes.contains(.accessibility), observationCounter <= trees.count {
+            observation.tree = trees[observationCounter - 1]
+        }
         return observation
     }
 
