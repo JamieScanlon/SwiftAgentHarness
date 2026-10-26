@@ -361,11 +361,19 @@ public actor OrchestratorRuntimeService {
                 enrichedMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = assembly.replaySpecDigest
             }
         }
-        if enrichedMetadata.isEmpty, thinkingConfig == nil {
+        var nativeDialect: ComputerUseNativeDialect?
+        if let conversationID = conversation?.id,
+           let session = await deps.computerUse.sessions.session(for: conversationID) {
+            nativeDialect = session.configuration.nativeDialect
+        }
+        if enrichedMetadata.isEmpty, thinkingConfig == nil, nativeDialect == nil {
             return nil
         }
 
         var payload: [String: JSON] = [:]
+        if let nativeDialect {
+            payload[ComputerUseNativeDialect.parameterKey] = nativeDialect.wireParameters
+        }
         if !enrichedMetadata.isEmpty {
             payload["systemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
             payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
@@ -954,7 +962,16 @@ public actor OrchestratorRuntimeService {
             // A specialist child drives its leased session; every other conversation may delegate to one.
             if let conversationID = activeConversation?.id,
                let session = await deps.computerUse.sessions.session(for: conversationID) {
-                providers.append(ComputerUseToolProvider(session: session))
+                if let native = session.configuration.nativeDialect {
+                    providers.append(ComputerUseNativeToolProvider(
+                        session: session,
+                        toolset: native.toolset,
+                        failures: deps.computerUse.nativeFailures
+                    ))
+                    providers.append(ComputerUseToolProvider(session: session, offering: ComputerUseToolProvider.nativeCompanionToolNames))
+                } else {
+                    providers.append(ComputerUseToolProvider(session: session))
+                }
             } else {
                 providers.append(ComputerUseDelegateToolProvider(
                     targets: await computerUse.registry.manifests,

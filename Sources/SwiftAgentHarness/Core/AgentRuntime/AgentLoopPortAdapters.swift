@@ -144,6 +144,7 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         AgentRuntimeLifecycleEmitter
     ) async -> Void
     let isHaltingFn: @Sendable (String, [ToolRegistryEntry]) async -> Bool
+    let batchHaltedFn: (@Sendable (String) async -> Bool)?
 
     init(
         consumeApprovalTimeoutsFn: @escaping @Sendable (
@@ -187,7 +188,8 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
             UUID,
             AgentRuntimeLifecycleEmitter
         ) async -> Void,
-        isHaltingFn: @escaping @Sendable (String, [ToolRegistryEntry]) async -> Bool
+        isHaltingFn: @escaping @Sendable (String, [ToolRegistryEntry]) async -> Bool,
+        batchHaltedFn: (@Sendable (String) async -> Bool)? = nil
     ) {
         self.consumeApprovalTimeoutsFn = consumeApprovalTimeoutsFn
         self.effectiveToolsFn = effectiveToolsFn
@@ -195,6 +197,11 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         self.dispatchBatchFn = dispatchBatchFn
         self.dispatchApprovalFn = dispatchApprovalFn
         self.isHaltingFn = isHaltingFn
+        self.batchHaltedFn = batchHaltedFn
+    }
+
+    func batchHalted(afterToolCallID toolCallID: String) async -> Bool {
+        await batchHaltedFn?(toolCallID) ?? false
     }
 
     func consumeApprovalTimeouts(
@@ -630,6 +637,10 @@ enum AgentLoopToolDispatch {
         spawnService: SubAgentSpawnService? = nil
     ) async -> Bool {
         for call in calls {
+            if let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
+               entry.policyTags.contains(.haltsBatchOnFailure) {
+                return true
+            }
             if let spawnService,
                let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
                spawnService.subAgentPool.isDelegateTool(entry: entry) {

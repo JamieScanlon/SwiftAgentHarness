@@ -100,6 +100,7 @@ final class ComputerUseInstallation: Sendable {
     let sessions = ComputerUseSessionDirectory()
     let replays = ComputerUseReplayIndex()
     let blobs = ComputerUseBlobLedger()
+    let nativeFailures = ComputerUseNativeFailures()
 
     init() {}
 

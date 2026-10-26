@@ -492,7 +492,7 @@ struct TurnLoop {
             } else {
                 var serial: [(call: ToolCallRequest, outcome: ToolDispatchOutcome, timedOut: Bool, elapsedMs: Int)] = []
                 serial.reserveCapacity(toolRequests.count)
-                for call in toolRequests {
+                for (callIndex, call) in toolRequests.enumerated() {
                     let result = await dispatchOneToolWithWatchdog(
                         call: call,
                         conversationID: conversationID,
@@ -511,6 +511,17 @@ struct TurnLoop {
                         break
                     }
                     if result.timedOut, contract.onToolTimeout == .failRun {
+                        break
+                    }
+                    if let id = call.id, await ports.tools.batchHalted(afterToolCallID: id) {
+                        // Every later block still needs a result; none of them runs.
+                        for skipped in toolRequests.dropFirst(callIndex + 1) {
+                            let halted = AgentLoopToolDispatch.toolResultMessage(
+                                toolCallId: skipped.id,
+                                content: ComputerUseNativeToolset.haltText
+                            )
+                            serial.append((skipped, .denied(halted), false, 0))
+                        }
                         break
                     }
                 }

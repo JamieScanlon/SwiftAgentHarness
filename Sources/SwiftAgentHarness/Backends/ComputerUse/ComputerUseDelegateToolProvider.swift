@@ -36,7 +36,7 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
             description: "Operates a computer screen to complete a task.",
             modeProfileID: profile.modeProfileID,
             modelRef: profile.modelRef,
-            toolsAllow: ComputerUseToolProvider.toolNames,
+            toolsAllow: ComputerUseToolProvider.toolNames + ComputerUseNativeToolset.allRegisteredToolNames.sorted(),
             longRunning: false,
             runTimeoutSeconds: profile.runTimeoutSeconds
         )

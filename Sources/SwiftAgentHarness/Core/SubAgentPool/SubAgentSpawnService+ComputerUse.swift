@@ -107,6 +107,12 @@ extension SubAgentSpawnService {
         sessionConfiguration.clampImageLimit(
             toLongEdge: deps.conversationTransformConfiguration.toolResultFormatting.maxInlineImagePixelDimension
         )
+        sessionConfiguration.nativeDialect = await Self.nativeDialect(
+            model: model,
+            profile: profile,
+            imageLimit: sessionConfiguration.imageLimit,
+            layout: try? await grant.target.describe(grant.lease)
+        )
         // Approvals, questions, and activity go to the user's conversation, not the specialist's child.
         let targetLabel = grant.target.manifest.label
         var approvals = configuration.approvals
@@ -169,6 +175,30 @@ extension SubAgentSpawnService {
             outcome: outcome
         )
         return reply(result)
+    }
+
+    /// Anthropic's native toolset when the model speaks Anthropic's API and its catalog version names one. The
+    /// older single-tool versions also declare the screen size, which is what a display screenshot comes out as.
+    static func nativeDialect(
+        model: Model,
+        profile: ContractProfile?,
+        imageLimit: ObservationImageLimit?,
+        layout: TargetLayout?
+    ) -> ComputerUseNativeDialect? {
+        guard model.modelProtocol == .anthropic,
+              let toolset = ComputerUseNativeToolset(version: profile.flatMap(ComputerUseModelSupport.init(profile:))?.version)
+        else { return nil }
+        guard !toolset.isToolset else { return ComputerUseNativeDialect(toolset: toolset) }
+        guard let display = layout?.displays.first(where: \.isPrimary) ?? layout?.displays.first else {
+            return ComputerUseNativeDialect(toolset: toolset)
+        }
+        let size = ObservationImageLimit.pixelSize(
+            for: display.frame,
+            nativeScale: display.scaleFactor,
+            maxLongEdge: imageLimit?.longEdgePx,
+            maxPixels: imageLimit?.maxPixels
+        )
+        return ComputerUseNativeDialect(toolset: toolset, displayWidthPx: size.width, displayHeightPx: size.height)
     }
 
     static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String) -> ComputerUseSurfaceIntentPayload {

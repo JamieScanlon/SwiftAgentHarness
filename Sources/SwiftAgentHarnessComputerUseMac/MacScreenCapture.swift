@@ -11,20 +11,12 @@ enum MacCaptureSizing {
     /// Pixels to capture for a rect in points: native resolution at most, scaled down to the long-edge and
     /// pixel-area caps.
     static func pixelSize(for rect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?, maxPixels: Int? = nil) -> ImagePixelSize {
-        let longEdge = max(rect.width, rect.height)
-        guard longEdge > 0 else { return ImagePixelSize(width: 0, height: 0) }
-        var scale = max(nativeScale, 1)
-        if let maxLongEdge, maxLongEdge > 0 {
-            scale = min(scale, CGFloat(maxLongEdge) / longEdge)
-        }
-        var areaBound = false
-        if let maxPixels, maxPixels > 0, rect.width * rect.height * scale * scale > CGFloat(maxPixels) {
-            scale = (CGFloat(maxPixels) / (rect.width * rect.height)).squareRoot()
-            areaBound = true
-        }
-        // Rounding up could cross a vendor's hard pixel limit, so an area-bound size rounds down.
-        let round: (CGFloat) -> Int = areaBound ? { Int($0.rounded(.down)) } : { Int($0.rounded()) }
-        return ImagePixelSize(width: max(1, round(rect.width * scale)), height: max(1, round(rect.height * scale)))
+        ObservationImageLimit.pixelSize(
+            for: DisplayRect(rect),
+            nativeScale: Double(nativeScale),
+            maxLongEdge: maxLongEdge,
+            maxPixels: maxPixels
+        )
     }
 
     static func geometry(capturedRect: CGRect, nativeScale: CGFloat, maxLongEdge: Int?, maxPixels: Int? = nil) -> ScreenshotGeometry {

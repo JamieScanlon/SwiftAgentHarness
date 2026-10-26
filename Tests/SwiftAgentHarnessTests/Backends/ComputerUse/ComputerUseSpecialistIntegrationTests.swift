@@ -70,7 +70,8 @@ struct ComputerUseSpecialistIntegrationTests {
         reply: String,
         recorder: ChildRecorder,
         publish: ComputerUseOversightCoordinator.Publish? = nil,
-        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
+        contracts: [ContractProfile] = []
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -82,7 +83,8 @@ struct ComputerUseSpecialistIntegrationTests {
                 modelProtocol: model.modelProtocol,
                 endpointModelId: model.modelName,
                 serverURL: model.serverURL
-            )]
+            )],
+            contracts: contracts
         )
         let session = HarnessRuntimeSession(
             container: container,
@@ -267,7 +269,8 @@ struct ComputerUseSpecialistIntegrationTests {
             Issue.record("expected an allowlist on the child")
             return
         }
-        #expect(tools == ComputerUseToolProvider.toolNames)
+        #expect(tools == ComputerUseToolProvider.toolNames + ComputerUseNativeToolset.allRegisteredToolNames.sorted())
+        #expect(!tools.contains { $0.contains("bash") || $0.contains("file") || $0.contains("shell") })
     }
 
     @Test("Every specialist step restates the task's constraints")
@@ -339,6 +342,75 @@ struct ComputerUseSpecialistIntegrationTests {
         let afterNames = after.effectiveEntries.map(\.name)
         #expect(afterNames.contains(ComputerUseDelegateToolProvider.toolName))
         #expect(!afterNames.contains(DeferredToolLoading.searchToolName), "nothing left to search for")
+    }
+
+    @Test("A Claude specialist on Anthropic's API drives the screen with the native toolset")
+    func nativeToolset() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let generate = ContractProfile(
+            contract: .generate,
+            surface: .anthropicMessages,
+            interaction: [.unary],
+            input: [.text, .image],
+            output: [.text, .toolCalls],
+            guarantee: .freeText,
+            features: [
+                "tools": FeatureSupport(),
+                ComputerUseModelSupport.featureKey: FeatureSupport(version: "computer_toolset_20260801", params: ["coordinates": .string("pixels")]),
+            ],
+            limits: ContractLimits(maxImageEdgePx: 2576)
+        )
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: [], reply: "ok", recorder: ChildRecorder(), contracts: [generate]
+        )
+        let prompt = try await SystemPrompt(includeCurrentDateTime: false, includeAgentSkills: false, skillLoader: nil, skipConfigLoad: true)
+        let seen = Box<([String], JSON?, ComputerUseNativeDialect?)>()
+        await session.subAgentSpawnService.installLocalAgentChildRunPort { childID, _ in
+            guard let child = await session.persistenceDomain.modelConversation(id: childID),
+                  let computer = await session.runtimeDependencies.computerUse.sessions.session(for: childID) else { return }
+            let runtime = await session.orchestratorRuntimeService
+            seen.value = (
+                await runtime.testing_buildToolManagerToolNames(systemPrompt: prompt, activeConversation: child),
+                await runtime.orchestratorAdditionalParameters(for: child),
+                computer.configuration.nativeDialect
+            )
+            var updated = child
+            updated.messages.append(Message(id: UUID(), role: .assistant, content: "ok"))
+            await session.persistenceDomain.replaceConversationInRegistry(updated, transcript: .authoritativeTip)
+        }
+        _ = try await invoke(session, parent: parent)
+        let (tools, parameters, dialect) = try #require(seen.value)
+        #expect(dialect == ComputerUseNativeDialect(toolset: .toolset20260801))
+        #expect(tools.contains("left_click") && tools.contains("screenshot"))
+        #expect(tools.contains(ComputerUseToolProvider.verifyToolName))
+        #expect(!tools.contains(ComputerUseToolProvider.clickToolName), "native members replace the harness's pointer tools")
+        #expect(ComputerUseNativeDialect(additionalParameters: parameters) == dialect)
+        let allowed = ComputerUseDelegateToolProvider.specialistDefinition(ComputerUseSpecialistProfile()).toolsAllow
+        #expect(allowed?.contains("left_click") == true)
+    }
+
+    @Test("Dialect selection: Anthropic's API and a known version; older versions declare the screenshot size")
+    func dialectSelection() {
+        let profile = { (version: String) in
+            ContractProfile(
+                contract: .generate, surface: .anthropicMessages, interaction: [.unary], input: [.text, .image],
+                output: [.text, .toolCalls], guarantee: .freeText,
+                features: [ComputerUseModelSupport.featureKey: FeatureSupport(version: version)]
+            )
+        }
+        let layout = TargetLayout(displays: [DisplayInfo(id: "main", frame: DisplayRect(x: 0, y: 0, width: 1440, height: 900), scaleFactor: 2, isPrimary: true)])
+        let limit = ObservationImageLimit(longEdgePx: 1200, maxPixels: 1_150_000)
+        let claude = makeModel()
+        #expect(SubAgentSpawnService.nativeDialect(model: claude, profile: profile("computer_toolset_20260801"), imageLimit: limit, layout: layout)
+            == ComputerUseNativeDialect(toolset: .toolset20260801))
+        #expect(SubAgentSpawnService.nativeDialect(model: claude, profile: profile("computer_20251124"), imageLimit: limit, layout: layout)
+            == ComputerUseNativeDialect(toolset: .computer20251124, displayWidthPx: 1200, displayHeightPx: 750))
+        #expect(SubAgentSpawnService.nativeDialect(model: claude, profile: profile("toolset-2026-08"), imageLimit: limit, layout: layout) == nil)
+        let openAI = Model(
+            id: UUID(), protocol: .openAIAPI, modelName: "gpt", serverURL: URL(string: "https://example.com")!,
+            capabilities: [.completion, .tools, .vision], modelProtocol: .openAIAPI
+        )
+        #expect(SubAgentSpawnService.nativeDialect(model: openAI, profile: profile("computer_toolset_20260801"), imageLimit: limit, layout: layout) == nil)
     }
 
     @Test("The host's kill switch stops a running specialist and blocks it")

@@ -12,6 +12,11 @@ public enum ActionTarget: Sendable, Codable, Hashable {
         }
     }
 
+    public var point: DisplayPoint? {
+        if case .point(let point, _) = self { return point }
+        return nil
+    }
+
     public var elementRef: String? {
         if case .ref(let ref, _) = self { return ref }
         return nil

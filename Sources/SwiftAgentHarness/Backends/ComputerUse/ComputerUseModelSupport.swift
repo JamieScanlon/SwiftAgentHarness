@@ -57,6 +57,26 @@ extension ContractProfile {
 }
 
 extension ObservationImageLimit {
+    /// The pixel size a capture of `rect` (points) gets: native resolution at most, scaled down to the long-edge
+    /// and pixel-area caps. Drivers size screenshots with this, and the older native tools declare it as the
+    /// screen size, so both must agree.
+    public static func pixelSize(for rect: DisplayRect, nativeScale: Double, maxLongEdge: Int?, maxPixels: Int?) -> ImagePixelSize {
+        let longEdge = max(rect.width, rect.height)
+        guard longEdge > 0 else { return ImagePixelSize(width: 0, height: 0) }
+        var scale = max(nativeScale, 1)
+        if let maxLongEdge, maxLongEdge > 0 {
+            scale = min(scale, Double(maxLongEdge) / longEdge)
+        }
+        var areaBound = false
+        if let maxPixels, maxPixels > 0, rect.width * rect.height * scale * scale > Double(maxPixels) {
+            scale = (Double(maxPixels) / (rect.width * rect.height)).squareRoot()
+            areaBound = true
+        }
+        // Rounding up could cross a vendor's hard pixel limit, so an area-bound size rounds down.
+        let round: (Double) -> Int = areaBound ? { Int($0.rounded(.down)) } : { Int($0.rounded()) }
+        return ImagePixelSize(width: max(1, round(rect.width * scale)), height: max(1, round(rect.height * scale)))
+    }
+
     /// Used when the bound model declares no image cap.
     public static let defaultLongEdgePx = 1_200
 

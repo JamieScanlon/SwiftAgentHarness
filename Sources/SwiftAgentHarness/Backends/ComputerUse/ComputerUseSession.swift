@@ -36,6 +36,9 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// Replay thumbnails kept per session. Past it, the first and the newest are kept.
     public var replayThumbnailCapacity: Int = 120
     public var replayThumbnailEdgePx: Int = Self.defaultReplayThumbnailEdgePx
+    /// Anthropic's native toolset, when the bound model speaks it over Anthropic's API; `nil` uses the harness's
+    /// own `computer_*` tools.
+    public var nativeDialect: ComputerUseNativeDialect?
 
     public static let defaultReplayThumbnailEdgePx = 320
 
@@ -214,6 +217,8 @@ public actor ComputerUseSession {
     /// The latest handoff nobody took, cleared when a later one is handed back.
     public private(set) var unresolvedHandoff: ComputerUseHandoffRequest?
     public private(set) var replayFrames: [ComputerUseReplayFrame] = []
+    /// Where the last pointer action left the pointer, in the target's global space.
+    public private(set) var lastPointer: DisplayPoint?
 
     public init(
         target: any DisplayTarget,
@@ -243,6 +248,11 @@ public actor ComputerUseSession {
 
     public func observation(_ id: ObservationID) -> DisplayObservation? {
         retained[id]
+    }
+
+    /// The most recent retained observation with pixels: the frame native coordinates refer to.
+    public var latestScreenshot: DisplayObservation? {
+        retainedOrder.reversed().lazy.compactMap { [retained] in retained[$0] }.first { $0.image != nil }
     }
 
     public var latestObservation: DisplayObservation? {
@@ -369,6 +379,7 @@ public actor ComputerUseSession {
                     lastActionAt = now()
                     history.append(classification.proposedAction)
                 }
+                if let pointer = Self.pointerDestination(of: action) { lastPointer = pointer }
             }
         } catch DisplayTargetError.leaseNotHeld {
             outcome = ActionOutcome(action: index, effect: .refused, evidence: "lease is no longer held")
@@ -660,6 +671,15 @@ public actor ComputerUseSession {
             let evicted = retainedOrder.removeFirst()
             retained.removeValue(forKey: evicted)
             refs.forget(evicted)
+        }
+    }
+
+    private static func pointerDestination(of action: ComputerAction) -> DisplayPoint? {
+        switch action {
+        case .click(let at, _, _, _), .move(let at): return at.point
+        case .drag(let path, _): return path.last?.point
+        case .scroll(let at?, _, _, _): return at.point
+        default: return nil
         }
     }
 

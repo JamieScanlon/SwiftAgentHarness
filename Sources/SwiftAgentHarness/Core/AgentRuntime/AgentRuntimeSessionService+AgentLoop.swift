@@ -600,6 +600,9 @@ extension AgentRuntimeSessionService {
             },
             isHaltingFn: { [self] toolName, entries in
                 await self.runtimeIsHaltingToolCall(toolName: toolName, effectiveEntries: entries)
+            },
+            batchHaltedFn: { [deps] toolCallID in
+                await deps.computerUse.nativeFailures.takeFailure(toolCallID: toolCallID)
             }
         )
         let conversationPort = SessionRuntimeConversationPort(

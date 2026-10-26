@@ -21,10 +21,17 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let askUserToolName = "computer_ask_user"
     public static let handoffToolName = "computer_handoff"
 
-    /// Tools whose results carry screen content.
-    public static let screenToolNames: Set<String> = [
+    /// This provider's tools whose results carry screen content.
+    static let ownScreenToolNames: Set<String> = [
         observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
         menuToolName, launchToolName, openURLToolName, zoomToolName, waitForToolName,
+    ]
+    /// Every computer-use tool whose results carry screen content, including Anthropic's native ones.
+    public static let screenToolNames: Set<String> = ownScreenToolNames.union(ComputerUseNativeToolset.screenToolNames)
+    /// What a native-toolset session offers besides Anthropic's members: verification, the user, and the cheaper
+    /// rungs of the control ladder.
+    static let nativeCompanionToolNames: Set<String> = [
+        verifyToolName, askUserToolName, handoffToolName, launchToolName, openURLToolName,
     ]
     /// Tools whose results are harness or user text only.
     static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName]
@@ -38,28 +45,37 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     static let reminderHeading = "Task reminder"
 
     private let session: ComputerUseSession
+    private let offering: Set<String>?
 
     public var name: String { "ComputerUse" }
 
-    public init(session: ComputerUseSession) {
+    /// - Parameter offering: The tools to offer; `nil` offers the whole family.
+    public init(session: ComputerUseSession, offering: Set<String>? = nil) {
         self.session = session
+        self.offering = offering
     }
 
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
         let readOnly: Set<String> = [Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName]
-        return Dictionary(uniqueKeysWithValues: (Self.screenToolNames.union(Self.harnessToolNames)).map { name in
+        return Dictionary(uniqueKeysWithValues: (Self.ownScreenToolNames.union(Self.harnessToolNames)).map { name in
             // One controller per target: every call is serial.
             (name, ToolDescriptorHints(effectClass: readOnly.contains(name) ? .readOnly : .mutating, parallelHint: .serialOnly))
         })
     }
 
     public func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
-        Self.screenToolNames.contains(definition.name)
+        Self.ownScreenToolNames.contains(definition.name)
             ? [ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag()]
             : []
     }
 
     public func availableTools() async -> [ToolDefinition] {
+        let all = allTools()
+        guard let offering else { return all }
+        return all.filter { offering.contains($0.name) }
+    }
+
+    private func allTools() -> [ToolDefinition] {
         let mode = session.coordinateCodec.mode
         let target = session.manifest.label
         let observation = ToolDefinition.Parameter(
@@ -392,8 +408,12 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         )
     }
 
-    /// The task's constraints and still-unverified criteria, restated on every step.
     private func reminder() async -> String? {
+        await Self.reminder(for: session)
+    }
+
+    /// The task's constraints and still-unverified criteria, restated on every step.
+    static func reminder(for session: ComputerUseSession) async -> String? {
         let constraints = session.configuration.task.constraints
         let unverified = await session.unverifiedCriteria
         guard !constraints.isEmpty || !unverified.isEmpty else { return nil }

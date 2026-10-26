@@ -152,6 +152,12 @@ protocol RuntimeToolPort: Sendable {
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async
     func isHaltSignal(_ toolName: String, in snapshot: RuntimeToolTurnPolicySnapshot) -> Bool
+    /// Whether this call's failure halts the rest of the model's batch, as vendor computer-use toolsets require.
+    func batchHalted(afterToolCallID toolCallID: String) async -> Bool
+}
+
+extension RuntimeToolPort {
+    func batchHalted(afterToolCallID toolCallID: String) async -> Bool { false }
 }
 
 protocol RuntimeConversationPort: Sendable {

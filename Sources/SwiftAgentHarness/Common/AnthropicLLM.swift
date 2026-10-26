@@ -87,7 +87,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         let body = try await buildRequestBody(messages: messages, config: config, stream: false)
-        let responseData = try await postRequest(body: body)
+        let responseData = try await postRequest(body: body, extraHeaders: Self.extraHeaders(for: config))
         return try parseMessageResponse(data: responseData, config: config)
     }
 
@@ -107,6 +107,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                         apiURL: self.messagesURL,
                         apiKey: self.apiKey,
                         requestBody: body,
+                        extraHeaders: Self.extraHeaders(for: config),
                         logger: self.logger
                     )
                     var fullContent = ""
@@ -281,7 +282,13 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         return (data, http)
     }
 
-    private func postRequest(body: Data) async throws -> Data {
+    /// Request headers beyond the defaults: the beta header an older native computer-use tool needs.
+    nonisolated static func extraHeaders(for config: LLMRequestConfig) -> [String: String] {
+        guard let beta = ComputerUseNativeDialect(additionalParameters: config.additionalParameters)?.toolset.betaHeader else { return [:] }
+        return ["anthropic-beta": beta]
+    }
+
+    private func postRequest(body: Data, extraHeaders: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: messagesURL)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -290,6 +297,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        for (field, value) in extraHeaders { request.setValue(value, forHTTPHeaderField: field) }
         let (data, response) = try await URLSession.shared.data(for: request)
         try AnthropicErrorMapping.validate(response, body: data)
         return data
@@ -386,7 +394,10 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
         body["messages"] = try anthropicMessages(from: plan.resolvedMessages, config: config)
         if !config.availableTools.isEmpty {
-            body["tools"] = config.availableTools.map { tool in
+            // A native computer-use dialect replaces its registered tools with the vendor declaration.
+            let native = ComputerUseNativeDialect(additionalParameters: config.additionalParameters)
+            let nativeNames = native?.toolset.registeredToolNames ?? []
+            var tools: [[String: Any]] = config.availableTools.filter { !nativeNames.contains($0.name) }.map { tool in
                 [
                     "name": tool.name,
                     "description": tool.description,
@@ -395,6 +406,10 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
                     ),
                 ] as [String: Any]
             }
+            if let native, config.availableTools.contains(where: { nativeNames.contains($0.name) }) {
+                tools.append(native.declaration)
+            }
+            body["tools"] = tools
             let policy = ToolChoiceTranslation.effectivePolicy(
                 config: config,
                 features: requestFeatures,
@@ -425,6 +440,11 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
 
     private func anthropicMessages(from messages: [Message], config: LLMRequestConfig) throws -> [[String: Any]] {
         let dispositions = AttachmentProjectionDispatchCodec.extractDispositions(from: config.additionalParameters)
+        let native = ComputerUseNativeDialect(additionalParameters: config.additionalParameters)
+        let nativeNames = native?.toolset.registeredToolNames ?? []
+        // Calls and results of toolset members echo `toolset_name`; the older single tool doesn't.
+        let echoesToolsetName = native?.toolset.isToolset == true
+        var nativeCallIDs: Set<String> = []
         var encoded: [[String: Any]] = []
         encoded.reserveCapacity(messages.count)
         for message in messages {
@@ -432,21 +452,24 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
             case .user:
                 encoded.append(try encodeUserMessage(message, dispositions: dispositions, config: config))
             case .assistant:
-                encoded.append(try encodeAssistantMessage(message))
+                for call in message.toolCalls where nativeNames.contains(call.name) {
+                    if let id = call.id { nativeCallIDs.insert(id) }
+                }
+                encoded.append(try encodeAssistantMessage(message, toolsetMembers: echoesToolsetName ? nativeNames : []))
             case .system:
                 continue
             case .tool:
                 guard let toolCallID = message.toolCallId else { continue }
-                encoded.append([
-                    "role": "user",
-                    "content": [
-                        [
-                            "type": "tool_result",
-                            "tool_use_id": toolCallID,
-                            "content": toolResultContent(message, dispositions: dispositions),
-                        ] as [String: Any],
-                    ],
-                ])
+                var result: [String: Any] = [
+                    "type": "tool_result",
+                    "tool_use_id": toolCallID,
+                    "content": toolResultContent(message, dispositions: dispositions),
+                ]
+                if nativeCallIDs.contains(toolCallID) {
+                    if echoesToolsetName { result["toolset_name"] = ComputerUseNativeToolset.name }
+                    if message.content == ComputerUseNativeToolset.haltText { result["is_error"] = true }
+                }
+                encoded.append(["role": "user", "content": [result]])
             }
         }
         return encoded
@@ -482,7 +505,7 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         return ["role": "user", "content": parts]
     }
 
-    private func encodeAssistantMessage(_ message: Message) throws -> [String: Any] {
+    private func encodeAssistantMessage(_ message: Message, toolsetMembers: Set<String> = []) throws -> [String: Any] {
         if message.toolCalls.isEmpty {
             return ["role": "assistant", "content": message.content]
         }
@@ -492,12 +515,14 @@ actor AnthropicLLM: LLMProtocol, AdapterAuthProbing {
         }
         for toolCall in message.toolCalls {
             let input = try toolCallArgumentsDictionary(toolCall.arguments)
-            blocks.append([
+            var block: [String: Any] = [
                 "type": "tool_use",
                 "id": toolCall.id ?? UUID().uuidString,
                 "name": toolCall.name,
                 "input": input,
-            ])
+            ]
+            if toolsetMembers.contains(toolCall.name) { block["toolset_name"] = ComputerUseNativeToolset.name }
+            blocks.append(block)
         }
         return ["role": "assistant", "content": blocks]
     }
@@ -626,6 +651,26 @@ protocol AnthropicStreamSourcing: Sendable {
         requestBody: Data,
         logger: Logger?
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error>
+
+    func messageStream(
+        apiURL: URL,
+        apiKey: String,
+        requestBody: Data,
+        extraHeaders: [String: String],
+        logger: Logger?
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error>
+}
+
+extension AnthropicStreamSourcing {
+    func messageStream(
+        apiURL: URL,
+        apiKey: String,
+        requestBody: Data,
+        extraHeaders: [String: String],
+        logger: Logger?
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
+        messageStream(apiURL: apiURL, apiKey: apiKey, requestBody: requestBody, logger: logger)
+    }
 }
 
 struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
@@ -636,6 +681,16 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
         apiURL: URL,
         apiKey: String,
         requestBody: Data,
+        logger: Logger?
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
+        messageStream(apiURL: apiURL, apiKey: apiKey, requestBody: requestBody, extraHeaders: [:], logger: logger)
+    }
+
+    func messageStream(
+        apiURL: URL,
+        apiKey: String,
+        requestBody: Data,
+        extraHeaders: [String: String],
         logger: Logger?
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -652,6 +707,7 @@ struct DefaultAnthropicStreamSource: AnthropicStreamSourcing {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                    for (field, value) in extraHeaders { request.setValue(value, forHTTPHeaderField: field) }
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     do {
                         try AnthropicErrorMapping.validate(response, body: nil)

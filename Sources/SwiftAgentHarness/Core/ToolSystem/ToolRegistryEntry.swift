@@ -34,6 +34,8 @@ struct ToolRegistryEntry: Sendable {
         case geometryBoundImages = "geometry-bound-images"
         /// Kept out of the model's tool list until `tool_search` loads it for the conversation.
         case deferLoading = "defer-loading"
+        /// A failure stops the rest of the model's batch, as vendor computer-use toolsets require.
+        case haltsBatchOnFailure = "halts-batch-on-failure"
     }
 
     enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable {
