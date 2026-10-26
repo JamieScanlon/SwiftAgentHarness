@@ -255,6 +255,10 @@ public struct ComputerUseActionClassifier: Sendable {
             return result
         }
         result.domain = host
+        if let reason = ComputerUseSecrets.secretInURL(url) {
+            result.actionClass = .outOfGrant(reason: "the URL can't be opened because \(reason); secrets must not travel in URLs")
+            return result
+        }
         guard let tier = context.grants.tier(forURL: url) else {
             result.actionClass = .outOfGrant(reason: "domain \(host) is not granted")
             return result

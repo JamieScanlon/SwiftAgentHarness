@@ -485,13 +485,17 @@ actor ConversationMessagingRuntimeService {
     private func applyInjectionProbeMiddleware(toolCall: ToolCall, result: ToolResult) async -> ToolResult {
         guard let probe = deps.decisionConsumers.injectionProbe else { return result }
         let entry = await toolEntryLookup.entry(named: toolCall.name)
-        guard ToolExternalContentPolicy.resolve(toolName: toolCall.name, entry: entry).shouldWrap else { return result }
+        let external = ToolExternalContentPolicy.resolve(toolName: toolCall.name, entry: entry)
+        guard external.shouldWrap else { return result }
         let conversationID = await runtimeScopedConversationID()
         let patches = await DecisionRolePatchLoader.patches(
             for: conversationID, persistenceDomain: deps.persistenceDomain, modeRegistry: deps.modeRegistry, logger: deps.logger
         )
         guard let warning = await probe.warning(
-            toolName: toolCall.name, content: result.content, conversationID: conversationID, rolePatches: patches
+            toolName: toolCall.name,
+            content: ComputerUseSecrets.probeInput(result.content, source: external.source),
+            conversationID: conversationID,
+            rolePatches: patches
         ) else { return result }
         return result.replacingText(warning + "\n" + result.content)
     }

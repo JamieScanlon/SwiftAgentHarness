@@ -234,7 +234,7 @@ The flags are `clipboard-read`, `clipboard-write` (needed for `paste` typing) an
 | navigate | scroll, move, launch of a granted app, `open-url` on an http(s) granted domain | allow |
 | interact | click, press, type, set-value, key, menu at a sufficient tier | Allowed when the intent check says consistent. With no checker bound, confirmed on `humanPresence: shared` targets and allowed otherwise. |
 | consequential | Typing into secure or payment fields; targets labeled submit, send, buy, delete…; destructive shortcuts; System Settings; installers; vendor safety signals | Always confirmed |
-| out of grant | Non-granted app or domain, tier violation, missing flag, non-web `open-url` scheme, the stop key | Denied, with the reason returned to the model |
+| out of grant | Non-granted app or domain, tier violation, missing flag, non-web `open-url` scheme, an `open-url` whose URL carries a credential, the stop key | Denied, with the reason returned to the model |
 | unresolvable | Citing an observation that is no longer retained, an unknown ref, a point outside the observation | Refused with `escalation: observe` |
 
 On-screen labels can only raise the class. They never lower it, and they never reach the intent check.
@@ -251,6 +251,10 @@ Possibly-delivered actions are never retried automatically:
 - A driver error after sending is reported as `unverifiable` with `escalation: observe`.
 - The tool result tells the model not to repeat the action.
 - After three failing batches in a row, the result escalates to `ask-user`.
+
+**Secrets.** `open-url` refuses a URL that carries a credential, even on a granted domain. That covers user-info before the host, a secret-named query or fragment parameter (`token`, `access_token`, `api_key`, `password`, `sig`, …), or a token-shaped value such as a JWT or a well-known key prefix. Text bound for helper models has secret values redacted: the user request the intent check sees, and screen text sent to the injection probe. Typed text never reaches the action log, which records only its hash.
+
+**Injection probe.** Screen results are external content labelled `screen`, so a host that configures `DecisionConsumers.injectionProbe` gets a warning line prepended when screen text looks like instructions. The probe warns and steers; it doesn't block.
 
 ## The intent check
 
@@ -449,6 +453,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |
 | Terminal controls | The spec asks for takeover and stop controls without naming keys. Esc is the host stop key, so the terminal uses Ctrl-T and Ctrl-X, and they work while a dialog is open. |
 | Tree diffs | The spec puts AX-text diffs with the Context Engine and gives `diffAgainst` a "structured diff" without a format. The session computes them, so they work for every target, and drivers always return full trees. A diff is only usable if refs survive between observations, which the spec doesn't address, so the session makes refs stable. |
+| Secret detection | The spec says to "block navigation to URLs that embed secrets, and redact secrets from any auxiliary-model inputs" without defining a secret. Detection is pattern-based (credential parameter names, user-info, JWTs, common key prefixes, and labelled values like `password: …`), so it catches common shapes rather than every secret. It covers `open-url`. A URL typed into an address bar is plain text typing, which stays under the intent check and consequential-field rules. |
 | Deferred loading mechanism | The spec defers `computer.*` tools with `defer_loading` and names `searchHint` and `shouldDefer`/`alwaysLoad` registry fields, but no search tool. Here a harness `tool_search` does the search, so it works with every provider. Vendor-side tool search isn't used. Deferral is a `defer-loading` policy tag and the hint a `search-hint:` tag, because SwiftAgentKit descriptors carry no other extensible fields. Tools without the tag load as before, which is the `alwaysLoad` default. |
 | What is deferred | The spec says to keep computer-use schemas "deferred or searchable in the parent and loaded only in the sub-agent". The parent already never sees the `computer_*` tools, only the delegate, so the delegate is the deferred tool. The child loads the computer tools directly. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |

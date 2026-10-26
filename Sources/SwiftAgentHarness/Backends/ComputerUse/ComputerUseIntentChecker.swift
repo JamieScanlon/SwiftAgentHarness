@@ -83,7 +83,7 @@ public actor ComputerUseIntentChecker {
 
     public func evaluate(_ input: ComputerUseIntentCheckInput) async -> ComputerUseIntentVerdict {
         let requests = input.userRequest
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { ComputerUseSecrets.redacting($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !requests.isEmpty else {
             return .confirm(reason: "no user request to check against", receipt: nil)
