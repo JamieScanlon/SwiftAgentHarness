@@ -126,7 +126,7 @@ public struct DisplayLiveView: Sendable, Codable, Hashable {
     }
 }
 
-public enum DisplayTargetError: Error, Sendable, Equatable {
+public enum DisplayTargetError: Error, Sendable, Codable, Hashable {
     case targetBusy(holder: String)
     case leaseNotHeld
     case permissionsMissing([DisplayPlatformPermission])

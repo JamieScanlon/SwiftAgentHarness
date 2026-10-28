@@ -38,7 +38,8 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx` and `maxPixels`, step-counted screenshot pruning | Done. The bundled Claude entries declare it with Anthropic's documented values. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
-| macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process dev mode. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. The signed host app with XPC, and VM targets, are not built yet. |
+| macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process or served by a display host. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. VM targets are not built yet. |
+| Display host protocol: `RemoteDisplayTarget`, `DisplayHostServer`, Unix-socket transport, XPC transport (macOS 26+), code-signature peer checks | Done. No host app ships; integrators build their own. |
 | Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
 | Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
 | "Agent active" HUD on the host desktop (`MacAgentActiveHUD`), post-run replays with observation thumbnails | Done |
@@ -133,7 +134,10 @@ What happens:
 
 ## The macOS driver
 
-`MacHostDisplayTarget` drives the user's own Mac. It runs in the spec's **in-process dev mode**: the drivers run inside the harness process and borrow its TCC grants. Run from a terminal, those are the terminal's grants, so every program run there inherits them. The production shape is a signed `LSUIElement` host app that owns its own grants and serves this contract over XPC; it isn't built yet.
+`MacHostDisplayTarget` drives the user's own Mac. macOS grants Screen Recording, Accessibility, and Post Event to the *responsible process*, so where the target runs decides who holds those grants:
+
+- **Inside a signed GUI app that embeds the harness**, the app holds them. Run the target in-process.
+- **Inside a command-line tool or server**, the terminal or launchd would hold them, and every program run there inherits them. That is fine for development only. For anything else, run the target in a separate signed process and connect to it; see [Hosting a target in another process](#hosting-a-target-in-another-process).
 
 ```swift
 import SwiftAgentHarnessComputerUseMac
@@ -176,6 +180,38 @@ session.installComputerUse(ComputerUseConfiguration(
 - the per-event Unicode length on 26 and 27;
 - process-routed clicks in apps that ignore background events;
 - AX trees in Chromium and Electron apps.
+
+## Hosting a target in another process
+
+A *display host* is a process that owns a `DisplayTarget` and serves it to harnesses elsewhere. The library ships the parts; the host process itself is yours to build. It can be a menu-bar app, an `SMAppService` login item, a daemon, your existing app, or an agent inside a VM.
+
+```swift
+// In the host process, which holds the permissions:
+let server = DisplayHostServer(target: MacHostDisplayTarget(), name: "Example Host")
+let listener = try await DisplayHostSocket.listen(
+    path: socketPath,
+    peers: .all(of: .sameUser, try .sameTeamAsThisProcess())
+)
+try await server.serve(listener)
+
+// In the harness:
+let connection = try await DisplayHostSocket.connect(path: socketPath, peers: try .sameTeamAsThisProcess())
+let remote = try await RemoteDisplayTarget.connect(over: connection)
+let registry = DisplayTargetRegistry(targets: [remote])
+Task { for await case .stopRequested in remote.events { await session.stopComputerUse() } }
+```
+
+| Piece | Behavior |
+|---|---|
+| `DisplayHostProtocol` | JSON messages: a request with an id, a response echoing it, or an event. The client opens with `hello`, and the host answers `welcome` with its manifest, or a version mismatch. Requests can be in flight concurrently. Leases are named by id. |
+| `RemoteDisplayTarget` | A `DisplayTarget` the harness uses like a local one. Target errors arrive as themselves. A dropped connection fails calls with `driverFailure`, and `permissions()` reports nothing granted. If a lease is refused as busy and a holder in this harness has died, the client releases that lease and retries. |
+| `DisplayHostServer` | Serves one target to any number of connections. Each connection can only use leases issued to it. A holder counts as alive while its connection is open, and a closed connection's leases are released as `aborted`. `requestStop(leaseID:)` sends `stopRequested` to the holder, for the host's stop key or HUD. |
+| `DisplayHostSocket` | A Unix-domain socket with length-prefixed frames. The socket file is owner-only. Both ends check the other's peer (pid, uid, audit token) against a `DisplayHostPeerRequirement`. The default is the same user. |
+| `DisplayHostPeerRequirement.codeSignature(_:)`, `.sameTeamAsThisProcess()` | Mac only. Checks the peer's code signature through its audit token, so a reused pid can't pass. |
+| `DisplayHostXPC` | Mac only, macOS 26 or later. Serves a launchd Mach service or an anonymous listener's endpoint, with an `XPCPeerRequirement` enforced on both ends. |
+| `InMemoryDisplayHostConnection` | Both ends in one process, for tests and for putting an in-process target behind the protocol. |
+
+Any transport works if it implements `DisplayHostConnection` and keeps message boundaries. A VM transport over vsock or TCP is one example. A host that wants a HUD wraps its target in a decorator, or calls the HUD from its stop handling.
 
 ## Writing a display target
 
@@ -464,7 +500,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Replay thumbnails | They are captured as observations arrive, because the session keeps only the last few observations for citing. They follow the run's image retention. Recordings aren't supported by any target yet. |
 | Audit retention | The spec says longer retention "applies only to sessions the user marks for audit" without a length. The default holds marked runs until unmarked. Set `ComputerUseRetention.audit` to bound it. Unmarking returns a run to the release TTL counted from its release, so a run unmarked after that window expires at the next sweep. |
 | Audit marks after a restart | The mark is read back from the blob store: a released run whose document doesn't expire at the normal release TTL is audit-marked. Marks placed on a live run that the server lost before release are lost too; that run's images keep the normal TTL. |
-| HUD placement | The spec puts the HUD in the signed host app. In dev mode it runs in the harness process, which the capture excludes anyway. `activityObserver` and `onForegroundDelivery` feed it, so a host app can drive its own. |
+| HUD placement | The spec puts the HUD in the signed host app. With an in-process target it runs in the harness process, which the capture excludes anyway. `activityObserver` and `onForegroundDelivery` feed it, so a host app can drive its own. |
 | Image block | The spec wants a cropped image of the target region on approval cards, but its portable presentation vocabulary (text, context, divider, buttons, select) has no image block. `image` was added to `ApprovalBlock`, `MessageBlock`, and `approval-presentation.schema.json`, with base64 data and alt text. `SurfacePresentationCapabilities.images` gates it, and core degrades it to the alt text. |
 | Terminal crops | The TUI composites dialogs into base rows, so a graphics escape can't be placed inside one. The approval card shows the crop's alt text and size instead. |
 | Terminal controls | The spec asks for takeover and stop controls without naming keys. Esc is the host stop key, so the terminal uses Ctrl-T and Ctrl-X, and they work while a dialog is open. |
@@ -476,3 +512,14 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Deferred loading mechanism | The spec defers `computer.*` tools with `defer_loading` and names `searchHint` and `shouldDefer`/`alwaysLoad` registry fields, but no search tool. Here a harness `tool_search` does the search, so it works with every provider. Vendor-side tool search isn't used. Deferral is a `defer-loading` policy tag and the hint a `search-hint:` tag, because SwiftAgentKit descriptors carry no other extensible fields. Tools without the tag load as before, which is the `alwaysLoad` default. |
 | What is deferred | The spec says to keep computer-use schemas "deferred or searchable in the parent and loaded only in the sub-agent". The parent already never sees the `computer_*` tools, only the delegate, so the delegate is the deferred tool. The child loads the computer tools directly. |
 | Tool-level approval | `computer_*` tools carry no `requiresApproval` tag, so the Tool System doesn't add a second prompt per click. A mode whose `approvalPolicy` is `.all` would double-gate them. |
+
+**Display host**
+
+| Topic | Behavior |
+|---|---|
+| No bundled host app | The spec ships `ComputerUseHost.app` as part of the kit. Here the library ships the host protocol, `RemoteDisplayTarget`, `DisplayHostServer`, and transports, and no app. An app would fix packaging, signing, onboarding, and UI that a library's integrators need to choose. A GUI app that embeds the harness is already the responsible process, so an in-process target is right there, not only a dev escape hatch. |
+| Transport | The spec says XPC "or a peer-signature-checked socket". Both are provided. The socket transport works everywhere the core builds, and it is the one to carry over vsock or TCP to a VM. XPC needs macOS 26 for `XPCPeerRequirement`. Without peer requirements, a host would accept any local process. |
+| `CUHostProtocol` shape | The spec names `CUHostProtocol` "Codable request/response + capability negotiation" without a format. Messages are JSON, so a host need not be written in Swift. The manifest in `welcome` is the capability declaration, and the protocol version is checked exactly. |
+| Holder liveness across a host | `LeaseRequest.isHolderAlive` is a closure and can't cross a connection. The host treats an open connection as a live holder. The client covers holders in its own process that die without releasing: it releases their leases when a new lease is refused as busy. |
+| Stop from the host | The spec's stop key and HUD Stop button live in the host. They reach the harness as a `stopRequested` event on `RemoteDisplayTarget.events`, and the integrator calls `stopComputerUse()` from it. |
+| Live view and observer tokens | They aren't carried. `liveView` passes through as the target returns it, and no target serves one yet. |
