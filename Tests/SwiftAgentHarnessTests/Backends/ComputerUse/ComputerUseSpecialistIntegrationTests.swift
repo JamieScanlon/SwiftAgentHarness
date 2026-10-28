@@ -65,7 +65,7 @@ struct ComputerUseSpecialistIntegrationTests {
     private func makeSession(
         model: Model,
         target: FakeDisplayTarget,
-        approve: @escaping ComputerUseGrantApprover = { $0.grantable.map(\.grant) },
+        approve: @escaping ComputerUseGrantApprover = { $0.review.grantable.map(\.grant) },
         script: Script,
         reply: String,
         recorder: ChildRecorder,
@@ -570,6 +570,29 @@ struct ComputerUseSpecialistIntegrationTests {
         let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["max_steps": .integer(1)]))
         #expect(result["status"] as? String == "budget-exhausted")
         #expect(await target.releases == [.budgetExhausted])
+    }
+
+    @Test("The grant dialog is told the parent conversation and the task's goal")
+    func grantDialogContext() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let seen = Box<ComputerUseGrantRequest>()
+        let (session, parent) = try await makeSession(
+            model: makeModel(),
+            target: target,
+            approve: { request in
+                seen.value = request
+                return nil
+            },
+            script: [],
+            reply: "ok",
+            recorder: ChildRecorder()
+        )
+        _ = try await invoke(session, parent: parent)
+        let request = try #require(seen.value)
+        #expect(request.conversationID == parent.id)
+        #expect(request.purpose == "Make the title bold in TextEdit.")
+        #expect(request.target.id == FakeDisplayTarget.vmManifest.id)
+        #expect(request.review.grantable.map(\.grant) == [.app(bundleID: "com.apple.TextEdit", tier: .full)])
     }
 
     @Test("Declined grants block the task before any child is spawned")

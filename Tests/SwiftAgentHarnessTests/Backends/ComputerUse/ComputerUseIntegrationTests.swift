@@ -18,7 +18,7 @@ struct ComputerUseIntegrationTests {
                 operatorInitiated: true,
                 userPresent: true
             ),
-            approve: { review in review.grantable.map(\.grant) }
+            approve: { request in request.review.grantable.map(\.grant) }
         )
         #expect(grant.review.blocked.count == 1)
         let session = ComputerUseSession(

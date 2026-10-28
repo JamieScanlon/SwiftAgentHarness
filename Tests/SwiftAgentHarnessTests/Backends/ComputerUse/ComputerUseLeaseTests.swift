@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import SwiftAgentHarness
 
@@ -137,11 +138,11 @@ struct DisplayTargetRegistryTests {
             await #expect(throws: ComputerUseLeaseDenial.hostTargetRequiresPresentOperator) {
                 _ = try await registry.lease(
                     self.request(target: host.manifest.id, operatorInitiated: operatorInitiated, userPresent: userPresent),
-                    approve: { $0.grantable.map(\.grant) }
+                    approve: { $0.review.grantable.map(\.grant) }
                 )
             }
         }
-        let granted = try await registry.lease(request(target: host.manifest.id), approve: { $0.grantable.map(\.grant) })
+        let granted = try await registry.lease(request(target: host.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         #expect(granted.lease.target == host.manifest.id)
     }
 
@@ -152,10 +153,30 @@ struct DisplayTargetRegistryTests {
         let registry = DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
         let granted = try await registry.lease(
             request(target: vm.manifest.id, operatorInitiated: false, userPresent: false),
-            approve: { $0.grantable.map(\.grant) }
+            approve: { $0.review.grantable.map(\.grant) }
         )
         #expect(granted.lease.budgets.maxDuration == .seconds(20 * 60))
         #expect(granted.lease.expiresAt == now.addingTimeInterval(20 * 60))
+    }
+
+    @Test("The grant dialog learns which conversation asked, for which target and task")
+    func approverContext() async throws {
+        let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let registry = DisplayTargetRegistry(targets: [vm])
+        let conversationID = UUID()
+        var leaseRequest = request(target: vm.manifest.id)
+        leaseRequest.conversationID = conversationID
+        let seen = Mutex<ComputerUseGrantRequest?>(nil)
+        _ = try await registry.lease(leaseRequest, purpose: "Bold the title.") { request in
+            seen.withLock { $0 = request }
+            return request.review.grantable.map(\.grant)
+        }
+        let request = try #require(seen.withLock { $0 })
+        #expect(request.conversationID == conversationID)
+        #expect(request.lease.agentID == "agent")
+        #expect(request.target == FakeDisplayTarget.vmManifest)
+        #expect(request.purpose == "Bold the title.")
+        #expect(request.review.grantable.map(\.grant) == leaseRequest.grants)
     }
 
     @Test("An approver cannot raise a grant above its cap or add grants that were not requested")
@@ -174,10 +195,10 @@ struct DisplayTargetRegistryTests {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, permissions: [.screenCapture: .granted, .accessibility: .denied])
         let registry = DisplayTargetRegistry(targets: [host])
         await #expect(throws: ComputerUseLeaseDenial.permissionsMissing([.accessibility, .postEvents])) {
-            _ = try await registry.lease(self.request(target: host.manifest.id), approve: { $0.grantable.map(\.grant) })
+            _ = try await registry.lease(self.request(target: host.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         }
         await #expect(throws: ComputerUseLeaseDenial.unknownTarget("nope")) {
-            _ = try await registry.lease(self.request(target: "nope"), approve: { $0.grantable.map(\.grant) })
+            _ = try await registry.lease(self.request(target: "nope"), approve: { $0.review.grantable.map(\.grant) })
         }
 
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
@@ -194,9 +215,9 @@ struct DisplayTargetRegistryTests {
     func busyTarget() async throws {
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
         let registry = DisplayTargetRegistry(targets: [vm])
-        _ = try await registry.lease(request(target: vm.manifest.id), approve: { $0.grantable.map(\.grant) })
+        _ = try await registry.lease(request(target: vm.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         await #expect(throws: ComputerUseLeaseDenial.targetBusy(holder: "agent")) {
-            _ = try await registry.lease(self.request(target: vm.manifest.id), approve: { $0.grantable.map(\.grant) })
+            _ = try await registry.lease(self.request(target: vm.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         }
     }
 }

@@ -82,10 +82,11 @@ session.installComputerUse(ComputerUseConfiguration(
         budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(15 * 60)),
         maxBudgets: ComputerUseBudgets(maxSteps: 300, maxDuration: .seconds(45 * 60), maxUSD: 5)
     ),
-    approveGrants: { review in
-        // Show review.grantable (with capReason / warning) and review.blocked in one dialog.
+    approveGrants: { request in
+        // Show request.review.grantable (with capReason / warning) and request.review.blocked in one dialog,
+        // in request.conversationID's conversation, explaining request.purpose on request.target.
         // Return the subset the user approved, or nil to decline.
-        await presentGrantDialog(review)
+        await presentGrantDialog(request)
     },
     approvals: execApprovalDelivery,      // any ExecApprovalDelivering: per-action confirmation cards
     intentChecker: intentChecker,         // optional; see "The intent check"
@@ -96,7 +97,7 @@ session.installComputerUse(ComputerUseConfiguration(
 
 Every conversation now has `delegate_computer_use`. Bind your surface's stop control and global stop key to `session.stopComputerUse()`, which ends every live specialist session; no model-facing tool can call it.
 
-A host that drives a session directly can still build one by hand: lease through `DisplayTargetRegistry.lease(_:approve:)`, create a `ComputerUseSession`, and install `ComputerUseToolProvider(session:)`.
+A host that drives a session directly can still build one by hand: lease through `DisplayTargetRegistry.lease(_:purpose:approve:)`, create a `ComputerUseSession`, and install `ComputerUseToolProvider(session:)`.
 
 ## The computer-use specialist
 
@@ -117,7 +118,7 @@ What happens:
 
 1. **The task is parsed** into a `ComputerUseTask`. Malformed arguments are denied with the reason.
 2. **The model is chosen.** That's `specialist.modelRef` when set, otherwise the parent's model. Either way it must see images and call tools. The session takes its coordinate dialect and screenshot size from that model's `generate` profile.
-3. **The target is leased.** This raises the one grant dialog and applies the host-target rules. The run's origin decides presence: interactive runs have the user present, trigger and sub-agent runs don't. A non-owner sender is not operator-initiated.
+3. **The target is leased.** This raises the one grant dialog and applies the host-target rules. The approver gets a `ComputerUseGrantRequest`: the reviewed grants, the lease request, the target's manifest, and the task's goal as `purpose`. Its `conversationID` is the parent conversation, so the host can show the dialog where the user asked. The run's origin decides presence: interactive runs have the user present, trigger and sub-agent runs don't. A non-owner sender is not operator-initiated.
 4. **The child is spawned.** It runs on `specialist.modeProfileID` (`subagent-minimal` by default), with a closed allow-list of the 15 computer tools, so it has no shell, files, or messaging. Its brief holds the goal, numbered criteria, constraints, working rules, and the return schema.
 5. **Every step restates the task.** Each computer tool result ends with a reminder of the constraints and the criteria not yet verified.
 6. **The session always ends** and the lease is released. The full action log is stored as a session blob.

@@ -11,8 +11,30 @@ public enum ComputerUseLeaseDenial: Error, Sendable, Equatable {
     case driverFailure(String)
 }
 
+/// What the start-of-session grant dialog asks the user to approve, and on whose behalf.
+public struct ComputerUseGrantRequest: Sendable {
+    /// The requested grants after app policy: what can be granted, with caps, and what is blocked.
+    public var review: ComputerUseGrantReview
+    /// The lease being requested, with its agent, budgets, delivery, and presence.
+    public var lease: LeaseRequest
+    public var target: DisplayTargetManifest
+    /// What the session is for, such as a delegated task's goal.
+    public var purpose: String?
+
+    public init(review: ComputerUseGrantReview, lease: LeaseRequest, target: DisplayTargetManifest, purpose: String? = nil) {
+        self.review = review
+        self.lease = lease
+        self.target = target
+        self.purpose = purpose
+    }
+
+    /// The user's conversation that asked, where the dialog belongs. For a delegated specialist this is the
+    /// parent conversation, not the specialist's child.
+    public var conversationID: UUID? { lease.conversationID }
+}
+
 /// Presents the one start-of-session grant dialog. Returns the approved subset, or `nil` when the user declines.
-public typealias ComputerUseGrantApprover = @Sendable (ComputerUseGrantReview) async -> [ComputerUseGrant]?
+public typealias ComputerUseGrantApprover = @Sendable (ComputerUseGrantRequest) async -> [ComputerUseGrant]?
 
 public struct ComputerUseLeaseGrant: Sendable {
     public let target: any DisplayTarget
@@ -55,6 +77,7 @@ public actor DisplayTargetRegistry {
 
     public func lease(
         _ request: LeaseRequest,
+        purpose: String? = nil,
         approve: ComputerUseGrantApprover
     ) async throws(ComputerUseLeaseDenial) -> ComputerUseLeaseGrant {
         guard let target = targets[request.target] else { throw .unknownTarget(request.target) }
@@ -69,7 +92,9 @@ public actor DisplayTargetRegistry {
         if !missing.isEmpty { throw .permissionsMissing(missing) }
 
         let review = reviewer.review(request.grants)
-        guard let answer = await approve(review) else { throw .grantsDeclined }
+        guard let answer = await approve(ComputerUseGrantRequest(review: review, lease: request, target: manifest, purpose: purpose)) else {
+            throw .grantsDeclined
+        }
         let approved = reviewer.clamp(answer, to: review)
         if approved.isEmpty { throw .grantsDeclined }
 

@@ -62,6 +62,7 @@ extension SubAgentSpawnService {
                     operatorInitiated: origin.operatorInitiated,
                     userPresent: origin.userPresent
                 ),
+                purpose: task.goal,
                 approve: configuration.approveGrants
             )
         } catch {
