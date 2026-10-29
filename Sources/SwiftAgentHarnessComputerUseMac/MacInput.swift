@@ -307,10 +307,21 @@ enum MacAppControl {
         return describe(app)
     }
 
-    static func open(_ url: URL) async throws {
+    static func open(_ url: URL, inApp bundleID: String) async throws {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            throw MacAppControlError.appNotInstalled(bundleID)
+        }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
-        _ = try await NSWorkspace.shared.open(url, configuration: configuration)
+        _ = try await NSWorkspace.shared.open([url], withApplicationAt: app, configuration: configuration)
+    }
+
+    static func browsers() -> MacBrowsers {
+        guard let page = URL(string: "https://example.com") else { return MacBrowsers(installed: [], defaultBundleID: nil) }
+        return MacBrowsers(
+            installed: NSWorkspace.shared.urlsForApplications(toOpen: page).compactMap { Bundle(url: $0)?.bundleIdentifier },
+            defaultBundleID: NSWorkspace.shared.urlForApplication(toOpen: page).flatMap { Bundle(url: $0)?.bundleIdentifier }
+        )
     }
 
     @discardableResult

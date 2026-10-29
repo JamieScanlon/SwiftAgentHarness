@@ -62,6 +62,16 @@ struct ComputerUseActionClassifierTests {
         }
     }
 
+    @Test("Launching a browser is refused with a pointer to open-url, since browsers stay at view")
+    func browserLaunch() {
+        let result = classify(.launch(app: "com.apple.Safari"), grants: [.app(bundleID: "com.apple.Safari", tier: .full)])
+        guard case .outOfGrant(let reason) = result.actionClass else {
+            Issue.record("expected out of grant, got \(result.actionClass)")
+            return
+        }
+        #expect(reason.contains("open-url"), "\(reason)")
+    }
+
     @Test("Tier violations are out of grant: view allows no pointer actions, click allows no typing")
     func tierViolations() throws {
         let view: [ComputerUseGrant] = [.app(bundleID: "com.apple.TextEdit", tier: .view)]

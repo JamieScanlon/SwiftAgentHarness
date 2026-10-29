@@ -21,6 +21,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
+        var workspace: any MacWorkspaceReading
 
         public init(id: DisplayTargetID = MacHostDisplayTarget.defaultID, excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
@@ -31,12 +32,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
             excludedBundleIDs: Set<String>,
             permissionProbe: any MacPermissionProbing,
             eventPoster: any MacEventPosting,
+            workspace: any MacWorkspaceReading = LiveMacWorkspace(),
             axBudget: MacAXTraversalBudget = .default
         ) {
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
             self.eventPoster = eventPoster
+            self.workspace = workspace
             self.axBudget = axBudget
         }
 
@@ -52,6 +55,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private let capture = MacScreenCapture()
     private let accessibility = MacAccessibilityReader()
     private let input: MacInputInjector
+    private var workspace: any MacWorkspaceReading { configuration.workspace }
 
     private struct ObservationMeta {
         var pid: pid_t?
@@ -112,7 +116,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         guard await lock.release(leaseID: lease.id) else { return }
         await input.releaseAll()
         if let restore = restoreFrontmost {
-            let frontmost = await MacAppControl.frontmostApp()?.pid
+            let frontmost = await workspace.frontmostApp()?.pid
             // User input wins: restore only if the app we activated is still in front.
             if frontmost == restore.activated { _ = await MacAppControl.activate(pid: restore.previous) }
         }
@@ -143,8 +147,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
                 )
             }
         }
-        let frontmost = await MacAppControl.frontmostApp()
-        return TargetLayout(displays: displays, windows: [], tabs: [], focusedApp: frontmost?.identity)
+        return TargetLayout(displays: displays, windows: [], tabs: [], focusedApp: await workingApp()?.identity)
     }
 
     public func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
@@ -156,8 +159,6 @@ public actor MacHostDisplayTarget: DisplayTarget {
         let grantedApps = grantedBundleIDs
         let wantsPixels = request.modes.contains(.pixels)
         let wantsTree = request.modes.contains(.accessibility)
-        let frontmost = await MacAppControl.frontmostApp()
-        let frontmostGranted = frontmost.map { grantedApps.contains($0.identity.bundleID) } ?? false
 
         var image: ObservationImage?
         var bounds = CGRect.zero
@@ -171,7 +172,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
             bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
         case .window(let window):
-            guard let running = await MacAppControl.runningApp(pid: window.pid), grantedApps.contains(running.identity.bundleID) else {
+            guard let running = await workspace.runningApp(pid: window.pid), grantedApps.contains(running.identity.bundleID) else {
                 throw DisplayTargetError.unsupported("window \(window.windowID) is not in a granted app")
             }
             pid = running.pid
@@ -188,10 +189,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
                 bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
             }
         case .display, .tab:
-            if frontmostGranted, let frontmost {
-                pid = frontmost.pid
-                app = frontmost.identity
-                processStart = frontmost.launchDate
+            if let working = await workingApp() {
+                pid = working.pid
+                app = working.identity
+                processStart = working.launchDate
             }
             if wantsPixels {
                 var displayID: CGDirectDisplayID?
@@ -306,36 +307,40 @@ public actor MacHostDisplayTarget: DisplayTarget {
         case .pointer(let state):
             let point = await input.currentPoint
             let event: MacInputEvent = state == .down ? .mouseDown(point, .left, 1, []) : .mouseUp(point, .left, 1, [])
-            await input.post([event], delivery: await keyboardDelivery())
+            guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
+            await input.post([event], delivery: delivery)
             return ActionOutcome(action: 0, effect: .unverifiable, evidence: "pointer \(state.rawValue)")
         case .scroll(let target, let dx, let dy, let unit):
             if let target {
                 return await pointer(target) { MacInputPlanner.scroll(at: $0, dx: dx, dy: dy, unit: unit) }
             }
-            await input.post(MacInputPlanner.scroll(at: await input.currentPoint, dx: dx, dy: dy, unit: unit), delivery: await keyboardDelivery())
+            guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
+            await input.post(MacInputPlanner.scroll(at: await input.currentPoint, dx: dx, dy: dy, unit: unit), delivery: delivery)
             return ActionOutcome(action: 0, effect: .unverifiable, evidence: "scroll posted")
         case .type(let text, let into, let mode):
             return await type(text, into: into, mode: mode)
         case .key(let combo, let repeatCount):
             guard let plan = MacInputPlanner.key(combo, repeatCount: repeatCount) else { return refused("\(combo) has no key code") }
-            let delivery = await keyboardDelivery()
+            guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
             await input.post(plan, delivery: delivery)
             return ActionOutcome(action: 0, effect: .unverifiable, evidence: "\(combo) posted (\(Self.describe(delivery)))")
         case .hold(let combo, let milliseconds):
             guard let plan = MacInputPlanner.hold(combo, milliseconds: milliseconds) else { return refused("\(combo) has no key code") }
-            await input.post(plan, delivery: await keyboardDelivery())
+            guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
+            await input.post(plan, delivery: delivery)
             return ActionOutcome(action: 0, effect: .unverifiable, evidence: "\(combo) held \(milliseconds) ms")
         case .setValue(let target, let value):
             guard case .ref(let ref, let observation) = target else { return refused("set-value needs an element ref") }
             return semantic(await accessibility.setValue(ref: ref, observation: observation, value: value))
         case .menu(let path, let bundleID):
-            let app: MacRunningApp?
+            let app: MacRunningApp
             if let bundleID {
-                app = await MacAppControl.runningApps(bundleIDs: [bundleID]).first
+                guard let running = await MacAppControl.runningApps(bundleIDs: [bundleID]).first else { return refused("the app is not running") }
+                app = running
             } else {
-                app = await MacAppControl.frontmostApp()
+                guard let working = await workingApp() else { return noWorkingApp() }
+                app = working
             }
-            guard let app else { return refused("the app is not running") }
             return semantic(await accessibility.selectMenu(pid: app.pid, path: path))
         case .launch(let bundleID, let background):
             do {
@@ -346,9 +351,12 @@ public actor MacHostDisplayTarget: DisplayTarget {
             }
         case .openURL(let raw):
             guard let url = URL(string: raw) else { return refused("not a URL") }
+            guard let browser = MacAppFocus.browser(granted: grantedBundleIDs, await workspace.browsers()) else {
+                return refused("no granted app opens web pages; the run needs a browser granted to open \(url.host() ?? raw)")
+            }
             do {
-                try await MacAppControl.open(url)
-                return ActionOutcome(action: 0, effect: .unverifiable, evidence: "opened in the default browser")
+                try await MacAppControl.open(url, inApp: browser)
+                return ActionOutcome(action: 0, effect: .unverifiable, evidence: "opened in \(browser)")
             } catch {
                 return refused("could not open the URL: \(error)")
             }
@@ -364,16 +372,16 @@ public actor MacHostDisplayTarget: DisplayTarget {
                 return refused(reason, escalation: .observe)
             }
         }
+        guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
         if mode == .paste {
-            return await paste(text)
+            return await paste(text, delivery: delivery)
         }
-        let delivery = await keyboardDelivery()
         await input.post(MacInputPlanner.type(text), delivery: delivery)
         return ActionOutcome(action: 0, effect: .unverifiable, evidence: "typed \(text.count) characters (\(Self.describe(delivery)))")
     }
 
     /// Save the clipboard, write, paste, and restore it.
-    private func paste(_ text: String) async -> ActionOutcome {
+    private func paste(_ text: String, delivery: MacInputDelivery) async -> ActionOutcome {
         let saved = await MainActor.run { NSPasteboard.general.string(forType: .string) }
         await MainActor.run {
             NSPasteboard.general.clearContents()
@@ -383,7 +391,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         guard written, let plan = MacInputPlanner.key(KeyCombo(modifiers: [.cmd], key: "v"), repeatCount: 1) else {
             return refused("the clipboard write did not verify")
         }
-        await input.post(plan, delivery: await keyboardDelivery())
+        await input.post(plan, delivery: delivery)
         try? await Task.sleep(for: .milliseconds(150))
         await MainActor.run {
             NSPasteboard.general.clearContents()
@@ -433,8 +441,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
         guard let pid = meta.pid else {
             return .failure(Refusal(message: "the observation is not pinned to a granted app"))
         }
-        guard let running = await MacAppControl.runningApp(pid: pid), running.launchDate == meta.processStart else {
+        guard let running = await workspace.runningApp(pid: pid), running.launchDate == meta.processStart else {
             return .failure(Refusal(message: "the app from observation \(target.observation) has quit or restarted"))
+        }
+        guard MacAppFocus.point(point, landsOn: pid, windows: await workspace.windows(), ignoring: getpid()) else {
+            return .failure(Refusal(message: "(\(Int(point.x)), \(Int(point.y))) is not over a window of \(running.identity.bundleID)"))
         }
         return .success(ResolvedPoint(point: point, delivery: await delivery(for: pid)))
     }
@@ -443,18 +454,34 @@ public actor MacHostDisplayTarget: DisplayTarget {
     /// activates the app and is undone on release.
     private func delivery(for pid: pid_t) async -> MacInputDelivery {
         guard foregroundAllowed else { return .process(pid) }
-        let frontmost = await MacAppControl.frontmostApp()?.pid
+        let frontmost = await workspace.frontmostApp()?.pid
         if frontmost != pid, let frontmost {
             if restoreFrontmost == nil { restoreFrontmost = (frontmost, pid) }
             _ = await MacAppControl.activate(pid: pid)
-            await configuration.onForegroundDelivery?(await MacAppControl.runningApp(pid: pid)?.identity.bundleID)
+            await configuration.onForegroundDelivery?(await workspace.runningApp(pid: pid)?.identity.bundleID)
         }
         return .foreground
     }
 
-    private func keyboardDelivery() async -> MacInputDelivery {
-        guard let frontmost = await MacAppControl.frontmostApp() else { return .foreground }
-        return foregroundAllowed ? .foreground : .process(frontmost.pid)
+    /// Delivery for input that names no target: to the working app, never to whatever happens to be in front.
+    private func keyboardDelivery() async -> MacInputDelivery? {
+        guard let app = await workingApp() else { return nil }
+        return await delivery(for: app.pid)
+    }
+
+    /// The app target-less input and full-screen observations belong to: the frontmost app when it is granted,
+    /// else the granted app with the frontmost window, since the harness's own app is usually in front.
+    private func workingApp() async -> MacRunningApp? {
+        let granted = grantedBundleIDs
+        if let frontmost = await workspace.frontmostApp(), granted.contains(frontmost.identity.bundleID) { return frontmost }
+        for pid in MacAppFocus.appsByWindowOrder(await workspace.windows()) {
+            if let app = await workspace.runningApp(pid: pid), granted.contains(app.identity.bundleID) { return app }
+        }
+        return nil
+    }
+
+    private func noWorkingApp() -> ActionOutcome {
+        refused("no granted app is on screen to receive input; launch one or observe again", escalation: .observe)
     }
 
     private var grantedBundleIDs: Set<String> {

@@ -75,7 +75,7 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                     ),
                     .init(
                         name: "domains",
-                        description: "Web domains to grant, comma-separated as domain:tier. Example: docs.example.com:click",
+                        description: "Web domains to grant, comma-separated as domain:tier. A web task needs a domain here and a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser. Example: docs.example.com:click",
                         type: "string",
                         required: false
                     ),

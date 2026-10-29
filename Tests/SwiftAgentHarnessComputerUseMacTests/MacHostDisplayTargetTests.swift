@@ -15,6 +15,7 @@ final class RecordingEventPoster: MacEventPosting {
     }
 
     var count: Int { posted.withLock { $0.count } }
+    var deliveries: [MacInputDelivery] { posted.withLock { $0.map(\.1) } }
 }
 
 @Suite("macOS host display target")

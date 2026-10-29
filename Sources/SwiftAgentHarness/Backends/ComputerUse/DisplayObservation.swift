@@ -262,6 +262,8 @@ public struct TargetLayout: Sendable, Codable, Hashable {
     public var displays: [DisplayInfo]
     public var windows: [WindowInfo]
     public var tabs: [TabInfo]
+    /// The app that input naming no target goes to. It need not be frontmost: a target on a shared desktop
+    /// reports the granted app it works in, not the harness's own app in front of it.
     public var focusedApp: AppIdentity?
 
     public init(displays: [DisplayInfo], windows: [WindowInfo] = [], tabs: [TabInfo] = [], focusedApp: AppIdentity? = nil) {

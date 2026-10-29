@@ -66,7 +66,7 @@ public struct ComputerUseClassificationContext: Sendable {
     public var grants: ComputerUseGrantSet
     /// Retained observations the action may cite.
     public var observation: @Sendable (ObservationID) -> DisplayObservation?
-    /// The frontmost app, for actions that carry no target.
+    /// The app actions that carry no target land on: the target's focused app.
     public var focusedApp: AppIdentity?
     /// Vendor safety signals attached to this action.
     public var safetySignals: [String]
@@ -306,6 +306,10 @@ public struct ComputerUseActionClassifier: Sendable {
             return result
         }
         guard tier >= required else {
+            if ruling.isBrowser, action.kind == .launch {
+                result.actionClass = .outOfGrant(reason: "\(subject) is a browser, which stays at view; open a page on a granted domain with open-url instead")
+                return result
+            }
             result.actionClass = .outOfGrant(
                 reason: "\(subject) is granted at \(tier.rawValue); \(action.kind.rawValue) needs \(required.rawValue)"
             )
