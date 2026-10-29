@@ -1118,7 +1118,11 @@ struct TurnLoop {
             runID: runID,
             conversationID: conversationID,
             mcpServerName: mcpServerName,
-            timeoutSeconds: contract.toolCallTimeoutSeconds,
+            timeoutSeconds: ToolDispatchWatchdog.timeoutSeconds(
+                forToolNamed: call.name,
+                entries: snapshot.effectiveEntries,
+                contract: contract
+            ),
             watchdogIntervalSeconds: contract.toolCallWatchdogIntervalSeconds
         )
         do {

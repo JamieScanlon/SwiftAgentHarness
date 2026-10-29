@@ -119,6 +119,27 @@ actor ToolApprovalRuntimeService {
         return .user
     }
 
+    /// Where a tool call's approval is asked and answered. A sub-agent's conversation is shown by no surface, so
+    /// its approvals go to the top-level conversation it was spawned from, still keyed to the sub-agent's run.
+    /// Mode transitions stay with the conversation whose mode they change.
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID {
+        let canonical = ToolNamePolicyNormalization.canonical(toolName)
+        guard !ToolPolicyConfiguration.modeTransitionApprovalRequiredToolNames.contains(canonical) else {
+            return conversationID
+        }
+        return await rootConversationID(for: conversationID)
+    }
+
+    private func rootConversationID(for conversationID: UUID) async -> UUID {
+        var current = conversationID
+        var visited: Set<UUID> = [current]
+        while let parent = await deps.persistenceDomain.modelConversation(id: current)?.parentConversationID,
+              visited.insert(parent).inserted {
+            current = parent
+        }
+        return current
+    }
+
     func configurationApplyingToolApprovals(
         _ configuration: HarnessRuntimeSession.Configuration,
         conversationID: UUID,
@@ -140,6 +161,16 @@ actor ToolApprovalRuntimeService {
                 route: route
             )
         )
+        let root = await rootConversationID(for: conversationID)
+        if root != conversationID {
+            // Approvals answered in the user's conversation for this sub-agent's run, on whichever route asked.
+            out.preApprovedCallBindings.formUnion(
+                await stateStore.approvedCallBindings(conversationID: root, runID: runID, route: nil)
+            )
+            out.preApprovedToolNames.formUnion(
+                await stateStore.approvedToolNames(conversationID: root, runID: runID, route: nil)
+            )
+        }
         let ownerAccountID = await ownerAccountID(for: conversationID)
         out.preApprovedToolNames.formUnion(
             await permissionRules.grantedToolNames(
@@ -422,10 +453,14 @@ actor ToolApprovalRuntimeService {
         modelID: UUID?,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async {
-        let expired = await stateStore.consumeTimedOutApprovals(
+        var expired = await stateStore.consumeTimedOutApprovals(
             conversationID: conversationID,
             runID: runID
         )
+        let root = await rootConversationID(for: conversationID)
+        if root != conversationID {
+            expired += await stateStore.consumeTimedOutApprovals(conversationID: root, runID: runID)
+        }
         for entry in expired {
             await applyToolApprovalResolution(
                 conversationID: entry.conversationID,

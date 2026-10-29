@@ -11,7 +11,7 @@ public struct ComputerUseSpecialistProfile: Sendable {
     /// Wall-clock ceiling for one specialist run, on top of the task's own time budget.
     public var runTimeoutSeconds: TimeInterval
 
-    public init(modeProfileID: String = "subagent-minimal", modelRef: String? = nil, runTimeoutSeconds: TimeInterval = 1_800) {
+    public init(modeProfileID: String = "subagent-computer-use", modelRef: String? = nil, runTimeoutSeconds: TimeInterval = 1_800) {
         self.modeProfileID = modeProfileID
         self.modelRef = modelRef
         self.runTimeoutSeconds = runTimeoutSeconds

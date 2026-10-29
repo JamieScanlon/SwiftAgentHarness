@@ -642,9 +642,6 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
         if escalationRequired, !configuration.allowEscalatedTools {
             return .blocked(.escalationRequired, facts: facts)
         }
-        if approvalRequiredFinal, !approvalGranted {
-            return .blocked(.approvalRequired, facts: facts)
-        }
         let allowContext = modePolicyContextWithEffectiveAllow(modePolicyContext, entry: entry)
         if !toolPolicy.isToolAllowed(
             name: entry.name,
@@ -661,6 +658,9 @@ struct DefaultToolSystemGateway: ToolSystemGatewaying {
             entry: entry
         ) {
             return .blocked(.routingToolWhitelist, facts: facts)
+        }
+        if approvalRequiredFinal, !approvalGranted {
+            return .blocked(.approvalRequired, facts: facts)
         }
         return .allowed(facts)
     }

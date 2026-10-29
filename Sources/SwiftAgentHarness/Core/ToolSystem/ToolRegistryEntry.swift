@@ -36,6 +36,9 @@ struct ToolRegistryEntry: Sendable {
         case deferLoading = "defer-loading"
         /// A failure stops the rest of the model's batch, as vendor computer-use toolsets require.
         case haltsBatchOnFailure = "halts-batch-on-failure"
+        /// Enforces its own wall-clock budget, such as a sub-agent's run timeout, so the per-call tool timeout
+        /// doesn't cut it short.
+        case boundsOwnRunTime = "bounds-own-run-time"
     }
 
     enum ExecutionEnvironmentKind: String, Sendable, Codable, Equatable {

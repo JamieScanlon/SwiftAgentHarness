@@ -63,6 +63,8 @@ protocol ToolApprovalRuntimeServicing: Sendable {
         binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute
     ) async throws -> ToolApprovalResolution
+    /// The conversation a tool call's approval is asked and answered in.
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID
 }
 
 protocol OrchestratorRuntimeToolPolicyServicing: Sendable {
@@ -280,6 +282,10 @@ extension OrchestratorRuntimeToolPolicyServicing {
 }
 
 extension ToolApprovalRuntimeServicing {
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID {
+        conversationID
+    }
+
     /// Classifier-assisted gating is off unless the conformer implements it.
     func classifierAutoApproval(
         conversationID: UUID,

@@ -58,6 +58,10 @@ Bindings are loaded from `PromptConfig.json` → `subAgentCustomEndpoints` keyed
 
 `SubAgentRemoteTransportSessionStore` holds session registry, event bus, permission gate, cancel, and recovery. Adapters register sessions and push real lifecycle events; production cancel/deny paths do **not** emit synthetic completion usage.
 
+### In-process sub-agent tool approvals
+
+No surface shows a sub-agent's own conversation, so when an in-process child calls a tool that needs approval, the card is published to the top-level conversation it was spawned from. The approval is registered there under the child's run id, so answering it in that conversation (with the event's `runID`) unblocks the child, and its timeout still applies. Mode-transition tools stay with the child, since they change the child's mode.
+
 ### ACP permission routing
 
 - **Invoke-time:** `SubAgentTransportPermissionGate` defers execution for `ask-user` and `ask-parent` until `resolveTransportPermission` (or tool approval bridged via `ToolApprovalRuntimeService`).

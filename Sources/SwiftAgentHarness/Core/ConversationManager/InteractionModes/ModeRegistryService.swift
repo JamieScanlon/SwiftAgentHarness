@@ -871,6 +871,20 @@ enum ModeProfileBuiltInCatalog {
                 runtime: ModeProfileRuntimeSlice(maxIterations: 1),
                 subAgents: denyAllSubAgents
             ),
+            // The computer-use specialist loops until its task is done: its session counts steps and enforces
+            // budgets, and gates each action itself, so a turn cap or tool-level approvals would only cut it short.
+            ResolvedModeProfile(
+                id: "subagent-computer-use",
+                interactionMode: .agent,
+                assemblyKind: .agentBuild,
+                allowsProactiveCompactionTriggers: true,
+                appliesAgentBuildOrchestratorHarness: true,
+                builtInSeedVersion: v,
+                semanticLayerTags: [],
+                tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: .never),
+                skills: ModeProfileSkillsSlice(allow: []),
+                subAgents: denyAllSubAgents
+            ),
             ResolvedModeProfile(
                 id: "subagent-explore",
                 interactionMode: .agent,

@@ -264,7 +264,7 @@ struct ComputerUseSpecialistIntegrationTests {
         let childID = try #require(await recorder.childIDs.first)
         let child = try #require(await session.persistenceDomain.modelConversation(id: childID))
         #expect(child.parentConversationID == parent.id)
-        #expect(child.modeProfileID == "subagent-minimal")
+        #expect(child.modeProfileID == "subagent-computer-use")
         guard case .allowlist(let tools, _)? = child.routingPrefs?.explicitToolPolicy else {
             Issue.record("expected an allowlist on the child")
             return

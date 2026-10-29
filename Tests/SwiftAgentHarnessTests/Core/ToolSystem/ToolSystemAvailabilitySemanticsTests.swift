@@ -852,6 +852,37 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(decision.blockReason == .routingToolWhitelist)
     }
 
+    @Test("routing tool allowlist hides approval-required tools not in whitelist")
+    func gatewayRoutingToolAllowlistHidesApprovalRequiredTools() {
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: makeToolsModel(),
+            systemPrompt: "sys",
+            interactionMode: .agent,
+            routingPrefs: ConversationRoutingPrefs(
+                explicitToolPolicy: .allowlist(tools: ["computer_observe"], skills: [])
+            )
+        )
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "enter_plan_mode", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let decision = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()).evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(
+                for: conversation,
+                tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
+            ),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: ToolPolicyConfiguration(approvalRequiredToolNames: ["enter_plan_mode"]),
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.isAdvertisedToModel == false)
+        #expect(decision.blockReason == .routingToolWhitelist)
+    }
+
     @Test("routing tool allowlist permits tools in whitelist")
     func gatewayRoutingToolAllowlistPermits() {
         let model = makeToolsModel()

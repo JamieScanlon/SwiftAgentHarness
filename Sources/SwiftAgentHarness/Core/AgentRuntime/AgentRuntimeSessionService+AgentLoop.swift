@@ -402,10 +402,14 @@ extension AgentRuntimeSessionService {
                 let evaluation = snapshot.availabilitySnapshots.first(where: { $0.entry.name == toolName })
                 let route = evaluation?.decision.approvalRoute ?? .user
                 let isElevated = evaluation?.decision.isElevated ?? false
+                let approvalConversationID = await self.toolApproval.approvalConversationID(
+                    for: conversationID,
+                    toolName: toolName
+                )
                 // Rules already resolved this call to *ask* (deny rules and the killswitch won earlier), so the
                 // classifier can only turn it into allow-once before the human is asked or the run parks.
                 if await self.toolApproval.classifierAutoApproval(
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID,
                     call: call,
                     route: route,
@@ -428,7 +432,7 @@ extension AgentRuntimeSessionService {
                     return initial
                 }
                 _ = await self.registerPendingToolApproval(
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID,
                     call: call,
                     route: route,
@@ -458,14 +462,14 @@ extension AgentRuntimeSessionService {
                             source: "runtime.toolDispatch"
                         )
                     ),
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID
                 )
                 let binding = ToolCallApprovalBinding.from(call: call)
                 let resolution: ToolApprovalResolution
                 do {
                     resolution = try await self.waitForToolApprovalResolution(
-                        conversationID: conversationID,
+                        conversationID: approvalConversationID,
                         runID: runID,
                         binding: binding,
                         route: route
@@ -502,7 +506,7 @@ extension AgentRuntimeSessionService {
                                 source: "runtime.approvalTimeout"
                             )
                         ),
-                        conversationID: conversationID,
+                        conversationID: approvalConversationID,
                         runID: runID
                     )
                 }
@@ -563,8 +567,12 @@ extension AgentRuntimeSessionService {
                 let evaluation = snapshot.availabilitySnapshots.first(where: { $0.entry.name == toolName })
                 let route = evaluation?.decision.approvalRoute ?? .user
                 let isElevated = evaluation?.decision.isElevated ?? false
+                let approvalConversationID = await self.toolApproval.approvalConversationID(
+                    for: conversationID,
+                    toolName: toolName
+                )
                 _ = await self.registerPendingToolApproval(
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID,
                     call: call,
                     route: route,
@@ -594,7 +602,7 @@ extension AgentRuntimeSessionService {
                             source: "runtime.toolDispatch"
                         )
                     ),
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID
                 )
             },

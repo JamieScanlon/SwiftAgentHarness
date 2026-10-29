@@ -10,8 +10,19 @@ enum ToolDispatchWatchdog {
         let runID: UUID?
         let conversationID: UUID
         let mcpServerName: String?
-        let timeoutSeconds: TimeInterval
+        /// `nil` for a tool that bounds its own run time: heartbeats are logged, and nothing times it out.
+        let timeoutSeconds: TimeInterval?
         let watchdogIntervalSeconds: TimeInterval
+    }
+
+    /// The per-call timeout for a tool, or `nil` when its entry bounds its own run time.
+    static func timeoutSeconds(
+        forToolNamed name: String,
+        entries: [ToolRegistryEntry],
+        contract: AgentRuntimeToolDispatchContract
+    ) -> TimeInterval? {
+        let entry = entries.first { $0.name == name }
+        return entry?.policyTags.contains(.boundsOwnRunTime) == true ? nil : contract.toolCallTimeoutSeconds
     }
 
     /// Runs `operation` bounded by `context.timeoutSeconds`, logging heartbeat warnings while waiting.
@@ -21,9 +32,9 @@ enum ToolDispatchWatchdog {
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let startedAt = ContinuousClock.now
-        let timeoutMs = max(0, Int((context.timeoutSeconds * 1_000).rounded(.towardZero)))
+        let timeoutMs = context.timeoutSeconds.map { max(0, Int(($0 * 1_000).rounded(.towardZero))) } ?? 0
         let interval = max(1, context.watchdogIntervalSeconds)
-        let halfTimeout = context.timeoutSeconds * 0.5
+        let halfTimeout = (context.timeoutSeconds ?? .infinity) * 0.5
 
         return try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
@@ -41,8 +52,11 @@ enum ToolDispatchWatchdog {
                 }
             }
             defer { group.cancelAll() }
+            guard let timeoutSeconds = context.timeoutSeconds else {
+                return try await operation()
+            }
             do {
-                return try await withToolCallTimeout(context.timeoutSeconds, toolName: context.toolName) {
+                return try await withToolCallTimeout(timeoutSeconds, toolName: context.toolName) {
                     try await operation()
                 }
             } catch let timeout as ToolCallTimeoutError {
@@ -57,7 +71,7 @@ enum ToolDispatchWatchdog {
                 logger?.error(
                     "[ToolDispatchWatchdog] timed out tool=\(context.toolName) toolCallID=\(context.toolCallID ?? "") runID=\(context.runID?.uuidString ?? "") conversationID=\(context.conversationID.uuidString) mcpServer=\(context.mcpServerName ?? "") elapsedMs=\(elapsedMs) timeoutMs=\(timeoutMs)"
                 )
-                throw ToolCallTimeoutError(timeout: context.timeoutSeconds, toolName: context.toolName)
+                throw ToolCallTimeoutError(timeout: timeoutSeconds, toolName: context.toolName)
             }
         }
     }

@@ -32,6 +32,7 @@ struct ModeRegistryTests {
             "memory-extraction",
             "memory-pre-compaction-flush",
             "plan",
+            "subagent-computer-use",
             "subagent-explore",
             "subagent-general",
             "subagent-minimal",
@@ -113,6 +114,17 @@ struct ModeRegistryTests {
         let extraction = try await registry.resolve(modeId: "memory-extraction")
         #expect(extraction.tools.allow?.sorted() == ["edit_file", "read_attachment", "read_file", "write_file"].sorted())
         #expect(!(extraction.tools.allow ?? []).contains("spawn_sub_agent"))
+    }
+
+    @Test("The computer-use specialist runs a multi-step loop and leaves gating to its session")
+    func computerUseProfile() async throws {
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: .empty)
+        let profile = try await registry.resolve(modeId: ComputerUseSpecialistProfile().modeProfileID)
+        #expect(profile.id == "subagent-computer-use")
+        #expect(profile.runtime.maxIterations == nil)
+        #expect(profile.tools.approvalPolicy == .never)
+        #expect(profile.subAgents.allow == [])
+        #expect(ConversationLineageInference.machineSubAgentModeProfileIDs.contains(profile.id))
     }
 
     @Test("Re-registering the same id throws")
@@ -233,6 +245,7 @@ struct ModeRegistryTests {
             "memory-extraction",
             "memory-pre-compaction-flush",
             "plan",
+            "subagent-computer-use",
             "subagent-explore",
             "subagent-general",
             "subagent-minimal",

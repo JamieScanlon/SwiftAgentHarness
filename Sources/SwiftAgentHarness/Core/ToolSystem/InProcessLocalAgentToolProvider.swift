@@ -107,6 +107,8 @@ file path, constraint, and success criterion it needs.
             ),
             ToolRegistryResultFormattingPolicy.exactContentObservationPolicyTag(),
             ToolRegistryResultFormattingPolicy.compactionProtectedPolicyTag(),
+            // The child run is bounded by the agent's runTimeoutSeconds.
+            ToolPolicyTag(rawValue: ToolRegistryEntry.PolicyTag.boundsOwnRunTime.rawValue),
         ]
     }
 

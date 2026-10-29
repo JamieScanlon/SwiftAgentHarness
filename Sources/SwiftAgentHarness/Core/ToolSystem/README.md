@@ -78,6 +78,8 @@ At boot, the host app typically:
 
 ## Deferred tool loading
 
+A tool tagged `bounds-own-run-time` enforces its own wall-clock budget, so the per-call `toolCallTimeoutSeconds` doesn't apply to it; the watchdog still logs heartbeats. In-process local-agent delegates carry it, because each child run is bounded by its agent's `runTimeoutSeconds`.
+
 A tool whose descriptor carries the `defer-loading` policy tag stays out of the model's tool list until the model loads it with `tool_search`. This keeps a large schema out of the prompt, and lets a cheaper tool for the job be seen first. Add `search-hint:<keywords>` to give the search words that aren't in the name or description.
 
 - **Policy decides first.** Deferral applies to a tool the conversation would otherwise be offered. Its decision becomes `deferredUntilLoaded`, a hold rather than a policy block. A tool the mode or allow-list blocks is no candidate, so a search can't reveal it.
