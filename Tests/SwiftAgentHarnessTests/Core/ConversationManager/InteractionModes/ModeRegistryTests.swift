@@ -123,6 +123,7 @@ struct ModeRegistryTests {
         #expect(profile.id == "subagent-computer-use")
         #expect(profile.runtime.maxIterations == nil)
         #expect(profile.tools.approvalPolicy == .never)
+        #expect(profile.tools.allow == ComputerUseDelegateToolProvider.specialistToolNames)
         #expect(profile.subAgents.allow == [])
         #expect(ConversationLineageInference.machineSubAgentModeProfileIDs.contains(profile.id))
     }

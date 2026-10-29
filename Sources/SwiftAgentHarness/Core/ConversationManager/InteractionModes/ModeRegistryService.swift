@@ -881,7 +881,7 @@ enum ModeProfileBuiltInCatalog {
                 appliesAgentBuildOrchestratorHarness: true,
                 builtInSeedVersion: v,
                 semanticLayerTags: [],
-                tools: ModeProfileToolsSlice(allow: [], deny: [], approvalPolicy: .never),
+                tools: ModeProfileToolsSlice(allow: ComputerUseDelegateToolProvider.specialistToolNames, deny: [], approvalPolicy: .never),
                 skills: ModeProfileSkillsSlice(allow: []),
                 subAgents: denyAllSubAgents
             ),

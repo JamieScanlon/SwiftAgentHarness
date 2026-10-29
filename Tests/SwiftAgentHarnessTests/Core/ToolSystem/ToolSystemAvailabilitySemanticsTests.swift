@@ -852,6 +852,37 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(decision.blockReason == .routingToolWhitelist)
     }
 
+    @Test("computer-use specialist sees its computer-use tools")
+    func computerUseSpecialistSeesItsTools() async throws {
+        let definition = ComputerUseDelegateToolProvider.specialistDefinition(ComputerUseSpecialistProfile())
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: .empty)
+        let profile = try await registry.resolve(modeId: definition.modeProfileID)
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: makeToolsModel(),
+            systemPrompt: "sys",
+            interactionMode: profile.interactionMode,
+            routingPrefs: ConversationRoutingPrefs(
+                explicitToolPolicy: .allowlist(tools: definition.toolsAllow ?? [], skills: [])
+            )
+        )
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: ComputerUseToolProvider.observeToolName, description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let decision = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()).evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: ModePolicyContext(conversation: conversation, resolvedProfile: profile),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.blockReason == nil)
+        #expect(decision.isAdvertisedToModel)
+    }
+
     @Test("routing tool allowlist hides approval-required tools not in whitelist")
     func gatewayRoutingToolAllowlistHidesApprovalRequiredTools() {
         let conversation = ModelConversation(

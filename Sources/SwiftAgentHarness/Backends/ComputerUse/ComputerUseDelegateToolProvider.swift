@@ -28,6 +28,9 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
             + [DeferredToolLoading.deferLoadingTag, DeferredToolLoading.searchHintTag(searchHint)]
     }
 
+    /// The computer-use family: everything the specialist may call.
+    static let specialistToolNames = ComputerUseToolProvider.toolNames + ComputerUseNativeToolset.allRegisteredToolNames.sorted()
+
     /// The child's capability: the computer-use family and nothing else — no shell, files, or messaging.
     static func specialistDefinition(_ profile: ComputerUseSpecialistProfile) -> LocalAgentDefinition {
         LocalAgentDefinition(
@@ -36,7 +39,7 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
             description: "Operates a computer screen to complete a task.",
             modeProfileID: profile.modeProfileID,
             modelRef: profile.modelRef,
-            toolsAllow: ComputerUseToolProvider.toolNames + ComputerUseNativeToolset.allRegisteredToolNames.sorted(),
+            toolsAllow: specialistToolNames,
             longRunning: false,
             runTimeoutSeconds: profile.runTimeoutSeconds
         )
