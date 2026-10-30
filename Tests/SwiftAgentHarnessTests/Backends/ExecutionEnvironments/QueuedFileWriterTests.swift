@@ -3,7 +3,7 @@ import Foundation
 import Testing
 
 #if canImport(Darwin) || os(Linux)
-@Suite("QueuedFileWriter (BUG-004)", .serialized)
+@Suite("QueuedFileWriter (BUG-004)", .timeLimit(.minutes(1)))
 struct QueuedFileWriterTests {
     private func tempDir() -> URL {
         FileManager.default.temporaryDirectory
@@ -11,9 +11,6 @@ struct QueuedFileWriterTests {
     }
 
     @Test func failedWriteDoesNotWedgeQueue() async throws {
-        await QueuedFileWriter.resetForTesting()
-        defer { Task { await QueuedFileWriter.resetForTesting() } }
-
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -47,9 +44,6 @@ struct QueuedFileWriterTests {
     }
 
     @Test func callerReceivesOwnError() async throws {
-        await QueuedFileWriter.resetForTesting()
-        defer { Task { await QueuedFileWriter.resetForTesting() } }
-
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -92,9 +86,6 @@ struct QueuedFileWriterTests {
     }
 
     @Test func concurrentAppendsAreSerializedWithoutCorruption() async throws {
-        await QueuedFileWriter.resetForTesting()
-        defer { Task { await QueuedFileWriter.resetForTesting() } }
-
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -118,10 +109,33 @@ struct QueuedFileWriterTests {
         #expect(onDisk.allSatisfy { $0 == 0xAB })
     }
 
-    @Test func appendWritesAllBytes() async throws {
-        await QueuedFileWriter.resetForTesting()
-        defer { Task { await QueuedFileWriter.resetForTesting() } }
+    @Test func everyQueuedWriteResumesItsCallerAcrossBusyPaths() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
+        let pathCount = 48
+        let appendsPerPath = 16
+        let paths = (0..<pathCount).map { dir.appendingPathComponent("file-\($0).txt").path }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for path in paths {
+                for _ in 0..<appendsPerPath {
+                    group.addTask {
+                        try await QueuedFileWriter.append(data: Data("x".utf8), to: path)
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        for path in paths {
+            let onDisk = try Data(contentsOf: URL(fileURLWithPath: path))
+            #expect(onDisk.count == appendsPerPath)
+        }
+    }
+
+    @Test func appendWritesAllBytes() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
