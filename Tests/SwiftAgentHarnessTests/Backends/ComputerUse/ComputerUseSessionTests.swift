@@ -102,7 +102,8 @@ enum ComputerUseSessionFixtures {
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,
         overrides: ComputerUseOperatorOverrides = .none,
-        clock: ComputerUseTestClock = ComputerUseTestClock()
+        clock: ComputerUseTestClock = ComputerUseTestClock(),
+        successCriteria: [String] = []
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         let target = FakeDisplayTarget(manifest: manifest, now: { clock.now() })
         let lease = try await target.lease(LeaseRequest(
@@ -117,7 +118,10 @@ enum ComputerUseSessionFixtures {
             target: target,
             lease: lease,
             configuration: ComputerUseSessionConfiguration(
-                task: ComputerUseTaskContext(userRequest: ["Make the first line bold and save the document."]),
+                task: ComputerUseTaskContext(
+                    userRequest: ["Make the first line bold and save the document."],
+                    successCriteria: successCriteria
+                ),
                 classifier: ComputerUseActionClassifier(reviewer: ComputerUseGrantReviewer(overrides: overrides))
             ),
             approvals: approvals,

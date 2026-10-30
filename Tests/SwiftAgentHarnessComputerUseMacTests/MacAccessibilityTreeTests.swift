@@ -97,6 +97,21 @@ struct MacAccessibilityTreeTests {
         #expect(rendered.nodeIDByRef[save.id] == 6)
     }
 
+    @Test("Elements record their depth as rendered and whether they have focus, for the state digest")
+    func depthAndFocus() throws {
+        let snapshot = MacAXTraversal.snapshot(root: 0, source: textEdit, budget: .default)
+        let rendered = MacAXTreeRenderer.render(try #require(snapshot.root), observationID: "o_1", app: nil)
+        let bold = try #require(rendered.elements.values.first { $0.label == "Bold" })
+        let save = try #require(rendered.elements.values.first { $0.label == "Save" })
+        let text = try #require(rendered.elements.values.first { $0.role == "AXTextArea" })
+        #expect(save.depth == 0)
+        #expect(bold.depth == 1)
+        // The layout group without text is flattened, so the text area renders at the group's depth.
+        #expect(text.depth == 0)
+        #expect(text.isFocused)
+        #expect(rendered.elements.values.filter(\.isFocused).count == 1)
+    }
+
     @Test("Drift: a different role, a different label, or a moved frame refuses the element")
     func drift() {
         let snapshot = attributes("AXButton", title: "Save", frame: CGRect(x: 10, y: 10, width: 80, height: 24))

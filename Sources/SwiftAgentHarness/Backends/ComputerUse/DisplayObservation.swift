@@ -142,6 +142,9 @@ public struct ElementRef: Sendable, Codable, Hashable {
     public var isSecureInput: Bool
     /// Declared input purpose such as an HTML `autocomplete` token (`cc-number`, `current-password`).
     public var inputPurpose: String?
+    /// Nesting depth in the tree as rendered, 0 for top-level elements.
+    public var depth: Int?
+    public var isFocused: Bool
 
     public init(
         id: String,
@@ -152,7 +155,9 @@ public struct ElementRef: Sendable, Codable, Hashable {
         app: AppIdentity? = nil,
         url: String? = nil,
         isSecureInput: Bool = false,
-        inputPurpose: String? = nil
+        inputPurpose: String? = nil,
+        depth: Int? = nil,
+        isFocused: Bool = false
     ) {
         self.id = id
         self.role = role
@@ -163,6 +168,8 @@ public struct ElementRef: Sendable, Codable, Hashable {
         self.url = url
         self.isSecureInput = isSecureInput
         self.inputPurpose = inputPurpose
+        self.depth = depth
+        self.isFocused = isFocused
     }
 }
 

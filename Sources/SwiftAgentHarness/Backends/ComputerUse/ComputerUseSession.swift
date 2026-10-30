@@ -112,6 +112,8 @@ public struct ComputerUseActionRecord: Sendable, Codable, Hashable {
     public var intentVerdict: String?
     public var effect: ActionEffect
     public var evidence: String?
+    /// The step led to a state not seen before, as observed next.
+    public var madeProgress = false
 }
 
 public struct ComputerUseBatchResult: Sendable {
@@ -211,6 +213,12 @@ public actor ComputerUseSession {
     public private(set) var terminalReason: ComputerUseTerminalReason?
     public private(set) var isTakeoverActive = false
     public private(set) var auditLog: [ComputerUseActionRecord] = []
+    /// Records ever appended, so a record can be found after older ones were trimmed.
+    private var auditCount = 0
+    public private(set) var progress = ComputerUseProgress()
+    private var seenStates: Set<String> = []
+    /// The latest acting step not yet followed by an observation: its number, effect, and record's position.
+    private var pendingActing: (step: Int, effect: ActionEffect, record: Int)?
     public private(set) var verifications: [ComputerUseVerification] = []
     /// Consequential actions denied because nobody was present; surfaced on the next interactive attach.
     public private(set) var headlessDenials: [ComputerUseActionRecord] = []
@@ -394,6 +402,7 @@ public actor ComputerUseSession {
         record.effect = outcome.effect
         record.evidence = outcome.evidence
         appendAudit(record)
+        if outcome.effect != .notExecuted { noteProgress(after: action, effect: outcome.effect, observation: produced) }
         await report(.acting, action: action.kind, app: classification.domain ?? classification.app?.bundleID)
         return (outcome, record, produced)
     }
@@ -604,6 +613,8 @@ public actor ComputerUseSession {
         guard on != isTakeoverActive else { return }
         try await target.takeover(lease, on: on)
         isTakeoverActive = on
+        // What the user does meanwhile is never credited to the agent's last action.
+        if on { pendingActing = nil }
         await report(on ? .takenOver : .acting)
     }
 
@@ -657,7 +668,40 @@ public actor ComputerUseSession {
         if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
         guard let observation = retained[id] else { throw ComputerUseSessionError.unknownObservation(id) }
         if let lastActionAt, observation.at < lastActionAt { throw ComputerUseSessionError.staleVerification(id) }
+        let criteria = configuration.task.successCriteria
+        let index = criteria.indices.first { ComputerUseResultBuilder.criterionMatches(criterion, criterion: criteria[$0], index: $0) }
+        let metBefore = index.map { index in
+            verifications.contains { $0.met && ComputerUseResultBuilder.criterionMatches($0.criterion, criterion: criteria[index], index: index) }
+        } ?? true
         verifications.append(ComputerUseVerification(criterion: criterion, met: met, evidence: evidence, observation: id))
+        if met, !metBefore {
+            progress.criteriaVerified += 1
+            progress.lastProgressStep = max(progress.lastProgressStep ?? 0, steps)
+        }
+    }
+
+    // MARK: - Progress
+
+    private static let creditableEffects: Set<ActionEffect> = [.confirmed, .partial, .unverifiable]
+
+    /// A step made progress when the next observation shows a state not seen before and the step acted on the
+    /// target without a known failure. Observing and waiting never earn progress, so a page that changes on its
+    /// own doesn't count.
+    private func noteProgress(after action: ComputerAction, effect: ActionEffect, observation: DisplayObservation?) {
+        switch action {
+        case .observe:
+            defer { pendingActing = nil }
+            guard let observation, let state = ComputerUseStateDigest.of(observation), seenStates.insert(state).inserted,
+                  let acting = pendingActing, Self.creditableEffects.contains(acting.effect) else { return }
+            progress.statesReached += 1
+            progress.lastProgressStep = max(progress.lastProgressStep ?? 0, acting.step)
+            let position = acting.record - (auditCount - auditLog.count)
+            if auditLog.indices.contains(position) { auditLog[position].madeProgress = true }
+        case .zoom, .wait, .waitFor:
+            return
+        default:
+            pendingActing = (steps, effect, auditCount - 1)
+        }
     }
 
     // MARK: - Helpers
@@ -727,6 +771,7 @@ public actor ComputerUseSession {
 
     private func appendAudit(_ record: ComputerUseActionRecord) {
         auditLog.append(record)
+        auditCount += 1
         if auditLog.count > configuration.auditCapacity {
             auditLog.removeFirst(auditLog.count - configuration.auditCapacity)
         }

@@ -192,7 +192,9 @@ enum MacAXTreeRenderer {
                 label: attributes.label,
                 frame: attributes.frame.map(DisplayRect.init),
                 app: app,
-                isSecureInput: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField"
+                isSecureInput: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField",
+                depth: depth,
+                isFocused: attributes.focused
             )
             var line = String(repeating: "  ", count: depth) + "[\(ref)] \(displayRole(attributes.role))"
             if let label = attributes.label { line += " \(quoted(label))" }
