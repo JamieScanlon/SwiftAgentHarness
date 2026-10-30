@@ -231,11 +231,11 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
 
             var idleTimeoutSeconds: TimeInterval? = defaultIdleTimeoutSeconds
             if let rawIdle = entry["idleTimeoutSeconds"] {
-                guard let seconds = (rawIdle as? NSNumber)?.doubleValue, seconds >= 0 else {
+                guard let limits = SubAgentLimits(configuredIdleTimeoutSeconds: rawIdle) else {
                     diagnostics.append("localAgents['\(configKey)']: 'idleTimeoutSeconds' must be a non-negative number (0 turns it off)")
                     continue
                 }
-                idleTimeoutSeconds = seconds == 0 ? nil : min(max(seconds, minimumIdleTimeoutSeconds), maximumRunTimeoutSeconds)
+                idleTimeoutSeconds = limits.idleTimeoutSeconds
             }
 
             claimedBy[toolName] = configKey

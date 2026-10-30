@@ -772,7 +772,7 @@ struct InProcessLocalAgentIntegrationTests {
         let definition = makeDefinition(runTimeoutSeconds: 30, idleTimeoutSeconds: 0.2)
         let started = Date()
         let (session, parent) = try await makeSession(definition: definition) { _, _ in
-            LocalAgentLiveness.current?.observe(waitingOnApproval: { false })
+            DelegateLiveness.current?.observe(waitingOnApproval: { false })
             try? await Task.sleep(for: .seconds(10))
         }
         let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
@@ -797,7 +797,7 @@ struct InProcessLocalAgentIntegrationTests {
         let definition = makeDefinition(runTimeoutSeconds: 30, idleTimeoutSeconds: 0.2)
         let box = SessionBox()
         let (session, parent) = try await makeSession(definition: definition) { childID, _ in
-            let liveness = LocalAgentLiveness.current
+            let liveness = DelegateLiveness.current
             liveness?.observe(waitingOnApproval: { false })
             for _ in 0..<8 {
                 try? await Task.sleep(for: .milliseconds(80))

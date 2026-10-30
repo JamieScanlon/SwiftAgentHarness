@@ -272,11 +272,11 @@ private actor SlowYesOversight: ComputerUseOversight {
 @Suite("Computer use: waiting on a person pauses the delegate's idle clock")
 struct ComputerUseLivenessOversightTests {
     private actor Observing: ComputerUseOversight {
-        let liveness: LocalAgentLiveness
+        let liveness: DelegateLiveness
         private(set) var pausedDuringAsk: Bool?
         private(set) var pausedDuringHandoff: Bool?
 
-        init(_ liveness: LocalAgentLiveness) { self.liveness = liveness }
+        init(_ liveness: DelegateLiveness) { self.liveness = liveness }
 
         func askUser(_ question: String) async -> ComputerUseUserReply {
             pausedDuringAsk = liveness.isPaused
@@ -291,7 +291,7 @@ struct ComputerUseLivenessOversightTests {
 
     @Test("Questions, handoffs, and ceiling questions pause the clock and resume it after")
     func pauses() async {
-        let liveness = LocalAgentLiveness()
+        let liveness = DelegateLiveness()
         let base = Observing(liveness)
         let oversight = ComputerUseLivenessOversight(base: base, liveness: liveness)
         _ = await oversight.askUser("which file?")

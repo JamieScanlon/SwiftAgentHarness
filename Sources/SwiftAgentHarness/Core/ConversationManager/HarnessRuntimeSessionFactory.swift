@@ -283,7 +283,7 @@ public enum HarnessRuntimeSessionFactory {
                         configuration: AgentRuntimeTurnConfiguration(enableTools: true)
                     )
                     // Every streamed delta and state change is a sign of life for the delegate's idle timeout.
-                    let liveness = LocalAgentLiveness.current
+                    let liveness = DelegateLiveness.current
                     let runID = response.runID
                     liveness?.observe(waitingOnApproval: {
                         guard let runID else { return false }

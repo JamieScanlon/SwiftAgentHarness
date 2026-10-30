@@ -331,14 +331,14 @@ extension SubAgentSpawnService {
 
     /// Drives the child run to completion before `deadline`, which is re-read so it can move, cancelling the
     /// child if the parent turn is cancelled, the deadline passes, or the child produces nothing for
-    /// `idleTimeoutSeconds`. The child reports its events into `liveness` through ``LocalAgentLiveness/current``.
+    /// `idleTimeoutSeconds`. The child reports its events into `liveness` through ``DelegateLiveness/current``.
     func runLocalAgentChild(
         childConversationID: UUID,
         prompt: String,
         deadline: @escaping @Sendable () async -> Date,
         budgetSeconds: TimeInterval? = nil,
         idleTimeoutSeconds: TimeInterval? = nil,
-        liveness: LocalAgentLiveness = LocalAgentLiveness()
+        liveness: DelegateLiveness = DelegateLiveness()
     ) async -> LocalAgentRunOutcome {
         let started = Date()
         guard let childRun = localAgentChildRunPort else {
@@ -348,7 +348,7 @@ extension SubAgentSpawnService {
             await withTaskGroup(of: LocalAgentRunOutcome?.self) { group in
                 group.addTask {
                     do {
-                        try await LocalAgentLiveness.$current.withValue(liveness) {
+                        try await DelegateLiveness.$current.withValue(liveness) {
                             try await childRun(childConversationID, prompt)
                         }
                         return nil
@@ -368,17 +368,12 @@ extension SubAgentSpawnService {
                 }
                 if let idleTimeoutSeconds, idleTimeoutSeconds > 0 {
                     group.addTask {
-                        let recheck = Duration.seconds(min(5, idleTimeoutSeconds / 2))
-                        while true {
-                            do {
-                                try await Task.sleep(for: recheck)
-                            } catch {
-                                return LocalAgentRunOutcome.cancelled
-                            }
-                            if let quiet = await liveness.quietTime(), quiet >= idleTimeoutSeconds {
-                                return LocalAgentRunOutcome.idleTimedOut(idleTimeoutSeconds)
-                            }
+                        do {
+                            try await liveness.waitUntilIdle(for: idleTimeoutSeconds)
+                        } catch {
+                            return LocalAgentRunOutcome.cancelled
                         }
+                        return LocalAgentRunOutcome.idleTimedOut(idleTimeoutSeconds)
                     }
                 }
                 let first: LocalAgentRunOutcome?

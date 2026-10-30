@@ -118,7 +118,7 @@ extension SubAgentSpawnService {
         // Approvals, questions, and activity go to the user's conversation, not the specialist's child. Waiting on
         // the user pauses the child's idle clock, and every action the session reports is a sign of life.
         let targetLabel = grant.target.manifest.label
-        let liveness = LocalAgentLiveness()
+        let liveness = DelegateLiveness()
         var approvals = configuration.approvals
         if approvals == nil {
             approvals = await orchestratorRuntime.approvalDelivery(for: parentConversation)

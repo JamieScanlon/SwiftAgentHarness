@@ -24,6 +24,8 @@ public actor SubAgentSpawnService {
     /// and no late install that could overwrite a host or test override.
     private(set) var localAgentChildRunPort: LocalAgentChildRunPort?
     private let subAgentDelegateEventTranslator = SubAgentDelegateEventTranslator()
+    /// Liveness of the remote invocations being followed, keyed by lifecycle id. Every applied event touches it.
+    var remoteDelegateLiveness: [String: DelegateLiveness] = [:]
     private lazy var subAgentRunScheduler: any SubAgentRunScheduling = RuntimeLaneSubAgentRunScheduler(
         runtimeLaneCoordinator: deps.runtimeLaneCoordinator
     )
@@ -288,11 +290,15 @@ public actor SubAgentSpawnService {
                     parentConversationID: parentConversationID
                 )
             )
+            let idleTimeoutSeconds = preparedLaunch.selectedRegistryEntry?.limits.idleTimeoutSeconds
             Task { [weak self] in
-                guard let self else { return }
-                for await event in stream {
-                    await self.applySubAgentDelegateEvent(event)
-                }
+                _ = await self?.followRemoteDelegate(
+                    stream,
+                    correlation: remoteCorrelation,
+                    parentConversationID: parentConversationID,
+                    idleTimeoutSeconds: idleTimeoutSeconds,
+                    applyingTerminal: true
+                )
             }
             runLaneHandoffCommitted = true
             return parentConversationID
@@ -481,6 +487,10 @@ public actor SubAgentSpawnService {
         subAgentLifecycleState.snapshot(conversationID: conversationID, pathSegments: pathSegments)
     }
 
+    func subAgentLifecycleEntry(parentConversationID: UUID, lifecycleID: String) -> SubAgentLifecycleEntryPayload? {
+        subAgentLifecycleState.entry(parentConversationID: parentConversationID, lifecycleID: lifecycleID)
+    }
+
     func listActiveInvocations(parentConversationID: UUID) -> [ActiveSubAgentInvocationInfo] {
         subAgentLifecycleState.listActiveInvocations(parentConversationID: parentConversationID)
     }
@@ -527,6 +537,7 @@ public actor SubAgentSpawnService {
     }
 
     func applySubAgentDelegateEvent(_ event: SubAgentDelegateEvent) async {
+        remoteDelegateLiveness[event.lifecycleID]?.touch()
         let existing = subAgentLifecycleState
             .entries(parentConversationID: event.parentConversationID)
             .first(where: { $0.lifecycleID == event.lifecycleID })
@@ -1317,18 +1328,22 @@ public actor SubAgentSpawnService {
                     completionHandleID: correlation.completionHandleID
                 )
             )
-            if isLongRunning {
-                let stream = await subAgentPool.streamDelegateEvents(
-                    SubAgentTransportDelegateEventsRequest(
-                        correlation: correlation,
-                        parentConversationID: conversationID
-                    )
+            let stream = await subAgentPool.streamDelegateEvents(
+                SubAgentTransportDelegateEventsRequest(
+                    correlation: correlation,
+                    parentConversationID: conversationID
                 )
+            )
+            let idleTimeoutSeconds = registryEntry.limits.idleTimeoutSeconds
+            if isLongRunning {
                 Task { [weak self] in
-                    guard let self else { return }
-                    for await event in stream {
-                        await self.applySubAgentDelegateEvent(event)
-                    }
+                    _ = await self?.followRemoteDelegate(
+                        stream,
+                        correlation: correlation,
+                        parentConversationID: conversationID,
+                        idleTimeoutSeconds: idleTimeoutSeconds,
+                        applyingTerminal: true
+                    )
                 }
                 return .pendingHandle(
                     AgentLoopToolDispatch.toolResultMessage(
@@ -1337,11 +1352,23 @@ public actor SubAgentSpawnService {
                     )
                 )
             }
-            if let terminal = await waitForTerminalDelegateEvent(
+            let ending = await followRemoteDelegate(
+                stream,
                 correlation: correlation,
-                parentConversationID: conversationID
-            ) {
+                parentConversationID: conversationID,
+                idleTimeoutSeconds: idleTimeoutSeconds,
+                applyingTerminal: false
+            )
+            if let terminal = ending.terminal {
                 await applySubAgentDelegateEvent(terminal)
+                if let seconds = ending.idleTimedOut {
+                    return .completed(
+                        AgentLoopToolDispatch.toolResultMessage(
+                            toolCallId: call.id,
+                            content: Self.remoteIdleTimeoutReport(delegateName: call.name, seconds: seconds)
+                        )
+                    )
+                }
                 switch terminal.phase {
                 case .done:
                     let content = SubAgentDelegateResultBounds.boundContent(
@@ -1404,22 +1431,4 @@ public actor SubAgentSpawnService {
         await publishSubAgentLifecycleIfConfigured(parentConversationID: parentConversationID)
     }
 
-    private func waitForTerminalDelegateEvent(
-        correlation: SubAgentTransportInvocationCorrelation,
-        parentConversationID: UUID
-    ) async -> SubAgentDelegateEvent? {
-        let stream = await subAgentPool.streamDelegateEvents(
-            SubAgentTransportDelegateEventsRequest(
-                correlation: correlation,
-                parentConversationID: parentConversationID
-            )
-        )
-        for await event in stream {
-            if event.phase == .done || event.phase == .failed {
-                return event
-            }
-            await applySubAgentDelegateEvent(event)
-        }
-        return nil
-    }
 }

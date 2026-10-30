@@ -203,6 +203,24 @@ Each policy object:
 | `authScopeTags` | [String] | `[]` | Auth scopes granted to the delegate (e.g. `"repo:write"`). |
 | `routingDomain` | String | `nil` | Routing domain label. |
 | `tenantScope` | String | `nil` | Tenant scope label. |
+| `limits` | object | inherited | Host-set limits on the delegate's invocations. An entry without `limits` inherits the `defaults` one. |
+
+`limits` keys:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `idleTimeoutSeconds` | Number | `300` | Liveness for remote (ACP, A2A, custom-endpoint) delegates: an invocation that produces no delegate event (streamed output, a tool call, a status update, a permission request) for this long is cancelled with reason `idle-timeout`. The clock pauses while the invocation awaits approval. Clamped to `10…3600`; `0` turns it off; a value that isn't a non-negative number is ignored. Size it to the remote agent, at least twice its slowest silent stretch. The model never sets it. In-process delegates use `localAgents[].idleTimeoutSeconds` instead. |
+
+```json
+{
+  "subAgentHostingPolicy": {
+    "defaults": { "limits": { "idleTimeoutSeconds": 300 } },
+    "entries": {
+      "delegate_researcher": { "limits": { "idleTimeoutSeconds": 900 } }
+    }
+  }
+}
+```
 
 ## `modeProfiles`
 

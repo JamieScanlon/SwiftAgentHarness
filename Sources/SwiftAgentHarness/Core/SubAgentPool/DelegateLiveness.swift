@@ -1,12 +1,12 @@
 import Foundation
 import Synchronization
 
-/// Whether an in-process delegate's child run is alive: when it last produced an event, and whether it is waiting
-/// on a person. The idle timeout reads it. It measures liveness, not progress: a child that keeps calling tools
-/// without getting anywhere is alive.
-final class LocalAgentLiveness: Sendable {
-    /// The liveness of the child run being driven, for the child-run port to report into.
-    @TaskLocal static var current: LocalAgentLiveness?
+/// Whether a delegate invocation is alive: when it last produced an event, and whether it is waiting on a person.
+/// The idle timeout reads it. It measures liveness, not progress: a delegate that keeps calling tools without
+/// getting anywhere is alive.
+final class DelegateLiveness: Sendable {
+    /// The liveness of the in-process child run being driven, for the child-run port to report into.
+    @TaskLocal static var current: DelegateLiveness?
 
     private struct State {
         var lastActivity: Date
@@ -69,5 +69,15 @@ final class LocalAgentLiveness: Sendable {
             return 0
         }
         return current.timeIntervalSince(state.withLock { $0.lastActivity })
+    }
+
+    /// Returns once the delegate has gone `idleTimeout` seconds without an event, rechecking every
+    /// `min(5, idleTimeout / 2)` seconds. Throws `CancellationError` when cancelled first.
+    func waitUntilIdle(for idleTimeout: TimeInterval) async throws {
+        let recheck = Duration.seconds(min(5, idleTimeout / 2))
+        while true {
+            try await Task.sleep(for: recheck)
+            if let quiet = await quietTime(), quiet >= idleTimeout { return }
+        }
     }
 }

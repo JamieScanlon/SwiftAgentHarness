@@ -148,7 +148,7 @@ struct ComputerUseConversationOversight: ComputerUseOversight {
 /// Pauses the specialist's idle clock while the user is asked something or doing a human-only step.
 struct ComputerUseLivenessOversight: ComputerUseOversight {
     let base: any ComputerUseOversight
-    let liveness: LocalAgentLiveness
+    let liveness: DelegateLiveness
 
     func askUser(_ question: String) async -> ComputerUseUserReply {
         liveness.pause()
@@ -172,7 +172,7 @@ struct ComputerUseLivenessOversight: ComputerUseOversight {
 /// Pauses the specialist's idle clock while a consequential action waits on the user's confirmation.
 struct ComputerUseLivenessApprovals: ExecApprovalDelivering {
     let base: any ExecApprovalDelivering
-    let liveness: LocalAgentLiveness
+    let liveness: DelegateLiveness
 
     func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
         liveness.pause()

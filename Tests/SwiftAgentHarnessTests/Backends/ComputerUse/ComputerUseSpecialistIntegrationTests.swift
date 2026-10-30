@@ -117,7 +117,7 @@ struct ComputerUseSpecialistIntegrationTests {
         await session.subAgentSpawnService.installLocalAgentChildRunPort { childID, prompt in
             await recorder.record(childID: childID, prompt: prompt)
             if idleChild {
-                LocalAgentLiveness.current?.observe(waitingOnApproval: { false })
+                DelegateLiveness.current?.observe(waitingOnApproval: { false })
                 try? await Task.sleep(for: .seconds(10))
                 return
             }

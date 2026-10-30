@@ -38,6 +38,30 @@ public struct SubAgentHostingPolicy: Sendable, Codable, Equatable {
     }
 }
 
+/// Host-set limits on a delegate's invocations. The spawning model never sets them.
+public struct SubAgentLimits: Sendable, Codable, Equatable {
+    /// No delegate event for this long cancels the invocation with reason `idle-timeout`. `nil` turns it off.
+    public var idleTimeoutSeconds: TimeInterval?
+
+    public init(idleTimeoutSeconds: TimeInterval? = LocalAgentConfiguration.defaultIdleTimeoutSeconds) {
+        self.idleTimeoutSeconds = idleTimeoutSeconds.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// From a configured `idleTimeoutSeconds`: 0 turns it off, and other values are clamped to
+    /// 10...3600 seconds. Fails when the value isn't a non-negative number.
+    init?(configuredIdleTimeoutSeconds raw: Any) {
+        guard let seconds = (raw as? NSNumber)?.doubleValue, seconds >= 0 else { return nil }
+        self.init(
+            idleTimeoutSeconds: seconds == 0
+                ? nil
+                : min(
+                    max(seconds, LocalAgentConfiguration.minimumIdleTimeoutSeconds),
+                    LocalAgentConfiguration.maximumRunTimeoutSeconds
+                )
+        )
+    }
+}
+
 struct SubAgentRoutingContext: Sendable, Codable, Equatable {
     var hostPersonaID: String?
     var authScopeTags: [String]
@@ -244,6 +268,8 @@ struct SubAgentTransportCancellationRequest: Sendable {
     var transportKind: SubAgentTransportKind
     var sessionHandleID: String
     var completionHandleID: String?
+    /// Why the invocation is being cancelled; the terminal event's error. `nil` means the operator cancelled it.
+    var reason: String? = nil
 }
 
 enum SubAgentTransportCancellationDisposition: Sendable, Equatable {
@@ -396,6 +422,7 @@ struct SubAgentRegistryEntry: Codable, Sendable, Equatable {
     var defaultTrustLevel: SubAgentTrustLevel
     var permissionPolicy: SubAgentPermissionPolicy
     var hostingPolicy: SubAgentHostingPolicy
+    var limits: SubAgentLimits
     var availableToolInfo: AvailableToolInfo
 
     init(
@@ -412,6 +439,7 @@ struct SubAgentRegistryEntry: Codable, Sendable, Equatable {
         defaultTrustLevel: SubAgentTrustLevel = .unknownParty,
         permissionPolicy: SubAgentPermissionPolicy = .askUser,
         hostingPolicy: SubAgentHostingPolicy = SubAgentHostingPolicy(),
+        limits: SubAgentLimits = SubAgentLimits(),
         availableToolInfo: AvailableToolInfo
     ) {
         self.agentID = agentID
@@ -427,6 +455,7 @@ struct SubAgentRegistryEntry: Codable, Sendable, Equatable {
         self.defaultTrustLevel = defaultTrustLevel
         self.permissionPolicy = permissionPolicy
         self.hostingPolicy = hostingPolicy
+        self.limits = limits
         self.availableToolInfo = availableToolInfo
     }
 }
@@ -992,6 +1021,7 @@ struct DefaultSubAgentPool: SubAgentPooling, SubAgentTransportAdapterResolving {
                     defaultTrustLevel: trustLevel(for: entry),
                     permissionPolicy: permissionPolicy(for: entry),
                     hostingPolicy: hostingPolicy,
+                    limits: hostingPolicyConfiguration.limits(forDelegateToolName: entry.name),
                     availableToolInfo: entry.availableToolInfo
                 )
             }
