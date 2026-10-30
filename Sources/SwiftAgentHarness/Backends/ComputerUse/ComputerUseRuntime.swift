@@ -126,7 +126,7 @@ final class ComputerUseInstallation: Sendable {
     /// specialist's child holds them until its lease's hard expiry plus the release TTL; release moves it.
     func toolImageExpiry(conversationID: UUID) async -> Date? {
         guard let session = await sessions.session(for: conversationID) else { return nil }
-        return session.lease.expiresAt.addingTimeInterval(retention.afterRelease.timeInterval)
+        return session.lease.endsAt.addingTimeInterval(retention.afterRelease.timeInterval)
     }
 
     func install(_ configuration: ComputerUseConfiguration, publish: ComputerUseOversightCoordinator.Publish? = nil) {

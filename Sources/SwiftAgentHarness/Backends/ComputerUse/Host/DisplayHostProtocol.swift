@@ -9,7 +9,7 @@ import Foundation
 /// concurrently; responses echo the id. Leases are named by id only, and a host honours only the leases it
 /// issued on the same connection.
 public enum DisplayHostProtocol {
-    public static let version = 1
+    public static let version = 2
     /// The largest message either side accepts.
     public static let maxMessageBytes = 64 * 1024 * 1024
 }

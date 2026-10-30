@@ -100,8 +100,8 @@ public actor DisplayTargetRegistry {
 
         var granted = request
         granted.grants = approved
-        if !request.userPresent, granted.budgets.maxDuration > unattendedMaxDuration {
-            granted.budgets.maxDuration = unattendedMaxDuration
+        if !request.userPresent {
+            granted.budgets.grantExpiry = min(granted.budgets.grantExpiry ?? unattendedMaxDuration, unattendedMaxDuration)
         }
         do {
             let lease = try await target.lease(granted)

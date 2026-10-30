@@ -16,7 +16,7 @@ struct ComputerUseToolProviderTests {
             target: manifest.id,
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants + [.domain("example.com", tier: .click)],
-            budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(3600)),
+            budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
             operatorInitiated: true,
             userPresent: true
         ))

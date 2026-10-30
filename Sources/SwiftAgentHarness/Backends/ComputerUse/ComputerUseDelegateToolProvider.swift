@@ -85,8 +85,18 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                         type: "string",
                         required: false
                     ),
-                    .init(name: "max_steps", description: "Action budget. Default \(defaults.budgets.maxSteps).", type: "integer", required: false),
-                    .init(name: "max_minutes", description: "Time budget in minutes.", type: "integer", required: false),
+                    .init(
+                        name: "steps",
+                        description: "Expected size of the work in actions, for example about 15 to open an app and fill in a form. Default \(defaults.budgets.defaultSteps). The harness extends it while the task makes progress.",
+                        type: "integer",
+                        required: false
+                    ),
+                    .init(
+                        name: "deadline",
+                        description: "Only a cutoff the user stated, as an ISO 8601 date-time with a UTC offset, such as 2026-10-29T15:00:00-07:00. Never an estimate of how long the task takes.",
+                        type: "string",
+                        required: false
+                    ),
                     .init(name: "return_schema", description: "Optional JSON Schema for the result.", type: "string", required: false),
                     .init(
                         name: InProcessLocalAgentToolProvider.descriptionParameterName,

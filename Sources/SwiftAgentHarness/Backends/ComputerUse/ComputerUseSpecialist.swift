@@ -1,17 +1,14 @@
 import EasyJSON
 import Foundation
 
-/// Host defaults and ceilings applied to every delegated computer-use task.
+/// Host defaults and limits applied to every delegated computer-use task.
 public struct ComputerUseSpecialistDefaults: Sendable {
     public var target: DisplayTargetID
-    public var budgets: ComputerUseBudgets
-    /// Requested budgets are clamped to these.
-    public var maxBudgets: ComputerUseBudgets
+    public var budgets: ComputerUseBudgetPolicy
 
-    public init(target: DisplayTargetID, budgets: ComputerUseBudgets, maxBudgets: ComputerUseBudgets) {
+    public init(target: DisplayTargetID, budgets: ComputerUseBudgetPolicy = ComputerUseBudgetPolicy()) {
         self.target = target
         self.budgets = budgets
-        self.maxBudgets = maxBudgets
     }
 }
 
@@ -60,8 +57,9 @@ public struct ComputerUseTask: Sendable {
         self.returnSchema = returnSchema
     }
 
-    /// Parses the delegate tool's flat arguments.
-    public init(arguments: JSON, defaults: ComputerUseSpecialistDefaults) throws(ComputerUseTaskError) {
+    /// Parses the delegate tool's flat arguments. The parent sizes the work in `steps` and may name a `deadline`
+    /// the user stated; every other limit comes from the host's policy.
+    public init(arguments: JSON, defaults: ComputerUseSpecialistDefaults, now: Date = Date()) throws(ComputerUseTaskError) {
         let args = ComputerUseToolProvider.Arguments(arguments)
         guard let goal = args.string("goal") else { throw .missing("goal") }
         let criteria = Self.lines(args.string("success_criteria"))
@@ -81,18 +79,23 @@ public struct ComputerUseTask: Sendable {
             }
             schema = decoded
         }
-        let ceiling = defaults.maxBudgets
-        let steps = min(args.int("max_steps") ?? defaults.budgets.maxSteps, ceiling.maxSteps)
-        let requestedDuration = args.int("max_minutes").map { Duration.seconds($0 * 60) } ?? defaults.budgets.maxDuration
-        let duration = min(requestedDuration, ceiling.maxDuration)
-        let usd = [defaults.budgets.maxUSD, ceiling.maxUSD].compactMap { $0 }.min()
+        let steps = args.int("steps")
+        if let steps, steps < 1 { throw .invalid("steps must be at least 1") }
+        var deadline: Date?
+        if let raw = args.string("deadline") {
+            guard let parsed = Self.date(raw) else {
+                throw .invalid("deadline must be an ISO 8601 date-time with a UTC offset, such as 2026-10-29T15:00:00-07:00")
+            }
+            guard parsed > now else { throw .invalid("deadline \(raw) has already passed") }
+            deadline = parsed
+        }
         self.init(
             goal: goal,
             successCriteria: criteria,
             constraints: Self.lines(args.string("constraints")),
             target: args.string("target") ?? defaults.target,
             grants: grants,
-            budgets: ComputerUseBudgets(maxSteps: steps, maxDuration: duration, maxUSD: usd),
+            budgets: defaults.budgets.resolve(steps: steps, deadline: deadline),
             returnSchema: schema
         )
     }
@@ -121,6 +124,13 @@ public struct ComputerUseTask: Sendable {
             sections.append("Finish with a short report of what you did and what you found.")
         }
         return sections.joined(separator: "\n\n")
+    }
+
+    private static func date(_ raw: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: raw)
     }
 
     static func lines(_ raw: String?) -> [String] {

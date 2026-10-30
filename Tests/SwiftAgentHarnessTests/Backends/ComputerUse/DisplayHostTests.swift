@@ -13,7 +13,7 @@ struct DisplayHostTests {
             target: target,
             agentID: agentID,
             grants: ComputerUseSessionFixtures.grants,
-            budgets: ComputerUseBudgets(maxSteps: 10, maxDuration: .seconds(60)),
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
             operatorInitiated: true,
             userPresent: true,
             isHolderAlive: isHolderAlive
@@ -289,7 +289,7 @@ struct DisplayHostSocketTests {
             target: remote.manifest.id,
             agentID: "agent",
             grants: [],
-            budgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60)),
+            budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
             operatorInitiated: true,
             userPresent: true
         ))

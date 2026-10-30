@@ -209,8 +209,7 @@ extension ComputerUseFixtures {
                 registry: DisplayTargetRegistry(targets: []),
                 defaults: ComputerUseSpecialistDefaults(
                     target: FakeDisplayTarget.hostManifest.id,
-                    budgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600)),
-                    maxBudgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600))
+                    budgets: ComputerUseBudgetPolicy(defaultSteps: 12, ceilingSteps: 12, maxDuration: .seconds(600))
                 ),
                 approveGrants: { _ in nil }
             ),
@@ -231,7 +230,7 @@ extension ComputerUseFixtures {
             target: target.manifest.id,
             agentID: "computer-use:\(lifecycleID)",
             grants: [.app(bundleID: textEdit.bundleID, tier: .full)],
-            budgets: ComputerUseBudgets(maxSteps: 12, maxDuration: .seconds(600)),
+            budgets: ComputerUseBudgets(steps: 12, maxDuration: .seconds(600)),
             operatorInitiated: true,
             userPresent: true
         ))

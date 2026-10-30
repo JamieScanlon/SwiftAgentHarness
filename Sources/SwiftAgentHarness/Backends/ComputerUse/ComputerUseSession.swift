@@ -286,7 +286,7 @@ public actor ComputerUseSession {
                 result.outcomes.append(ActionOutcome(action: index, effect: .notExecuted))
                 continue
             }
-            if steps >= lease.budgets.maxSteps {
+            if steps >= lease.budgets.steps {
                 await end(.stepBudget)
             } else if timeExpired {
                 await end(.timeBudget)
@@ -389,6 +389,8 @@ public actor ComputerUseSession {
             outcome = ActionOutcome(action: index, effect: .unverifiable, evidence: "driver error: \(error)", escalation: .observe)
             if !Self.isObservation(action) { lastActionAt = now() }
         }
+        // A step is an action delivered to the driver.
+        if outcome.effect == .notExecuted { steps -= 1 }
         record.effect = outcome.effect
         record.evidence = outcome.evidence
         appendAudit(record)
@@ -405,7 +407,7 @@ public actor ComputerUseSession {
         await activity(ComputerUseActivity(
             status: status,
             step: steps,
-            maxSteps: lease.budgets.maxSteps,
+            maxSteps: lease.budgets.steps,
             app: app,
             action: action,
             terminalReason: status == .ended ? terminalReason : nil
@@ -560,9 +562,7 @@ public actor ComputerUseSession {
     // MARK: - Budgets and lifecycle
 
     private var timeExpired: Bool {
-        let current = now()
-        return current >= lease.expiresAt
-            || current.timeIntervalSince(lease.issuedAt) >= lease.budgets.maxDuration.timeInterval
+        now() >= lease.endsAt
     }
 
     private func budgetOrPermissionViolation() async -> ComputerUseTerminalReason? {

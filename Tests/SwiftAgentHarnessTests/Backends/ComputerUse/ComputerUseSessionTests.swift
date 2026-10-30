@@ -97,7 +97,7 @@ enum ComputerUseSessionFixtures {
         manifest: DisplayTargetManifest = FakeDisplayTarget.hostManifest,
         grants: [ComputerUseGrant] = grants,
         userPresent: Bool = true,
-        budgets: ComputerUseBudgets = ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(3600)),
+        budgets: ComputerUseBudgets = ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
         approvals: (any ExecApprovalDelivering)? = nil,
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,
@@ -329,7 +329,7 @@ struct ComputerUseSessionGatingTests {
         let lease = Lease(
             request: LeaseRequest(
                 target: target.manifest.id, agentID: "agent", grants: ComputerUseSessionFixtures.grants,
-                budgets: ComputerUseBudgets(maxSteps: 10, maxDuration: .seconds(600)), operatorInitiated: true, userPresent: true
+                budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)), operatorInitiated: true, userPresent: true
             ),
             issuedAt: ComputerUseFixtures.epoch
         )
@@ -368,7 +368,7 @@ struct ComputerUseSessionLifecycleTests {
     func stepBudget() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make(
             manifest: FakeDisplayTarget.vmManifest,
-            budgets: ComputerUseBudgets(maxSteps: 2, maxDuration: .seconds(3600))
+            budgets: ComputerUseBudgets(steps: 2, maxDuration: .seconds(3600))
         )
         let result = await session.perform([
             ComputerUseSessionFixtures.observe,
@@ -381,12 +381,26 @@ struct ComputerUseSessionLifecycleTests {
         #expect(await target.releases == [.budgetExhausted])
     }
 
+    @Test("Actions the driver reports as not executed don't use up steps")
+    func notExecutedNotCounted() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(3600))
+        )
+        await target.setOutcomes { _, index in ActionOutcome(action: index, effect: .notExecuted) }
+        for _ in 0..<3 {
+            #expect(await session.perform([.wait(milliseconds: 1)]).outcomes.map(\.effect) == [.notExecuted])
+        }
+        #expect(await session.stepCount == 0)
+        #expect(await session.terminalReason == nil)
+    }
+
     @Test("The wall-clock budget ends the session")
     func timeBudget() async throws {
         let clock = ComputerUseTestClock()
         let (target, session) = try await ComputerUseSessionFixtures.make(
             manifest: FakeDisplayTarget.vmManifest,
-            budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(60)),
+            budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(60)),
             clock: clock
         )
         clock.advance(seconds: 61)
@@ -400,7 +414,7 @@ struct ComputerUseSessionLifecycleTests {
     func costBudget() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make(
             manifest: FakeDisplayTarget.vmManifest,
-            budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(3600), maxUSD: 1)
+            budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600), maxUSD: 1)
         )
         await session.recordCost(usd: 0.6)
         #expect(await session.terminalReason == nil)

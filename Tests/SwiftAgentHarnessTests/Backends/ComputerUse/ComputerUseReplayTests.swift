@@ -39,7 +39,7 @@ struct ComputerUseReplayTests {
             target: target.manifest.id,
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants,
-            budgets: ComputerUseBudgets(maxSteps: 50, maxDuration: .seconds(600)),
+            budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
             operatorInitiated: true,
             userPresent: true
         ))
@@ -158,8 +158,7 @@ struct ComputerUseReplayTests {
             registry: DisplayTargetRegistry(targets: []),
             defaults: ComputerUseSpecialistDefaults(
                 target: "t",
-                budgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60)),
-                maxBudgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60))
+                budgets: ComputerUseBudgetPolicy(defaultSteps: 1, maxDuration: .seconds(60))
             ),
             approveGrants: { _ in nil },
             retention: ComputerUseRetention(afterRelease: .seconds(3_600), audit: .seconds(30 * 86_400))

@@ -96,8 +96,7 @@ struct ComputerUseSpecialistIntegrationTests {
             registry: DisplayTargetRegistry(targets: [target]),
             defaults: ComputerUseSpecialistDefaults(
                 target: target.manifest.id,
-                budgets: ComputerUseBudgets(maxSteps: 40, maxDuration: .seconds(600)),
-                maxBudgets: ComputerUseBudgets(maxSteps: 200, maxDuration: .seconds(1_800))
+                budgets: ComputerUseBudgetPolicy(defaultSteps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800))
             ),
             approveGrants: approve,
             activityObserver: activityObserver
@@ -567,7 +566,7 @@ struct ComputerUseSpecialistIntegrationTests {
         let (session, parent) = try await makeSession(
             model: makeModel(), target: target, script: Self.fullScript, reply: "ok", recorder: recorder
         )
-        let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["max_steps": .integer(1)]))
+        let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["steps": .integer(1)]))
         #expect(result["status"] as? String == "budget-exhausted")
         #expect(await target.releases == [.budgetExhausted])
     }

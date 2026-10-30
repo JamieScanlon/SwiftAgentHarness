@@ -14,7 +14,7 @@ struct ComputerUseIntegrationTests {
                 target: target.manifest.id,
                 agentID: "agent",
                 grants: [.app(bundleID: "com.apple.TextEdit", tier: .full), .app(bundleID: "com.1password.1password", tier: .full)],
-                budgets: ComputerUseBudgets(maxSteps: 20, maxDuration: .seconds(600)),
+                budgets: ComputerUseBudgets(steps: 20, maxDuration: .seconds(600)),
                 operatorInitiated: true,
                 userPresent: true
             ),

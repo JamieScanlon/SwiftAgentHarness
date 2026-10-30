@@ -123,7 +123,7 @@ struct DisplayTargetRegistryTests {
             target: target,
             agentID: "agent",
             grants: grants,
-            budgets: ComputerUseBudgets(maxSteps: 50, maxDuration: maxDuration),
+            budgets: ComputerUseBudgets(steps: 50, maxDuration: maxDuration),
             delivery: .backgroundOnly,
             operatorInitiated: operatorInitiated,
             userPresent: userPresent
@@ -155,8 +155,8 @@ struct DisplayTargetRegistryTests {
             request(target: vm.manifest.id, operatorInitiated: false, userPresent: false),
             approve: { $0.review.grantable.map(\.grant) }
         )
-        #expect(granted.lease.budgets.maxDuration == .seconds(20 * 60))
-        #expect(granted.lease.expiresAt == now.addingTimeInterval(20 * 60))
+        #expect(granted.lease.budgets.grantExpiry == .seconds(20 * 60))
+        #expect(granted.lease.endsAt == now.addingTimeInterval(20 * 60))
     }
 
     @Test("The grant dialog learns which conversation asked, for which target and task")

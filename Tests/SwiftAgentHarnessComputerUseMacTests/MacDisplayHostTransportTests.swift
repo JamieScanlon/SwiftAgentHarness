@@ -50,7 +50,7 @@ private func leaseRequest() -> LeaseRequest {
         target: "stub",
         agentID: "agent",
         grants: [],
-        budgets: ComputerUseBudgets(maxSteps: 1, maxDuration: .seconds(60)),
+        budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
         operatorInitiated: true,
         userPresent: true
     )

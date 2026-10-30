@@ -41,7 +41,7 @@ struct MacHostDisplayTargetTests {
             target: MacHostDisplayTarget.defaultID,
             agentID: agent,
             grants: grants,
-            budgets: ComputerUseBudgets(maxSteps: 10, maxDuration: .seconds(60)),
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
             delivery: delivery,
             operatorInitiated: true,
             userPresent: true

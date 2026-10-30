@@ -7,8 +7,7 @@ import Testing
 struct ComputerUseSpecialistContractTests {
     private let defaults = ComputerUseSpecialistDefaults(
         target: "fake-host",
-        budgets: ComputerUseBudgets(maxSteps: 60, maxDuration: .seconds(600)),
-        maxBudgets: ComputerUseBudgets(maxSteps: 200, maxDuration: .seconds(1_800), maxUSD: 5)
+        budgets: ComputerUseBudgetPolicy(defaultSteps: 60, ceilingSteps: 200, maxDuration: .seconds(1_800), maxUSD: 5)
     )
 
     private func task(_ arguments: [String: JSON]) throws -> ComputerUseTask {
@@ -23,8 +22,7 @@ struct ComputerUseSpecialistContractTests {
             "constraints": .string("Do not overwrite existing files\n* Stay in TextEdit"),
             "apps": .string("com.apple.TextEdit:full:clipboard-write, com.apple.finder:view"),
             "domains": .string("docs.example.com:click"),
-            "max_steps": .integer(40),
-            "max_minutes": .integer(5),
+            "steps": .integer(40),
         ])
         #expect(parsed.goal == "Export the open report as PDF.")
         #expect(parsed.successCriteria == ["report.pdf exists on the Desktop", "The export dialog is closed"])
@@ -35,16 +33,16 @@ struct ComputerUseSpecialistContractTests {
             .domain("docs.example.com", tier: .click),
         ])
         #expect(parsed.target == "fake-host")
-        #expect(parsed.budgets == ComputerUseBudgets(maxSteps: 40, maxDuration: .seconds(300), maxUSD: 5))
+        #expect(parsed.budgets == ComputerUseBudgets(steps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800), maxUSD: 5))
     }
 
-    @Test("Requested budgets are clamped to the host's ceilings")
+    @Test("Requested steps are clamped to the host's ceiling")
     func budgetsClamped() throws {
         let parsed = try task([
             "goal": .string("x"), "success_criteria": .string("y"), "apps": .string("com.apple.TextEdit:full"),
-            "max_steps": .integer(10_000), "max_minutes": .integer(600),
+            "steps": .integer(10_000),
         ])
-        #expect(parsed.budgets.maxSteps == 200)
+        #expect(parsed.budgets.steps == 200)
         #expect(parsed.budgets.maxDuration == .seconds(1_800))
     }
 

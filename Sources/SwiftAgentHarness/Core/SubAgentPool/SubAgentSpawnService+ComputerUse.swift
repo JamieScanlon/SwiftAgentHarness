@@ -150,7 +150,7 @@ extension SubAgentSpawnService {
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: task.brief,
-            timeoutSeconds: min(definition.runTimeoutSeconds, task.budgets.maxDuration.timeInterval)
+            timeoutSeconds: min(definition.runTimeoutSeconds, max(1, grant.lease.endsAt.timeIntervalSinceNow))
         )
         await deps.computerUse.sessions.remove(for: childID)
         await session.end()

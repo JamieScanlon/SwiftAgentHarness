@@ -45,7 +45,7 @@ public struct ComputerUseControlService: Sendable {
                 lifecycleID: entry.lifecycleID,
                 target: entry.targetLabel,
                 step: await entry.session.stepCount,
-                maxSteps: entry.session.lease.budgets.maxSteps,
+                maxSteps: entry.session.lease.budgets.steps,
                 takenOver: await entry.session.isTakeoverActive
             ))
         }

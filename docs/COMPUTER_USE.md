@@ -79,8 +79,14 @@ session.installComputerUse(ComputerUseConfiguration(
     registry: DisplayTargetRegistry(targets: [myTarget]),
     defaults: ComputerUseSpecialistDefaults(
         target: "macos-host",
-        budgets: ComputerUseBudgets(maxSteps: 100, maxDuration: .seconds(15 * 60)),
-        maxBudgets: ComputerUseBudgets(maxSteps: 300, maxDuration: .seconds(45 * 60), maxUSD: 5)
+        budgets: ComputerUseBudgetPolicy(
+            defaultSteps: 40,           // first allotment when the task names none
+            ceilingSteps: 120,          // includes every extension
+            extensionShare: 0.5,        // of the first allotment, per extension
+            noProgressSteps: 8,
+            maxDuration: .seconds(30 * 60),
+            maxUSD: 5                   // never extended
+        )
     ),
     approveGrants: { request in
         // Show request.review.grantable (with capReason / warning) and request.review.blocked in one dialog,
@@ -111,7 +117,9 @@ Once loaded, the parent calls `delegate_computer_use` with flat arguments:
 | `success_criteria` | One checkable criterion per line. |
 | `constraints` | Rules to keep, one per line. |
 | `apps`, `domains` | Requested grants, for example `com.apple.TextEdit:full`, `docs.example.com:click`. The user approves a subset. |
-| `target`, `max_steps`, `max_minutes` | Target id and budgets, clamped to `maxBudgets`. |
+| `target` | Target id. |
+| `steps` | Expected size of the work in actions: the first step allotment, clamped to the policy's `ceilingSteps`. Defaults to `defaultSteps`. |
+| `deadline` | Only a cutoff the user stated, as an ISO 8601 date-time with a UTC offset. It can only end the session earlier. |
 | `return_schema` | Optional JSON Schema for the result. |
 
 What happens:
@@ -119,7 +127,7 @@ What happens:
 1. **The task is parsed** into a `ComputerUseTask`. Malformed arguments are denied with the reason.
 2. **The model is chosen.** That's `specialist.modelRef` when set, otherwise the parent's model. Either way it must see images and call tools. The session takes its coordinate dialect and screenshot size from that model's `generate` profile.
 3. **The target is leased.** This raises the one grant dialog and applies the host-target rules. The approver gets a `ComputerUseGrantRequest`: the reviewed grants, the lease request, the target's manifest, and the task's goal as `purpose`. Its `conversationID` is the parent conversation, so the host can show the dialog where the user asked. The run's origin decides presence: interactive runs have the user present, trigger and sub-agent runs don't. A non-owner sender is not operator-initiated.
-4. **The child is spawned.** It runs on `specialist.modeProfileID` (`subagent-computer-use` by default), with a closed allow-list of the 15 computer tools, so it has no shell, files, or messaging. The mode doesn't cap the number of model turns and has no tool-level approvals: the session counts steps, enforces budgets, and confirms actions itself. Tools off the allow-list are never offered, including ones that need approval. A mode's tool allow-list caps the child's, so the built-in mode allows exactly the computer tools; a custom `modeProfileID` must allow them too, or the specialist is offered nothing. The parent's per-call tool timeout doesn't apply to `delegate_computer_use`; the run is bounded by `runTimeoutSeconds` and the task's time budget, so a long task still returns a structured result. Its brief holds the goal, numbered criteria, constraints, working rules, and the return schema.
+4. **The child is spawned.** It runs on `specialist.modeProfileID` (`subagent-computer-use` by default), with a closed allow-list of the 15 computer tools, so it has no shell, files, or messaging. The mode doesn't cap the number of model turns and has no tool-level approvals: the session counts steps, enforces budgets, and confirms actions itself. Tools off the allow-list are never offered, including ones that need approval. A mode's tool allow-list caps the child's, so the built-in mode allows exactly the computer tools; a custom `modeProfileID` must allow them too, or the specialist is offered nothing. The parent's per-call tool timeout doesn't apply to `delegate_computer_use`; the run is bounded by `runTimeoutSeconds` and the lease's end time, so a long task still returns a structured result. Its brief holds the goal, numbered criteria, constraints, working rules, and the return schema.
 5. **Every step restates the task.** Each computer tool result ends with a reminder of the constraints and the criteria not yet verified.
 6. **The session always ends** and the lease is released. The full action log is stored as a session blob.
 7. **The parent gets JSON.** That's `status`, `result`, `verification` (one entry per criterion), `handoff`, `actionsLog`, and `reason`.
@@ -155,7 +163,7 @@ stopKey.start()                                       // needs Input Monitoring
 
 session.installComputerUse(ComputerUseConfiguration(
     registry: DisplayTargetRegistry(targets: [mac]),
-    defaults: ComputerUseSpecialistDefaults(target: MacHostDisplayTarget.defaultID, budgets: …, maxBudgets: …),
+    defaults: ComputerUseSpecialistDefaults(target: MacHostDisplayTarget.defaultID, budgets: ComputerUseBudgetPolicy()),
     approveGrants: …,
     activityObserver: { activity in await hud.apply(activity) }
 ))
@@ -319,7 +327,7 @@ The shared decider setup is in [Decision models](./DECISION_MODELS.md). The spec
 
 ## Budgets, kill switch, takeover
 
-- **Budgets.** `maxSteps`, `maxDuration` and `maxUSD` (fed by `session.recordCost(usd:)`) each end the session with a typed `ComputerUseTerminalReason` and release the lease. Permissions are polled before every batch, and a revoked one ends the session with `permission-revoked`.
+- **Budgets.** The host sets a `ComputerUseBudgetPolicy`; the parent sizes the work in `steps` and never sets a time budget. The lease carries `ComputerUseBudgets`, the policy combined with the task. A step is an action delivered to the driver, so actions that come back `not-executed` don't count. The lease's `endsAt` is the earliest of the time ceiling (`maxDuration`), the task's `deadline`, and an unattended session's grant expiry, measured from when the lease is issued. Running out of steps, reaching `endsAt`, or exceeding `maxUSD` (fed by `session.recordCost(usd:)`) ends the session with a typed `ComputerUseTerminalReason` and releases the lease. Permissions are polled before every batch, and a revoked one ends the session with `permission-revoked`.
 - **Kill switch.** `HarnessRuntimeSession.stopComputerUse()` stops every live specialist session, and `POST /api/conversations/{id}/computer-use/stop` stops one conversation's (`ComputerUseSession.stop()` for one you drive yourself). The stop key (Escape by default; set it with `ComputerUseActionClassifier(stopKey:)`) is never synthesized, in any spelling, while a session is active.
 - **Takeover.** `session.handoff(reason:prompt:)` turns takeover on, waits for `ComputerUseOversight.handoff` to return, then turns it off. The user can also take over at any time with `POST …/computer-use/takeover`. While takeover is on, observe and act are refused. Ask-user and handoff are unavailable when no user is present.
 - **Verification.** `session.verify(...)` accepts only an observation taken after the last action.
@@ -454,6 +462,8 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Tool names | The spec writes the family as `computer.*`. Anthropic and OpenAI only accept tool names matching `^[a-zA-Z0-9_-]{1,64}$`, so the tools are `computer_*`. |
 | Type name | The spec's `Observation` is `DisplayObservation`, because `Observation` collides with Swift's Observation module, which SwiftData's `@Model` expands into. |
 | `LeaseRequest` fields | The spec's request has no initiator or presence fields, but its rules depend on both: non-operator work never gets a host target, host targets need a present user, and unattended sessions get a short expiry. `operatorInitiated` and `userPresent` were added. |
+| Budget field names | The spec's `ResolvedBudgets` is `ComputerUseBudgets`, matching the module's other computer-use types. It also keeps `maxDuration`, `deadline`, and `grantExpiry` beside the spec's `endsAt`, because a present user's extension at the time ceiling must move the ceiling without moving the deadline or the grant expiry. |
+| When `endsAt` is fixed | The spec computes `endsAt` from the session's start. Here it is fixed when the lease is issued, after the grant dialog closes, so time the user spends deciding isn't charged to the session. |
 | `humanPresence` values | The manifest example shows only `shared`. `none` was added for VMs, containers, and managed browsers. |
 | Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes, and the host desktop isn't one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
 

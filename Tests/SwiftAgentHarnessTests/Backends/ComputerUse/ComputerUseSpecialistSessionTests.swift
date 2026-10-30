@@ -15,7 +15,7 @@ struct ComputerUseSpecialistSessionTests {
             target: target.manifest.id,
             agentID: "specialist",
             grants: ComputerUseSessionFixtures.grants,
-            budgets: ComputerUseBudgets(maxSteps: 50, maxDuration: .seconds(600)),
+            budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
             operatorInitiated: true,
             userPresent: userPresent
         ))

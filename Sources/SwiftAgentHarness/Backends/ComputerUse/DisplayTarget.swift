@@ -1,17 +1,5 @@
 import Foundation
 
-public struct ComputerUseBudgets: Sendable, Codable, Hashable {
-    public var maxSteps: Int
-    public var maxDuration: Duration
-    public var maxUSD: Double?
-
-    public init(maxSteps: Int, maxDuration: Duration, maxUSD: Double? = nil) {
-        self.maxSteps = max(0, maxSteps)
-        self.maxDuration = maxDuration
-        self.maxUSD = maxUSD
-    }
-}
-
 public enum ComputerUseDeliveryPolicy: String, Sendable, Codable, Hashable {
     case backgroundOnly = "background-only"
     /// Foreground delivery is a consented escalation, announced on shared targets.
@@ -68,7 +56,8 @@ public struct Lease: Sendable, Codable, Hashable {
     public var operatorInitiated: Bool
     public var userPresent: Bool
     public var issuedAt: Date
-    public var expiresAt: Date
+    /// When the session must end; see ``ComputerUseBudgets/endsAt(start:)``.
+    public var endsAt: Date
 
     public init(request: LeaseRequest, id: UUID = UUID(), issuedAt: Date) {
         self.id = id
@@ -81,7 +70,7 @@ public struct Lease: Sendable, Codable, Hashable {
         self.operatorInitiated = request.operatorInitiated
         self.userPresent = request.userPresent
         self.issuedAt = issuedAt
-        self.expiresAt = issuedAt.addingTimeInterval(request.budgets.maxDuration.timeInterval)
+        self.endsAt = request.budgets.endsAt(start: issuedAt)
     }
 }
 

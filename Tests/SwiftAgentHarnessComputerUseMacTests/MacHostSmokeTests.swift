@@ -21,7 +21,7 @@ struct MacHostSmokeTests {
             target: target.manifest.id,
             agentID: "smoke",
             grants: [.app(bundleID: frontmost.identity.bundleID, tier: .view)],
-            budgets: ComputerUseBudgets(maxSteps: 5, maxDuration: .seconds(60)),
+            budgets: ComputerUseBudgets(steps: 5, maxDuration: .seconds(60)),
             operatorInitiated: true,
             userPresent: true
         ))
