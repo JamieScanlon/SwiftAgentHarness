@@ -3,11 +3,37 @@ import Foundation
 import Testing
 
 #if canImport(Darwin) || os(Linux)
-@Suite("QueuedFileWriter (BUG-004)", .timeLimit(.minutes(1)))
+@Suite("QueuedFileWriter (BUG-004)")
 struct QueuedFileWriterTests {
     private func tempDir() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("sah-queued-file-writer-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    /// Runs `work` unstructured so a caller that is never resumed fails the test (`nil`) instead of
+    /// hanging the run: a structured child that never returns would block the test from finishing.
+    private func outcome(
+        within limit: Duration,
+        _ work: @escaping @Sendable () async throws -> Void
+    ) async -> Result<Void, any Error>? {
+        let (stream, continuation) = AsyncStream<Result<Void, any Error>?>.makeStream()
+        Task {
+            do {
+                try await work()
+                continuation.yield(.success(()))
+            } catch {
+                continuation.yield(.failure(error))
+            }
+        }
+        let timer = Task {
+            try? await Task.sleep(for: limit)
+            continuation.yield(nil)
+        }
+        var iterator = stream.makeAsyncIterator()
+        let first = await iterator.next() ?? nil
+        timer.cancel()
+        continuation.finish()
+        return first
     }
 
     @Test func failedWriteDoesNotWedgeQueue() async throws {
@@ -118,16 +144,20 @@ struct QueuedFileWriterTests {
         let appendsPerPath = 16
         let paths = (0..<pathCount).map { dir.appendingPathComponent("file-\($0).txt").path }
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for path in paths {
-                for _ in 0..<appendsPerPath {
-                    group.addTask {
-                        try await QueuedFileWriter.append(data: Data("x".utf8), to: path)
+        let outcome = await outcome(within: .seconds(30)) {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for path in paths {
+                    for _ in 0..<appendsPerPath {
+                        group.addTask {
+                            try await QueuedFileWriter.append(data: Data("x".utf8), to: path)
+                        }
                     }
                 }
+                try await group.waitForAll()
             }
-            try await group.waitForAll()
         }
+        let finished = try #require(outcome, "a queued write never resumed its caller")
+        try finished.get()
 
         for path in paths {
             let onDisk = try Data(contentsOf: URL(fileURLWithPath: path))
