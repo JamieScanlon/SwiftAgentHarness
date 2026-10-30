@@ -209,6 +209,7 @@ extension SubAgentSpawnService {
             status: activity.status,
             step: activity.step,
             maxSteps: activity.maxSteps,
+            extensions: activity.extensions,
             app: activity.app,
             action: activity.action?.rawValue,
             terminalReason: activity.terminalReason?.rawValue
@@ -237,6 +238,13 @@ extension SubAgentSpawnService {
             task: task,
             verifications: await session.verifications,
             terminal: await session.terminalReason,
+            terminalDetail: await session.terminalDetail,
+            budget: ComputerUseResult.Budget(
+                stepsUsed: await session.stepCount,
+                stepsGranted: await session.budgets.steps,
+                extensions: await session.extensions,
+                lastProgressStep: await session.progress.lastProgressStep
+            ),
             child: child,
             unresolvedHandoff: await session.unresolvedHandoff,
             headlessDenials: await session.headlessDenials.map(\.canonical),

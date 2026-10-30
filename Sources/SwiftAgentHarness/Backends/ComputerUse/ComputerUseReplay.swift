@@ -50,6 +50,8 @@ public struct ComputerUseReplay: Sendable, Codable, Equatable {
     public var steps: Int
     public var records: [ComputerUseActionRecord]
     public var thumbnails: [ComputerUseReplayThumbnail]
+    /// Budget extensions, ceiling questions, and how the session ended.
+    public var events: [ComputerUseSessionEvent] = []
     /// The run's screenshot blobs, which follow the replay's retention.
     public var screenshotBlobIDs: [String] = []
 
@@ -100,7 +102,8 @@ extension ComputerUseReplay {
             terminalReason: await session.terminalReason,
             steps: await session.stepCount,
             records: await session.auditLog,
-            thumbnails: thumbnails
+            thumbnails: thumbnails,
+            events: await session.events
         )
     }
 }

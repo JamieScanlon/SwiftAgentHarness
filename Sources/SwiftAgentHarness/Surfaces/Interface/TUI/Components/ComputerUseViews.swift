@@ -47,7 +47,7 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
             } else {
                 parts = ["Computer use on \(target)"]
                 if let step = activity.step, let maxSteps = activity.maxSteps {
-                    parts.append("step \(step)/\(maxSteps)")
+                    parts.append("step \(step)/\(maxSteps)" + (activity.extensionsPhrase.map { ", \($0)" } ?? ""))
                 }
                 if let app = activity.app { parts.append(TUITextSanitizer.sanitizeSingleLine(app)) }
                 if let action = activity.action { parts.append(action) }

@@ -91,7 +91,10 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
     public var lifecycleID: String?
     public var status: Status?
     public var step: Int?
+    /// The current step allotment.
     public var maxSteps: Int?
+    /// How many times the allotment was extended.
+    public var extensions: Int?
     /// Bundle id or domain the latest action landed in.
     public var app: String?
     public var action: String?
@@ -107,6 +110,7 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         status: Status? = nil,
         step: Int? = nil,
         maxSteps: Int? = nil,
+        extensions: Int? = nil,
         app: String? = nil,
         action: String? = nil,
         terminalReason: String? = nil
@@ -120,8 +124,21 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         self.status = status
         self.step = step
         self.maxSteps = maxSteps
+        self.extensions = extensions
         self.app = app
         self.action = action
         self.terminalReason = terminalReason
+    }
+}
+
+extension ComputerUseSurfaceIntentPayload {
+    /// "extended twice", or `nil` when the allotment was never extended.
+    public var extensionsPhrase: String? {
+        guard let extensions, extensions > 0 else { return nil }
+        switch extensions {
+        case 1: return "extended once"
+        case 2: return "extended twice"
+        default: return "extended \(extensions) times"
+        }
     }
 }

@@ -97,7 +97,7 @@ enum ComputerUseSessionFixtures {
         manifest: DisplayTargetManifest = FakeDisplayTarget.hostManifest,
         grants: [ComputerUseGrant] = grants,
         userPresent: Bool = true,
-        budgets: ComputerUseBudgets = ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
+        budgets: ComputerUseBudgets = ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(3600)),
         approvals: (any ExecApprovalDelivering)? = nil,
         intentChecker: ComputerUseIntentChecker? = nil,
         oversight: (any ComputerUseOversight)? = nil,

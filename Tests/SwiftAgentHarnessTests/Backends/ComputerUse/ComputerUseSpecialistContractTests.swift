@@ -104,6 +104,7 @@ struct ComputerUseSpecialistContractTests {
             task: parsed,
             verifications: verifications,
             terminal: terminal,
+            budget: ComputerUseResult.Budget(stepsUsed: 12, stepsGranted: 60, extensions: 0),
             child: child,
             unresolvedHandoff: unresolvedHandoff,
             headlessDenials: headlessDenials,

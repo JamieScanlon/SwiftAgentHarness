@@ -73,12 +73,17 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case costBudget = "cost-budget"
     case killSwitch = "kill-switch"
     case permissionRevoked = "permission-revoked"
+    /// Too many consecutive steps without progress.
+    case noProgress = "no-progress"
+    /// The cutoff the task stated passed.
+    case deadline
     case ended
 
     var releaseReason: ReleaseReason {
         switch self {
         case .stepBudget, .costBudget: return .budgetExhausted
-        case .timeBudget: return .expired
+        case .timeBudget, .deadline: return .expired
+        case .noProgress: return .aborted
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
         case .ended: return .completed
@@ -176,6 +181,26 @@ public struct ComputerUseActivity: Sendable, Equatable {
     public var app: String?
     public var action: ComputerActionKind?
     public var terminalReason: ComputerUseTerminalReason?
+    /// How many times the step allotment was extended.
+    public var extensions = 0
+}
+
+/// Asked of a present user when a session reaches its step or time ceiling.
+public struct ComputerUseCeilingQuestion: Sendable, Hashable {
+    public enum Limit: String, Sendable, Codable, Hashable {
+        case steps
+        case time
+    }
+
+    public var limit: Limit
+    public var stepsUsed: Int
+    public var extensions: Int
+    public var prompt: String
+
+    static func isAffirmative(_ answer: String) -> Bool {
+        let first = answer.lowercased().split { !$0.isLetter }.first.map(String.init) ?? ""
+        return ["yes", "y", "yeah", "yep", "sure", "ok", "okay", "continue", "go"].contains(first)
+    }
 }
 
 /// The surfaces a session reaches a person through for questions and human-only steps.
@@ -183,6 +208,70 @@ public protocol ComputerUseOversight: Sendable {
     func askUser(_ question: String) async -> ComputerUseUserReply
     /// Returns once the user hands control back.
     func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult
+    /// Whether to go past a ceiling. `true` grants one more extension.
+    func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool
+}
+
+extension ComputerUseOversight {
+    /// Asks through ``askUser(_:)`` and reads a yes from the reply.
+    public func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool {
+        guard case .answered(let answer) = await askUser(question.prompt) else { return false }
+        return ComputerUseCeilingQuestion.isAffirmative(answer)
+    }
+}
+
+/// A session-level entry in the action log: budget extensions, ceiling questions, and how the session ended, with
+/// the progress facts behind each.
+public struct ComputerUseSessionEvent: Sendable, Codable, Hashable {
+    public enum Kind: String, Sendable, Codable, Hashable {
+        case extended
+        case timeExtended = "time-extended"
+        case ceilingQuestion = "ceiling-question"
+        case ended
+    }
+
+    public enum Answer: String, Sendable, Codable, Hashable {
+        case `continue`
+        case stop
+    }
+
+    public var kind: Kind
+    public var at: Date
+    public var step: Int
+    /// The step allotment after an extension.
+    public var stepsGranted: Int?
+    /// The session's end time after a time extension.
+    public var endsAt: Date?
+    /// For an extension, progress since the previous one; for the end, the session's totals.
+    public var criteriaVerified: Int?
+    public var statesReached: Int?
+    public var limit: ComputerUseCeilingQuestion.Limit?
+    public var answer: Answer?
+    public var reason: ComputerUseTerminalReason?
+
+    public init(
+        kind: Kind,
+        at: Date,
+        step: Int,
+        stepsGranted: Int? = nil,
+        endsAt: Date? = nil,
+        criteriaVerified: Int? = nil,
+        statesReached: Int? = nil,
+        limit: ComputerUseCeilingQuestion.Limit? = nil,
+        answer: Answer? = nil,
+        reason: ComputerUseTerminalReason? = nil
+    ) {
+        self.kind = kind
+        self.at = at
+        self.step = step
+        self.stepsGranted = stepsGranted
+        self.endsAt = endsAt
+        self.criteriaVerified = criteriaVerified
+        self.statesReached = statesReached
+        self.limit = limit
+        self.answer = answer
+        self.reason = reason
+    }
 }
 
 /// One leased computer-use session: gates every action, runs it against the target, and keeps the action log.
@@ -211,6 +300,15 @@ public actor ComputerUseSession {
     private var consecutiveFailures = 0
     private var lastActionAt: Date?
     public private(set) var terminalReason: ComputerUseTerminalReason?
+    /// What ran out, in words, when a budget ended the session.
+    public private(set) var terminalDetail: String?
+    /// The lease's budgets as extended so far.
+    public private(set) var budgets: ComputerUseBudgets
+    public private(set) var endsAt: Date
+    public private(set) var extensions = 0
+    public private(set) var events: [ComputerUseSessionEvent] = []
+    private var timeCeiling: Date
+    private var progressAtLastGrant = ComputerUseProgress()
     public private(set) var isTakeoverActive = false
     public private(set) var auditLog: [ComputerUseActionRecord] = []
     /// Records ever appended, so a record can be found after older ones were trimmed.
@@ -250,6 +348,9 @@ public actor ComputerUseSession {
         self.activity = activity
         self.now = now
         self.startedAt = now()
+        self.budgets = lease.budgets
+        self.endsAt = lease.endsAt
+        self.timeCeiling = lease.issuedAt.addingTimeInterval(lease.budgets.maxDuration.timeInterval)
     }
 
     public var stepCount: Int { steps }
@@ -294,11 +395,7 @@ public actor ComputerUseSession {
                 result.outcomes.append(ActionOutcome(action: index, effect: .notExecuted))
                 continue
             }
-            if steps >= lease.budgets.steps {
-                await end(.stepBudget)
-            } else if timeExpired {
-                await end(.timeBudget)
-            }
+            await enforceBudgets()
             if let terminalReason {
                 result.outcomes.append(ActionOutcome(action: index, effect: .notExecuted, evidence: "session ended: \(terminalReason.rawValue)"))
                 stopped = true
@@ -416,10 +513,11 @@ public actor ComputerUseSession {
         await activity(ComputerUseActivity(
             status: status,
             step: steps,
-            maxSteps: lease.budgets.steps,
+            maxSteps: budgets.steps,
             app: app,
             action: action,
-            terminalReason: status == .ended ? terminalReason : nil
+            terminalReason: status == .ended ? terminalReason : nil,
+            extensions: extensions
         ))
     }
 
@@ -570,13 +668,8 @@ public actor ComputerUseSession {
 
     // MARK: - Budgets and lifecycle
 
-    private var timeExpired: Bool {
-        now() >= lease.endsAt
-    }
-
     private func budgetOrPermissionViolation() async -> ComputerUseTerminalReason? {
-        if timeExpired { return .timeBudget }
-        if let max = lease.budgets.maxUSD, spentUSD > max { return .costBudget }
+        if let max = budgets.maxUSD, spentUSD > max { return .costBudget }
         let missing = await target.permissions().missing(manifest.requires)
         return missing.isEmpty ? nil : .permissionRevoked
     }
@@ -584,7 +677,7 @@ public actor ComputerUseSession {
     public func recordCost(usd: Double) async {
         guard usd.isFinite, usd > 0 else { return }
         spentUSD += usd
-        if terminalReason == nil, let max = lease.budgets.maxUSD, spentUSD > max {
+        if terminalReason == nil, let max = budgets.maxUSD, spentUSD > max {
             await end(.costBudget)
         }
     }
@@ -594,10 +687,108 @@ public actor ComputerUseSession {
         await end(.killSwitch)
     }
 
+    /// Checked before every action. The no-progress window and the end time can end the session; a used-up step
+    /// allotment is extended when there was progress since the last grant, and at a ceiling a present user decides.
+    private func enforceBudgets() async {
+        guard terminalReason == nil else { return }
+        let sinceProgress = steps - (progress.lastProgressStep ?? 0)
+        if sinceProgress >= budgets.noProgressSteps {
+            return await end(.noProgress, detail: "no progress in the last \(sinceProgress) steps")
+        }
+        if now() >= endsAt {
+            await reachedEndTime()
+            guard terminalReason == nil else { return }
+        }
+        if steps >= budgets.steps {
+            await ranOutOfSteps()
+        }
+    }
+
+    private var grantExpiresAt: Date? {
+        budgets.grantExpiry.map { lease.issuedAt.addingTimeInterval($0.timeInterval) }
+    }
+
+    /// The deadline and an unattended session's grant expiry are never moved; only the time ceiling is, and only by a
+    /// present user.
+    private func reachedEndTime() async {
+        let current = now()
+        if let deadline = budgets.deadline, current >= deadline {
+            return await end(.deadline, detail: "the deadline passed")
+        }
+        if let expiry = grantExpiresAt, current >= expiry {
+            return await end(.timeBudget, detail: "the unattended session's grant expiry passed")
+        }
+        let added = budgets.maxDuration.timeInterval * budgets.extensionShare
+        let minutes = max(1, Int((added / 60).rounded()))
+        let prompt = "The computer-use task on \(manifest.label) has reached its time limit. Continue for another \(minutes) minutes?"
+        guard await askToContinue(.time, prompt: prompt) else {
+            return await end(.timeBudget, detail: "time ceiling reached")
+        }
+        timeCeiling = now().addingTimeInterval(added)
+        endsAt = [timeCeiling, budgets.deadline, grantExpiresAt].compactMap { $0 }.min() ?? timeCeiling
+        events.append(ComputerUseSessionEvent(kind: .timeExtended, at: now(), step: steps, endsAt: endsAt))
+    }
+
+    private func ranOutOfSteps() async {
+        let share = max(1, Int((Double(lease.budgets.steps) * budgets.extensionShare).rounded(.up)))
+        if budgets.steps < budgets.ceilingSteps {
+            let since = progressSinceGrant
+            guard since.criteriaVerified + since.statesReached > 0 else {
+                return await end(.stepBudget, detail: "the step allotment ran out with no progress since the last extension")
+            }
+            return grant(steps: min(budgets.steps + share, budgets.ceilingSteps))
+        }
+        let extended = extensions == 0 ? "" : ", extended \(extensions) \(extensions == 1 ? "time" : "times")"
+        let prompt = "The computer-use task on \(manifest.label) has used all \(steps) of its steps\(extended). Continue for \(share) more?"
+        guard await askToContinue(.steps, prompt: prompt) else {
+            return await end(.stepBudget, detail: "step ceiling reached")
+        }
+        grant(steps: budgets.steps + share)
+    }
+
+    private var progressSinceGrant: (criteriaVerified: Int, statesReached: Int) {
+        (progress.criteriaVerified - progressAtLastGrant.criteriaVerified, progress.statesReached - progressAtLastGrant.statesReached)
+    }
+
+    private func grant(steps allotment: Int) {
+        let since = progressSinceGrant
+        budgets.steps = allotment
+        budgets.ceilingSteps = max(budgets.ceilingSteps, allotment)
+        extensions += 1
+        progressAtLastGrant = progress
+        events.append(ComputerUseSessionEvent(
+            kind: .extended,
+            at: now(),
+            step: steps,
+            stepsGranted: allotment,
+            criteriaVerified: since.criteriaVerified,
+            statesReached: since.statesReached
+        ))
+    }
+
+    /// Asked one by one only at a ceiling; extensions below it aren't, since asking per extension tires the user
+    /// as much as asking per click.
+    private func askToContinue(_ limit: ComputerUseCeilingQuestion.Limit, prompt: String) async -> Bool {
+        guard lease.userPresent, let oversight else { return false }
+        let question = ComputerUseCeilingQuestion(limit: limit, stepsUsed: steps, extensions: extensions, prompt: prompt)
+        let yes = await oversight.continuePastCeiling(question)
+        events.append(ComputerUseSessionEvent(kind: .ceilingQuestion, at: now(), step: steps, limit: limit, answer: yes ? .continue : .stop))
+        return yes && terminalReason == nil
+    }
+
     /// Ends the session and releases the lease. Idempotent.
-    public func end(_ reason: ComputerUseTerminalReason = .ended) async {
+    public func end(_ reason: ComputerUseTerminalReason = .ended, detail: String? = nil) async {
         guard terminalReason == nil else { return }
         terminalReason = reason
+        terminalDetail = detail
+        events.append(ComputerUseSessionEvent(
+            kind: .ended,
+            at: now(),
+            step: steps,
+            criteriaVerified: progress.criteriaVerified,
+            statesReached: progress.statesReached,
+            reason: reason
+        ))
         if isTakeoverActive {
             isTakeoverActive = false
             try? await target.takeover(lease, on: false)

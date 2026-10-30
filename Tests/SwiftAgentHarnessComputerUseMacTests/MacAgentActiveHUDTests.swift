@@ -40,6 +40,17 @@ struct MacAgentActiveHUDStateTests {
         #expect(state.isVisible)
     }
 
+    @Test("The step shows against the current allotment and how many times it was extended")
+    func extended() {
+        var state = MacAgentActiveHUDState()
+        for (extensions, phrase) in [(1, "extended once"), (2, "extended twice"), (3, "extended 3 times")] {
+            state.apply(ComputerUseSurfaceIntentPayload(
+                target: "This Mac", lifecycleID: "call-1", status: .acting, step: 34, maxSteps: 45, extensions: extensions
+            ))
+            #expect(state.detail == "Step 34 of 45, \(phrase)")
+        }
+    }
+
     @Test("Foreground input is announced until the next step")
     func foreground() {
         var state = MacAgentActiveHUDState()

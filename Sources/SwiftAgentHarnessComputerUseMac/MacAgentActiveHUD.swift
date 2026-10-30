@@ -33,7 +33,9 @@ public struct MacAgentActiveHUDState: Sendable, Equatable {
             title = "Agent is using \(target)"
         }
         var parts: [String] = []
-        if let step = activity.step, let maxSteps = activity.maxSteps { parts.append("Step \(step) of \(maxSteps)") }
+        if let step = activity.step, let maxSteps = activity.maxSteps {
+            parts.append("Step \(step) of \(maxSteps)" + (activity.extensionsPhrase.map { ", \($0)" } ?? ""))
+        }
         if let app = activity.app { parts.append(app) }
         if let action = activity.action { parts.append(action) }
         detail = parts.joined(separator: " · ")

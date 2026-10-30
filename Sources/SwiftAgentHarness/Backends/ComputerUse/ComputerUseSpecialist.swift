@@ -190,8 +190,27 @@ public struct ComputerUseResult: Sendable, Codable {
         case doneUnverified = "done-unverified"
         case needsUser = "needs-user"
         case blocked
+        /// The work was moving and ran out of room.
         case budgetExhausted = "budget-exhausted"
+        /// Repeating the same delegation won't help.
+        case noProgress = "no-progress"
+        /// The stated cutoff passed.
+        case deadline
         case failed
+    }
+
+    public struct Budget: Sendable, Codable, Hashable {
+        public var stepsUsed: Int
+        public var stepsGranted: Int
+        public var extensions: Int
+        public var lastProgressStep: Int?
+
+        public init(stepsUsed: Int, stepsGranted: Int, extensions: Int, lastProgressStep: Int? = nil) {
+            self.stepsUsed = stepsUsed
+            self.stepsGranted = stepsGranted
+            self.extensions = extensions
+            self.lastProgressStep = lastProgressStep
+        }
     }
 
     public struct Verification: Sendable, Codable, Hashable {
@@ -211,6 +230,7 @@ public struct ComputerUseResult: Sendable, Codable {
     /// One entry per success criterion, in task order.
     public var verification: [Verification]
     public var handoff: Handoff?
+    public var budget: Budget
     /// A summary of the action log, and where the full log is stored.
     public var actionsLog: String
     /// Why the task stopped, when it did not finish normally.
@@ -229,6 +249,7 @@ public struct ComputerUseResult: Sendable, Codable {
             result: nil,
             verification: task.successCriteria.map { Verification(criterion: $0, met: false, evidence: "not verified") },
             handoff: nil,
+            budget: Budget(stepsUsed: 0, stepsGranted: task.budgets.steps, extensions: 0),
             actionsLog: "no actions",
             reason: reason
         )
@@ -247,6 +268,8 @@ enum ComputerUseResultBuilder {
         task: ComputerUseTask,
         verifications: [ComputerUseVerification],
         terminal: ComputerUseTerminalReason?,
+        terminalDetail: String? = nil,
+        budget: ComputerUseResult.Budget,
         child: ComputerUseChildOutcome,
         unresolvedHandoff: ComputerUseHandoffRequest?,
         headlessDenials: [String],
@@ -266,13 +289,22 @@ enum ComputerUseResultBuilder {
             result: report(finalText, schema: task.returnSchema),
             verification: verification,
             handoff: nil,
+            budget: budget,
             actionsLog: actionsLog,
             reason: nil
         )
         switch terminal {
         case .stepBudget?, .timeBudget?, .costBudget?:
             result.status = .budgetExhausted
-            result.reason = "the \(terminal?.rawValue ?? "budget") ran out"
+            result.reason = terminalDetail ?? "the \(terminal?.rawValue ?? "budget") ran out"
+            return result
+        case .noProgress?:
+            result.status = .noProgress
+            result.reason = terminalDetail ?? "no progress"
+            return result
+        case .deadline?:
+            result.status = .deadline
+            result.reason = terminalDetail ?? "the deadline passed"
             return result
         case .killSwitch?:
             result.status = .blocked
