@@ -102,4 +102,35 @@ struct DelegateLivenessTests {
         let completed = AgentRuntimeRunResult.completed(reason: ConversationRunTerminalReason(category: .naturalStop))
         #expect(completed.applyingCancellationDetail("idle-timeout").terminalReason?.category == .naturalStop)
     }
+
+    @Test("A run cancelled for idle-timeout records it as its run_cancelled marker's reason")
+    func cancelledMarkerReason() {
+        let runID = UUID()
+        let idle = ConversationRunTerminalReason(category: .externalCancellation, detail: "idle-timeout")
+        let marker = RunLifecycleTranscriptMarkerPayload.cancelled(runId: runID, fallbackReason: "run_cancelled", terminalReason: idle)
+        #expect(marker.customType == "run_cancelled")
+        #expect(marker.reason == "idle-timeout")
+        #expect(marker.terminalReasonDetail == "idle-timeout")
+        #expect(marker.terminalReasonCategory == "externalCancellation")
+
+        let other = ConversationRunTerminalReason(category: .externalCancellation, detail: "task_cancelled")
+        #expect(RunLifecycleTranscriptMarkerPayload.cancelled(runId: runID, fallbackReason: "run_cancelled", terminalReason: other).reason == "run_cancelled")
+        #expect(RunLifecycleTranscriptMarkerPayload.cancelled(runId: runID, fallbackReason: "user-cancel", terminalReason: nil).reason == "user-cancel")
+    }
+
+    @Test("The loop's cancel marker can read a noted reason without consuming it before the run result does")
+    func notedReasonPeek() async throws {
+        let session = HarnessRuntimeSession(container: try HarnessTestModelContainer.makeInMemory())
+        let runtime = await session.agentRuntimeSessionService
+        let runID = UUID()
+        await runtime.noteCancellationReason("idle-timeout", runID: runID)
+        #expect(await runtime.cancellationReason(runID: runID) == "idle-timeout")
+        #expect(await runtime.takeCancellationReason(runID: runID) == "idle-timeout")
+        #expect(await runtime.cancellationReason(runID: runID) == nil)
+
+        let control: any AgentRuntimeRunControlling = runtime
+        let delegatedRunID = UUID()
+        await control.noteCancellationReason("idle-timeout", runID: delegatedRunID)
+        #expect(await runtime.cancellationReason(runID: delegatedRunID) == "idle-timeout")
+    }
 }

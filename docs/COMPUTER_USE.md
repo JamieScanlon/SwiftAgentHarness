@@ -11,11 +11,13 @@ Computer use is a **display target** (the user's desktop, a VM, a desktop contai
 - [Quick start](#quick-start)
 - [The computer-use specialist](#the-computer-use-specialist)
 - [The macOS driver](#the-macos-driver)
+- [Hosting a target in another process](#hosting-a-target-in-another-process)
 - [Writing a display target](#writing-a-display-target)
 - [Grants and tiers](#grants-and-tiers)
 - [How each action is gated](#how-each-action-is-gated)
 - [The intent check](#the-intent-check)
 - [Budgets, kill switch, takeover](#budgets-kill-switch-takeover)
+- [Oversight surfaces](#oversight-surfaces)
 - [The tool family](#the-tool-family)
 - [Screenshots in tool results](#screenshots-in-tool-results)
 - [Model descriptors and the screenshot budget](#model-descriptors-and-the-screenshot-budget)
@@ -141,7 +143,7 @@ What happens:
 | `budget-exhausted` | The step ceiling, the time ceiling, the unattended grant expiry, the cost cap, or the run timeout was reached. After extensions it means the work was moving and ran out of room, so delegating the remainder is reasonable |
 | `no-progress` | Too many steps in a row made no progress. Repeating the same delegation won't help: rephrase the goal, try another approach, or ask the user |
 | `deadline` | The task's stated cutoff passed |
-| `failed` | The child failed or was cancelled |
+| `failed` | The child failed, was cancelled, or went silent for its idle timeout (`reason: idle-timeout`) |
 
 ## The macOS driver
 
@@ -280,7 +282,7 @@ The flags are `clipboard-read`, `clipboard-write` (needed for `paste` typing) an
 |---|---|---|
 | observe | observe, zoom, wait, wait-for | allow |
 | navigate | scroll, move, launch of a granted app, `open-url` on an http(s) granted domain | allow |
-| interact | click, press, type, set-value, key, menu at a sufficient tier | Allowed when the intent check says consistent. With no checker bound, confirmed on `humanPresence: shared` targets and allowed otherwise. |
+| interact | click, press, type, set-value, key, menu at a sufficient tier | Allowed when the intent check says consistent. With no checker bound, confirmed on `humanPresence: shared` targets and allowed otherwise. An operator can opt out of that confirmation with `ComputerUseOperatorOverrides.skipInteractConfirmationWithoutIntentCheck`. |
 | consequential | Typing into secure or payment fields; targets labeled submit, send, buy, delete…; destructive shortcuts; System Settings; installers; vendor safety signals | Always confirmed |
 | out of grant | Non-granted app or domain, tier violation, missing flag, non-web `open-url` scheme, an `open-url` whose URL carries a credential, the stop key | Denied, with the reason returned to the model |
 | unresolvable | Citing an observation that is no longer retained, an unknown ref, a point outside the observation | Refused with `escalation: observe` |
@@ -477,7 +479,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Time extension size | The spec says the time ceiling "works the same way" as the step ceiling: a present user's yes grants one more extension. It doesn't size a time extension. Here it is `extensionShare` of `maxDuration`, counted from when the user answers. |
 | Ceiling question | The spec asks "through `ask_user`", which returns free text. `ComputerUseOversight.continuePastCeiling(_:)` defaults to that and treats a reply starting with yes, ok, sure, or continue as a yes; anything else, or no user, stops. Hosts can override it with a yes/no dialog. |
 | Release reasons | A `no-progress` ending releases the lease as `aborted` and a `deadline` ending as `expired`, since `ReleaseReason` has no closer match. |
-| Idle timeout events | The spec resets the idle clock on any `DelegateEvent`. In-process delegates have no `DelegateEvent` stream, so the child-run port reports each streamed delta and orchestration state change instead, and a pending approval for the child's run counts as `awaiting-approval`. The cancelled run carries `idle-timeout` as its terminal reason's detail; the harness's `turn.cancelled` has no `metadata.reason` field. Remote delegates take `limits.idleTimeoutSeconds` from `subAgentHostingPolicy`, since their agent entries come from host-registered tools rather than config. An A2A task in `input-required` or `auth-required` is waiting on input the harness can't route to anyone yet, so it counts as idle rather than paused. |
+| Idle timeout events | The spec resets the idle clock on any `DelegateEvent`. In-process delegates have no `DelegateEvent` stream, so the child-run port reports each streamed delta and orchestration state change instead, and a pending approval for the child's run counts as `awaiting-approval`. The cancelled run's `run_cancelled` marker records `idle-timeout` as its `reason` and its terminal detail. Other cancellations still record the harness's own reason strings there, such as `task_cancelled_iter_N`, rather than the spec's `user-cancel`, `parent-cancel`, `deadline`, or `budget`. Remote delegates take `limits.idleTimeoutSeconds` from `subAgentHostingPolicy`, since their agent entries come from host-registered tools rather than config. An A2A task in `input-required` or `auth-required` is waiting on input the harness can't route to anyone yet, so it counts as idle rather than paused. |
 | `humanPresence` values | The manifest example shows only `shared`. `none` was added for VMs, containers, and managed browsers. |
 | Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes, and the host desktop isn't one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
 
@@ -507,7 +509,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | References the spec lists | The spec holds images while the live context window, a pending approval, or replay thumbnails reference them. The context window and pending approvals both end with the lease, because the specialist's context isn't reused and approval cards carry their crop inline. Thumbnails are covered by the replay's own retention. |
 | Retention defaults | The spec gives vendor guidance "keep 3, prune every ~25" and also says requests should stay under ~20 images. Those conflict: batches of 25 allow up to 27 screenshots. The defaults are keep 3, prune 15 (at most 17); a model's feature can override them. |
 | Pruned screenshot summary | The spec asks for a one-line text summary of each pruned screenshot. The marker reuses the observation's harness-written header line (id, app, window) rather than describing pixels, which would need a model call. |
-| Catalog values | Checked against Anthropic's computer-use docs (October 2026). Claude Opus 4.6 and Sonnet 4.6 take `computer_20251124` (beta `computer-use-2025-11-24`), and Haiku 4.5 takes `computer_20250124` (`computer-use-2025-01-24`). All three take screenshot-pixel coordinates and images of at most 1,568 px and about 1.15 MP. The bundled entries, including OpenRouter's Sonnet 4.6, declare these. `version` picks the native dialect for Claude on Anthropic's API, and `betaHeader` documents the header the codec sends. Newer models (Opus 4.7 and the Claude 5 family) allow 2,576 px and 4,784 visual tokens, about 3.75 MP, through `computer_toolset_20260801`. Host catalogs that list them should declare those values. OpenAI's and Gemini's computer use run through dedicated models, so their bundled entries don't declare the feature. |
+| Catalog values | Checked against Anthropic's computer-use docs (October 2026). Claude Opus 4.6 and Sonnet 4.6 take `computer_20251124` (beta `computer-use-2025-11-24`), and Haiku 4.5 takes `computer_20250124` (`computer-use-2025-01-24`). All three take screenshot-pixel coordinates and images of at most 1,568 px and about 1.15 MP. The bundled entries, including OpenRouter's Sonnet 4.6, declare these. `version` picks the native dialect for Claude on Anthropic's API, and `betaHeader` documents the header the codec sends. Opus 4.7 and later allow 2,576 px and 4,784 visual tokens, about 3.75 MP; Opus 4.7 still takes `computer_20251124`, and Opus 4.8 and the Claude 5 family take `computer_toolset_20260801`. Host catalogs that list them should declare those values. OpenAI's and Gemini's computer use run through dedicated models, so their bundled entries don't declare the feature. |
 | Pixel-area cap | The spec sizes screenshots by long edge and visual-token cap. Anthropic also rejects images over about 1.15 MP on earlier models, and a 16:10 capture at 1,568 px is 1.54 MP. So the feature carries `maxPixels`, and capture fits both caps, rounding down when the area binds. |
 | Pipeline cap | Screenshots are never resized after capture. So the session also clamps them to the tool-result pipeline's `maxInlineImagePixelDimension` (1,200 px by default), or a model-sized screenshot would reach the model as a marker. Raise that setting to use a model's full limit. |
 | `computer-use` role | The spec binds the role to a model with the `computer-use` feature and falls back to `main` only if `main` has it. That would rule out the harness function-tool path, which the spec's dialect table allows for any model. Here the role is `specialist.modelRef`, falling back to the parent's model when it can see images and call tools. The feature, when present, sets the coordinate dialect and screenshot size. |
@@ -551,3 +553,15 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Holder liveness across a host | `LeaseRequest.isHolderAlive` is a closure and can't cross a connection. The host treats an open connection as a live holder. The client covers holders in its own process that die without releasing: it releases their leases when a new lease is refused as busy. |
 | Stop from the host | The spec's stop key and HUD Stop button live in the host. They reach the harness as a `stopRequested` event on `RemoteDisplayTarget.events`, and the integrator calls `stopComputerUse()` from it. |
 | Live view and observer tokens | They aren't carried. `liveView` passes through as the target returns it, and no target serves one yet. |
+
+**Not built yet**
+
+Spec features with no implementation so far. Each needs something the harness doesn't have yet, or is optional in the spec.
+
+| Feature | State |
+|---|---|
+| Isolated targets | Only the host desktop exists. The managed browser, desktop container, local VM, user's real browser, and paired device targets aren't built, and neither is the browser network policy (SSRF checks, private-network opt-in) that goes with browser targets. |
+| Specialist scratchpad | The spec gives the specialist a scratchpad beside the computer tools. Its allow-list holds only the 15 computer tools. |
+| `grounder` and `vision-describe` roles | Neither role is bound. The specialist's model localizes its own actions, and a model without vision is refused rather than given text descriptions of screenshots. |
+| Labeled screenshots | Refs aren't drawn onto screenshots as tags. The model gets the tree and the screenshot side by side. |
+| Code execution as a peer path | Scripts run against the leased target, gated as a whole, aren't offered. |

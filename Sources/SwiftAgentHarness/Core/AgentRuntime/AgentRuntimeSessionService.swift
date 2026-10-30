@@ -710,6 +710,11 @@ public actor AgentRuntimeSessionService {
         cancellationReasonsByRunID[runID] = reason
     }
 
+    func cancellationReason(runID: UUID?) -> String? {
+        guard let runID else { return nil }
+        return cancellationReasonsByRunID[runID]
+    }
+
     func takeCancellationReason(runID: UUID?) -> String? {
         guard let runID else { return nil }
         return cancellationReasonsByRunID.removeValue(forKey: runID)

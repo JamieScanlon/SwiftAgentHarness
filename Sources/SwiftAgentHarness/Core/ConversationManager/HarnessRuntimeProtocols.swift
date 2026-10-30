@@ -303,7 +303,3 @@ extension ToolApprovalRuntimeServicing {
         false
     }
 }
-
-extension AgentRuntimeRunControlling {
-    func noteCancellationReason(_ reason: String, runID: UUID) async {}
-}

@@ -634,16 +634,17 @@ extension AgentRuntimeSessionService {
                 await self.subAgentSpawnServiceForRuntime()?.cancelActiveInvocationsForParent(
                     parentConversationID: conversationID
                 )
+                // Peek, not take: the run result applies the same reason once the loop returns.
+                let notedReason = await self.cancellationReason(runID: runID)
                 do {
                     try await self.routingPersistRunLifecycleTranscriptMarker(
                         conversationID: conversationID,
-                        payload: RunLifecycleTranscriptMarkerPayload(
-                            kind: .run_cancelled,
+                        payload: .cancelled(
                             runId: runID,
-                            reason: "task_cancelled_iter_\(iteration)",
+                            fallbackReason: "task_cancelled_iter_\(iteration)",
                             terminalReason: ConversationRunTerminalReason(
                                 category: .externalCancellation,
-                                detail: "task_cancelled"
+                                detail: notedReason ?? "task_cancelled"
                             )
                         )
                     )
