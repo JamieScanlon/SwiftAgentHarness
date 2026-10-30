@@ -74,6 +74,10 @@ type AgentEntry = {
 
   transport: TransportBinding       // how to actually reach this agent
 
+  limits?: {
+    idleTimeoutSeconds?: number     // no DelegateEvent for this long → cancel with reason "idle-timeout"
+  }
+
   trust: {
     defaultLevel: "system" | "user-deferred" | "known-party" | "unknown-party"
     permissionPolicy: "auto" | "ask-parent" | "ask-user"
@@ -122,6 +126,16 @@ queued → dispatching → connecting → running → tool-calling → completin
 The Pool publishes state changes onto `subagent/{conversationId}/{path}/state` and detail events onto `subagent/{conversationId}/{path}/events` (per the topic taxonomy in [communication-layer.md](../communication-layer/)). This is what makes parent-agent UIs render "researcher is searching, then summarizing, then waiting for permission to write a file" rather than just a spinner.
 
 `awaiting-approval` is the state that doesn't exist in the Model Pool, and it's the one with the most subtlety — see "permission routing" below.
+
+### Idle timeout: liveness, not progress
+
+A delegate that produces nothing should end long before its overall cap: a hung provider stream, a driver call that never returns, a remote agent that went silent. The Pool runs an **idle timeout** per invocation. When no `DelegateEvent` arrives for `limits.idleTimeoutSeconds`, the Pool cancels the invocation through [§ Cancellation propagation](#cancellation-propagation) with reason `idle-timeout`.
+
+- **Any event resets the clock:** streamed model output (including thinking deltas, where the provider streams them), a tool call starting or finishing, a state change.
+- **Waiting on a human isn't idle.** The clock pauses in `awaiting-approval` and while the delegate is paused on `ask_user`, a handoff, or a takeover.
+- **It measures liveness, not progress.** A delegate that keeps calling tools without getting anywhere is alive. Catching that is the delegate's own job: the runtime's `maxIterations` and stall recovery, or computer use's [no-progress window](../../backends/computer-use/#ending-a-session-that-isnt-moving).
+- **Size it to the model binding.** Some providers stream nothing while the model thinks, so the timeout must comfortably exceed the slowest expected non-streaming turn; at least twice it. The host sets it on the agent entry or definition. It is never a parameter the spawning model chooses.
+- **It is distinct from the run timeout**, which caps total run time. For a delegate that manages its own budget (a computer-use lease, for example), the run timeout is derived from that budget rather than configured separately. Otherwise it ends runs the delegate was extending.
 
 ### Trust class on returning events
 
@@ -341,6 +355,7 @@ Centralize all sub-agent invocations through a single coordinator agent that the
 - **No trust class on remote events.** The Pool blindly forwards remote sub-agent output as if it were `system` content. Now the model treats arbitrary agent output as authoritative, and prompt-injection in the remote agent compromises the parent. Tag every event from a remote adapter with at least `known-party`.
 - **Fire-and-forget invocations with no completion path.** The Pool starts a sub-agent and never publishes a completion event; the parent has to poll. The right pattern is push-based delivery with idempotent retries; models should not poll `subagents list` waiting for completion.
 - **Cancellation that doesn't propagate.** Parent's turn is cancelled; sub-agents keep running; they call tools; results arrive after the parent moved on. Pool must propagate cancel down the tree, and adapters must respect it (with grace + force-kill for stdio).
+- **Using the total run timeout as a stuck detector.** Set short, it kills slow delegates that are working. Set long, a hung delegate holds its lane for the whole period. Use the idle timeout for liveness and keep the run timeout as a cap.
 - **Cost accounting that stops at the invocation boundary.** "The remote agent cost $0.10" — fine — but the parent then has to do $2 of summarization on the result. Track full per-conversation cost, not just per-invocation.
 - **Letting one delegate tool per agent explode the tool registry.** With 50 delegates, 50 tools is too many for the model to handle well. Switch to one-tool-with-`agent`-parameter shape, or partition delegates by sub-pool that the parent has to opt into.
 - **No depth or fanout limits.** A buggy planner agent decomposes "do my taxes" into 100 sub-tasks each of which spawns 10 sub-sub-agents. Bound depth and fanout at the Pool layer; surface explainable rejections back to the requesting agent.

@@ -12,7 +12,7 @@ The prescriptive shape:
 2. **Display targets are an execution-environment family.** Host desktop, local VM, remote desktop container, managed browser, paired device. Each sits behind one `DisplayTarget` contract that declares its perception modes, delivery modes, and isolation level.
 3. **One canonical action model and one coordinate space** (logical points on the target), with a codec per model dialect. Vendor toolsets differ: screenshot pixels for two vendors, a normalized 0–999 grid for a third, and model-native grids for open grounders. The harness rescales, records the geometry of every screenshot it sends, and freezes the coordinate mode for the session.
 4. **Observations are receipts and actions cite them.** An action names the observation it was planned against and is refused if the target drifted. Every outcome reports evidence (`confirmed | unverifiable | suspected-noop | partial | refused | not-executed`). An action that may already have been delivered is never auto-retried.
-5. **A computer-use session is a lease.** It has a single controller per target, scoped grants (per-app or per-domain allowlists with view / click / full tiers), step, time, and cost budgets, an injection-proof kill switch, and guaranteed cleanup.
+5. **A computer-use session is a lease.** It has a single controller per target, scoped grants (per-app or per-domain allowlists with view / click / full tiers), budgets, an injection-proof kill switch, and guaranteed cleanup. The step budget is a first allotment that grows while the harness measures progress, up to a host ceiling. Time limits belong to the host, a session that stops making progress ends early, and cost is never extended.
 6. **Safety is layered, not a single gate.** Isolation by default, then scoped grants, per-action risk classification, an intent-alignment check per action, confirmation for consequential actions (honoring vendor safety signals), takeover mode for credentials, and the harness's own UI excluded from capture.
 7. **Screenshots are a bounded, cache-aware resource.** Resize harness-side to the model's limits, because at least one vendor now rejects oversized images instead of downscaling them. Keep the last few and prune in batches to protect the prompt cache. Prefer text observations when they suffice.
 8. **Use a computer-use specialist sub-agent by default for long tasks.** It gets its own model, its own bounded screenshot context, and narrower tool authority. It returns a structured result, so injected screen content never sits in the parent's context with the parent's permissions.
@@ -229,7 +229,7 @@ type LeaseRequest = {
   target: string                       // display-target id
   conversation: string; agent: string
   grants: Grant[]                      // requested; user approves a subset
-  budgets: { maxSteps: number; maxMinutes: number; maxUsd?: number }
+  budgets: ResolvedBudgets             // host policy combined with the task's request; see § Budgets
   delivery: "background-only" | "foreground-allowed"
 }
 
@@ -245,9 +245,82 @@ type Grant =
   - *Full*: everything.
 
   At grant time the dialog states the real blast radius of apps whose access is effectively broader than the app: shells and IDEs, file managers, and system settings. This template additionally recommends **blocking by default** the categories vendors have flagged as high-harm: investment, trading and crypto platforms and other financial services. Password managers belong on the same list. These categories need an explicit operator override.
-- **Approval is one dialog at session start, not one per click.** The user approves the grant set. Per-action confirmation is reserved for consequential actions (below). Grants expire with the session. Sessions spawned without a present user (delegated or background) get a short absolute expiry, measured in tens of minutes.
+- **Approval is one dialog at session start, not one per click.** The user approves the grant set. Per-action confirmation is reserved for consequential actions (below). Grants expire with the session. Sessions spawned without a present user (delegated or background) get a short absolute expiry, measured in tens of minutes. Budget extensions never move it.
 - **Non-granted apps are hidden or excluded.** On host targets, hide non-granted windows during the agent's turn and restore them at turn end, on abort, and on crash, with a timeout so cleanup can't wedge. Exclude the harness's own UI (terminal, chat window, overlays) from every capture. The model must never read its own transcript or approval prompts off the screen.
-- **Budgets end sessions.** Step, wall-clock, and cost caps produce a typed terminal reason. After 2–3 consecutive failed attempts at the same subgoal, escalate to `ask_user` rather than looping.
+- **Budgets grow on progress and stop at a ceiling.** Every way a session can run out produces a typed terminal reason. See [§ Budgets, progress, and extensions](#budgets-progress-and-extensions).
+
+### Budgets, progress, and extensions
+
+One fixed wall-clock budget cannot do two jobs. Set short, it ends real work: with model turns of 20–55 seconds, a 3-minute budget buys four to seven turns. Set long, a stuck session burns all of it before anything notices. So the budget is split by job, and each limit is set by whoever has the information to set it.
+
+| Limit | Set by | Job | Extended? |
+|---|---|---|---|
+| Step allotment | the task (parent), else the host default; clamped to the ceiling | expected size of the work | yes, on progress |
+| Step ceiling | host | cap on long work | only by a present user |
+| No-progress window (in steps) | host | catch a session that is busy but going nowhere | no |
+| Consecutive-failure escalation | host | catch a session whose actions keep failing | no; escalates to `ask_user` |
+| Idle timeout | host, through the Sub-Agent Pool | catch a hung model call or driver | no |
+| Time ceiling | host | wall-clock cap on the session | only by a present user |
+| Deadline | the task, only when a real one exists | a cutoff the user stated | never |
+| Absolute grant expiry (no user present) | host | bound unattended authority | never |
+| Cost cap | host (the task may tighten it) | spend | never |
+
+```ts
+// Host configuration. The model never sets these.
+type ComputerUseBudgetPolicy = {
+  defaultSteps: number          // first allotment when the task names none
+  ceilingSteps: number          // includes all extensions; e.g. 3 × defaultSteps
+  extensionShare: number        // fraction of the first allotment added per extension; e.g. 0.5
+  noProgressSteps: number       // consecutive steps without progress before the session ends; e.g. 8
+  maxDuration: Duration         // wall-clock ceiling for the session
+  maxUsd?: number               // never extended automatically
+}
+
+// What a lease carries: the policy combined with the task's request.
+type ResolvedBudgets = {
+  steps: number                 // current allotment; starts at min(task.steps ?? defaultSteps, ceilingSteps)
+  ceilingSteps: number
+  extensionShare: number
+  noProgressSteps: number
+  endsAt: string                // earliest of: start + maxDuration, task.deadline, absolute grant expiry
+  maxUsd?: number
+}
+```
+
+- **The parent sizes the work in steps, never in minutes.** A step is one action delivered to the driver. Actions that come back `not-executed` don't count. A parent can estimate that "open the app and fill in the form" is about fifteen actions. It can't estimate how long a different model will think, so the delegate tool exposes no time budget. Time limits belong to the host and are generous. They bound the session; they don't measure the work.
+- **A deadline is a cutoff, not an estimate.** The task carries `deadline` only when the user or the task states a real one ("before my call at 3"). It can only make `endsAt` earlier, and progress never extends it. When it passes, the session ends with `deadline`.
+
+#### What counts as progress
+
+Progress is decided only from facts the harness recorded. It is never the model's claim that it is nearly done, and never screen text. A step **made progress** when either of these holds:
+
+1. **A success criterion was newly verified.** A `verify` call recorded `met: true` for a criterion that had not been met before. This is the strongest signal.
+2. **The agent reached a new state.** All three conditions must hold:
+   - **The state is new.** Its fingerprint is not in the set of fingerprints this session has already observed. Returning to an earlier state never counts, which is what catches oscillation (open a menu, close it, open it again).
+   - **An acting step caused it.** The state was first observed after an action that does something, not after `observe`, `zoom`, `wait`, or `wait-for`, and not during takeover. A page that finishes loading on its own doesn't earn progress.
+   - **The action wasn't a known failure.** Its effect was `confirmed`, `partial`, or `unverifiable`, not `refused`, `suspected-noop`, or `not-executed`. Requiring `confirmed` would starve pixel-only targets, where legitimate clicks often can't be confirmed.
+
+**The state fingerprint is coarse and structural.** It is a digest of the frontmost app, the window identity, the URL or document identity, the focused element's role, and the shape of the accessibility tree or DOM: element roles and depth, not text or values. A clock ticking, a feed adding items, or a toast changing its text then mostly doesn't produce a new fingerprint. On pixel-only targets the fingerprint is limited to app, window, and URL identity, so it is coarser there. Fingerprints are only compared, never shown to a model, so screen content can at worst make states look new, and the ceiling bounds that case.
+
+**One progress predicate serves every check.** The extension check and the no-progress window read the same predicate, so they can never disagree about whether the session is moving. An agent wandering through genuinely new but unhelpful screens still looks like it is making progress. No rule built only on harness-recorded facts can tell wandering from exploring. The ceiling covers that case, and a verified criterion remains the stronger signal.
+
+#### Extensions
+
+- **When.** When the step allotment runs out, the harness grants an extension if any step since the last grant (or since the start) made progress.
+- **How much.** `extensionShare` of the first allotment, rounded up, never past `ceilingSteps`.
+- **At the ceiling.** With a present user, the session pauses and asks through `ask_user` whether to continue. A yes grants one more extension, and the question comes again at the next ceiling. The time ceiling works the same way. Without a present user, the session ends with `budget-exhausted`.
+- **Never extended.** Cost, the deadline, and the absolute grant expiry of unattended sessions. Extensions grow the work, never the authority.
+- **Visible.** Each grant is written to the action log with the facts that justified it (criteria newly verified, new states reached since the last grant) and shown on the activity indicator ("step 34 of 45, extended twice"). Grants are not approved one by one, because asking per extension causes the same approval fatigue as asking per click.
+
+#### Ending a session that isn't moving
+
+- **No progress.** When `noProgressSteps` consecutive steps pass without progress, the session ends with `no-progress`, whatever allotment remains. Counting steps rather than seconds makes the check behave the same on a fast model and a slow one.
+- **Repeated failure.** After 2–3 consecutive failed attempts at the same subgoal, escalate to `ask_user` rather than looping. This usually fires before the no-progress window, and it remains the faster signal for a loop of refused actions.
+- **Idle.** A model call or driver that produces nothing at all is caught by the Sub-Agent Pool's [idle timeout](../../core/sub-agent-pool/#idle-timeout-liveness-not-progress), which applies to every delegate. Size it for the computer-use model binding: at least twice the slowest expected model turn, since some providers stream nothing while the model thinks.
+
+#### One clock, not two
+
+The specialist runs as a child of the Sub-Agent Pool, and that child has its own run timeout. If that timeout is configured separately, it ends the run while the lease is still being extended, and the extensions do nothing. The child's run timeout is **derived from the lease**: `endsAt` plus a short cleanup grace, recomputed when a present user grants more time at the ceiling. The session's terminal reason, not the child's timeout, decides the result status.
 
 ### Permission classification per action
 
@@ -304,18 +377,29 @@ For anything longer than a handful of steps, the parent delegates:
 type ComputerUseTask = {
   goal: string                         // includes success criteria the sub-agent must verify
   constraints: string[]                // carried verbatim into every step's context (lost constraints are the #1 failure)
-  target: string; grants: Grant[]; budgets: LeaseRequest["budgets"]
+  target: string; grants: Grant[]
+  steps?: number                       // expected size of the work: the first allotment. There is no time budget.
+  deadline?: string                    // only a real, stated cutoff; never an estimate
   returnSchema?: JsonSchema            // structured result for the parent
 }
 
 type ComputerUseResult = {
-  status: "done" | "done-unverified" | "needs-user" | "blocked" | "budget-exhausted" | "failed"
+  status: "done" | "done-unverified" | "needs-user" | "blocked"
+        | "budget-exhausted" | "no-progress" | "deadline" | "failed"
+  reason?: string                      // e.g. "step ceiling reached", "idle-timeout"
   result?: unknown                     // matches returnSchema
   verification: { criterion: string; met: boolean; evidence: string }[]
   handoff?: { reason: "login" | "2fa" | "captcha" | "payment" | "ambiguous" | "consequential"; prompt: string }
+  budget: { stepsUsed: number; stepsGranted: number; extensions: number; lastProgressStep?: number }
   actionsLog: string                   // blob ref; the parent sees a summary, not screenshots
 }
 ```
+
+**The terminal statuses tell the parent what to do next.**
+- `budget-exhausted` after extensions means the work was moving and ran out of room. Delegating the remainder, starting from the criteria already verified, is reasonable.
+- `no-progress` means repeating the same delegation won't help. Rephrase the goal, pick another rung of the control ladder, or ask the user.
+- `deadline` means the stated cutoff passed.
+- An idle timeout comes back as `failed` with `reason: "idle-timeout"`. That usually points at the model binding or the driver rather than the task.
 
 Why this is the default for long tasks:
 
@@ -338,7 +422,7 @@ Tool schemas for computer use run to several thousand tokens. Keep them deferred
 Surfaces that support it declare a `computer-use` capability and render:
 
 - **A live view.** An authenticated stream or VNC link, view-only unless takeover is on. A sensitive-domain session requires it to be open.
-- **An activity indicator.** "Agent is using <target>", with the current app and step, visible outside the chat window on host targets.
+- **An activity indicator.** "Agent is using <target>", with the current app, the step against the current allotment, and how many times the allotment was extended. It is visible outside the chat window on host targets.
 - **Per-action approval cards** for consequential actions, showing the action, target element, a cropped image of the target region, and the intent-check verdict.
 - **Takeover and stop controls.** Stop is also bound to the global kill switch on host targets.
 - **A post-run replay.** Action log plus observation thumbnails, and a recording where the target supports it.
@@ -347,7 +431,7 @@ Headless runs (scheduled triggers) can use isolated targets only. A consequentia
 
 ### Recording, audit, replay
 
-Every action is logged with its observation id, canonical form, classification, gate decision and reason, intent-check verdict, effect, and evidence. Observation images are stored as content-addressed blobs **in the durable lane while anything references them**: the live context window, a pending approval citing the observation, or the session's replay thumbnails. The ephemeral TTL starts when the lease is released. Retention beyond that applies only to sessions the user marks for audit. Route receipts from the Model Pool link each step to the model call that proposed it. Replays are for humans. Deterministic re-execution of a recorded action list is a different feature (scripted RPA) and should not be implied by "replay."
+Every action is logged with its observation id, canonical form, classification, gate decision and reason, intent-check verdict, effect, evidence, and whether it made progress. Budget extensions, ceiling questions, and the terminal reason are logged as session events, with the progress facts behind each. Observation images are stored as content-addressed blobs **in the durable lane while anything references them**: the live context window, a pending approval citing the observation, or the session's replay thumbnails. The ephemeral TTL starts when the lease is released. Retention beyond that applies only to sessions the user marks for audit. Route receipts from the Model Pool link each step to the model call that proposed it. Replays are for humans. Deterministic re-execution of a recorded action list is a different feature (scripted RPA) and should not be implied by "replay."
 
 ---
 
@@ -393,6 +477,30 @@ Attach a third-party computer-use or desktop-automation MCP server and stop ther
 
 **Why not as default:** grants, leases, observation binding, intent checks, and screenshot retention still have to live in the harness. An MCP server cannot see the conversation, the user's request, or the context budget. **Treat the server as a display-target driver**, with the harness's contract wrapped around it. This is a good way to support platforms you don't build natively.
 
+### Fixed time budget set by the parent
+
+The parent passes a wall-clock budget, and the session ends when it runs out.
+
+**When this works:** fast, predictable models on short tasks.
+
+**Why not as default:** it asks the parent to estimate the speed of a model it doesn't run, and one number can't both catch a stuck session quickly and leave room for a long one. Model latency dominates wall-clock time, so the same task passes on one binding and fails on another.
+
+### Parent decides on continuation
+
+The session ends with `budget-exhausted` and a continuation handle, and the parent decides whether to resume.
+
+**When this works:** when the parent knows something the harness doesn't, such as a change in the user's priorities mid-task.
+
+**Why not as default:** the parent is usually the slower, more expensive model, and it knows less about progress than the harness, which recorded every action. Keep the extension rule in the harness. The parent still decides what to do with a `budget-exhausted` result.
+
+### Model judge for extensions
+
+A cheap model decides whether to extend, given the goal, the criteria and which are verified, and one-line action summaries written by the harness.
+
+**When this works:** borderline cases, such as a long stretch of new states with no criterion verified.
+
+**Why not as default:** with only harness-written inputs it adds little over the deterministic predicate, and it costs a model call plus its own validation. If used, it follows the intent check's input rule: harness-derived facts only, never screen text.
+
 ---
 
 ## Anti-patterns
@@ -410,6 +518,9 @@ Attach a third-party computer-use or desktop-automation MCP server and stop ther
 - **Screen text in the permission gate's input.** The gate then reads the injected instruction it is supposed to guard against. Gates see the user's request and the proposed action, not the page.
 - **Stuck input state.** A modifier or mouse button left down on the user's real machine. Release in `finally`, guard held keys, and make cleanup idempotent.
 - **Host control by default for background work.** A scheduled trigger driving the owner's real desktop with nobody watching. Host targets require an interactive, present user.
+- **A wall-clock budget the model guesses.** The parent can't know how fast the specialist model thinks, so the guess ends real work or lets stuck work run. The parent sizes work in steps; time limits belong to the host.
+- **Counting any screen change as progress.** Animations, live feeds, and oscillation between two states all change the screen. Progress is a newly verified criterion, or a new state reached by the agent's own action.
+- **Two independent clocks on one session.** A child run timeout configured apart from the lease ends runs that the lease was extending. Derive one from the other.
 
 ---
 
