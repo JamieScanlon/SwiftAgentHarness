@@ -260,6 +260,8 @@ public enum ComputerUseChildOutcome: Sendable, Equatable {
     case completed
     case failed(String)
     case timedOut
+    /// The child produced nothing for its idle timeout.
+    case idleTimedOut
     case cancelled
 }
 
@@ -325,6 +327,11 @@ enum ComputerUseResultBuilder {
         case .failed(let message):
             result.status = .failed
             result.reason = message
+            return result
+        case .idleTimedOut:
+            // Usually the model binding or the driver, not the task.
+            result.status = .failed
+            result.reason = "idle-timeout"
             return result
         case .cancelled:
             result.status = .failed

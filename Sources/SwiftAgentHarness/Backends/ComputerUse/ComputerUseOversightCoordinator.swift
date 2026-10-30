@@ -144,3 +144,43 @@ struct ComputerUseConversationOversight: ComputerUseOversight {
         }
     }
 }
+
+/// Pauses the specialist's idle clock while the user is asked something or doing a human-only step.
+struct ComputerUseLivenessOversight: ComputerUseOversight {
+    let base: any ComputerUseOversight
+    let liveness: LocalAgentLiveness
+
+    func askUser(_ question: String) async -> ComputerUseUserReply {
+        liveness.pause()
+        defer { liveness.resume() }
+        return await base.askUser(question)
+    }
+
+    func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult {
+        liveness.pause()
+        defer { liveness.resume() }
+        return await base.handoff(request)
+    }
+
+    func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool {
+        liveness.pause()
+        defer { liveness.resume() }
+        return await base.continuePastCeiling(question)
+    }
+}
+
+/// Pauses the specialist's idle clock while a consequential action waits on the user's confirmation.
+struct ComputerUseLivenessApprovals: ExecApprovalDelivering {
+    let base: any ExecApprovalDelivering
+    let liveness: LocalAgentLiveness
+
+    func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
+        liveness.pause()
+        defer { liveness.resume() }
+        return await base.requestApproval(request, headless: headless)
+    }
+
+    func sendFollowup(approvalID: String, approved: Bool) async {
+        await base.sendFollowup(approvalID: approvalID, approved: approved)
+    }
+}

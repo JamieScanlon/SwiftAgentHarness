@@ -59,8 +59,11 @@ public struct LocalAgentDefinition: Sendable, Equatable {
     /// Reserved for push-based completion delivery. The in-process path is synchronous today and
     /// must not read long-running-ness from transport capabilities, which always report `true`.
     public var longRunning: Bool
-    /// Wall-clock budget for a blocking delegate run.
+    /// Wall-clock budget for a blocking delegate run. A cap on total run time, not a stuck detector.
     public var runTimeoutSeconds: TimeInterval
+    /// Liveness: a child run that produces no event for this long is cancelled with reason `idle-timeout`. Waiting
+    /// on a person doesn't count. `nil` turns it off. Set by the host, never by the spawning model.
+    public var idleTimeoutSeconds: TimeInterval?
     /// Per-agent recursion cap, combined with mode-profile and transport caps at launch time.
     public var maxRecursionDepth: Int?
 
@@ -73,6 +76,7 @@ public struct LocalAgentDefinition: Sendable, Equatable {
         toolsAllow: [String]? = nil,
         longRunning: Bool = false,
         runTimeoutSeconds: TimeInterval? = nil,
+        idleTimeoutSeconds: TimeInterval? = LocalAgentConfiguration.defaultIdleTimeoutSeconds,
         maxRecursionDepth: Int? = nil
     ) {
         self.toolName = toolName
@@ -84,6 +88,7 @@ public struct LocalAgentDefinition: Sendable, Equatable {
         self.longRunning = longRunning
         self.runTimeoutSeconds = runTimeoutSeconds
             ?? LocalAgentConfiguration.resolvedDefaultRunTimeoutSeconds(longRunning: longRunning)
+        self.idleTimeoutSeconds = idleTimeoutSeconds.flatMap { $0 > 0 ? $0 : nil }
         self.maxRecursionDepth = maxRecursionDepth
     }
 }
@@ -111,6 +116,10 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
     /// with nobody reading it. Lane accounting stays correct either way; this stops the window being
     /// configurable at all.
     public static let minimumRunTimeoutSeconds: TimeInterval = 5
+    /// Default liveness window. Some providers stream nothing while the model thinks, so it sits well above twice
+    /// a slow non-streaming turn.
+    public static let defaultIdleTimeoutSeconds: TimeInterval = 300
+    public static let minimumIdleTimeoutSeconds: TimeInterval = 10
 
     public var definitionsByToolName: [String: LocalAgentDefinition]
     /// Human-readable rejection reasons, one per skipped entry. Surfaced by the composition root.
@@ -220,6 +229,15 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                 runTimeoutSeconds = min(max(seconds, minimumRunTimeoutSeconds), maximumRunTimeoutSeconds)
             }
 
+            var idleTimeoutSeconds: TimeInterval? = defaultIdleTimeoutSeconds
+            if let rawIdle = entry["idleTimeoutSeconds"] {
+                guard let seconds = (rawIdle as? NSNumber)?.doubleValue, seconds >= 0 else {
+                    diagnostics.append("localAgents['\(configKey)']: 'idleTimeoutSeconds' must be a non-negative number (0 turns it off)")
+                    continue
+                }
+                idleTimeoutSeconds = seconds == 0 ? nil : min(max(seconds, minimumIdleTimeoutSeconds), maximumRunTimeoutSeconds)
+            }
+
             claimedBy[toolName] = configKey
             definitions[toolName] = LocalAgentDefinition(
                 toolName: toolName,
@@ -230,6 +248,7 @@ public struct LocalAgentConfiguration: Sendable, Equatable {
                 toolsAllow: toolsAllow,
                 longRunning: (entry["longRunning"] as? NSNumber)?.boolValue ?? false,
                 runTimeoutSeconds: runTimeoutSeconds,
+                idleTimeoutSeconds: idleTimeoutSeconds,
                 maxRecursionDepth: maxRecursionDepth
             )
         }

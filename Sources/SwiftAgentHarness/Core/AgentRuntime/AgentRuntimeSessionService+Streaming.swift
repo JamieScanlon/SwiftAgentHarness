@@ -119,7 +119,8 @@ extension AgentRuntimeSessionService {
                             configuration: turnConfiguration,
                             orchestrator: orchestrator,
                             runtimeLifecyclePublish: nil,
-                            lifecycleEmitterOverride: nil
+                            lifecycleEmitterOverride: nil,
+                            cancellationDetail: { [self] in await self.takeCancellationReason(runID: capturedRunID) }
                         )
                     )
                 }
@@ -140,7 +141,8 @@ extension AgentRuntimeSessionService {
                         configuration: turnConfiguration,
                         orchestrator: orchestrator,
                         runtimeLifecyclePublish: nil,
-                        lifecycleEmitterOverride: nil
+                        lifecycleEmitterOverride: nil,
+                        cancellationDetail: { [self] in await self.takeCancellationReason(runID: capturedRunID) }
                     )
                 )
             }

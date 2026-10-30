@@ -11,11 +11,21 @@ public struct ComputerUseSpecialistProfile: Sendable {
     /// How long the child run may continue after its session ends, to report what it did. The run has no timeout
     /// of its own: it ends with its lease, so extensions the lease grants are never cut short.
     public var cleanupGraceSeconds: TimeInterval
+    /// Liveness for the child run: no event for this long cancels it with reason `idle-timeout`. Size it to the
+    /// computer-use model, at least twice its slowest turn, since some providers stream nothing while it thinks.
+    /// Time spent waiting on the user doesn't count. `nil` turns it off.
+    public var idleTimeoutSeconds: TimeInterval?
 
-    public init(modeProfileID: String = "subagent-computer-use", modelRef: String? = nil, cleanupGraceSeconds: TimeInterval = 30) {
+    public init(
+        modeProfileID: String = "subagent-computer-use",
+        modelRef: String? = nil,
+        cleanupGraceSeconds: TimeInterval = 30,
+        idleTimeoutSeconds: TimeInterval? = 180
+    ) {
         self.modeProfileID = modeProfileID
         self.modelRef = modelRef
         self.cleanupGraceSeconds = max(0, cleanupGraceSeconds)
+        self.idleTimeoutSeconds = idleTimeoutSeconds.flatMap { $0 > 0 ? $0 : nil }
     }
 }
 

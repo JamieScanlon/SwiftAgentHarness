@@ -71,7 +71,9 @@ struct ComputerUseSpecialistIntegrationTests {
         recorder: ChildRecorder,
         publish: ComputerUseOversightCoordinator.Publish? = nil,
         activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
-        contracts: [ContractProfile] = []
+        contracts: [ContractProfile] = [],
+        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
+        idleChild: Bool = false
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -99,7 +101,8 @@ struct ComputerUseSpecialistIntegrationTests {
                 budgets: ComputerUseBudgetPolicy(defaultSteps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800))
             ),
             approveGrants: approve,
-            activityObserver: activityObserver
+            activityObserver: activityObserver,
+            specialist: specialist
         )
         if let publish {
             session.installComputerUse(configuration, publish: publish)
@@ -113,6 +116,11 @@ struct ComputerUseSpecialistIntegrationTests {
         box.value = session
         await session.subAgentSpawnService.installLocalAgentChildRunPort { childID, prompt in
             await recorder.record(childID: childID, prompt: prompt)
+            if idleChild {
+                LocalAgentLiveness.current?.observe(waitingOnApproval: { false })
+                try? await Task.sleep(for: .seconds(10))
+                return
+            }
             guard let session = box.value,
                   let computerSession = await session.runtimeDependencies.computerUse.sessions.session(for: childID) else {
                 throw NSError(domain: "ComputerUseSpecialistIntegrationTests", code: 1)
@@ -569,6 +577,20 @@ struct ComputerUseSpecialistIntegrationTests {
         let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["steps": .integer(1)]))
         #expect(result["status"] as? String == "budget-exhausted")
         #expect(await target.releases == [.budgetExhausted])
+    }
+
+    @Test("A specialist that produces nothing for its idle timeout comes back failed with reason idle-timeout")
+    func idleTimeout() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let started = Date()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: [], reply: "ok", recorder: ChildRecorder(),
+            specialist: ComputerUseSpecialistProfile(idleTimeoutSeconds: 0.2), idleChild: true
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "failed")
+        #expect(result["reason"] as? String == "idle-timeout")
+        #expect(Date().timeIntervalSince(started) < 5)
     }
 
     @Test("The grant dialog is told the parent conversation and the task's goal")

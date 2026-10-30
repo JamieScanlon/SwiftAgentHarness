@@ -62,6 +62,10 @@ Bindings are loaded from `PromptConfig.json` → `subAgentCustomEndpoints` keyed
 
 No surface shows a sub-agent's own conversation, so when an in-process child calls a tool that needs approval, the card is published to the top-level conversation it was spawned from. The approval is registered there under the child's run id, so answering it in that conversation (with the event's `runID`) unblocks the child, and its timeout still applies. Mode-transition tools stay with the child, since they change the child's mode.
 
+### Idle timeout (in-process delegates)
+
+`runLocalAgentChild` cancels a child run that produces no event for the agent's `idleTimeoutSeconds` (default 300 s; the computer-use specialist's is `ComputerUseSpecialistProfile.idleTimeoutSeconds`, 180 s). It measures liveness, not progress. The child reports into `LocalAgentLiveness.current`: the runtime child-run port touches it on every streamed delta and orchestration state change, and starts timing only once the child's run exists. Waiting on a person isn't idle: a pending tool approval for the child's run, and for the specialist a question, handoff, ceiling question, consequential-action confirmation, or takeover, pause the clock, which restarts when the wait ends. When it fires, the child's run is cancelled with `idle-timeout` as its terminal detail, the delegate's lifecycle entry fails, and the tool result says the run went silent. The embedded REST child-run path reports no events, so it has no idle timeout.
+
 ### ACP permission routing
 
 - **Invoke-time:** `SubAgentTransportPermissionGate` defers execution for `ask-user` and `ask-parent` until `resolveTransportPermission` (or tool approval bridged via `ToolApprovalRuntimeService`).

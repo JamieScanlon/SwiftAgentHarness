@@ -21,6 +21,8 @@ public actor AgentRuntimeSessionService {
     var activeListenerConversationID: UUID?
 
     private var turnLoopStopRequestedConversationIDs: Set<UUID> = []
+    /// Why a run is being cancelled, when its canceller said; read once, when the run ends.
+    private var cancellationReasonsByRunID: [UUID: String] = [:]
     private var activeTurnConfigurationsByRunID: [UUID: (conversationID: UUID, configuration: AgentRuntimeTurnConfiguration)] = [:]
     private var activeRunOrchestratorHandles: [UUID: OrchestratorHandle] = [:]
     var agentLoopPartialContinuationsByRunID: [UUID: AsyncStream<ChatStreamingPartial>.Continuation] = [:]
@@ -702,6 +704,15 @@ public actor AgentRuntimeSessionService {
             conversationID: conversationID,
             forRunID: forRunID
         )
+    }
+
+    func noteCancellationReason(_ reason: String, runID: UUID) {
+        cancellationReasonsByRunID[runID] = reason
+    }
+
+    func takeCancellationReason(runID: UUID?) -> String? {
+        guard let runID else { return nil }
+        return cancellationReasonsByRunID.removeValue(forKey: runID)
     }
 
     func cancelSubAgentRun(conversationID: UUID, runID: UUID) async {

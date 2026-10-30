@@ -17,7 +17,8 @@ struct InProcessLocalAgentIntegrationTests {
     private func makeDefinition(
         toolsAllow: [String]? = nil,
         longRunning: Bool = false,
-        runTimeoutSeconds: TimeInterval = 30
+        runTimeoutSeconds: TimeInterval = 30,
+        idleTimeoutSeconds: TimeInterval? = nil
     ) -> LocalAgentDefinition {
         LocalAgentDefinition(
             toolName: Self.toolName,
@@ -27,7 +28,8 @@ struct InProcessLocalAgentIntegrationTests {
             modelRef: Self.modelRef,
             toolsAllow: toolsAllow,
             longRunning: longRunning,
-            runTimeoutSeconds: runTimeoutSeconds
+            runTimeoutSeconds: runTimeoutSeconds,
+            idleTimeoutSeconds: idleTimeoutSeconds
         )
     }
 
@@ -763,6 +765,61 @@ struct InProcessLocalAgentIntegrationTests {
         let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
         #expect(snapshot.entries.first?.phase == .failed)
         #expect(await session.subAgentSpawnService.listActiveInvocations(parentConversationID: parent.id).isEmpty)
+    }
+
+    @Test("A child run that produces nothing for its idle timeout is cancelled long before its run timeout")
+    func idleChildCancelled() async throws {
+        let definition = makeDefinition(runTimeoutSeconds: 30, idleTimeoutSeconds: 0.2)
+        let started = Date()
+        let (session, parent) = try await makeSession(definition: definition) { _, _ in
+            LocalAgentLiveness.current?.observe(waitingOnApproval: { false })
+            try? await Task.sleep(for: .seconds(10))
+        }
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-idle"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected .completed carrying an idle-timeout report, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("idle"), "\(message.content)")
+        #expect(Date().timeIntervalSince(started) < 5)
+        let snapshot = await session.subAgentSpawnService.lifecycleSnapshot(parentConversationID: parent.id)
+        #expect(snapshot.entries.first?.phase == .failed)
+    }
+
+    @Test("A child run that keeps producing events outlives its idle timeout")
+    func activeChildContinues() async throws {
+        let definition = makeDefinition(runTimeoutSeconds: 30, idleTimeoutSeconds: 0.2)
+        let box = SessionBox()
+        let (session, parent) = try await makeSession(definition: definition) { childID, _ in
+            let liveness = LocalAgentLiveness.current
+            liveness?.observe(waitingOnApproval: { false })
+            for _ in 0..<8 {
+                try? await Task.sleep(for: .milliseconds(80))
+                liveness?.touch()
+            }
+            guard let session = box.value, var child = await session.persistenceDomain.modelConversation(id: childID) else { return }
+            child.messages.append(Message(id: UUID(), role: .assistant, content: "still here"))
+            await session.persistenceDomain.replaceConversationInRegistry(child, transcript: .authoritativeTip)
+        }
+        box.value = session
+        let outcome = await session.subAgentSpawnService.invokeInProcessLocalAgent(
+            call: call(instructions: "Do the thing.", id: "call-active"),
+            conversationID: parent.id,
+            parentConversation: parent,
+            toolEntry: makeToolEntry(),
+            definition: definition
+        )
+        guard case .completed(let message) = outcome else {
+            Issue.record("expected .completed, got \(outcome)")
+            return
+        }
+        #expect(message.content.contains("still here"), "\(message.content)")
     }
 
     @Test("A child run that exceeds its budget times out rather than wedging the parent turn")

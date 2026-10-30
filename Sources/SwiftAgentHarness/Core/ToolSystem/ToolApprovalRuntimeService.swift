@@ -259,6 +259,11 @@ actor ToolApprovalRuntimeService {
         )
     }
 
+    /// Whether any tool approval for `runID` is still waiting on a person, wherever it is routed.
+    func hasPendingApproval(runID: UUID) async -> Bool {
+        await stateStore.hasPendingApproval(runID: runID)
+    }
+
     @discardableResult
     func registerPendingToolApproval(
         conversationID: UUID,

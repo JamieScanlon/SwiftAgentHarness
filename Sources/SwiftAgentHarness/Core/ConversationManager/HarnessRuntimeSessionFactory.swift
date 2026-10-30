@@ -282,11 +282,18 @@ public enum HarnessRuntimeSessionFactory {
                         conversationID: childID,
                         configuration: AgentRuntimeTurnConfiguration(enableTools: true)
                     )
+                    // Every streamed delta and state change is a sign of life for the delegate's idle timeout.
+                    let liveness = LocalAgentLiveness.current
+                    let runID = response.runID
+                    liveness?.observe(waitingOnApproval: {
+                        guard let runID else { return false }
+                        return await toolApprovalRuntimeService.hasPendingApproval(runID: runID)
+                    })
                     async let partialDrain: Void = {
-                        for await _ in response.partialContent {}
+                        for await _ in response.partialContent { liveness?.touch() }
                     }()
                     async let stateDrain: Void = {
-                        for await _ in response.orchestrationState {}
+                        for await _ in response.orchestrationState { liveness?.touch() }
                     }()
                     _ = await (partialDrain, stateDrain)
                 }

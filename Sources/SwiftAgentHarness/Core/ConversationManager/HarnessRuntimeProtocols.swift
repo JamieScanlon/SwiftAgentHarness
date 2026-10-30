@@ -175,6 +175,8 @@ protocol AgentRuntimeOrchestrationEmitting: Sendable {
 }
 
 protocol AgentRuntimeRunControlling: Sendable {
+    /// Records why `runID` is about to be cancelled, for its terminal reason's detail.
+    func noteCancellationReason(_ reason: String, runID: UUID) async
     func cancelGeneration(for conversationID: UUID) async
     func cancelGeneration() async
     func cancelActiveRunForAPI(conversationID: UUID, runID: UUID) async throws
@@ -300,4 +302,8 @@ extension ToolApprovalRuntimeServicing {
     ) async -> Bool {
         false
     }
+}
+
+extension AgentRuntimeRunControlling {
+    func noteCancellationReason(_ reason: String, runID: UUID) async {}
 }

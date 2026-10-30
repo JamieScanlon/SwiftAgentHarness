@@ -457,9 +457,11 @@ public actor SubAgentSpawnService {
         }
     }
 
-    func cancelChildRunForSubAgent(childConversationID: UUID) async {
+    /// Cancels the child's active run. `reason`, when given, becomes the cancelled run's terminal detail.
+    func cancelChildRunForSubAgent(childConversationID: UUID, reason: String? = nil) async {
         if let conversation = await deps.persistenceDomain.modelConversation(id: childConversationID),
            let runID = conversation.currentRunID {
+            if let reason { await agentRuntime.noteCancellationReason(reason, runID: runID) }
             await agentRuntime.cancelSubAgentRun(conversationID: childConversationID, runID: runID)
             return
         }
@@ -467,6 +469,7 @@ public actor SubAgentSpawnService {
         guard lifecycle.activeStreamingConversationID == childConversationID,
               let runID = lifecycle.currentStreamingRunID
         else { return }
+        if let reason { await agentRuntime.noteCancellationReason(reason, runID: runID) }
         try? await agentRuntime.cancelActiveRunForAPI(conversationID: childConversationID, runID: runID)
     }
 

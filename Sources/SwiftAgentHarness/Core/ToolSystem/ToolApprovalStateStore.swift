@@ -242,6 +242,11 @@ actor ToolApprovalStateStore {
         }
     }
 
+    /// Whether any approval for `runID` is still waiting on a person.
+    func hasPendingApproval(runID: UUID) -> Bool {
+        resolutions.contains { key, value in key.runID == runID && value.status == .pending }
+    }
+
     func resolveBindingForAPI(
         conversationID: UUID,
         runID: UUID?,

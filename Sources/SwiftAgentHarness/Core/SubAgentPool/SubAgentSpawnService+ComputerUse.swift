@@ -1,6 +1,7 @@
 import EasyJSON
 import Foundation
 import SwiftAgentKit
+import Synchronization
 
 extension SubAgentSpawnService {
     /// Runs one delegated computer-use task: lease the target (one grant dialog), run the specialist in an
@@ -114,24 +115,32 @@ extension SubAgentSpawnService {
             imageLimit: sessionConfiguration.imageLimit,
             layout: try? await grant.target.describe(grant.lease)
         )
-        // Approvals, questions, and activity go to the user's conversation, not the specialist's child.
+        // Approvals, questions, and activity go to the user's conversation, not the specialist's child. Waiting on
+        // the user pauses the child's idle clock, and every action the session reports is a sign of life.
         let targetLabel = grant.target.manifest.label
+        let liveness = LocalAgentLiveness()
         var approvals = configuration.approvals
         if approvals == nil {
             approvals = await orchestratorRuntime.approvalDelivery(for: parentConversation)
         }
-        let oversight: (any ComputerUseOversight)? = configuration.oversight ?? deps.computerUse.coordinator.map {
+        approvals = approvals.map { ComputerUseLivenessApprovals(base: $0, liveness: liveness) }
+        let oversight: (any ComputerUseOversight)? = (configuration.oversight ?? deps.computerUse.coordinator.map {
             ComputerUseConversationOversight(coordinator: $0, conversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel)
-        }
-        var activity: (@Sendable (ComputerUseActivity) async -> Void)?
+        }).map { ComputerUseLivenessOversight(base: $0, liveness: liveness) }
         let publish = deps.computerUse.publish
         let observer = configuration.activityObserver
-        if publish != nil || observer != nil {
-            activity = { update in
-                let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)
-                await publish?(conversationID, .computerUseActivity(payload))
-                await observer?(payload)
+        let takenOver = Mutex(false)
+        let activity: @Sendable (ComputerUseActivity) async -> Void = { update in
+            let on = update.status == .takenOver
+            let changed = takenOver.withLock { current in
+                defer { current = on }
+                return current != on
             }
+            if changed { on ? liveness.pause() : liveness.resume() } else { liveness.touch() }
+            guard publish != nil || observer != nil else { return }
+            let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)
+            await publish?(conversationID, .computerUseActivity(payload))
+            await observer?(payload)
         }
         let session = ComputerUseSession(
             target: grant.target,
@@ -150,7 +159,9 @@ extension SubAgentSpawnService {
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: task.brief,
-            deadline: { [grace = configuration.specialist.cleanupGraceSeconds] in await session.childRunDeadline(grace: grace) }
+            deadline: { [grace = configuration.specialist.cleanupGraceSeconds] in await session.childRunDeadline(grace: grace) },
+            idleTimeoutSeconds: configuration.specialist.idleTimeoutSeconds,
+            liveness: liveness
         )
         await deps.computerUse.sessions.remove(for: childID)
         await session.end()
@@ -230,6 +241,7 @@ extension SubAgentSpawnService {
             finalText = text
         case .failed(let message): child = .failed(message)
         case .timedOut: child = .timedOut
+        case .idleTimedOut: child = .idleTimedOut
         case .cancelled: child = .cancelled
         }
         var actionsLog = await session.auditSummary

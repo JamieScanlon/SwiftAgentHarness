@@ -26,6 +26,8 @@ extension SubAgentSpawnService {
         case completed(String)
         case failed(String)
         case timedOut(TimeInterval)
+        /// No event for the agent's idle timeout: a hung model call or tool, not slow work.
+        case idleTimedOut(TimeInterval)
         case cancelled
     }
 
@@ -108,7 +110,8 @@ extension SubAgentSpawnService {
                 let outcome = await self.runLocalAgentChild(
                     childConversationID: childID,
                     prompt: instructions,
-                    timeoutSeconds: definition.runTimeoutSeconds
+                    timeoutSeconds: definition.runTimeoutSeconds,
+                    idleTimeoutSeconds: definition.idleTimeoutSeconds
                 )
                 await self.finishLocalAgentLifecycle(
                     lifecycleID: lifecycleID,
@@ -137,7 +140,8 @@ extension SubAgentSpawnService {
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: instructions,
-            timeoutSeconds: definition.runTimeoutSeconds
+            timeoutSeconds: definition.runTimeoutSeconds,
+            idleTimeoutSeconds: definition.idleTimeoutSeconds
         )
         await finishLocalAgentLifecycle(
             lifecycleID: lifecycleID,
@@ -288,6 +292,7 @@ extension SubAgentSpawnService {
         case .completed: "completed"
         case .failed: "failed"
         case .timedOut: "timed out"
+        case .idleTimedOut: "idle timeout"
         case .cancelled: "cancelled"
         }
         return """
@@ -311,19 +316,29 @@ extension SubAgentSpawnService {
     func runLocalAgentChild(
         childConversationID: UUID,
         prompt: String,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        idleTimeoutSeconds: TimeInterval? = nil
     ) async -> LocalAgentRunOutcome {
         let end = Date().addingTimeInterval(timeoutSeconds)
-        return await runLocalAgentChild(childConversationID: childConversationID, prompt: prompt, deadline: { end }, budgetSeconds: timeoutSeconds)
+        return await runLocalAgentChild(
+            childConversationID: childConversationID,
+            prompt: prompt,
+            deadline: { end },
+            budgetSeconds: timeoutSeconds,
+            idleTimeoutSeconds: idleTimeoutSeconds
+        )
     }
 
     /// Drives the child run to completion before `deadline`, which is re-read so it can move, cancelling the
-    /// child if the parent turn is cancelled or the deadline passes.
+    /// child if the parent turn is cancelled, the deadline passes, or the child produces nothing for
+    /// `idleTimeoutSeconds`. The child reports its events into `liveness` through ``LocalAgentLiveness/current``.
     func runLocalAgentChild(
         childConversationID: UUID,
         prompt: String,
         deadline: @escaping @Sendable () async -> Date,
-        budgetSeconds: TimeInterval? = nil
+        budgetSeconds: TimeInterval? = nil,
+        idleTimeoutSeconds: TimeInterval? = nil,
+        liveness: LocalAgentLiveness = LocalAgentLiveness()
     ) async -> LocalAgentRunOutcome {
         let started = Date()
         guard let childRun = localAgentChildRunPort else {
@@ -333,7 +348,9 @@ extension SubAgentSpawnService {
             await withTaskGroup(of: LocalAgentRunOutcome?.self) { group in
                 group.addTask {
                     do {
-                        try await childRun(childConversationID, prompt)
+                        try await LocalAgentLiveness.$current.withValue(liveness) {
+                            try await childRun(childConversationID, prompt)
+                        }
                         return nil
                     } catch is CancellationError {
                         return LocalAgentRunOutcome.cancelled
@@ -348,6 +365,21 @@ extension SubAgentSpawnService {
                         return LocalAgentRunOutcome.cancelled
                     }
                     return LocalAgentRunOutcome.timedOut(budgetSeconds ?? Date().timeIntervalSince(started).rounded())
+                }
+                if let idleTimeoutSeconds, idleTimeoutSeconds > 0 {
+                    group.addTask {
+                        let recheck = Duration.seconds(min(5, idleTimeoutSeconds / 2))
+                        while true {
+                            do {
+                                try await Task.sleep(for: recheck)
+                            } catch {
+                                return LocalAgentRunOutcome.cancelled
+                            }
+                            if let quiet = await liveness.quietTime(), quiet >= idleTimeoutSeconds {
+                                return LocalAgentRunOutcome.idleTimedOut(idleTimeoutSeconds)
+                            }
+                        }
+                    }
                 }
                 let first: LocalAgentRunOutcome?
                 if let produced = await group.next() {
@@ -366,7 +398,8 @@ extension SubAgentSpawnService {
 
         switch completion {
         case .some(let terminal):
-            await cancelChildRunForSubAgent(childConversationID: childConversationID)
+            let reason: String? = if case .idleTimedOut = terminal { Self.idleTimeoutCancelReason } else { nil }
+            await cancelChildRunForSubAgent(childConversationID: childConversationID, reason: reason)
             return terminal
         case .none:
             guard let text = await lastAssistantText(childConversationID: childConversationID) else {
@@ -439,6 +472,8 @@ extension SubAgentSpawnService {
             // Name the setting: a bare "300s timeout" is indistinguishable from the tool-call
             // timeout, which fails for an entirely different reason and has a different fix.
             return "Delegate '\(displayName)' exceeded its runTimeoutSeconds budget of \(Int(seconds))s and was cancelled."
+        case .idleTimedOut(let seconds):
+            return "Delegate '\(displayName)' produced nothing for \(Int(seconds))s (its idleTimeoutSeconds) and was cancelled. That usually points at the model or a tool call that hung rather than at the task."
         case .cancelled:
             return "Delegate '\(displayName)' was cancelled."
         }
@@ -478,11 +513,14 @@ extension SubAgentSpawnService {
 }
 
 extension SubAgentSpawnService {
+    /// The cancellation reason a child run records when its idle timeout fires.
+    static let idleTimeoutCancelReason = "idle-timeout"
+
     /// Terminal phase derived from runtime signals, never from the child's self-reported text.
     static func lifecyclePhase(for outcome: LocalAgentRunOutcome) -> SubAgentLifecyclePhase {
         switch outcome {
         case .completed: .done
-        case .failed, .timedOut, .cancelled: .failed
+        case .failed, .timedOut, .idleTimedOut, .cancelled: .failed
         }
     }
 
@@ -491,6 +529,7 @@ extension SubAgentSpawnService {
         case .completed: nil
         case .failed(let message): message
         case .timedOut(let seconds): "delegate run exceeded runTimeoutSeconds budget of \(Int(seconds))s"
+        case .idleTimedOut(let seconds): "\(idleTimeoutCancelReason): no events for \(Int(seconds))s"
         case .cancelled: "delegate run cancelled"
         }
     }
