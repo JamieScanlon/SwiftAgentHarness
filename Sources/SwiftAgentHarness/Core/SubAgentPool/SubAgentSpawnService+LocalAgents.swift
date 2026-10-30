@@ -6,6 +6,19 @@ import SwiftAgentKit
 /// service reaches the same embedded-REST-with-runtime-fallback path Memory and Triggers use.
 typealias LocalAgentChildRunPort = @Sendable (UUID, String) async throws -> Void
 
+/// When a child run must end. Re-read after every wait, so a delegate that manages its own budget can move it.
+enum LocalAgentRunDeadline {
+    /// Returns once the deadline has passed; throws `CancellationError` when cancelled first. The deadline is read
+    /// at least every `recheck`, so one that moves earlier takes effect promptly.
+    static func wait(until deadline: @escaping @Sendable () async -> Date, recheck: Duration = .seconds(5)) async throws {
+        while true {
+            let remaining = await deadline().timeIntervalSinceNow
+            guard remaining > 0 else { return }
+            try await Task.sleep(for: min(.seconds(remaining), recheck))
+        }
+    }
+}
+
 extension SubAgentSpawnService {
     /// Outcome of a blocking in-process delegate run, derived from runtime signals rather than from
     /// whatever the child's assistant text claims.
@@ -300,6 +313,19 @@ extension SubAgentSpawnService {
         prompt: String,
         timeoutSeconds: TimeInterval
     ) async -> LocalAgentRunOutcome {
+        let end = Date().addingTimeInterval(timeoutSeconds)
+        return await runLocalAgentChild(childConversationID: childConversationID, prompt: prompt, deadline: { end }, budgetSeconds: timeoutSeconds)
+    }
+
+    /// Drives the child run to completion before `deadline`, which is re-read so it can move, cancelling the
+    /// child if the parent turn is cancelled or the deadline passes.
+    func runLocalAgentChild(
+        childConversationID: UUID,
+        prompt: String,
+        deadline: @escaping @Sendable () async -> Date,
+        budgetSeconds: TimeInterval? = nil
+    ) async -> LocalAgentRunOutcome {
+        let started = Date()
         guard let childRun = localAgentChildRunPort else {
             return .failed("in-process delegate runtime is not configured")
         }
@@ -316,13 +342,12 @@ extension SubAgentSpawnService {
                     }
                 }
                 group.addTask {
-                    let nanoseconds = UInt64(max(1, timeoutSeconds * 1000)) * 1_000_000
                     do {
-                        try await Task.sleep(nanoseconds: nanoseconds)
+                        try await LocalAgentRunDeadline.wait(until: deadline)
                     } catch {
                         return LocalAgentRunOutcome.cancelled
                     }
-                    return LocalAgentRunOutcome.timedOut(timeoutSeconds)
+                    return LocalAgentRunOutcome.timedOut(budgetSeconds ?? Date().timeIntervalSince(started).rounded())
                 }
                 let first: LocalAgentRunOutcome?
                 if let produced = await group.next() {

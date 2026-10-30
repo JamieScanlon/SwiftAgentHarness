@@ -309,6 +309,9 @@ public actor ComputerUseSession {
     public private(set) var events: [ComputerUseSessionEvent] = []
     private var timeCeiling: Date
     private var progressAtLastGrant = ComputerUseProgress()
+    private var endedAt: Date?
+    /// The time-ceiling decision in flight, so an action and the child run's timer reaching it together ask once.
+    private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
     public private(set) var auditLog: [ComputerUseActionRecord] = []
     /// Records ever appended, so a record can be found after older ones were trimmed.
@@ -708,10 +711,28 @@ public actor ComputerUseSession {
         budgets.grantExpiry.map { lease.issuedAt.addingTimeInterval($0.timeInterval) }
     }
 
+    /// When the specialist's child run must end: the lease's end time while the session runs, moved when a present
+    /// user extends it, and `grace` after the session ends so the child can wrap up. Reaching the end time here
+    /// makes the same decision an action would, so a slow model turn doesn't skip the user's question.
+    public func childRunDeadline(grace: TimeInterval) async -> Date {
+        if terminalReason == nil, now() >= endsAt { await reachedEndTime() }
+        if let endedAt { return endedAt.addingTimeInterval(grace) }
+        return endsAt
+    }
+
+    private func reachedEndTime() async {
+        if let endTimeDecision { return await endTimeDecision.value }
+        let decision = Task { await self.decideAtEndTime() }
+        endTimeDecision = decision
+        await decision.value
+        endTimeDecision = nil
+    }
+
     /// The deadline and an unattended session's grant expiry are never moved; only the time ceiling is, and only by a
     /// present user.
-    private func reachedEndTime() async {
+    private func decideAtEndTime() async {
         let current = now()
+        guard terminalReason == nil, current >= endsAt else { return }
         if let deadline = budgets.deadline, current >= deadline {
             return await end(.deadline, detail: "the deadline passed")
         }
@@ -781,6 +802,7 @@ public actor ComputerUseSession {
         guard terminalReason == nil else { return }
         terminalReason = reason
         terminalDetail = detail
+        endedAt = now()
         events.append(ComputerUseSessionEvent(
             kind: .ended,
             at: now(),

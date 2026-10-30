@@ -187,6 +187,88 @@ struct ComputerUseExtensionTests {
     }
 }
 
+@Suite("Computer use budgets: one clock for the session and its child run")
+struct ComputerUseChildRunDeadlineTests {
+    private typealias S = ComputerUseSessionFixtures
+
+    private static func make(
+        userPresent: Bool = true,
+        oversight: (any ComputerUseOversight)? = ScriptedComputerUseOversight(reply: "yes"),
+        clock: ComputerUseTestClock
+    ) async throws -> ComputerUseSession {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { clock.now() })
+        let lease = try await target.lease(LeaseRequest(
+            target: target.manifest.id,
+            agentID: "a",
+            grants: S.grants,
+            budgets: ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(60)),
+            operatorInitiated: true,
+            userPresent: userPresent
+        ))
+        return ComputerUseSession(
+            target: target,
+            lease: lease,
+            configuration: ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["x"])),
+            oversight: oversight,
+            now: { clock.now() }
+        )
+    }
+
+    @Test("While the session runs, the child's deadline is the lease's end time")
+    func live() async throws {
+        let clock = ComputerUseTestClock()
+        let session = try await Self.make(clock: clock)
+        #expect(await session.childRunDeadline(grace: 30) == clock.now().addingTimeInterval(60))
+    }
+
+    @Test("At the time ceiling a present user's yes moves the child's deadline with the lease")
+    func extended() async throws {
+        let clock = ComputerUseTestClock()
+        let session = try await Self.make(clock: clock)
+        clock.advance(seconds: 60)
+        let deadline = await session.childRunDeadline(grace: 30)
+        #expect(deadline == clock.now().addingTimeInterval(30))
+        #expect(await session.terminalReason == nil)
+        #expect(await session.endsAt == deadline)
+    }
+
+    @Test("Once the session has ended, the child gets the cleanup grace to wrap up")
+    func ended() async throws {
+        let clock = ComputerUseTestClock()
+        let session = try await Self.make(userPresent: false, clock: clock)
+        clock.advance(seconds: 60)
+        #expect(await session.childRunDeadline(grace: 30) == clock.now().addingTimeInterval(30))
+        #expect(await session.terminalReason == .timeBudget)
+        clock.advance(seconds: 10)
+        #expect(await session.childRunDeadline(grace: 30) == clock.now().addingTimeInterval(20))
+    }
+
+    @Test("The child's timer and an action reaching the time ceiling together ask the user once")
+    func asksOnce() async throws {
+        let clock = ComputerUseTestClock()
+        let oversight = SlowYesOversight()
+        let session = try await Self.make(oversight: oversight, clock: clock)
+        clock.advance(seconds: 60)
+        async let deadline = session.childRunDeadline(grace: 30)
+        async let batch = session.perform([S.observe])
+        _ = await (deadline, batch)
+        #expect(await oversight.asked == 1)
+        #expect(await session.terminalReason == nil)
+    }
+}
+
+private actor SlowYesOversight: ComputerUseOversight {
+    private(set) var asked = 0
+
+    func askUser(_ question: String) async -> ComputerUseUserReply {
+        asked += 1
+        try? await Task.sleep(for: .milliseconds(50))
+        return .answered("yes")
+    }
+
+    func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult { .declined }
+}
+
 private actor ActivityRecorder {
     private(set) var all: [ComputerUseActivity] = []
     func append(_ activity: ComputerUseActivity) { all.append(activity) }

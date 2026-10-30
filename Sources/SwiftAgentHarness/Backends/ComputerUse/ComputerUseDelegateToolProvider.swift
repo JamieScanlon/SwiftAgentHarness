@@ -40,8 +40,8 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
             modeProfileID: profile.modeProfileID,
             modelRef: profile.modelRef,
             toolsAllow: specialistToolNames,
-            longRunning: false,
-            runTimeoutSeconds: profile.runTimeoutSeconds
+            // The run ends with its lease rather than at runTimeoutSeconds.
+            longRunning: false
         )
     }
 

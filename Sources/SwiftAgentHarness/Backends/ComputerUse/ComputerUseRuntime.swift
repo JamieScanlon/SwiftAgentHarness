@@ -8,13 +8,14 @@ public struct ComputerUseSpecialistProfile: Sendable {
     /// The `computer-use` role binding. `nil` uses the parent conversation's model when it can see images and
     /// call tools.
     public var modelRef: String?
-    /// Wall-clock ceiling for one specialist run, on top of the task's own time budget.
-    public var runTimeoutSeconds: TimeInterval
+    /// How long the child run may continue after its session ends, to report what it did. The run has no timeout
+    /// of its own: it ends with its lease, so extensions the lease grants are never cut short.
+    public var cleanupGraceSeconds: TimeInterval
 
-    public init(modeProfileID: String = "subagent-computer-use", modelRef: String? = nil, runTimeoutSeconds: TimeInterval = 1_800) {
+    public init(modeProfileID: String = "subagent-computer-use", modelRef: String? = nil, cleanupGraceSeconds: TimeInterval = 30) {
         self.modeProfileID = modeProfileID
         self.modelRef = modelRef
-        self.runTimeoutSeconds = runTimeoutSeconds
+        self.cleanupGraceSeconds = max(0, cleanupGraceSeconds)
     }
 }
 
