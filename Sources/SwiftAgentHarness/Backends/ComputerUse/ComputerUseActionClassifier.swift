@@ -187,7 +187,7 @@ public struct ComputerUseActionClassifier: Sendable {
                     return result
                 }
                 resolvedApp = resolvedApp ?? app
-                resolvedURL = resolvedURL ?? element.url ?? observation.target.url
+                resolvedURL = resolvedURL ?? element.url ?? (surroundsPage(app) ? nil : observation.target.url)
             case .point(let point, _):
                 guard observation.target.bounds.contains(point) else {
                     result.actionClass = .unresolvable(reason: "point lies outside observation \(observation.id)")
@@ -198,7 +198,9 @@ public struct ComputerUseActionClassifier: Sendable {
                     return result
                 }
                 resolvedApp = resolvedApp ?? observation.target.app
-                resolvedURL = resolvedURL ?? observation.target.url
+                if !surroundsPage(observation.target.app) || observation.target.pageBounds?.contains(point) == true {
+                    resolvedURL = resolvedURL ?? observation.target.url
+                }
             }
         }
 
@@ -218,6 +220,12 @@ public struct ComputerUseActionClassifier: Sendable {
 
         let (required, base) = requirement(for: action)
         return finish(result, app: resolvedApp, url: resolvedURL, required: required, base: base, context: context, action: action)
+    }
+
+    /// A desktop browser draws its own controls around the page, so only elements and points on the page take the
+    /// page's URL. A target with no app is the page itself.
+    private func surroundsPage(_ app: AppIdentity?) -> Bool {
+        app.map { reviewer.ruling(for: $0).isBrowser } ?? false
     }
 
     private func requirement(for action: ComputerAction) -> (ComputerUseGrantTier, ComputerUseActionClass) {
@@ -291,6 +299,20 @@ public struct ComputerUseActionClassifier: Sendable {
             return result
         }
 
+        if ruling.isBrowser, let app, required > .view {
+            if action.kind == .launch {
+                result.actionClass = .outOfGrant(reason: "\(app.bundleID) is a browser, which stays at view; open a page on a granted domain with open-url instead")
+                return result
+            }
+            if url == nil {
+                let controls = "\(app.bundleID)'s own controls stay at view, whatever the grant; navigate with open-url"
+                result.actionClass = .outOfGrant(
+                    reason: action.citedTargets.isEmpty ? "cite an element on the page; \(controls)" : controls
+                )
+                return result
+            }
+        }
+
         var tier: ComputerUseGrantTier?
         var subject = app?.bundleID ?? ""
         if let url, ruling.isBrowser || app == nil {
@@ -298,6 +320,11 @@ public struct ComputerUseActionClassifier: Sendable {
             if let domainTier = context.grants.tier(forURL: url) {
                 tier = domainTier
                 subject = result.domain ?? url
+            } else if ruling.isBrowser, let domain = result.domain {
+                // The browser's own view grant doesn't reach into pages.
+                result.actionClass = .outOfGrant(reason: "domain \(domain) is not granted")
+                result.missingGrant = .domain(domain, tier: required)
+                return result
             }
         }
         if tier == nil, let app {
@@ -312,10 +339,6 @@ public struct ComputerUseActionClassifier: Sendable {
             return result
         }
         guard tier >= required else {
-            if ruling.isBrowser, action.kind == .launch {
-                result.actionClass = .outOfGrant(reason: "\(subject) is a browser, which stays at view; open a page on a granted domain with open-url instead")
-                return result
-            }
             result.actionClass = .outOfGrant(
                 reason: "\(subject) is granted at \(tier.rawValue); \(action.kind.rawValue) needs \(required.rawValue)"
             )
@@ -346,7 +369,7 @@ public struct ComputerUseActionClassifier: Sendable {
     }
 
     /// The grant a task could add to allow the action: the page's domain in a browser, otherwise the app. `nil` when
-    /// no grant helps, such as a browser launch, browser chrome with no page, or a tier above the app's cap.
+    /// no grant helps, such as a tier above the app's cap.
     private static func grant(
         covering domain: String?,
         app: AppIdentity?,

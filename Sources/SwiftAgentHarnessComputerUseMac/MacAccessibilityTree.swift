@@ -15,6 +15,8 @@ struct MacAXAttributes: Sendable, Hashable {
     var frame: CGRect?
     var enabled: Bool
     var focused: Bool
+    /// `AXURL`: a web area's page, or a link's destination.
+    var url: String?
 
     init(
         role: String,
@@ -25,7 +27,8 @@ struct MacAXAttributes: Sendable, Hashable {
         identifier: String? = nil,
         frame: CGRect? = nil,
         enabled: Bool = true,
-        focused: Bool = false
+        focused: Bool = false,
+        url: String? = nil
     ) {
         self.role = role
         self.subrole = subrole
@@ -36,6 +39,7 @@ struct MacAXAttributes: Sendable, Hashable {
         self.frame = frame
         self.enabled = enabled
         self.focused = focused
+        self.url = url
     }
 
     var label: String? {
@@ -84,7 +88,8 @@ enum MacAXTraversal {
         root: Source.Element,
         source: Source,
         budget: MacAXTraversalBudget,
-        clock: ContinuousClock = ContinuousClock()
+        clock: ContinuousClock = ContinuousClock(),
+        descendInto: (MacAXAttributes) -> Bool = { _ in true }
     ) -> MacAXSnapshot<Source.Element> {
         let start = clock.now
         var elements: [Int: Source.Element] = [:]
@@ -109,6 +114,7 @@ enum MacAXTraversal {
             nextID += 1
             elements[id] = element
             var node = MacAXNode(id: id, attributes: attributes, children: [])
+            guard descendInto(attributes) else { return node }
             guard depth < budget.maxDepth else {
                 if !source.children(of: element).isEmpty { note("depth limit of \(budget.maxDepth) reached") }
                 return node
@@ -135,11 +141,43 @@ enum MacAXTraversal {
     }
 }
 
+/// The web page a window shows, for browsers and other apps that embed one.
+struct MacAXPage: Sendable, Hashable {
+    static let webAreaRole = "AXWebArea"
+    /// What a search without a tree may read before giving up; the page sits a few levels below the window.
+    static let searchBudget = MacAXTraversalBudget(maxDepth: 10, maxNodes: 300, maxChildren: 100, deadline: .milliseconds(300))
+
+    var url: String
+    /// The visible part of the page: the web area clipped to its scroll area, which keeps the toolbar outside it.
+    var bounds: CGRect?
+
+    /// The outermost web area; nested ones are frames inside the page.
+    static func locate(in root: MacAXNode) -> MacAXPage? {
+        func visit(_ node: MacAXNode, clip: CGRect?) -> MacAXPage? {
+            let attributes = node.attributes
+            if attributes.role == webAreaRole, let url = attributes.url {
+                let bounds = attributes.frame.map { frame in clip.map { frame.intersection($0) } ?? frame }
+                return MacAXPage(url: url, bounds: bounds.flatMap { $0.isNull ? nil : $0 })
+            }
+            let clip = attributes.role == "AXScrollArea" ? attributes.frame ?? clip : clip
+            return node.children.lazy.compactMap { visit($0, clip: clip) }.first
+        }
+        return visit(root, clip: nil)
+    }
+
+    /// Finds the page without rendering a tree, never reading inside it.
+    static func find<Source: MacAXTreeSource>(root: Source.Element, source: Source, budget: MacAXTraversalBudget = searchBudget) -> MacAXPage? {
+        let snapshot = MacAXTraversal.snapshot(root: root, source: source, budget: budget) { $0.role != webAreaRole }
+        return snapshot.root.flatMap(locate(in:))
+    }
+}
+
 struct MacAXRendering: Sendable {
     var text: String
     var elements: [String: ElementRef]
     /// The traversal node behind each ref.
     var nodeIDByRef: [String: Int]
+    var page: MacAXPage?
 }
 
 /// The compact text the model reads. Keeps elements that are actionable or carry text, flattens text-less
@@ -169,18 +207,20 @@ enum MacAXTreeRenderer {
             attributes.label != nil || !(attributes.value ?? "").isEmpty
         }
 
-        func renderChildren(of node: MacAXNode, depth: Int) -> [String] {
-            node.children.flatMap { render($0, depth: depth) }
+        func renderChildren(of node: MacAXNode, depth: Int, page: String?) -> [String] {
+            node.children.flatMap { render($0, depth: depth, page: page) }
         }
 
-        func render(_ node: MacAXNode, depth: Int) -> [String] {
+        func render(_ node: MacAXNode, depth: Int, page: String?) -> [String] {
             let attributes = node.attributes
             if let frame = attributes.frame, frame.width <= 0 || frame.height <= 0 { return [] }
+            // Only a web area's AXURL names the page; a link's names where it leads.
+            let page = attributes.role == MacAXPage.webAreaRole ? attributes.url ?? page : page
             if layoutRoles.contains(attributes.role), !hasText(attributes) {
-                return renderChildren(of: node, depth: depth)
+                return renderChildren(of: node, depth: depth, page: page)
             }
             let keep = actionableRoles.contains(attributes.role) || hasText(attributes)
-            let childLines = renderChildren(of: node, depth: depth + 1)
+            let childLines = renderChildren(of: node, depth: depth + 1, page: page)
             guard keep || !childLines.isEmpty else { return [] }
             counter += 1
             let ref = "e\(counter)"
@@ -192,6 +232,7 @@ enum MacAXTreeRenderer {
                 label: attributes.label,
                 frame: attributes.frame.map(DisplayRect.init),
                 app: app,
+                url: page,
                 isSecureInput: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField",
                 depth: depth,
                 isFocused: attributes.focused
@@ -206,8 +247,13 @@ enum MacAXTreeRenderer {
             return [line] + childLines
         }
 
-        lines.append(contentsOf: renderChildren(of: root, depth: 0))
-        return MacAXRendering(text: lines.joined(separator: "\n"), elements: elements, nodeIDByRef: nodeIDByRef)
+        lines.append(contentsOf: renderChildren(of: root, depth: 0, page: nil))
+        return MacAXRendering(
+            text: lines.joined(separator: "\n"),
+            elements: elements,
+            nodeIDByRef: nodeIDByRef,
+            page: MacAXPage.locate(in: root)
+        )
     }
 
     static func displayRole(_ role: String) -> String {

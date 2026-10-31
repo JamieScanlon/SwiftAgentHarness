@@ -82,6 +82,9 @@ public struct ObservationTarget: Sendable, Codable, Hashable {
     public var tabID: String?
     /// The page URL for browser targets.
     public var url: String?
+    /// Where the page sits when an app's own controls surround it, as in a desktop browser. Points outside it land on
+    /// the app, not the page.
+    public var pageBounds: DisplayRect?
     public var bounds: DisplayRect
 
     public init(
@@ -91,6 +94,7 @@ public struct ObservationTarget: Sendable, Codable, Hashable {
         windowID: String? = nil,
         tabID: String? = nil,
         url: String? = nil,
+        pageBounds: DisplayRect? = nil,
         bounds: DisplayRect
     ) {
         self.app = app
@@ -99,6 +103,7 @@ public struct ObservationTarget: Sendable, Codable, Hashable {
         self.windowID = windowID
         self.tabID = tabID
         self.url = url
+        self.pageBounds = pageBounds
         self.bounds = bounds
     }
 }

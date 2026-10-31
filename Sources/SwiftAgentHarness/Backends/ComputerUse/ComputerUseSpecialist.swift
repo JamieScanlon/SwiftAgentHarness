@@ -132,6 +132,21 @@ public struct ComputerUseTask: Sendable {
         return .invalid("\(names) \(verb): " + advice.joined(separator: "; "))
     }
 
+    /// Requested grants that do less than they ask: capped apps, and browsers with no domain to act on.
+    public func grantNotes(reviewedBy reviewer: ComputerUseGrantReviewer) -> [String] {
+        let grantsDomains = grants.contains { if case .domain = $0 { true } else { false } }
+        return reviewer.review(grants).grantable.compactMap { reviewed in
+            guard case .app(let bundleID, let tier, _) = reviewed.grant else { return nil }
+            let capped = reviewed.requestedTier > tier
+            if reviewer.ruling(for: AppIdentity(bundleID: bundleID)).isBrowser {
+                if capped { return "\(bundleID) is a browser, which stays at view whatever the grant; grant domains for its pages instead" }
+                return grantsDomains ? nil : "\(bundleID) is a browser and no domains are granted, so its pages can only be viewed"
+            }
+            guard capped, let reason = reviewed.capReason else { return nil }
+            return "\(bundleID) stays at \(tier.rawValue) whatever the grant: \(reason)"
+        }
+    }
+
     /// The child's instructions. It starts from a fresh conversation, so the brief is self-contained.
     public var brief: String {
         var sections = ["Goal: \(goal)"]
@@ -299,6 +314,8 @@ public struct ComputerUseResult: Sendable, Codable {
     public var reason: String?
     /// Grants refused actions needed. Grants can't change during a run, so delegating again with them is the fix.
     public var missingGrants: [MissingGrant]? = nil
+    /// Requested grants that can't do what they ask, such as a browser above view.
+    public var grantNotes: [String]? = nil
 
     public var jsonString: String {
         let encoder = JSONEncoder()

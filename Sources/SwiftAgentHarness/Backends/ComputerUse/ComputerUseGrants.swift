@@ -229,12 +229,17 @@ public struct ComputerUseAppPolicy: Sendable, Hashable {
             ruling.isBrowser = true
             ruling.tierCap = .view
             ruling.capReason = rule.reason
+            ruling.blastRadiusWarning = Self.browserVisibilityWarning
         }
         if let rule = broadBlastRadius.first(where: { $0.matches(app) }) {
             ruling.blastRadiusWarning = rule.reason
         }
         return ruling
     }
+
+    /// Domain grants limit what can be done on a page, not what can be seen.
+    public static let browserVisibilityWarning =
+        "Observations show whatever page its windows display, on any domain; domain grants decide only where it can act."
 
     public static let `default` = ComputerUseAppPolicy(
         blocked: [

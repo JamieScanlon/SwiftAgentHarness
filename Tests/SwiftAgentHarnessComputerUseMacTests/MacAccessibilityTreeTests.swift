@@ -14,6 +14,21 @@ struct FakeAXSource: MacAXTreeSource {
     func children(of element: Int) -> [Int] { children[element] ?? [] }
 }
 
+/// Records which elements were read.
+final class RecordingAXSource: MacAXTreeSource {
+    let base: FakeAXSource
+    private(set) var reads: [Int] = []
+
+    init(base: FakeAXSource) { self.base = base }
+
+    func read(_ element: Int) -> MacAXAttributes? {
+        reads.append(element)
+        return base.read(element)
+    }
+
+    func children(of element: Int) -> [Int] { base.children(of: element) }
+}
+
 @Suite("macOS accessibility tree")
 struct MacAccessibilityTreeTests {
     private func attributes(
@@ -44,6 +59,59 @@ struct MacAccessibilityTreeTests {
             ],
             children: [0: [1, 4, 6, 7, 8], 1: [2, 3], 4: [5]]
         )
+    }
+
+    /// window → toolbar → address field; group → scroll area → web area (apple.com) → [link, iframe web area → button].
+    private var safari: FakeAXSource {
+        FakeAXSource(
+            attributes: [
+                0: attributes("AXWindow", title: "Apple", frame: CGRect(x: 0, y: 0, width: 1200, height: 800)),
+                1: attributes("AXToolbar", frame: CGRect(x: 0, y: 0, width: 1200, height: 52)),
+                2: attributes("AXTextField", title: "smart search field", value: "https://www.apple.com/"),
+                3: attributes("AXGroup", frame: CGRect(x: 0, y: 52, width: 1200, height: 748)),
+                4: attributes("AXScrollArea", frame: CGRect(x: 0, y: 52, width: 1200, height: 748)),
+                5: MacAXAttributes(role: "AXWebArea", title: "Apple", frame: CGRect(x: 0, y: 52, width: 1200, height: 4000), url: "https://www.apple.com/"),
+                6: MacAXAttributes(role: "AXLink", title: "Store", frame: CGRect(x: 20, y: 80, width: 60, height: 20), url: "https://www.apple.com/store"),
+                7: MacAXAttributes(role: "AXWebArea", frame: CGRect(x: 0, y: 400, width: 600, height: 200), url: "https://video.example.com/embed"),
+                8: attributes("AXButton", title: "Play", frame: CGRect(x: 10, y: 410, width: 40, height: 20)),
+            ],
+            children: [0: [1, 3], 1: [2], 3: [4], 4: [5], 5: [6, 7], 7: [8]]
+        )
+    }
+
+    @Test("Elements inside a web area carry its page URL, nested frames carry their own, and browser controls carry none")
+    func pageURLs() throws {
+        let snapshot = MacAXTraversal.snapshot(root: 0, source: safari, budget: .default)
+        let rendered = MacAXTreeRenderer.render(try #require(snapshot.root), observationID: "o_1", app: nil)
+        let address = try #require(rendered.elements.values.first { $0.label == "smart search field" })
+        let link = try #require(rendered.elements.values.first { $0.label == "Store" })
+        let play = try #require(rendered.elements.values.first { $0.label == "Play" })
+        #expect(address.url == nil)
+        // A link's own AXURL is where it leads; the action lands on the page it is on.
+        #expect(link.url == "https://www.apple.com/")
+        #expect(play.url == "https://video.example.com/embed")
+    }
+
+    @Test("The page is the outermost web area, bounded by its scroll area so the toolbar stays outside it")
+    func pageOfTree() throws {
+        let snapshot = MacAXTraversal.snapshot(root: 0, source: safari, budget: .default)
+        let root = try #require(snapshot.root)
+        let page = try #require(MacAXPage.locate(in: root))
+        #expect(page.url == "https://www.apple.com/")
+        #expect(page.bounds == CGRect(x: 0, y: 52, width: 1200, height: 748))
+        let plain = MacAXTraversal.snapshot(root: 0, source: textEdit, budget: .default)
+        let plainRoot = try #require(plain.root)
+        #expect(MacAXPage.locate(in: plainRoot) == nil)
+    }
+
+    @Test("Finding the page without a tree stops at the web area instead of reading the page")
+    func findPage() {
+        let recording = RecordingAXSource(base: safari)
+        let page = MacAXPage.find(root: 0, source: recording, budget: .default)
+        #expect(page?.url == "https://www.apple.com/")
+        #expect(page?.bounds == CGRect(x: 0, y: 52, width: 1200, height: 748))
+        #expect(!recording.reads.contains(6))
+        #expect(MacAXPage.find(root: 0, source: RecordingAXSource(base: textEdit), budget: .default) == nil)
     }
 
     @Test("Traversal reads the whole tree when it fits the budget")

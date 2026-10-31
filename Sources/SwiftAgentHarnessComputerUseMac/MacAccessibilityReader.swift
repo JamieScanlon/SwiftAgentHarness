@@ -35,6 +35,16 @@ actor MacAccessibilityReader {
         var windowFrame: CGRect?
     }
 
+    /// The page the app's focused window shows, read without rendering the window's tree.
+    func focusedPage(pid: pid_t) -> MacAXPage? {
+        configureOnce()
+        let appElement = AXUIElementCreateApplication(pid)
+        enableManualAccessibility(appElement, pid: pid)
+        guard let window = Self.copyElement(appElement, kAXFocusedWindowAttribute)
+            ?? Self.copyElements(appElement, kAXWindowsAttribute).first else { return nil }
+        return MacAXPage.find(root: window, source: LiveAXSource())
+    }
+
     /// The focused window of an app, rendered for the model and retained for acting on its refs.
     func snapshotFocusedWindow(
         pid: pid_t,
@@ -228,7 +238,7 @@ final class LiveAXSource: MacAXTreeSource {
     private static let attributeNames: [String] = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute,
         kAXIdentifierAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
-        kAXChildrenAttribute,
+        kAXChildrenAttribute, kAXURLAttribute,
     ]
 
     private var lastElement: AXUIElement?
@@ -271,7 +281,8 @@ final class LiveAXSource: MacAXTreeSource {
             identifier: string(5),
             frame: position.flatMap { origin in size.map { CGRect(origin: origin, size: $0) } },
             enabled: bool(8) ?? true,
-            focused: bool(9) ?? false
+            focused: bool(9) ?? false,
+            url: (array[11] as? URL)?.absoluteString
         )
     }
 

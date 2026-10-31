@@ -29,8 +29,11 @@ extension SubAgentSpawnService {
                 content: "Tool dispatch denied: \(error.message)."
             ))
         }
+        let grantNotes = task.grantNotes(reviewedBy: configuration.registry.reviewer)
         let reply: (ComputerUseResult) -> ToolDispatchOutcome = { result in
-            .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.jsonString))
+            var result = result
+            if !grantNotes.isEmpty { result.grantNotes = grantNotes }
+            return .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.jsonString))
         }
 
         let definition = ComputerUseDelegateToolProvider.specialistDefinition(configuration.specialist)

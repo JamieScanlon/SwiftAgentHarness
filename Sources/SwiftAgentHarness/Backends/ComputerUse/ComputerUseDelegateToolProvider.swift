@@ -59,7 +59,8 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                 budget, and any handoff the user must complete. budget-exhausted after extensions means the work was \
                 moving and ran out of room; no-progress means repeating the same task won't help. missingGrants lists \
                 apps and domains the specialist was refused for lacking; grants can't change during a run, so delegate \
-                again with them added.
+                again with them added. grantNotes lists requested grants that do less than they ask, such as a \
+                browser above view.
                 """,
                 parameters: [
                     .init(name: "goal", description: "What to accomplish, stated fully.", type: "string", required: true),

@@ -212,20 +212,32 @@ public actor MacHostDisplayTarget: DisplayTarget {
         }
 
         var tree: ObservationTree?
-        if wantsTree, let pid, let app, grantedApps.contains(app.bundleID),
-           let snapshot = await accessibility.snapshotFocusedWindow(pid: pid, app: app, observationID: id, budget: configuration.axBudget) {
-            tree = ObservationTree(
-                text: snapshot.rendering.text,
-                elements: snapshot.rendering.elements,
-                capturedAt: Date(),
-                truncated: snapshot.truncated
-            )
+        var page: MacAXPage?
+        if let pid, let app, grantedApps.contains(app.bundleID) {
+            if wantsTree, let snapshot = await accessibility.snapshotFocusedWindow(pid: pid, app: app, observationID: id, budget: configuration.axBudget) {
+                tree = ObservationTree(
+                    text: snapshot.rendering.text,
+                    elements: snapshot.rendering.elements,
+                    capturedAt: Date(),
+                    truncated: snapshot.truncated
+                )
+                page = snapshot.rendering.page
+            } else {
+                page = await accessibility.focusedPage(pid: pid)
+            }
         }
         retain(ObservationMeta(pid: pid, processStart: processStart, geometry: image?.geometry), for: id)
         return DisplayObservation(
             id: id,
             at: now,
-            target: ObservationTarget(app: app, pid: pid, processStart: processStart, bounds: DisplayRect(bounds)),
+            target: ObservationTarget(
+                app: app,
+                pid: pid,
+                processStart: processStart,
+                url: page?.url,
+                pageBounds: page?.bounds.map(DisplayRect.init),
+                bounds: DisplayRect(bounds)
+            ),
             image: image,
             tree: tree
         )
