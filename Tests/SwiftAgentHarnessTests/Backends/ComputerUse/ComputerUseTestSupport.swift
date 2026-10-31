@@ -124,7 +124,9 @@ actor FakeDisplayTarget: DisplayTarget {
             withImage: request.modes.contains(.pixels)
         )
         if let screenshot { observation.image?.data = screenshot }
-        if request.modes.contains(.accessibility), observationCounter <= trees.count {
+        if !request.modes.contains(.accessibility) {
+            observation.tree = nil
+        } else if observationCounter <= trees.count {
             observation.tree = trees[observationCounter - 1]
         }
         return observation

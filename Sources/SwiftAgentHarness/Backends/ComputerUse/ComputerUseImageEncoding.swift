@@ -5,8 +5,9 @@ import ImageIO
 import UniformTypeIdentifiers
 #endif
 
-/// Decode, downscale, and PNG-encode helpers for images the harness derives from observations (approval-card
-/// crops and replay thumbnails). Never used on the screenshot the model sees, whose geometry must not change.
+/// Decode, downscale, and encode helpers for images the harness derives from observations (approval-card crops,
+/// replay thumbnails, and labeled screenshots). Nothing here may resize the screenshot the model sees, whose geometry
+/// must not change.
 enum ComputerUseImageEncoding {
     /// `data` scaled so its long edge is at most `maxEdgePx`, as PNG. `nil` when it can't be decoded.
     static func thumbnail(of data: Data, maxEdgePx: Int, alt: String) -> PresentationImage? {
@@ -40,11 +41,16 @@ enum ComputerUseImageEncoding {
     }
 
     static func png(_ image: CGImage, alt: String) -> PresentationImage? {
+        guard let encoded = encode(image, as: .png) else { return nil }
+        return PresentationImage(data: encoded, mediaType: "image/png", width: image.width, height: image.height, alt: alt)
+    }
+
+    static func encode(_ image: CGImage, as type: UTType) -> Data? {
         let encoded = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(encoded, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        guard let destination = CGImageDestinationCreateWithData(encoded, type.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { return nil }
-        return PresentationImage(data: encoded as Data, mediaType: "image/png", width: image.width, height: image.height, alt: alt)
+        return encoded as Data
     }
     #endif
 }

@@ -20,6 +20,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let verifyToolName = "computer_verify"
     public static let askUserToolName = "computer_ask_user"
     public static let handoffToolName = "computer_handoff"
+    public static let scratchpadToolName = "computer_scratchpad"
 
     /// This provider's tools whose results carry screen content.
     static let ownScreenToolNames: Set<String> = [
@@ -31,18 +32,19 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     /// What a native-toolset session offers besides Anthropic's members: verification, the user, and the cheaper
     /// rungs of the control ladder.
     static let nativeCompanionToolNames: Set<String> = [
-        verifyToolName, askUserToolName, handoffToolName, launchToolName, openURLToolName,
+        verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, launchToolName, openURLToolName,
     ]
     /// Tools whose results are harness or user text only.
-    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName]
+    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName, scratchpadToolName]
     /// The whole family, in the order the tools are offered.
     static let toolNames: [String] = [
         observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
         menuToolName, launchToolName, openURLToolName, zoomToolName, waitForToolName, verifyToolName,
-        askUserToolName, handoffToolName,
+        askUserToolName, handoffToolName, scratchpadToolName,
     ]
 
     static let reminderHeading = "Task reminder"
+    static let screenshotTagsNote = "Red tags on the screenshot are the tree's element refs, at each element's top-left corner."
 
     private let session: ComputerUseSession
     private let offering: Set<String>?
@@ -56,7 +58,9 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     }
 
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
-        let readOnly: Set<String> = [Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName]
+        let readOnly: Set<String> = [
+            Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName, Self.scratchpadToolName,
+        ]
         return Dictionary(uniqueKeysWithValues: (Self.ownScreenToolNames.union(Self.harnessToolNames)).map { name in
             // One controller per target: every call is serial.
             (name, ToolDescriptorHints(
@@ -260,6 +264,23 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                 ],
                 type: .function
             ),
+            ToolDefinition(
+                name: Self.scratchpadToolName,
+                description: """
+                Keep notes for later steps, such as values read off the screen or where you are in a multi-step task. \
+                The notes replace any earlier ones and come back in every task reminder, after older screenshots are \
+                gone. Taking notes is not an action on the screen.
+                """,
+                parameters: [
+                    .init(
+                        name: "notes",
+                        description: "All the notes you want to keep, up to \(ComputerUseSession.scratchpadLimit) characters. Empty clears them.",
+                        type: "string",
+                        required: true
+                    ),
+                ],
+                type: .function
+            ),
         ]
     }
 
@@ -354,6 +375,19 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                     throw Error.invalidParameter("reason must be one of login, 2fa, captcha, payment, ambiguous, consequential")
                 }
                 return await handoff(reason: reason, prompt: try arguments.requiredString("prompt"), toolCall)
+            case Self.scratchpadToolName:
+                guard let notes = arguments.rawString("notes") else { throw Error.missingParameter("notes") }
+                do {
+                    try await session.setScratchpad(notes)
+                } catch ComputerUseSessionError.scratchpadTooLong(let limit) {
+                    return failure(toolCall, "notes are limited to \(limit) characters; keep only what later steps need")
+                }
+                return ToolResult(
+                    success: true,
+                    content: await session.scratchpad == nil ? "Notes cleared." : "Notes saved.",
+                    metadata: .object(["source": .string("computer_use"), "action": .string("scratchpad")]),
+                    toolCallId: toolCall.id
+                )
             default:
                 throw Error.unknownTool(toolCall.name)
             }
@@ -400,10 +434,12 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         ]
         var screenshot: ToolResultImage?
         if let observation = batch.observations.last {
+            let labeled = session.configuration.labelsScreenshots ? ComputerUseScreenshotLabels.labeled(observation) : nil
             lines.append("")
             lines.append(Self.render(observation, mode: session.coordinateCodec.mode))
+            if labeled != nil { lines.append(Self.screenshotTagsNote) }
             metadata["observation"] = Self.metadata(for: observation)
-            screenshot = Self.screenshot(of: observation)
+            screenshot = labeled ?? Self.screenshot(of: observation)
         }
         let succeeded = outcome.effect != .refused && outcome.effect != .notExecuted
         let text = lines.joined(separator: "\n")
@@ -428,13 +464,17 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     static func reminder(for session: ComputerUseSession) async -> String? {
         let constraints = session.configuration.task.constraints
         let unverified = await session.unverifiedCriteria
-        guard !constraints.isEmpty || !unverified.isEmpty else { return nil }
+        let notes = await session.scratchpad
+        guard !constraints.isEmpty || !unverified.isEmpty || notes != nil else { return nil }
         var lines = ["\(Self.reminderHeading):"]
         if !constraints.isEmpty {
             lines.append("Constraints: " + constraints.joined(separator: "; "))
         }
         if !unverified.isEmpty {
             lines.append("Not yet verified: " + unverified.map { "\($0.number). \($0.criterion)" }.joined(separator: "; "))
+        }
+        if let notes {
+            lines.append("Your notes: \(notes)")
         }
         return lines.joined(separator: "\n")
     }
@@ -626,6 +666,12 @@ extension ComputerUseToolProvider {
             guard case .string(let value)? = fields[key] else { return nil }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : value
+        }
+
+        /// The string as given, blank included.
+        func rawString(_ key: String) -> String? {
+            guard case .string(let value)? = fields[key] else { return nil }
+            return value
         }
 
         func requiredString(_ key: String) throws -> String {

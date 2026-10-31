@@ -34,6 +34,8 @@ public struct ComputerUseSessionConfiguration: Sendable {
     public var accountID: UUID?
     public var auditCapacity: Int
     /// Replay thumbnails kept per session. Past it, the first and the newest are kept.
+    /// Draw element refs onto screenshots the model sees, beside the tree that lists them.
+    public var labelsScreenshots = true
     public var replayThumbnailCapacity: Int = 120
     public var replayThumbnailEdgePx: Int = Self.defaultReplayThumbnailEdgePx
     /// Anthropic's native toolset, when the bound model speaks it over Anthropic's API; `nil` uses the harness's
@@ -146,6 +148,7 @@ public enum ComputerUseSessionError: Error, Sendable, Equatable {
     /// Verification must cite one of the task's success criteria, when it has any.
     case unknownCriterion(String)
     case takeoverActive
+    case scratchpadTooLong(limit: Int)
 }
 
 public enum ComputerUseHandoffReason: String, Sendable, Codable, Hashable {
@@ -332,6 +335,9 @@ public actor ComputerUseSession {
     /// Grants the session's refused actions needed, one per subject at the highest tier asked. Grants can't change
     /// during a run, so the parent has to delegate again with them.
     public private(set) var missingGrants: [ComputerUseGrant] = []
+    /// The specialist's own notes, restated in every task reminder so they outlive pruned screenshots.
+    public private(set) var scratchpad: String?
+    public static let scratchpadLimit = 2_000
     public private(set) var replayFrames: [ComputerUseReplayFrame] = []
     /// Where the last pointer action left the pointer, in the target's global space.
     public private(set) var lastPointer: DisplayPoint?
@@ -899,6 +905,13 @@ public actor ComputerUseSession {
             unresolvedHandoff = request
         }
         return result
+    }
+
+    /// Replaces the notes; blank notes clear them. Notes are not actions and take no step.
+    public func setScratchpad(_ notes: String) throws(ComputerUseSessionError) {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count <= Self.scratchpadLimit else { throw .scratchpadTooLong(limit: Self.scratchpadLimit) }
+        scratchpad = trimmed.isEmpty ? nil : trimmed
     }
 
     /// Task criteria without a verification that they are met, in task order.
