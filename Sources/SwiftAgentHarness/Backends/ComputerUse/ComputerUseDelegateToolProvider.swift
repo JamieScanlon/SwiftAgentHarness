@@ -57,7 +57,9 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                 and domains before it starts. It returns JSON with status (done, done-unverified, needs-user, \
                 blocked, budget-exhausted, no-progress, deadline, failed), result, verification per criterion, \
                 budget, and any handoff the user must complete. budget-exhausted after extensions means the work was \
-                moving and ran out of room; no-progress means repeating the same task won't help.
+                moving and ran out of room; no-progress means repeating the same task won't help. missingGrants lists \
+                apps and domains the specialist was refused for lacking; grants can't change during a run, so delegate \
+                again with them added.
                 """,
                 parameters: [
                     .init(name: "goal", description: "What to accomplish, stated fully.", type: "string", required: true),

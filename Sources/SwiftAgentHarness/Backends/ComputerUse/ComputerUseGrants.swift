@@ -46,6 +46,37 @@ public enum ComputerUseGrant: Sendable, Codable, Hashable {
         }
     }
 
+    /// The grant as the delegate tool's `apps` or `domains` argument spells it, such as `docs.example.com:click`.
+    var delegateArgument: String {
+        switch self.normalized {
+        case .app(let bundleID, let tier, let flags):
+            let joined = flags.map(\.rawValue).sorted().joined(separator: "+")
+            return joined.isEmpty ? "\(bundleID):\(tier.rawValue)" : "\(bundleID):\(tier.rawValue):\(joined)"
+        case .domain(let domain, let tier):
+            return "\(domain):\(tier.rawValue)"
+        }
+    }
+
+    /// Grants as delegate arguments, such as `domains: a.com:click and apps: com.x:full`.
+    static func delegateArguments(_ grants: [ComputerUseGrant]) -> String {
+        let domains = grants.filter { if case .domain = $0 { true } else { false } }.map(\.delegateArgument)
+        let apps = grants.filter { if case .app = $0 { true } else { false } }.map(\.delegateArgument)
+        return [
+            domains.isEmpty ? nil : "domains: " + domains.joined(separator: ", "),
+            apps.isEmpty ? nil : "apps: " + apps.joined(separator: ", "),
+        ].compactMap { $0 }.joined(separator: " and ")
+    }
+
+    /// The same subject at the higher of the two tiers, with both grants' flags.
+    func merging(_ other: ComputerUseGrant) -> ComputerUseGrant {
+        switch (self, other) {
+        case (.app(let bundleID, let tier, let flags), .app(_, let otherTier, let otherFlags)):
+            return .app(bundleID: bundleID, tier: max(tier, otherTier), flags: flags.union(otherFlags))
+        default:
+            return replacingTier(max(tier, other.tier))
+        }
+    }
+
     /// Same subject, ignoring tier and flags.
     func sameSubject(as other: ComputerUseGrant) -> Bool {
         switch (self.normalized, other.normalized) {

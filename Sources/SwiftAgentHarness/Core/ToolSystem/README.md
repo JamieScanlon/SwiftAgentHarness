@@ -78,7 +78,7 @@ At boot, the host app typically:
 
 ## Deferred tool loading
 
-A tool tagged `bounds-own-run-time` enforces its own wall-clock budget, so the per-call `toolCallTimeoutSeconds` doesn't apply to it; the watchdog still logs heartbeats. In-process local-agent delegates carry it, because each child run is bounded by its agent's `runTimeoutSeconds`.
+A tool tagged `bounds-own-run-time` enforces its own wall-clock budget, so the per-call `toolCallTimeoutSeconds` doesn't apply to it; the watchdog still logs heartbeats. In-process local-agent delegates carry it, because each child run is bounded by its agent's `runTimeoutSeconds`. So does the computer-use family, because any of its calls can wait on the user and each is bounded by the session's end time and the specialist's idle timeout.
 
 A tool whose descriptor carries the `defer-loading` policy tag stays out of the model's tool list until the model loads it with `tool_search`. This keeps a large schema out of the prompt, and lets a cheaper tool for the job be seen first. Add `search-hint:<keywords>` to give the search words that aren't in the name or description.
 

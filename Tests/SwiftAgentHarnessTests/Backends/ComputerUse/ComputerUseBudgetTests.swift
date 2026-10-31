@@ -115,9 +115,12 @@ struct ComputerUseTaskBudgetTests {
         #expect(try task(["steps": .integer(10_000)]).budgets.steps == 200)
     }
 
-    @Test("There is no time budget for the parent to set: a minutes argument changes nothing")
+    @Test("There is no time budget for the parent to set: a minutes argument is refused, saying the host sets it")
     func noMinutes() throws {
-        #expect(try task(["max_minutes": .integer(1)]).budgets.maxDuration == .seconds(1_800))
+        #expect(throws: ComputerUseTaskError.invalid("max_minutes is not a parameter: time limits are set by the host")) {
+            try task(["max_minutes": .integer(1)])
+        }
+        #expect(try task([:]).budgets.maxDuration == .seconds(1_800))
     }
 
     @Test("A stated deadline is carried as a cutoff")
@@ -142,5 +145,6 @@ struct ComputerUseTaskBudgetTests {
         let names = Set(definition.parameters.map(\.name))
         #expect(names.isSuperset(of: ["steps", "deadline"]))
         #expect(names.isDisjoint(with: ["max_steps", "max_minutes"]))
+        #expect(definition.parameters.map(\.name) == ComputerUseTask.parameterNames, "the task accepts exactly the schema's parameters")
     }
 }

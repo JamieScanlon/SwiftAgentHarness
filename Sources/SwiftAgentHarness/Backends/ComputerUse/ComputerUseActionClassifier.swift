@@ -56,6 +56,8 @@ public struct ComputerUseClassification: Sendable, Hashable {
     public var elementRole: String?
     /// The element the action lands on, for the approval card. Its label is for the human, never for a gate.
     public var element: ElementRef?
+    /// For an out-of-grant action, the grant that would have allowed it, when a task's grants can provide one.
+    public var missingGrant: ComputerUseGrant?
 
     public var proposedAction: ComputerUseProposedAction {
         ComputerUseProposedAction(kind: kind.rawValue, app: app?.bundleID, domain: domain, elementRole: elementRole)
@@ -261,10 +263,12 @@ public struct ComputerUseActionClassifier: Sendable {
         }
         guard let tier = context.grants.tier(forURL: url) else {
             result.actionClass = .outOfGrant(reason: "domain \(host) is not granted")
+            result.missingGrant = .domain(host, tier: .click)
             return result
         }
         guard tier >= .click else {
             result.actionClass = .outOfGrant(reason: "domain \(host) is granted at \(tier.rawValue); navigation needs click")
+            result.missingGrant = .domain(host, tier: .click)
             return result
         }
         result.actionClass = .navigate
@@ -301,8 +305,10 @@ public struct ComputerUseActionClassifier: Sendable {
                 ruling.tierCap.map { min($0, granted) } ?? granted
             }
         }
+        let flags = app.map { context.grants.flags(forApp: $0.bundleID) } ?? []
         guard let tier else {
             result.actionClass = .outOfGrant(reason: "\(subject.isEmpty ? "target" : subject) is not granted")
+            result.missingGrant = Self.grant(covering: result.domain, app: app, ruling: ruling, flags: flags, tier: required)
             return result
         }
         guard tier >= required else {
@@ -313,19 +319,21 @@ public struct ComputerUseActionClassifier: Sendable {
             result.actionClass = .outOfGrant(
                 reason: "\(subject) is granted at \(tier.rawValue); \(action.kind.rawValue) needs \(required.rawValue)"
             )
+            result.missingGrant = Self.grant(covering: result.domain, app: app, ruling: ruling, flags: flags, tier: required)
             return result
         }
 
-        let flags = app.map { context.grants.flags(forApp: $0.bundleID) } ?? []
         switch action {
         case .key(let combo, _), .hold(let combo, _):
             if (systemShortcuts.contains(combo) || combo.modifiers.contains(.fn)), !flags.contains(.systemKeys) {
                 result.actionClass = .outOfGrant(reason: "\(combo) is a global shortcut; it needs the system-keys flag")
+                result.missingGrant = app.map { .app(bundleID: $0.bundleID, tier: tier, flags: flags.union([.systemKeys])) }
                 return result
             }
         case .type(_, _, .paste?):
             if !flags.contains(.clipboardWrite) {
                 result.actionClass = .outOfGrant(reason: "pasting needs the clipboard-write flag")
+                result.missingGrant = app.map { .app(bundleID: $0.bundleID, tier: tier, flags: flags.union([.clipboardWrite])) }
                 return result
             }
         default:
@@ -335,6 +343,23 @@ public struct ComputerUseActionClassifier: Sendable {
         let reasons = consequentialReasons(action: action, element: result.element, app: app, context: context)
         result.actionClass = reasons.isEmpty ? base : .consequential(reasons: reasons)
         return result
+    }
+
+    /// The grant a task could add to allow the action: the page's domain in a browser, otherwise the app. `nil` when
+    /// no grant helps, such as a browser launch, browser chrome with no page, or a tier above the app's cap.
+    private static func grant(
+        covering domain: String?,
+        app: AppIdentity?,
+        ruling: ComputerUseAppRuling,
+        flags: Set<ComputerUseGrantFlag>,
+        tier: ComputerUseGrantTier
+    ) -> ComputerUseGrant? {
+        if let domain, ruling.isBrowser || app == nil {
+            return .domain(domain, tier: tier)
+        }
+        guard let app, !ruling.isBrowser else { return nil }
+        if let cap = ruling.tierCap, tier > cap { return nil }
+        return .app(bundleID: app.bundleID, tier: tier, flags: flags)
     }
 
     private func consequentialReasons(

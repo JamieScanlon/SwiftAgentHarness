@@ -260,7 +260,7 @@ struct ComputerUseToolProviderTests {
         let observe = try #require(tools.first { $0.name == ComputerUseToolProvider.observeToolName })
         let ask = try #require(tools.first { $0.name == ComputerUseToolProvider.askUserToolName })
         #expect(await provider.policyTags(for: observe).contains(ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag()))
-        #expect(await provider.policyTags(for: ask).isEmpty)
+        #expect(!(await provider.policyTags(for: ask).contains(ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag())))
     }
 
     @Test("The session's image limit reaches every observe request, and defaults within the pipeline's cap")

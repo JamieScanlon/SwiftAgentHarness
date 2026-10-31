@@ -59,14 +59,26 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         let readOnly: Set<String> = [Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName]
         return Dictionary(uniqueKeysWithValues: (Self.ownScreenToolNames.union(Self.harnessToolNames)).map { name in
             // One controller per target: every call is serial.
-            (name, ToolDescriptorHints(effectClass: readOnly.contains(name) ? .readOnly : .mutating, parallelHint: .serialOnly))
+            (name, ToolDescriptorHints(
+                effectClass: readOnly.contains(name) ? .readOnly : .mutating,
+                parallelHint: .serialOnly,
+                policyTags: Self.policyTags(forName: name)
+            ))
         })
     }
 
     public func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
-        Self.ownScreenToolNames.contains(definition.name)
-            ? [ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag()]
-            : []
+        Self.policyTags(forName: definition.name)
+    }
+
+    /// Every call may wait on the user (a question, a handoff, a ceiling question, or a confirmation card) and is
+    /// bounded by the session's end time and the specialist's idle timeout instead of the per-call timeout.
+    static let boundsOwnRunTimeTag = ToolPolicyTag(rawValue: ToolRegistryEntry.PolicyTag.boundsOwnRunTime.rawValue)
+
+    private static func policyTags(forName name: String) -> [ToolPolicyTag] {
+        ownScreenToolNames.contains(name)
+            ? [boundsOwnRunTimeTag, ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag()]
+            : [boundsOwnRunTimeTag]
     }
 
     public func availableTools() async -> [ToolDefinition] {

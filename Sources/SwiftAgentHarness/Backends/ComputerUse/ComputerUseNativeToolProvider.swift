@@ -35,7 +35,10 @@ struct ComputerUseNativeToolProvider: ToolProvider, ToolDescriptorHinting {
     }
 
     private func policyTags(forName name: String) -> [ToolPolicyTag] {
-        var tags = [ToolPolicyTag(rawValue: ToolRegistryEntry.PolicyTag.haltsBatchOnFailure.rawValue)]
+        var tags = [
+            ToolPolicyTag(rawValue: ToolRegistryEntry.PolicyTag.haltsBatchOnFailure.rawValue),
+            ComputerUseToolProvider.boundsOwnRunTimeTag,
+        ]
         if ComputerUseNativeToolset.screenToolNames.contains(name) {
             tags.append(ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag())
         }

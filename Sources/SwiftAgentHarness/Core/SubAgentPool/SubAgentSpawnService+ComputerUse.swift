@@ -260,6 +260,7 @@ extension SubAgentSpawnService {
             child: child,
             unresolvedHandoff: await session.unresolvedHandoff,
             headlessDenials: await session.headlessDenials.map(\.canonical),
+            missingGrants: await session.missingGrants,
             finalText: finalText,
             actionsLog: actionsLog
         )

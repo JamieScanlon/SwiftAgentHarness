@@ -60,6 +60,7 @@ public struct ComputerUseTask: Sendable {
     /// Parses the delegate tool's flat arguments. The parent sizes the work in `steps` and may name a `deadline`
     /// the user stated; every other limit comes from the host's policy.
     public init(arguments: JSON, defaults: ComputerUseSpecialistDefaults, now: Date = Date()) throws(ComputerUseTaskError) {
+        if let unknown = Self.unknownParameters(in: arguments) { throw unknown }
         let args = ComputerUseToolProvider.Arguments(arguments)
         guard let goal = args.string("goal") else { throw .missing("goal") }
         let criteria = Self.lines(args.string("success_criteria"))
@@ -100,6 +101,37 @@ public struct ComputerUseTask: Sendable {
         )
     }
 
+    /// The delegate tool's parameters, in the order its schema lists them.
+    static let parameterNames = [
+        "goal", "success_criteria", "constraints", "apps", "domains", "target", "steps", "deadline", "return_schema",
+        InProcessLocalAgentToolProvider.descriptionParameterName,
+    ]
+
+    /// Parameters an earlier schema or another tool's habits suggest, and what to do instead.
+    private static let replacedParameters: [(hint: String, names: Set<String>)] = [
+        ("use steps for the size of the work", ["max_steps", "max_actions", "step_budget"]),
+        ("time limits are set by the host", [
+            "max_minutes", "minutes", "max_seconds", "timeout", "timeout_seconds", "time_limit", "max_duration", "duration",
+        ]),
+    ]
+
+    /// Refuses arguments the schema doesn't have, so a model calling with a stale schema is corrected rather than
+    /// silently ignored.
+    private static func unknownParameters(in arguments: JSON) -> ComputerUseTaskError? {
+        guard case .object(let object) = arguments else { return nil }
+        let unknown = object.keys.filter { !parameterNames.contains($0) }.sorted()
+        guard !unknown.isEmpty else { return nil }
+        var advice = replacedParameters.filter { !$0.names.isDisjoint(with: unknown) }.map(\.hint)
+        if unknown.contains(where: { name in !replacedParameters.contains { $0.names.contains(name) } }) {
+            advice.append("the parameters are " + parameterNames.joined(separator: ", "))
+        }
+        let names = unknown.count < 3
+            ? unknown.joined(separator: " and ")
+            : unknown.dropLast().joined(separator: ", ") + ", and " + unknown[unknown.count - 1]
+        let verb = unknown.count == 1 ? "is not a parameter" : "are not parameters"
+        return .invalid("\(names) \(verb): " + advice.joined(separator: "; "))
+    }
+
     /// The child's instructions. It starts from a fresh conversation, so the brief is self-contained.
     public var brief: String {
         var sections = ["Goal: \(goal)"]
@@ -117,6 +149,8 @@ public struct ComputerUseTask: Sendable {
         - Never type credentials or payment details. Use computer_handoff for logins, 2FA, CAPTCHAs, and payments.
         - Ask with computer_ask_user instead of guessing when the task is ambiguous.
         - When a result is unverifiable, observe before trying anything again.
+        - Your app and domain grants are fixed for this run, and nobody can add to them. When an action is refused \
+        as not granted, don't ask for the grant: finish and report what was refused.
         """)
         if let returnSchema, let schemaText = Self.compactJSON(returnSchema) {
             sections.append("Finish with only a JSON value matching this schema, and nothing else:\n\(schemaText)")
@@ -224,6 +258,34 @@ public struct ComputerUseResult: Sendable, Codable {
         public var prompt: String
     }
 
+    /// A grant a refused action needed, in the shape of a task's grant: an app with flags, or a domain.
+    public struct MissingGrant: Sendable, Codable, Hashable {
+        public var app: String?
+        public var domain: String?
+        public var tier: ComputerUseGrantTier
+        public var flags: [ComputerUseGrantFlag]?
+
+        public init(app: String, tier: ComputerUseGrantTier, flags: [ComputerUseGrantFlag]? = nil) {
+            self.app = app
+            self.tier = tier
+            self.flags = flags
+        }
+
+        public init(domain: String, tier: ComputerUseGrantTier) {
+            self.domain = domain
+            self.tier = tier
+        }
+
+        init(_ grant: ComputerUseGrant) {
+            switch grant.normalized {
+            case .app(let bundleID, let tier, let flags):
+                self.init(app: bundleID, tier: tier, flags: flags.isEmpty ? nil : flags.sorted { $0.rawValue < $1.rawValue })
+            case .domain(let domain, let tier):
+                self.init(domain: domain, tier: tier)
+            }
+        }
+    }
+
     public var status: Status
     /// The specialist's final report: JSON when the task set a return schema, text otherwise.
     public var result: JSON?
@@ -235,6 +297,8 @@ public struct ComputerUseResult: Sendable, Codable {
     public var actionsLog: String
     /// Why the task stopped, when it did not finish normally.
     public var reason: String?
+    /// Grants refused actions needed. Grants can't change during a run, so delegating again with them is the fix.
+    public var missingGrants: [MissingGrant]? = nil
 
     public var jsonString: String {
         let encoder = JSONEncoder()
@@ -275,6 +339,7 @@ enum ComputerUseResultBuilder {
         child: ComputerUseChildOutcome,
         unresolvedHandoff: ComputerUseHandoffRequest?,
         headlessDenials: [String],
+        missingGrants: [ComputerUseGrant] = [],
         finalText: String?,
         actionsLog: String
     ) -> ComputerUseResult {
@@ -293,16 +358,20 @@ enum ComputerUseResultBuilder {
             handoff: nil,
             budget: budget,
             actionsLog: actionsLog,
-            reason: nil
+            reason: nil,
+            missingGrants: missingGrants.isEmpty ? nil : missingGrants.map(ComputerUseResult.MissingGrant.init)
         )
+        // Refused for want of a grant with nothing achieved: the parent can fix this by delegating again.
+        let blockedOnGrants = !missingGrants.isEmpty && !verification.contains(where: \.met)
+        let grantsReason = "missing grants: delegate again with \(ComputerUseGrant.delegateArguments(missingGrants))"
         switch terminal {
         case .stepBudget?, .timeBudget?, .costBudget?:
             result.status = .budgetExhausted
             result.reason = terminalDetail ?? "the \(terminal?.rawValue ?? "budget") ran out"
             return result
         case .noProgress?:
-            result.status = .noProgress
-            result.reason = terminalDetail ?? "no progress"
+            result.status = blockedOnGrants ? .blocked : .noProgress
+            result.reason = blockedOnGrants ? grantsReason : terminalDetail ?? "no progress"
             return result
         case .deadline?:
             result.status = .deadline
@@ -351,6 +420,11 @@ enum ComputerUseResultBuilder {
                 reason: ComputerUseHandoffReason.consequential.rawValue,
                 prompt: "Needs a person to confirm: \(denial)"
             )
+            return result
+        }
+        if blockedOnGrants {
+            result.status = .blocked
+            result.reason = grantsReason
             return result
         }
         result.status = verification.allSatisfy(\.met) ? .done : .doneUnverified

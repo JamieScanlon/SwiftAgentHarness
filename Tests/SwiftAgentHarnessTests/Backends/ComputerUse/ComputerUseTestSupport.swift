@@ -48,6 +48,8 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var observeCalls: [ObserveRequest] = []
     private(set) var releases: [ReleaseReason] = []
     private(set) var takeoverStates: [Bool] = []
+    /// Like a remote target, work requested from a cancelled task never reaches the screen.
+    private(set) var failsWhenCancelled = false
 
     init(
         manifest: DisplayTargetManifest,
@@ -58,6 +60,10 @@ actor FakeDisplayTarget: DisplayTarget {
         self.permissionStates = permissions
             ?? Dictionary(uniqueKeysWithValues: manifest.requires.map { ($0, PermissionState.granted) })
         self.now = now
+    }
+
+    func setFailsWhenCancelled(_ fails: Bool) {
+        failsWhenCancelled = fails
     }
 
     func setPermission(_ permission: DisplayPlatformPermission, _ state: PermissionState) {
@@ -88,6 +94,7 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func release(_ lease: Lease, reason: ReleaseReason) async {
+        if failsWhenCancelled, Task.isCancelled { return }
         if await lock.release(leaseID: lease.id) {
             releases.append(reason)
         }
@@ -136,6 +143,7 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func takeover(_ lease: Lease, on: Bool) async throws {
+        if failsWhenCancelled { try Task.checkCancellation() }
         try await requireLease(lease)
         takeoverStates.append(on)
     }

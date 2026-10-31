@@ -93,6 +93,7 @@ struct ComputerUseSpecialistContractTests {
         child: ComputerUseChildOutcome = .completed,
         unresolvedHandoff: ComputerUseHandoffRequest? = nil,
         headlessDenials: [String] = [],
+        missingGrants: [ComputerUseGrant] = [],
         finalText: String? = "Exported to ~/Desktop/report.pdf",
         returnSchema: JSON? = nil
     ) throws -> ComputerUseResult {
@@ -108,6 +109,7 @@ struct ComputerUseSpecialistContractTests {
             child: child,
             unresolvedHandoff: unresolvedHandoff,
             headlessDenials: headlessDenials,
+            missingGrants: missingGrants,
             finalText: finalText,
             actionsLog: "12 actions"
         )
@@ -142,6 +144,47 @@ struct ComputerUseSpecialistContractTests {
         let denied = try build(headlessDenials: ["press Delete account"])
         #expect(denied.status == .needsUser)
         #expect(denied.handoff?.reason == "consequential")
+    }
+
+    @Test("Unknown arguments are refused, naming the replacement for known renames")
+    func rejectsUnknownArguments() {
+        let base: [String: JSON] = ["goal": .string("x"), "success_criteria": .string("y"), "apps": .string("a.b:full")]
+        #expect(throws: ComputerUseTaskError.invalid(
+            "max_minutes and max_steps are not parameters: use steps for the size of the work; time limits are set by the host"
+        )) {
+            try task(base.merging(["max_steps": .integer(20), "max_minutes": .integer(5)]) { $1 })
+        }
+        #expect(throws: ComputerUseTaskError.invalid(
+            "colour is not a parameter: the parameters are goal, success_criteria, constraints, apps, domains, target, steps, deadline, return_schema, description"
+        )) {
+            try task(base.merging(["colour": .string("red")]) { $1 })
+        }
+        #expect((try? task(base.merging(["description": .string("Open the page")]) { $1 })) != nil)
+    }
+
+    @Test("A task refused for a missing grant comes back blocked and names the grants to delegate with")
+    func missingGrantsBlock() throws {
+        let missing: [ComputerUseGrant] = [.domain("www.apple.com", tier: .click), .app(bundleID: "com.apple.Terminal", tier: .full, flags: [.systemKeys])]
+        let blocked = try build(missingGrants: missing)
+        #expect(blocked.status == .blocked)
+        #expect(blocked.reason == "missing grants: delegate again with domains: www.apple.com:click and apps: com.apple.Terminal:full:system-keys")
+        #expect(blocked.missingGrants == [
+            ComputerUseResult.MissingGrant(domain: "www.apple.com", tier: .click),
+            ComputerUseResult.MissingGrant(app: "com.apple.Terminal", tier: .full, flags: [.systemKeys]),
+        ])
+        #expect(try build(terminal: .noProgress, missingGrants: missing).status == .blocked)
+
+        let partial = try build(verifications: [verification("pdf exists", met: true)], missingGrants: missing)
+        #expect(partial.status == .doneUnverified)
+        #expect(partial.missingGrants?.count == 2)
+
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(blocked.jsonString.utf8)) as? [String: Any])
+        let entries = try #require(object["missingGrants"] as? [[String: Any]])
+        #expect(entries.first?["domain"] as? String == "www.apple.com")
+        #expect(entries.first?["tier"] as? String == "click")
+        #expect(entries.last?["flags"] as? [String] == ["system-keys"])
+        let clean = try #require(try JSONSerialization.jsonObject(with: Data(try build().jsonString.utf8)) as? [String: Any])
+        #expect(clean["missingGrants"] == nil)
     }
 
     @Test("With a return schema the final report is parsed as JSON; otherwise it is text")

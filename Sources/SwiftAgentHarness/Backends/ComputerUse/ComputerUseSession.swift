@@ -300,6 +300,8 @@ public actor ComputerUseSession {
     private var steps = 0
     private var spentUSD: Double = 0
     private var consecutiveFailures = 0
+    /// Actions refused since the last progress. They aren't steps, but they fill the no-progress window.
+    private var refusedSinceProgress = 0
     private var lastActionAt: Date?
     public private(set) var terminalReason: ComputerUseTerminalReason?
     /// What ran out, in words, when a budget ended the session.
@@ -327,6 +329,9 @@ public actor ComputerUseSession {
     public private(set) var headlessDenials: [ComputerUseActionRecord] = []
     /// The latest handoff nobody took, cleared when a later one is handed back.
     public private(set) var unresolvedHandoff: ComputerUseHandoffRequest?
+    /// Grants the session's refused actions needed, one per subject at the highest tier asked. Grants can't change
+    /// during a run, so the parent has to delegate again with them.
+    public private(set) var missingGrants: [ComputerUseGrant] = []
     public private(set) var replayFrames: [ComputerUseReplayFrame] = []
     /// Where the last pointer action left the pointer, in the target's global space.
     public private(set) var lastPointer: DisplayPoint?
@@ -447,7 +452,10 @@ public actor ComputerUseSession {
             record.effect = .refused
             record.evidence = gate.reason
             if gate.decision == .headlessDenied { headlessDenials.append(record) }
+            if let missing = classification.missingGrant { noteMissing(missing) }
             appendAudit(record)
+            refusedSinceProgress += 1
+            await endIfNotProgressing()
             return (outcome, record, nil)
         }
 
@@ -543,7 +551,12 @@ public actor ComputerUseSession {
     private func gate(_ classification: ComputerUseClassification, action: ComputerAction) async -> GateResult {
         switch classification.actionClass {
         case .outOfGrant(let reason):
-            return GateResult(decision: .denied, reason: reason)
+            guard let missing = classification.missingGrant else { return GateResult(decision: .denied, reason: reason) }
+            return GateResult(
+                decision: .denied,
+                reason: "\(reason); grants can't change during this run. Finish and report it, and the parent can delegate "
+                    + "again with \(ComputerUseGrant.delegateArguments([missing]))"
+            )
         case .unresolvable(let reason):
             return GateResult(decision: .denied, reason: reason, escalation: .observe)
         case .observe, .navigate:
@@ -696,10 +709,8 @@ public actor ComputerUseSession {
     /// allotment is extended when there was progress since the last grant, and at a ceiling a present user decides.
     private func enforceBudgets() async {
         guard terminalReason == nil else { return }
-        let sinceProgress = steps - (progress.lastProgressStep ?? 0)
-        if sinceProgress >= budgets.noProgressSteps {
-            return await end(.noProgress, detail: "no progress in the last \(sinceProgress) steps")
-        }
+        await endIfNotProgressing()
+        guard terminalReason == nil else { return }
         if now() >= endsAt {
             await reachedEndTime()
             guard terminalReason == nil else { return }
@@ -707,6 +718,23 @@ public actor ComputerUseSession {
         if steps >= budgets.steps {
             await ranOutOfSteps()
         }
+    }
+
+    /// Ends the session once `noProgressSteps` steps and refused actions in a row have made no progress. Refused
+    /// actions aren't steps, but a session refused at every turn is going nowhere.
+    private func endIfNotProgressing() async {
+        guard terminalReason == nil else { return }
+        let sinceProgress = steps - (progress.lastProgressStep ?? 0)
+        let attempts = sinceProgress + refusedSinceProgress
+        guard attempts >= budgets.noProgressSteps else { return }
+        await end(.noProgress, detail: refusedSinceProgress == 0
+            ? "no progress in the last \(sinceProgress) steps"
+            : "no progress in the last \(attempts) attempts, \(refusedSinceProgress) of them refused")
+    }
+
+    private func noteMissing(_ grant: ComputerUseGrant) {
+        guard let index = missingGrants.firstIndex(where: { $0.sameSubject(as: grant) }) else { return missingGrants.append(grant) }
+        missingGrants[index] = missingGrants[index].merging(grant)
     }
 
     private var grantExpiresAt: Date? {
@@ -813,11 +841,13 @@ public actor ComputerUseSession {
             statesReached: progress.statesReached,
             reason: reason
         ))
-        if isTakeoverActive {
-            isTakeoverActive = false
-            try? await target.takeover(lease, on: false)
-        }
-        await target.release(lease, reason: reason.releaseReason)
+        let handBack = isTakeoverActive
+        isTakeoverActive = false
+        // A task of its own: a cancelled caller's requests never reach a remote target, and cleanup must.
+        await Task { [target, lease] in
+            if handBack { try? await target.takeover(lease, on: false) }
+            await target.release(lease, reason: reason.releaseReason)
+        }.value
         await report(.ended)
     }
 
@@ -831,6 +861,15 @@ public actor ComputerUseSession {
         // What the user does meanwhile is never credited to the agent's last action.
         if on { pendingActing = nil }
         await report(on ? .takenOver : .acting)
+    }
+
+    /// Hands the screen back to the agent even when the handoff's caller was cancelled or the target failed: a stuck
+    /// takeover would refuse every later action.
+    private func endTakeover() async {
+        guard isTakeoverActive, terminalReason == nil else { return }
+        isTakeoverActive = false
+        await Task { [target, lease] in try? await target.takeover(lease, on: false) }.value
+        await report(.acting)
     }
 
     public func askUser(_ question: String) async -> ComputerUseUserReply {
@@ -853,7 +892,7 @@ public actor ComputerUseSession {
             return .unavailable
         }
         let result = await oversight.handoff(request)
-        try? await setTakeover(false)
+        await endTakeover()
         if case .handedBack = result {
             unresolvedHandoff = nil
         } else {
@@ -893,6 +932,7 @@ public actor ComputerUseSession {
         if met, !metBefore {
             progress.criteriaVerified += 1
             progress.lastProgressStep = max(progress.lastProgressStep ?? 0, steps)
+            refusedSinceProgress = 0
         }
     }
 
@@ -911,6 +951,7 @@ public actor ComputerUseSession {
                   let acting = pendingActing, Self.creditableEffects.contains(acting.effect) else { return }
             progress.statesReached += 1
             progress.lastProgressStep = max(progress.lastProgressStep ?? 0, acting.step)
+            refusedSinceProgress = 0
             let position = acting.record - (auditCount - auditLog.count)
             if auditLog.indices.contains(position) { auditLog[position].madeProgress = true }
         case .zoom, .wait, .waitFor:
