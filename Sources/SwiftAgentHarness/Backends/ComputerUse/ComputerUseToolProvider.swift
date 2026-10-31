@@ -438,6 +438,9 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             return failure(toolCall, "observation \(id) predates your last action; observe again before verifying")
         } catch ComputerUseSessionError.unknownObservation(let id) {
             return failure(toolCall, "observation \(id) is not retained; observe again")
+        } catch ComputerUseSessionError.unknownCriterion(let cited) {
+            let listed = session.configuration.task.successCriteria.enumerated().map { "\($0.offset + 1). \($0.element)" }
+            return failure(toolCall, "\"\(cited)\" matches no success criterion; cite one by number or as listed: \(listed.joined(separator: "; "))")
         }
         return ToolResult(
             success: true,

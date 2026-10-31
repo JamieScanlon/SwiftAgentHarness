@@ -1,7 +1,15 @@
 import Foundation
 import SwiftAgentKit
+import Synchronization
 import Testing
 @testable import SwiftAgentHarness
+
+/// Quiet time for the tests that expect no timeout, so a loaded test run can't stretch a gap between events past it.
+private final class RemoteIdleTestClock: Sendable {
+    private let current = Mutex(Date(timeIntervalSince1970: 1_800_000_000))
+    func now() -> Date { current.withLock { $0 } }
+    func advance(_ seconds: TimeInterval) { current.withLock { $0 = $0.addingTimeInterval(seconds) } }
+}
 
 @Suite("Remote delegate idle timeout")
 struct RemoteDelegateIdleTimeoutTests {
@@ -41,15 +49,34 @@ struct RemoteDelegateIdleTimeoutTests {
         _ invocation: Invocation,
         stream: AsyncStream<SubAgentDelegateEvent>,
         idleTimeoutSeconds: TimeInterval?,
-        applyingTerminal: Bool = true
+        applyingTerminal: Bool = true,
+        clock: RemoteIdleTestClock? = nil
     ) async -> SubAgentSpawnService.RemoteDelegateEnding {
         await service.followRemoteDelegate(
             stream,
             correlation: invocation.correlation,
             parentConversationID: invocation.parentConversationID,
             idleTimeoutSeconds: idleTimeoutSeconds,
-            applyingTerminal: applyingTerminal
+            applyingTerminal: applyingTerminal,
+            now: { @Sendable in clock?.now() ?? Date() }
         )
+    }
+
+    /// The liveness the follower registered for the invocation, once it has.
+    private func liveness(_ service: SubAgentSpawnService, _ invocation: Invocation) async -> DelegateLiveness {
+        while true {
+            if let liveness = await service.remoteDelegateLiveness[invocation.correlation.lifecycleID] { return liveness }
+            await Task.yield()
+        }
+    }
+
+    /// Waits until the follower has counted the latest event: quiet time is back to zero on the test clock. Gives up
+    /// after a few seconds so an event that is never counted fails the test instead of hanging it.
+    private func untilCounted(_ liveness: DelegateLiveness) async {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while await liveness.quietTime() != 0, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
     }
 
     private func phase(_ service: SubAgentSpawnService, _ invocation: Invocation) async -> SubAgentLifecyclePhase? {
@@ -82,15 +109,19 @@ struct RemoteDelegateIdleTimeoutTests {
         defer { withExtendedLifetime(session) {} }
         let invocation = Invocation()
         let (stream, continuation) = AsyncStream.makeStream(of: SubAgentDelegateEvent.self)
+        let clock = RemoteIdleTestClock()
         let producer = Task {
+            let liveness = await liveness(service, invocation)
             for _ in 0..<8 {
+                clock.advance(0.05)
                 continuation.yield(invocation.event(.running))
-                try? await Task.sleep(for: .milliseconds(80))
+                await untilCounted(liveness)
+                try? await Task.sleep(for: .milliseconds(30))
             }
             continuation.yield(invocation.event(.done))
             continuation.finish()
         }
-        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2)
+        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2, clock: clock)
         await producer.value
         #expect(ending.idleTimedOut == nil)
         #expect(ending.terminal?.phase == .done)
@@ -103,14 +134,19 @@ struct RemoteDelegateIdleTimeoutTests {
         defer { withExtendedLifetime(session) {} }
         let invocation = Invocation()
         let (stream, continuation) = AsyncStream.makeStream(of: SubAgentDelegateEvent.self)
+        let clock = RemoteIdleTestClock()
         let producer = Task {
+            let liveness = await liveness(service, invocation)
+            clock.advance(0.01)
             continuation.yield(invocation.event(.awaitingApproval))
-            try? await Task.sleep(for: .milliseconds(600))
+            await untilCounted(liveness)
+            clock.advance(0.6)
+            try? await Task.sleep(for: .milliseconds(300))
             continuation.yield(invocation.event(.running))
             continuation.yield(invocation.event(.done))
             continuation.finish()
         }
-        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2)
+        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2, clock: clock)
         await producer.value
         #expect(ending.idleTimedOut == nil)
         #expect(ending.terminal?.phase == .done)
@@ -123,15 +159,18 @@ struct RemoteDelegateIdleTimeoutTests {
         let invocation = Invocation()
         let (stream, continuation) = AsyncStream.makeStream(of: SubAgentDelegateEvent.self)
         continuation.yield(invocation.event(.running))
+        let clock = RemoteIdleTestClock()
         let producer = Task {
+            _ = await liveness(service, invocation)
             for _ in 0..<8 {
-                try? await Task.sleep(for: .milliseconds(80))
+                try? await Task.sleep(for: .milliseconds(30))
+                clock.advance(0.05)
                 await service.applySubAgentDelegateEvent(invocation.event(.running))
             }
             continuation.yield(invocation.event(.done))
             continuation.finish()
         }
-        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2)
+        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2, clock: clock)
         await producer.value
         #expect(ending.idleTimedOut == nil)
         #expect(ending.terminal?.phase == .done)

@@ -357,10 +357,12 @@ enum ComputerUseResultBuilder {
         return result
     }
 
-    /// A verification cites a criterion by its text (case and spacing aside) or by its number.
+    /// A verification cites a criterion by its text (case and spacing aside), by its number, or as the harness
+    /// lists it: number, then text.
     static func criterionMatches(_ recorded: String, criterion: String, index: Int) -> Bool {
         let key = normalized(recorded)
-        return key == normalized(criterion) || key == String(index + 1)
+        let text = normalized(criterion)
+        return key == text || key == String(index + 1) || key == "\(index + 1). \(text)"
     }
 
     private static func normalized(_ text: String) -> String {

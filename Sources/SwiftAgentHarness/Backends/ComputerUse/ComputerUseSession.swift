@@ -143,6 +143,8 @@ public enum ComputerUseSessionError: Error, Sendable, Equatable {
     case unknownObservation(ObservationID)
     /// Verification must cite an observation taken after the last action.
     case staleVerification(ObservationID)
+    /// Verification must cite one of the task's success criteria, when it has any.
+    case unknownCriterion(String)
     case takeoverActive
 }
 
@@ -883,6 +885,7 @@ public actor ComputerUseSession {
         if let lastActionAt, observation.at < lastActionAt { throw ComputerUseSessionError.staleVerification(id) }
         let criteria = configuration.task.successCriteria
         let index = criteria.indices.first { ComputerUseResultBuilder.criterionMatches(criterion, criterion: criteria[$0], index: $0) }
+        if index == nil, !criteria.isEmpty { throw ComputerUseSessionError.unknownCriterion(criterion) }
         let metBefore = index.map { index in
             verifications.contains { $0.met && ComputerUseResultBuilder.criterionMatches($0.criterion, criterion: criteria[index], index: index) }
         } ?? true

@@ -9,7 +9,8 @@ struct ComputerUseToolProviderTests {
     private func provider(
         manifest: DisplayTargetManifest = FakeDisplayTarget.vmManifest,
         coordinateMode: ComputerUseCoordinateMode = .imagePixels,
-        oversight: (any ComputerUseOversight)? = nil
+        oversight: (any ComputerUseOversight)? = nil,
+        successCriteria: [String] = []
     ) async throws -> (FakeDisplayTarget, ComputerUseSession, ComputerUseToolProvider) {
         let target = FakeDisplayTarget(manifest: manifest)
         let lease = try await target.lease(LeaseRequest(
@@ -24,7 +25,7 @@ struct ComputerUseToolProviderTests {
             target: target,
             lease: lease,
             configuration: ComputerUseSessionConfiguration(
-                task: ComputerUseTaskContext(userRequest: ["Bold the title."]),
+                task: ComputerUseTaskContext(userRequest: ["Bold the title."], successCriteria: successCriteria),
                 coordinateMode: coordinateMode
             ),
             oversight: oversight,
@@ -185,6 +186,23 @@ struct ComputerUseToolProviderTests {
         ])
         #expect(result.success)
         #expect(await session.verifications.count == 1)
+    }
+
+    @Test("Verify refuses a criterion that matches none of the task's, and lists them")
+    func verifyUnknownCriterion() async throws {
+        let (_, session, provider) = try await provider(successCriteria: ["The title is bold", "The file is saved"])
+        _ = try await call(provider, "computer_observe")
+        let unknown = try await call(provider, "computer_verify", [
+            "criterion": .string("The page is bold"), "met": .boolean(true), "evidence": .string("x"), "observation": .string("o_1"),
+        ])
+        #expect(!unknown.success)
+        #expect(unknown.content.contains("1. The title is bold; 2. The file is saved"))
+        #expect(await session.verifications.isEmpty)
+        let listed = try await call(provider, "computer_verify", [
+            "criterion": .string("1. The title is bold"), "met": .boolean(true), "evidence": .string("x"), "observation": .string("o_1"),
+        ])
+        #expect(listed.success)
+        #expect(await session.unverifiedCriteria.map(\.number) == [2])
     }
 
     @Test("Ask-user and handoff route through oversight")

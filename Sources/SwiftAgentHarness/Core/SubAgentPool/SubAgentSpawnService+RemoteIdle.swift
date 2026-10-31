@@ -13,15 +13,17 @@ extension SubAgentSpawnService {
     /// arrives for `idleTimeoutSeconds`, the invocation is cancelled with reason `idle-timeout` and ends failed.
     /// Events applied from elsewhere, such as permission requests, also count, and the clock pauses while the
     /// invocation awaits approval. With `applyingTerminal` false, the terminal event is returned unapplied.
+    /// `now` is the clock quiet time is measured on.
     func followRemoteDelegate(
         _ stream: AsyncStream<SubAgentDelegateEvent>,
         correlation: SubAgentTransportInvocationCorrelation,
         parentConversationID: UUID,
         idleTimeoutSeconds: TimeInterval?,
-        applyingTerminal: Bool
+        applyingTerminal: Bool,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) async -> RemoteDelegateEnding {
         let lifecycleID = correlation.lifecycleID
-        let liveness = DelegateLiveness()
+        let liveness = DelegateLiveness(now: now)
         liveness.observe(waitingOnApproval: { [weak self] in
             await self?.isAwaitingApproval(lifecycleID: lifecycleID, parentConversationID: parentConversationID) ?? false
         })

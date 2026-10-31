@@ -155,6 +155,19 @@ struct ComputerUseSessionProgressTests {
         #expect(await session.progress.statesReached == 0)
     }
 
+    @Test("A criterion cited as the harness lists it, number then text, counts")
+    func criterionCitedAsListed() async throws {
+        let (_, session) = try await Self.make(criteria: ["The text is bold", "The file is saved"])
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        try await session.verify(criterion: "1. The text is bold", met: true, evidence: "bold", observation: "o_1")
+        await #expect(throws: ComputerUseSessionError.unknownCriterion("1. The file is saved")) {
+            try await session.verify(criterion: "1. The file is saved", met: true, evidence: "number and text disagree", observation: "o_1")
+        }
+        #expect(await session.unverifiedCriteria.map(\.number) == [2])
+        #expect(await session.verifications.count == 1)
+        #expect(await session.progress.criteriaVerified == 1)
+    }
+
     @Test("A criterion newly verified as met is progress; repeating it or recording not-met isn't")
     func verifiedCriteria() async throws {
         let (_, session) = try await Self.make(criteria: ["The text is bold", "The file is saved"])
@@ -163,7 +176,9 @@ struct ComputerUseSessionProgressTests {
         #expect(await session.progress.criteriaVerified == 0)
         try await session.verify(criterion: "1", met: true, evidence: "bold", observation: "o_1")
         try await session.verify(criterion: "The text is bold", met: true, evidence: "still bold", observation: "o_1")
-        try await session.verify(criterion: "Something else entirely", met: true, evidence: "?", observation: "o_1")
+        await #expect(throws: ComputerUseSessionError.unknownCriterion("Something else entirely")) {
+            try await session.verify(criterion: "Something else entirely", met: true, evidence: "?", observation: "o_1")
+        }
         let progress = await session.progress
         #expect(progress.criteriaVerified == 1)
         #expect(progress.lastProgressStep == 1)
