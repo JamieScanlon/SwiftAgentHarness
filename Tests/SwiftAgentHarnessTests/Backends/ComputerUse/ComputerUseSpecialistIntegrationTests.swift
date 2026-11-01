@@ -1,5 +1,6 @@
 import EasyJSON
 import Foundation
+import Logging
 import SwiftAgentKit
 import Synchronization
 import Testing
@@ -31,6 +32,65 @@ struct ComputerUseSpecialistIntegrationTests {
         func record(_ result: ToolResult) {
             toolResults.append(result)
         }
+    }
+
+    /// Helper-model calls (`vision-describe`, `grounder`) answer with `reply` and record the model they were built for.
+    private final class HelperLLMFactory: ModelLLMFactoring, Sendable {
+        private struct HelperLLM: LLMProtocol {
+            let reply: String
+            var currentState: LLMRuntimeState { .idle(.ready) }
+            var stateUpdates: AsyncStream<LLMRuntimeState> { AsyncStream { $0.finish() } }
+            func getModelName() -> String { "helper" }
+            func getCapabilities() -> [LLMCapability] { [.completion, .vision] }
+            func send(_: [Message], config _: LLMRequestConfig) async throws -> LLMResponse {
+                LLMResponse(content: reply, toolCalls: [])
+            }
+            func stream(_: [Message], config _: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { continuation in
+                    continuation.yield(.complete(LLMResponse(content: reply, toolCalls: [])))
+                    continuation.finish()
+                }
+            }
+            func generateImage(_: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+                throw LLMError.unsupportedCapability(.imageGeneration)
+            }
+        }
+
+        let reply: String
+        private let names = Mutex<[String]>([])
+
+        init(reply: String) {
+            self.reply = reply
+        }
+
+        var modelNames: [String] { names.withLock { $0 } }
+
+        func makeBaseLLM(
+            model: Model,
+            providerBindings: [ProviderBinding]?,
+            conversationID: UUID?,
+            ownerAccountID: UUID?,
+            systemPrompt: SystemPrompt,
+            logger: Logger?,
+            attemptObserver: (@Sendable (ModelCallAttemptObservation) async -> Void)?
+        ) -> any LLMProtocol {
+            names.withLock { $0.append(model.modelName) }
+            return HelperLLM(reply: reply)
+        }
+    }
+
+    private func registryEntry(_ name: String, capabilities: Set<LLMCapability>) -> ModelRegistryEntry {
+        ModelRegistryEntry(
+            id: UUID(),
+            displayName: name,
+            capabilities: capabilities,
+            providers: [ProviderBinding(
+                providerId: "openai",
+                modelProtocol: .openAIAPI,
+                endpointModelId: name,
+                serverURL: URL(string: "https://api.openai.com")!
+            )]
+        )
     }
 
     /// What the scripted specialist does: a sequence of computer tool calls, then a final reply.
@@ -73,7 +133,9 @@ struct ComputerUseSpecialistIntegrationTests {
         activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
         contracts: [ContractProfile] = [],
         specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
-        idleChild: Bool = false
+        idleChild: Bool = false,
+        otherModels: [ModelRegistryEntry] = [],
+        llmFactory: (any ModelLLMFactoring)? = nil
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -88,10 +150,18 @@ struct ComputerUseSpecialistIntegrationTests {
             )],
             contracts: contracts
         )
+        let entries = [entry] + otherModels
         let session = HarnessRuntimeSession(
             container: container,
-            registryEntryProvider: { id in id == entry.id ? entry : nil },
-            rankedRegistryEntriesProvider: { _ in [entry] },
+            llmFactory: llmFactory ?? StandardModelLLMFactory(accounting: AlwaysAllowBudgetAccounting()),
+            registryEntryProvider: { id in entries.first { $0.id == id } },
+            rankedRegistryEntriesProvider: { reference in
+                switch reference {
+                case .id(let id): return entries.filter { $0.id == id }
+                case .slug(let slug): return entries.filter { $0.displayName == slug }
+                case .query(let query): return entries.filter { query.mustIncludeCapabilities.isSubset(of: $0.capabilities) }
+                }
+            },
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
         )
         let configuration = ComputerUseConfiguration(
@@ -656,6 +726,73 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(result["status"] as? String == "blocked")
         #expect((result["reason"] as? String)?.contains("see images") == true)
         #expect(await target.releases.isEmpty)
+    }
+
+    @Test("A specialist that can't see images works from the tree and asks a registered vision model about the screen")
+    func textOnlySpecialist() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let recorder = ChildRecorder()
+        let helpers = HelperLLMFactory(reply: "The title is bold and the document is saved.")
+        let (session, parent) = try await makeSession(
+            model: makeModel(capabilities: [.completion, .tools]),
+            target: target,
+            script: [
+                Self.observe,
+                (ComputerUseToolProvider.describeToolName, ["question": .string("Is the title bold?")]),
+                Self.verify("title is bold"),
+                Self.verify("2"),
+            ],
+            reply: "Done.",
+            recorder: recorder,
+            otherModels: [registryEntry("vision-helper", capabilities: [.completion, .vision])],
+            llmFactory: helpers
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "done")
+        let results = await recorder.toolResults
+        let observed = try #require(results.first)
+        #expect(!observed.parts.contains { if case .image = $0 { true } else { false } })
+        #expect(observed.content.contains("not shown to you"))
+        #expect(results[1].content.contains("The title is bold"))
+        #expect(helpers.modelNames == ["vision-helper"])
+    }
+
+    @Test("A grounder named in the profile backs computer_locate; one that doesn't resolve blocks the run before leasing")
+    func grounderBinding() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let recorder = ChildRecorder()
+        let helpers = HelperLLMFactory(reply: "(22, 18)")
+        let (session, parent) = try await makeSession(
+            model: makeModel(),
+            target: target,
+            script: [(ComputerUseToolProvider.locateToolName, ["description": .string("the Bold button")])],
+            reply: "Found it.",
+            recorder: recorder,
+            specialist: ComputerUseSpecialistProfile(grounderModelRef: "grounder"),
+            otherModels: [registryEntry("grounder", capabilities: [.completion, .vision])],
+            llmFactory: helpers
+        )
+        _ = try await invoke(session, parent: parent)
+        let located = try #require(await recorder.toolResults.first)
+        #expect(located.success)
+        #expect(located.content.contains("x=22, y=18"))
+        #expect(located.content.contains("e2 (AXButton)"))
+        #expect(helpers.modelNames == ["grounder"])
+
+        let missingTarget = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let (missing, missingParent) = try await makeSession(
+            model: makeModel(),
+            target: missingTarget,
+            script: [],
+            reply: "ok",
+            recorder: ChildRecorder(),
+            specialist: ComputerUseSpecialistProfile(grounderModelRef: "grounder"),
+            otherModels: [registryEntry("grounder", capabilities: [.completion])]
+        )
+        let (_, blocked) = try await invoke(missing, parent: missingParent)
+        #expect(blocked["status"] as? String == "blocked")
+        #expect((blocked["reason"] as? String)?.contains("the grounder model 'grounder' cannot see images") == true)
+        #expect(await missingTarget.releases.isEmpty)
     }
 
     @Test("Malformed delegate arguments are denied with the reason")

@@ -44,10 +44,21 @@ extension SubAgentSpawnService {
             }
             model = resolved
         }
-        guard model.capabilities.contains(.vision), model.capabilities.contains(.tools) else {
+        guard model.capabilities.contains(.tools) else {
+            return reply(.notStarted(.blocked, reason: "model \(model.modelName) cannot call tools; bind a computer-use model", task: task))
+        }
+        let seesImages = model.capabilities.contains(.vision)
+        let perception: ComputerUsePerceptionModels
+        do {
+            perception = try await computerUsePerception(configuration.specialist, seesImages: seesImages, conversationID: conversationID)
+        } catch {
+            return reply(.notStarted(.blocked, reason: error.reason, task: task))
+        }
+        guard seesImages || perception.describer != nil else {
             return reply(.notStarted(
                 .blocked,
-                reason: "model \(model.modelName) cannot both see images and call tools; bind a computer-use model",
+                reason: "model \(model.modelName) cannot see images and no model that can is registered for vision-describe; "
+                    + "bind a computer-use model",
                 task: task
             ))
         }
@@ -109,10 +120,13 @@ extension SubAgentSpawnService {
             model: profile
         )
         sessionConfiguration.conversationID = childID
+        sessionConfiguration.showsScreenshots = seesImages
+        sessionConfiguration.describer = perception.describer
+        sessionConfiguration.grounder = perception.grounder
         sessionConfiguration.clampImageLimit(
             toLongEdge: deps.conversationTransformConfiguration.toolResultFormatting.maxInlineImagePixelDimension
         )
-        sessionConfiguration.nativeDialect = await Self.nativeDialect(
+        sessionConfiguration.nativeDialect = !seesImages ? nil : await Self.nativeDialect(
             model: model,
             profile: profile,
             imageLimit: sessionConfiguration.imageLimit,

@@ -113,6 +113,29 @@ public struct ComputerUseCoordinateCodec: Sendable, Hashable {
         return map(x: x, y: y, geometry: geometry)
     }
 
+    /// What the model would emit for `point`, the inverse of ``decode(x:y:geometry:)``: whole units, kept on the
+    /// screenshot so the model can send it back unchanged.
+    public func encode(_ point: DisplayPoint, geometry: ScreenshotGeometry) -> (x: Double, y: Double) {
+        let raw: DisplayPoint
+        switch mode {
+        case .imagePixels:
+            raw = geometry.toImage(point)
+        case .normalized1000:
+            let rect = geometry.capturedRect
+            let grid = Self.normalizedGridSize
+            raw = DisplayPoint(
+                x: (point.x - rect.minX) / max(rect.width, .leastNonzeroMagnitude) * grid,
+                y: (point.y - rect.minY) / max(rect.height, .leastNonzeroMagnitude) * grid
+            )
+        }
+        let limits = limits(for: geometry)
+        let top: (Double) -> Double = { mode == .normalized1000 ? $0 - 1 : $0 }
+        return (
+            min(max(raw.x.rounded(), 0), top(limits.width)),
+            min(max(raw.y.rounded(), 0), top(limits.height))
+        )
+    }
+
     private func limits(for geometry: ScreenshotGeometry) -> (width: Double, height: Double) {
         switch mode {
         case .imagePixels: return (Double(geometry.imageSize.width), Double(geometry.imageSize.height))

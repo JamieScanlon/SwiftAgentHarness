@@ -8,6 +8,12 @@ public struct ComputerUseSpecialistProfile: Sendable {
     /// The `computer-use` role binding. `nil` uses the parent conversation's model when it can see images and
     /// call tools.
     public var modelRef: String?
+    /// The `vision-describe` role binding, used only when the computer-use model can't see images: it answers
+    /// `computer_describe` questions about the screen. `nil` uses any registered model that can see images.
+    public var visionDescribeModelRef: String?
+    /// The `grounder` role binding, offered as `computer_locate` to find a point from a description. `nil` leaves the
+    /// role off. The grounder's coordinates are read from its `computer-use` feature, pixels by default.
+    public var grounderModelRef: String?
     /// How long the child run may continue after its session ends, to report what it did. The run has no timeout
     /// of its own: it ends with its lease, so extensions the lease grants are never cut short.
     public var cleanupGraceSeconds: TimeInterval
@@ -19,11 +25,15 @@ public struct ComputerUseSpecialistProfile: Sendable {
     public init(
         modeProfileID: String = "subagent-computer-use",
         modelRef: String? = nil,
+        visionDescribeModelRef: String? = nil,
+        grounderModelRef: String? = nil,
         cleanupGraceSeconds: TimeInterval = 30,
         idleTimeoutSeconds: TimeInterval? = 180
     ) {
         self.modeProfileID = modeProfileID
         self.modelRef = modelRef
+        self.visionDescribeModelRef = visionDescribeModelRef
+        self.grounderModelRef = grounderModelRef
         self.cleanupGraceSeconds = max(0, cleanupGraceSeconds)
         self.idleTimeoutSeconds = idleTimeoutSeconds.flatMap { $0 > 0 ? $0 : nil }
     }

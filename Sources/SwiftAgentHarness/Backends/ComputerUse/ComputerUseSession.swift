@@ -33,9 +33,16 @@ public struct ComputerUseSessionConfiguration: Sendable {
     public var runID: UUID?
     public var accountID: UUID?
     public var auditCapacity: Int
-    /// Replay thumbnails kept per session. Past it, the first and the newest are kept.
     /// Draw element refs onto screenshots the model sees, beside the tree that lists them.
     public var labelsScreenshots = true
+    /// Whether screenshots reach the model. A model without vision works from the tree, asks `describer` what the
+    /// screen shows, and finds points with `grounder`. Screenshots are still taken for them and for approval cards.
+    public var showsScreenshots = true
+    /// The `vision-describe` role, offered as `computer_describe`.
+    public var describer: ComputerUseDescriber?
+    /// The `grounder` role, offered as `computer_locate`.
+    public var grounder: ComputerUseGrounder?
+    /// Replay thumbnails kept per session. Past it, the first and the newest are kept.
     public var replayThumbnailCapacity: Int = 120
     public var replayThumbnailEdgePx: Int = Self.defaultReplayThumbnailEdgePx
     /// Anthropic's native toolset, when the bound model speaks it over Anthropic's API; `nil` uses the harness's
