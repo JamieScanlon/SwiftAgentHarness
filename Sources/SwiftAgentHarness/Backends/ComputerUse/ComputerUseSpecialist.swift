@@ -4,11 +4,21 @@ import Foundation
 /// Host defaults and limits applied to every delegated computer-use task.
 public struct ComputerUseSpecialistDefaults: Sendable {
     public var target: DisplayTargetID
+    /// Where a task that grants domains and no apps runs when it names no target: an isolated browser, such as a
+    /// ``ManagedBrowserDisplayTarget``, so web work doesn't land on the user's desktop by default.
+    public var webTarget: DisplayTargetID?
     public var budgets: ComputerUseBudgetPolicy
 
-    public init(target: DisplayTargetID, budgets: ComputerUseBudgetPolicy = ComputerUseBudgetPolicy()) {
+    public init(target: DisplayTargetID, webTarget: DisplayTargetID? = nil, budgets: ComputerUseBudgetPolicy = ComputerUseBudgetPolicy()) {
         self.target = target
+        self.webTarget = webTarget
         self.budgets = budgets
+    }
+
+    /// The target for a task that names none.
+    func target(for grants: [ComputerUseGrant]) -> DisplayTargetID {
+        let webOnly = grants.allSatisfy { if case .domain = $0 { true } else { false } }
+        return webOnly ? webTarget ?? target : target
     }
 }
 
@@ -94,7 +104,7 @@ public struct ComputerUseTask: Sendable {
             goal: goal,
             successCriteria: criteria,
             constraints: Self.lines(args.string("constraints")),
-            target: args.string("target") ?? defaults.target,
+            target: args.string("target") ?? defaults.target(for: grants),
             grants: grants,
             budgets: defaults.budgets.resolve(steps: steps, deadline: deadline),
             returnSchema: schema

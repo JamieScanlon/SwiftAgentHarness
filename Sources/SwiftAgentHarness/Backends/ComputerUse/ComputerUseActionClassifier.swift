@@ -70,6 +70,8 @@ public struct ComputerUseClassificationContext: Sendable {
     public var observation: @Sendable (ObservationID) -> DisplayObservation?
     /// The app actions that carry no target land on: the target's focused app.
     public var focusedApp: AppIdentity?
+    /// The page actions that carry no target land on, on a target with no app (a managed browser).
+    public var focusedURL: String?
     /// Vendor safety signals attached to this action.
     public var safetySignals: [String]
 
@@ -77,11 +79,13 @@ public struct ComputerUseClassificationContext: Sendable {
         grants: ComputerUseGrantSet,
         observation: @escaping @Sendable (ObservationID) -> DisplayObservation?,
         focusedApp: AppIdentity?,
+        focusedURL: String? = nil,
         safetySignals: [String] = []
     ) {
         self.grants = grants
         self.observation = observation
         self.focusedApp = focusedApp
+        self.focusedURL = focusedURL
         self.safetySignals = safetySignals
     }
 }
@@ -210,6 +214,7 @@ public struct ComputerUseActionClassifier: Sendable {
                 if let focused = context.focusedApp, focused.bundleID == app { resolvedApp = focused }
             } else {
                 resolvedApp = context.focusedApp
+                if resolvedApp == nil { resolvedURL = context.focusedURL }
             }
         }
         guard resolvedApp != nil || resolvedURL != nil else {
@@ -314,7 +319,7 @@ public struct ComputerUseActionClassifier: Sendable {
         }
 
         var tier: ComputerUseGrantTier?
-        var subject = app?.bundleID ?? ""
+        var subject = app?.bundleID ?? url.flatMap(ComputerUseDomain.host(ofURL:)).map { "domain \($0)" } ?? ""
         if let url, ruling.isBrowser || app == nil {
             result.domain = ComputerUseDomain.host(ofURL: url)
             if let domainTier = context.grants.tier(forURL: url) {

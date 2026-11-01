@@ -445,15 +445,14 @@ public actor ComputerUseSession {
         index: Int,
         signals: [String]
     ) async -> (ActionOutcome, ComputerUseActionRecord, DisplayObservation?) {
-        let focusedApp = action.citedTargets.isEmpty && Self.needsFocusedApp(action)
-            ? (try? await target.describe(lease))?.focusedApp
-            : nil
+        let layout = action.citedTargets.isEmpty && Self.needsFocusedApp(action) ? try? await target.describe(lease) : nil
         let classification = configuration.classifier.classify(
             action,
             context: ComputerUseClassificationContext(
                 grants: grants,
                 observation: { [retained] in retained[$0] },
-                focusedApp: focusedApp,
+                focusedApp: layout?.focusedApp,
+                focusedURL: layout?.tabs.first(where: \.isActive)?.url,
                 safetySignals: signals
             )
         )

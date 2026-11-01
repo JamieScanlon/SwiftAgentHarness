@@ -49,6 +49,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Deferred loading: the parent finds `delegate_computer_use` through `tool_search` | Done |
 | Anthropic's native computer toolset (`computer_toolset_20260801`, and `computer_20251124` / `computer_20250124` for older models) | Done. Other vendors' toolsets and a live view: not yet. |
 | `grounder` and `vision-describe` roles (`computer_locate`, `computer_describe`), specialists on models without vision | Done |
+| Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
 
 ## How it fits together
 
@@ -120,7 +121,7 @@ Once loaded, the parent calls `delegate_computer_use` with flat arguments:
 | `success_criteria` | One checkable criterion per line. |
 | `constraints` | Rules to keep, one per line. |
 | `apps`, `domains` | Requested grants, for example `com.apple.TextEdit:full`, `docs.example.com:click`. The user approves a subset. |
-| `target` | Target id. |
+| `target` | Target id. Defaults to `defaults.target`, or to `defaults.webTarget` for a task with domains and no apps. |
 | `steps` | Expected size of the work in actions: the first step allotment, clamped to the policy's `ceilingSteps`. Defaults to `defaultSteps`. |
 | `deadline` | Only a cutoff the user stated, as an ISO 8601 date-time with a UTC offset. It can only end the session earlier. |
 | `return_schema` | Optional JSON Schema for the result. |
@@ -198,6 +199,40 @@ session.installComputerUse(ComputerUseConfiguration(
 - the per-event Unicode length on 26 and 27;
 - process-routed clicks in apps that ignore background events;
 - AX trees in Chromium and Electron apps.
+
+## The managed browser
+
+`ManagedBrowserDisplayTarget` drives a Chromium-family browser over the DevTools protocol. It has none of the user's data or sign-ins, so it is the target for web work: set it as `webTarget`, and a task that grants domains and no apps runs there unless it names a target.
+
+```swift
+let browser = ManagedBrowserDisplayTarget.localChromium(
+    configuration: ManagedBrowserConfiguration(
+        network: BrowserNetworkPolicy(blockedDomains: ["ads.example"])   // private network access is off by default
+    ),
+    chromium: ManagedChromiumConfiguration(headless: false)              // a window the user can watch and take over in
+)
+session.installComputerUse(ComputerUseConfiguration(
+    registry: DisplayTargetRegistry(targets: [mac, browser]),
+    defaults: ComputerUseSpecialistDefaults(target: MacHostDisplayTarget.defaultID, webTarget: browser.manifest.id),
+    approveGrants: …
+))
+```
+
+`ManagedBrowserDisplayTarget.hosted(endpoint:)` drives a browser reached by its DevTools WebSocket URL instead, such as a hosted one.
+
+| Piece | Behavior |
+|---|---|
+| Isolation | A launched browser declares `container` and a hosted one `remote-browser`; both are `humanPresence: none`, so runs nobody started at the keyboard may use them. Each lease launches a fresh Chromium with a throwaway profile in a temporary directory (connecting, for a hosted browser), creates a new browser context with downloads denied, and disposes of it on release. The launched browser inherits no descriptors but its pipe, and `--use-mock-keychain` keeps it out of the user's keychain. |
+| Network | A launched browser's only route out is a loopback SOCKS5 proxy (`BrowserNetworkProxy`) that applies the `BrowserNetworkPolicy` to every connection: each redirect hop, subresource, and WebSocket. Loopback goes through the proxy too, local name resolution is disabled so names reach the proxy unresolved, and QUIC and non-proxied WebRTC UDP are off. The proxy checks the name, resolves it, checks every address, and connects to the address it checked. It fails closed: a name that doesn't resolve, or resolves to any non-public address while private network access is off, is refused. |
+| Policy | Only `http`, `https`, `ws`, and `wss` load. Non-public addresses are the IANA special-purpose ranges, including cloud metadata (169.254.169.254), shared space (100.64/10), and IPv6 forms that embed an IPv4 address (mapped, NAT64, 6to4), which are judged by the address they embed. Single-label names and `.localhost`, `.local`, `.internal`, `.intranet`, `.lan`, `.home.arpa`, and `.corp` names are refused before resolution. `allowsPrivateNetwork` opts into all of them. `allowedDomains` and `blockedDomains` match like domain grants, and the block list wins. |
+| Navigation | `open-url` is checked against the policy before `Page.navigate`, and after every action the page's final URL is checked again: a page that ended on a blocked URL is cleared to `about:blank` and the outcome is `partial`. Connections the proxy refused during an action are listed in its evidence. |
+| Perception | The DOM and pixels. The tree is built by a script in an isolated JavaScript world: page scripts share the DOM but can't reach the script, its state, or the built-ins it calls, so they can't forge what it reports. It lists interactive elements, headings, images with alt text, and text blocks, through open shadow roots and same-origin frames, up to 600 elements; offscreen elements are marked. Password values are reported as a length only. Screenshots are rendered at the model's size through the clip's scale, so they need no resizing, and a zoom renders at twice the CSS resolution. |
+| Coordinates | The target's space is the page viewport in CSS pixels (1280×800 by default) at device scale 1. The browser's own UI isn't part of it. |
+| Refs | An element keeps its ref for the life of its document. Before acting, the ref is looked up live in the document it was observed in, and refused if it is gone or its role or label changed. A click on a ref scrolls it into view and lands on its live center with trusted mouse events, and is refused when another element covers that point. A point is refused when the page navigated or scrolled since its observation, since the content under it moved. |
+| Delivery | Always background: CDP input reaches the page, never the browser's UI or the host. `press` is a DOM `click()`, which works on covered elements. `set-value` writes through the field's native setter, fires input and change events, and is `confirmed` when it reads back. Typing inserts text and presses line breaks and tabs as keys. Copy and paste commands aren't sent, so the host clipboard is never read or written; the paste typing mode inserts the text. |
+| Page events | JavaScript dialogs are dismissed (a `beforeunload` prompt is accepted, so the navigation goes ahead) and reported in the next observation. A popup is closed, and its page opened in the one tab unless policy blocks it. |
+| Evidence | A navigation the action caused is `confirmed`. Otherwise pointer and key actions are `unverifiable`, with the evidence saying whether the DOM changed. |
+| Takeover | Pauses capture and agent input. A headed browser (the default) shows its window on the host, where the user can complete a handoff; a headless one has nothing to take over in. |
 
 ## Hosting a target in another process
 
@@ -490,7 +525,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Release reasons | A `no-progress` ending releases the lease as `aborted` and a `deadline` ending as `expired`, since `ReleaseReason` has no closer match. |
 | Idle timeout events | The spec resets the idle clock on any `DelegateEvent`. In-process delegates have no `DelegateEvent` stream, so the child-run port reports each streamed delta and orchestration state change instead, and a pending approval for the child's run counts as `awaiting-approval`. The cancelled run's `run_cancelled` marker records `idle-timeout` as its `reason` and its terminal detail. Other cancellations still record the harness's own reason strings there, such as `task_cancelled_iter_N`, rather than the spec's `user-cancel`, `parent-cancel`, `deadline`, or `budget`. Remote delegates take `limits.idleTimeoutSeconds` from `subAgentHostingPolicy`, since their agent entries come from host-registered tools rather than config. An A2A task in `input-required` or `auth-required` is waiting on input the harness can't route to anyone yet, so it counts as idle rather than paused. |
 | `humanPresence` values | The manifest example shows only `shared`. `none` was added for VMs, containers, and managed browsers. |
-| Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes, and the host desktop isn't one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
+| Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes; neither the host desktop nor the managed browser, which launches per lease, is one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
 
 **Grants and classification**
 
@@ -574,11 +609,26 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Stop from the host | The spec's stop key and HUD Stop button live in the host. They reach the harness as a `stopRequested` event on `RemoteDisplayTarget.events`, and the integrator calls `stopComputerUse()` from it. |
 | Live view and observer tokens | They aren't carried. `liveView` passes through as the target returns it, and no target serves one yet. |
 
+**Managed browser**
+
+| Topic | Behavior |
+|---|---|
+| Isolation of a launched browser | The spec's table gives the managed browser `container / remote` isolation. A launched browser is a separate Chromium process with a throwaway profile, running as the user, with Chromium's own sandbox: not an OS container. It declares `container` because it holds none of the user's data and nobody else uses it. |
+| Network boundary | The spec says the boundary is the target's network. For a launched browser it is the policy proxy the browser is forced through, not an OS network sandbox: a renderer that escaped Chromium's sandbox could open sockets directly. A container target would put the boundary in its network namespace. A hosted browser's network is its host's, so only the URL checks (before navigation and on the final URL) apply. |
+| What "private" means | The spec makes private-network access opt-in without defining it. It is defined here as the IANA special-purpose ranges plus private name suffixes (see the policy row above). A name that resolves to any non-public address is refused, so DNS can't steer a public name to a private address. |
+| Domain lists and grants | The spec gives the network policy domain allow and block lists beside the session's domain grants. They are separate: grants decide where the agent may act, the lists decide what the browser may load, including subresources from domains the task never named. |
+| Ref drift | The spec re-resolves a ref by role, label, and frame within a tolerance. The driver holds the live DOM node, so a ref is matched by identity, role, and label; its frame isn't compared, because the driver scrolls an element into view before acting. A point, which has no element, is refused when the page navigated or scrolled since its observation. |
+| Click on a ref | The spec lets a driver implement `click` on a ref as `press`. Here a click is a trusted mouse click at the element's live center, refused when something covers it, and `press` is the DOM `click()`, which isn't a trusted event and which some pages ignore. |
+| Dialogs, popups, and downloads | The spec doesn't cover them. Dialogs are dismissed and reported, popups are folded into the one tab, and downloads are denied, so the agent has one page, nothing it can't see blocks it, and nothing reaches the host's disk. |
+| Default target | The spec says the default target is the most isolated one that can do the job. Whether a task can be done in a browser isn't known from its arguments, so the rule is explicit: `defaults.webTarget` takes tasks that grant domains and no apps. |
+| Live view | The spec's observer access is an authenticated, view-only stream. None is served; a headed browser's window on the host stands in for it, and `observerAccess` is `none`. |
+
 **Not built yet**
 
 Spec features with no implementation so far. Each needs something the harness doesn't have yet, or is optional in the spec.
 
 | Feature | State |
 |---|---|
-| Isolated targets | Only the host desktop exists. The managed browser, desktop container, local VM, user's real browser, and paired device targets aren't built, and neither is the browser network policy (SSRF checks, private-network opt-in) that goes with browser targets. |
+| Isolated targets | The host desktop and the managed browser exist. The desktop container, local VM, user's real browser, and paired device targets aren't built. |
+| Live view | No target serves a live-view URL or observer tokens. A headed managed browser shows its window on the host instead. |
 | Code execution as a peer path | Scripts run against the leased target, gated as a whole, aren't offered. |

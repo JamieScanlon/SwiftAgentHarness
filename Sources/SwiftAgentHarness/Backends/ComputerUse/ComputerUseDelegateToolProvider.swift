@@ -79,13 +79,13 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                     ),
                     .init(
                         name: "domains",
-                        description: "Web domains to grant, comma-separated as domain:tier. A web task needs a domain here and a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser. Example: docs.example.com:click",
+                        description: domainsDescription,
                         type: "string",
                         required: false
                     ),
                     .init(
                         name: "target",
-                        description: "Display target id. Default \(defaults.target). Available: \(targetList.isEmpty ? "none" : targetList).",
+                        description: targetDescription(targetList),
                         type: "string",
                         required: false
                     ),
@@ -112,6 +112,20 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
                 type: .function
             ),
         ]
+    }
+
+    private var domainsDescription: String {
+        let example = " Example: docs.example.com:click"
+        guard let web = defaults.webTarget else {
+            return "Web domains to grant, comma-separated as domain:tier. A web task needs a domain here and a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser." + example
+        }
+        return "Web domains to grant, comma-separated as domain:tier. A task with domains and no apps runs in \(web), a separate browser with none of the user's data or sign-ins; it needs no browser in apps. To work in the user's own browser instead, also name a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser." + example
+    }
+
+    private func targetDescription(_ targetList: String) -> String {
+        var text = "Display target id. Default \(defaults.target)"
+        if let web = defaults.webTarget { text += ", or \(web) for a task with domains and no apps" }
+        return text + ". Available: \(targetList.isEmpty ? "none" : targetList)."
     }
 
     func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
