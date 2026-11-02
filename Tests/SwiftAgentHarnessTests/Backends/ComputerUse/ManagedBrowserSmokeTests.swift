@@ -160,6 +160,33 @@ struct ManagedBrowserSmokeTests {
         #expect(try await viewer.status().type == "ended")
     }
 
+    @Test("The browser exits on its own when the harness's end of the pipe closes, and its profile is swept later")
+    func exitsWithPipe() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("smoke-profiles-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // No page is loaded, so the proxy port is never dialed.
+        let browser = try await ManagedChromium.launch(ManagedChromiumConfiguration(headless: true, profileRoot: root), proxyPort: 9)
+        let processID = browser.processID
+        await browser.connection.close()
+        let deadline = ContinuousClock.now + .seconds(10)
+        var status: Int32 = 0
+        var exited = false
+        while ContinuousClock.now < deadline {
+            if waitpid(processID, &status, WNOHANG) == processID { exited = true; break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(exited, "the browser outlived its pipe")
+        if !exited { kill(processID, SIGKILL) }
+
+        let profiles = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(profiles.count == 1, "the profile is left until something sweeps it")
+        let old = Date().addingTimeInterval(-ManagedChromium.unlockedProfileGrace - 60)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: root.appendingPathComponent(profiles[0]).path)
+        ManagedChromium.removeStaleProfiles(in: root, hostName: ManagedChromium.currentHostName(), now: Date())
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+        await browser.shutdown()
+    }
+
     @Test("Loopback is unreachable under the default policy, even through a page")
     func defaultPolicy() async throws {
         let server = try await Self.server()
