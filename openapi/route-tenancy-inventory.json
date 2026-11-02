@@ -183,6 +183,13 @@
       "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"audit\")"
     },
     {
+      "method": "POST",
+      "path": "/api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"live-view\")"
+    },
+    {
       "method": "GET",
       "path": "/api/conversations/{id}/computer-use/replays",
       "tenancy_guard": "conversationAccess",

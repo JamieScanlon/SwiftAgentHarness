@@ -122,6 +122,44 @@ struct ManagedBrowserSmokeTests {
         await target.release(lease, reason: .completed)
     }
 
+    @Test("Streams the page to a live view and takes the viewer's input during takeover")
+    func liveView() async throws {
+        let server = try await Self.server()
+        defer { Task { try? await server.channel.close(); await server.task.value } }
+        let liveView = DisplayLiveViewServer()
+        defer { Task { await liveView.stop() } }
+        let target = ManagedBrowserDisplayTarget.localChromium(
+            configuration: ManagedBrowserConfiguration(network: BrowserNetworkPolicy(allowsPrivateNetwork: true, blockedDomains: ["tracker.test"])),
+            chromium: ManagedChromiumConfiguration(headless: true),
+            liveView: liveView
+        )
+        let lease = try await Self.lease(target)
+        _ = try await target.act(lease, ActionBatch([.openURL("http://127.0.0.1:\(server.port)/")]))
+        let first = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))
+        let button = try #require(first.tree?.elements.values.first { $0.role == "button" }?.frame)
+
+        let viewer = try DisplayLiveViewServerTests.Viewer(try #require(try await target.liveView(lease)))
+        #expect(try await viewer.status().control == false)
+        let frame = try await viewer.frame()
+        #expect(frame.jpeg.prefix(2) == Data([0xFF, 0xD8]))
+        #expect(frame.width == 1280 && frame.height == 800)
+
+        try await target.takeover(lease, on: true)
+        #expect(try await viewer.status().control == true)
+        let (x, y) = (button.center.x, button.center.y)
+        try await viewer.send(#"{"type":"mouse","action":"down","x":\#(x),"y":\#(y),"button":"left","clickCount":1}"#)
+        try await viewer.send(#"{"type":"mouse","action":"up","x":\#(x),"y":\#(y),"button":"left","clickCount":1}"#)
+        try await viewer.roundTrip()
+        try await Task.sleep(for: .milliseconds(300))
+        try await target.takeover(lease, on: false)
+        #expect(try await viewer.status().control == false)
+
+        let after = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))
+        #expect(after.tree?.elements.values.contains { $0.role == "button" && $0.label == "Clicked" } == true)
+        await target.release(lease, reason: .completed)
+        #expect(try await viewer.status().type == "ended")
+    }
+
     @Test("Loopback is unreachable under the default policy, even through a page")
     func defaultPolicy() async throws {
         let server = try await Self.server()

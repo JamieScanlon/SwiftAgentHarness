@@ -62,10 +62,16 @@ public struct ManagedBrowserSession: Sendable {
 ///
 /// The coordinate space is the page viewport in CSS pixels. The browser has no app identity, so actions are
 /// granted by the page's domain.
+///
+/// With a live view server, each lease gets a feed: the page is streamed while someone watches, and a viewer's
+/// input reaches the page only during takeover.
 public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public nonisolated let manifest: DisplayTargetManifest
     public nonisolated let configuration: ManagedBrowserConfiguration
     private let launcher: @Sendable () async throws -> ManagedBrowserSession
+    private let liveViewServer: DisplayLiveViewServer?
+    private var liveFeed: UUID?
+    private var casting = false
     private let lock = DisplayTargetLeaseLock()
     private var page: Page?
     private var takeoverActive = false
@@ -96,10 +102,12 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public init(
         configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration(),
         isolation: DisplayTargetIsolation,
+        liveView: DisplayLiveViewServer? = nil,
         launcher: @escaping @Sendable () async throws -> ManagedBrowserSession
     ) {
         self.configuration = configuration
         self.launcher = launcher
+        liveViewServer = liveView
         manifest = DisplayTargetManifest(
             id: configuration.id,
             label: configuration.label,
@@ -108,14 +116,19 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             perception: [.dom, .pixels],
             delivery: [.background],
             semanticActions: [.press, .setValue, .focus, .openURL],
+            observerAccess: liveView == nil ? .none : .stream,
             humanPresence: .none
         )
     }
 
     /// A browser reached by its DevTools WebSocket URL, such as a hosted browser. Its network is the host's: the
     /// policy is applied to navigations and final URLs only.
-    public static func hosted(endpoint: URL, configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration()) -> ManagedBrowserDisplayTarget {
-        ManagedBrowserDisplayTarget(configuration: configuration, isolation: .remoteBrowser) {
+    public static func hosted(
+        endpoint: URL,
+        configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration(),
+        liveView: DisplayLiveViewServer? = nil
+    ) -> ManagedBrowserDisplayTarget {
+        ManagedBrowserDisplayTarget(configuration: configuration, isolation: .remoteBrowser, liveView: liveView) {
             let connection = CDPConnection(transport: CDPWebSocketTransport(url: endpoint))
             await connection.start()
             return ManagedBrowserSession(connection: connection, shutdown: { await connection.close() })
@@ -128,12 +141,13 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public static func localChromium(
         configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration(),
         chromium: ManagedChromiumConfiguration = ManagedChromiumConfiguration(),
-        resolver: any BrowserNetworkResolving = SystemBrowserNetworkResolver()
+        resolver: any BrowserNetworkResolving = SystemBrowserNetworkResolver(),
+        liveView: DisplayLiveViewServer? = nil
     ) -> ManagedBrowserDisplayTarget {
         var chromium = chromium
         chromium.viewport = configuration.viewport
         let browserConfiguration = chromium
-        return ManagedBrowserDisplayTarget(configuration: configuration, isolation: .container) {
+        return ManagedBrowserDisplayTarget(configuration: configuration, isolation: .container, liveView: liveView) {
             let proxy = BrowserNetworkProxy(policy: configuration.network, resolver: resolver)
             let port = try await proxy.start()
             let browser: ManagedChromium
@@ -167,10 +181,18 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             throw DisplayTargetError.driverFailure("the browser did not start: \(error)")
         }
         takeoverActive = false
+        casting = false
         observations = [:]
         observationOrder = []
         notices = []
         lastPointer = nil
+        if let liveViewServer {
+            liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
+                label: configuration.label,
+                viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
+                input: { [weak self] input in await self?.liveInput(input) }
+            ))
+        }
         return lease
     }
 
@@ -183,6 +205,9 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         }
         page = nil
         takeoverActive = false
+        casting = false
+        if let liveFeed { await liveViewServer?.close(liveFeed) }
+        liveFeed = nil
         await lock.release(leaseID: lease.id)
     }
 
@@ -203,6 +228,17 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public func takeover(_ lease: Lease, on: Bool) async throws {
         try await requireLease(lease)
         takeoverActive = on
+        if let liveFeed { await liveViewServer?.setControl(on, for: liveFeed) }
+        if !on, let url = try? await pageState().url, let reason = configuration.network.evaluate(url: url).denialReason {
+            _ = try? await send("Page.navigate", ["url": .string("about:blank")])
+            notices.append("During the takeover the page went to \(url), which network policy blocks (\(reason)); it was cleared.")
+        }
+    }
+
+    public func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
+        try await requireLease(lease)
+        guard let liveViewServer, let liveFeed else { return nil }
+        return try await liveViewServer.link(for: liveFeed)
     }
 
     private func openPage() async throws -> Page {
@@ -264,8 +300,81 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
                 _ = try? await connection.send("Page.navigate", ["url": .string(url)], session: page.sessionID)
                 notices.append("The page opened a new window; it was closed and its page opened here instead.")
             }
+        case "Page.screencastFrame" where event.sessionID == page.sessionID:
+            if let frame = event.params[wire: "sessionId"] {
+                _ = try? await connection.send("Page.screencastFrameAck", .object(["sessionId": frame]), session: page.sessionID)
+            }
+            guard let liveFeed, let encoded = event.params[wire: "data"]?.wireString, let jpeg = Data(base64Encoded: encoded) else { return }
+            let metadata = event.params[wire: "metadata"]
+            let width = metadata?[wire: "deviceWidth"]?.wireNumber.map { Int($0.rounded()) } ?? configuration.viewport.width
+            let height = metadata?[wire: "deviceHeight"]?.wireNumber.map { Int($0.rounded()) } ?? configuration.viewport.height
+            await liveViewServer?.publish(DisplayLiveViewFrame(jpeg: jpeg, width: width, height: height), to: liveFeed)
         default:
             break
+        }
+    }
+
+    // MARK: - Live view
+
+    private func viewersChanged(_ count: Int) async {
+        guard page != nil else { return }
+        if count > 0, !casting {
+            casting = true
+            _ = try? await send("Page.startScreencast", [
+                "format": .string("jpeg"),
+                "quality": .integer(70),
+                "maxWidth": .integer(configuration.viewport.width),
+                "maxHeight": .integer(configuration.viewport.height),
+            ])
+        } else if count == 0, casting {
+            casting = false
+            _ = try? await send("Page.stopScreencast")
+        }
+    }
+
+    /// A viewer's input during takeover. Outside takeover the server drops it first; this check is the second gate.
+    private func liveInput(_ input: DisplayLiveViewInput) async {
+        guard takeoverActive, page != nil else { return }
+        let width = Double(configuration.viewport.width), height = Double(configuration.viewport.height)
+        func clamped(_ x: Double, _ y: Double) -> DisplayPoint {
+            DisplayPoint(x: min(max(x, 0), width - 1), y: min(max(y, 0), height - 1))
+        }
+        switch input {
+        case .mouse(let action, let x, let y, let button, let clickCount, let modifiers):
+            let type = switch action {
+            case .down: "mousePressed"
+            case .up: "mouseReleased"
+            case .move: "mouseMoved"
+            }
+            let held = action == .up ? 0 : button.map(CDPInput.buttonMask) ?? 0
+            try? await mouse(type, clamped(x, y), button: button, buttons: held, clickCount: action == .move ? 0 : clickCount, modifiers: CDPInput.modifierMask(modifiers))
+        case .wheel(let x, let y, let dx, let dy, let modifiers):
+            let point = clamped(x, y)
+            _ = try? await send("Input.dispatchMouseEvent", [
+                "type": .string("mouseWheel"),
+                "x": .double(point.x),
+                "y": .double(point.y),
+                "deltaX": .double(dx),
+                "deltaY": .double(dy),
+                "modifiers": .integer(CDPInput.modifierMask(modifiers)),
+            ])
+        case .key(let down, let key, let code, let keyCode, let text, let modifiers):
+            var params: [String: JSON] = [
+                "type": .string(down ? (text == nil ? "rawKeyDown" : "keyDown") : "keyUp"),
+                "key": .string(key),
+                "code": .string(code),
+                "windowsVirtualKeyCode": .integer(keyCode),
+                "modifiers": .integer(CDPInput.modifierMask(modifiers)),
+            ]
+            if down, let text {
+                params["text"] = .string(text)
+                params["unmodifiedText"] = .string(text)
+            }
+            let commands = down && key.count == 1 ? CDPInput.commands(for: KeyCombo(modifiers: modifiers, key: key)) : []
+            if !commands.isEmpty { params["commands"] = .array(commands.map(JSON.string)) }
+            _ = try? await send("Input.dispatchKeyEvent", params)
+        case .text(let text):
+            _ = try? await send("Input.insertText", ["text": .string(text)])
         }
     }
 

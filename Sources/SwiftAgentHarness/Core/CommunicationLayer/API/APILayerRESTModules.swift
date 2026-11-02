@@ -2893,6 +2893,29 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
             return Self.json(status)
         }
 
+        conversationsPath.post(":id", "computer-use", "runs", ":lifecycleID", "live-view") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            let link: DisplayLiveView?
+            do {
+                link = try await control.liveView(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "")
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Live view failed: \(error)")
+            }
+            guard let link else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use run with a live view")
+            }
+            // The link carries a credential.
+            let response = Self.json(link)
+            response.headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+            return response
+        }
+
         conversationsPath.post(":id", "computer-use", "takeover") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
                 return APILayerRESTErrorResponse.invalidConversationID()

@@ -47,9 +47,10 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | "Agent active" HUD on the host desktop (`MacAgentActiveHUD`), post-run replays with observation thumbnails | Done |
 | Image retention: held while the run can cite them, a TTL from lease release, audit marks for longer retention | Done |
 | Deferred loading: the parent finds `delegate_computer_use` through `tool_search` | Done |
-| Anthropic's native computer toolset (`computer_toolset_20260801`, and `computer_20251124` / `computer_20250124` for older models) | Done. Other vendors' toolsets and a live view: not yet. |
+| Anthropic's native computer toolset (`computer_toolset_20260801`, and `computer_20251124` / `computer_20250124` for older models) | Done. Other vendors' toolsets: not yet. |
 | `grounder` and `vision-describe` roles (`computer_locate`, `computer_describe`), specialists on models without vision | Done |
 | Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
+| Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; REST link minting | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser. The TUI doesn't offer links yet. |
 
 ## How it fits together
 
@@ -209,7 +210,8 @@ let browser = ManagedBrowserDisplayTarget.localChromium(
     configuration: ManagedBrowserConfiguration(
         network: BrowserNetworkPolicy(blockedDomains: ["ads.example"])   // private network access is off by default
     ),
-    chromium: ManagedChromiumConfiguration(headless: false)              // a window the user can watch and take over in
+    chromium: ManagedChromiumConfiguration(headless: true),
+    liveView: DisplayLiveViewServer()                                    // the user watches, and takes over, in a live view
 )
 session.installComputerUse(ComputerUseConfiguration(
     registry: DisplayTargetRegistry(targets: [mac, browser]),
@@ -232,7 +234,22 @@ session.installComputerUse(ComputerUseConfiguration(
 | Delivery | Always background: CDP input reaches the page, never the browser's UI or the host. `press` is a DOM `click()`, which works on covered elements. `set-value` writes through the field's native setter, fires input and change events, and is `confirmed` when it reads back. Typing inserts text and presses line breaks and tabs as keys. Copy and paste commands aren't sent, so the host clipboard is never read or written; the paste typing mode inserts the text. |
 | Page events | JavaScript dialogs are dismissed (a `beforeunload` prompt is accepted, so the navigation goes ahead) and reported in the next observation. A popup is closed, and its page opened in the one tab unless policy blocks it. |
 | Evidence | A navigation the action caused is `confirmed`. Otherwise pointer and key actions are `unverifiable`, with the evidence saying whether the DOM changed. |
-| Takeover | Pauses capture and agent input. A headed browser (the default) shows its window on the host, where the user can complete a handoff; a headless one has nothing to take over in. |
+| Takeover | Pauses capture and agent input. The user completes a handoff in the live view, or in the window of a headed browser. A headless browser with no live view has nothing to take over in. When takeover ends, the page's URL is checked against the policy, and a blocked page is cleared and reported in the next observation. |
+| Live view | With a `DisplayLiveViewServer`, the manifest declares `observerAccess: stream` and each lease opens a feed. The page is streamed (Chromium's screencast, JPEG) only while someone watches. See [Live view](#live-view). |
+
+### Live view
+
+`DisplayLiveViewServer` serves a viewer page and a WebSocket stream for any number of targets, one feed per lease. One server can be shared by every target in the registry; it starts listening on the first link.
+
+- **Links.** `target.liveView(lease)`, `ComputerUseControlService.liveView(conversationID:lifecycleID:)`, or `POST /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view` mints a link like `http://127.0.0.1:52144/view#<token>`. Each call makes a new 256-bit token. It sits in the URL fragment, which browsers never send, so it appears in no request line, log, or referrer. The page clears it from the address bar and presents it as the stream's first message. A link can be used to connect until `linkLifetime` (10 minutes by default) passes; a viewer that connected keeps watching until the lease ends. Releasing the lease ends its viewers and revokes its links.
+- **Control.** A viewer is view-only. Its input reaches the page only while the session is taken over, through `POST …/takeover` or a handoff. The viewer shows which state it's in. Mouse, wheel, and key events are sent as CDP input in the viewport's CSS pixels, clamped to the viewport, and pasted text is inserted as typed, so the user can paste from a password manager. The server drops input outside takeover, and the target checks again.
+- **Page hardening.** The page and stream refuse to be framed (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), are sent `no-store` and `no-referrer`, and load no scripts but their own. A stream opened from another site's page is refused by its `Origin` even with a token, and one that doesn't present a token within `authenticationTimeout` is closed. At most `maxViewersPerFeed` viewers watch one feed.
+- **Reaching it from elsewhere.** The server listens on loopback. For a viewer on another machine, put it behind a tunnel or TLS reverse proxy and set `publicBaseURL`; the proxy must pass `/view`, `/viewer.js`, and `/stream` (a WebSocket upgrade) through.
+
+```swift
+let liveView = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(publicBaseURL: URL(string: "https://agent.example.com/live/")))
+let browser = ManagedBrowserDisplayTarget.localChromium(liveView: liveView)
+```
 
 ## Hosting a target in another process
 
@@ -395,7 +412,8 @@ Clients answer and steer through REST. Each route checks conversation tenancy:
 
 | Route | Does |
 |---|---|
-| `GET /api/conversations/{id}/computer-use` | Lists pending requests and live sessions (`lifecycleID`, target, step, `maxSteps`, `takenOver`) |
+| `GET /api/conversations/{id}/computer-use` | Lists pending requests and live sessions (`lifecycleID`, target, step, `maxSteps`, `takenOver`, and `liveView`: whether the target serves one) |
+| `POST /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view` | Mints a live-view link (`url`, `viewOnly`, `expiresAt`), sent `no-store`. 404 when no live run matches or its target serves no live view. |
 | `POST /api/conversations/{id}/computer-use/requests/{requestID}` | `{"action": "answer", "answer": "…"}`, `{"action": "hand-back", "note": "…"}` or `{"action": "decline"}`. A question takes answer or decline; a handoff takes hand-back or decline (otherwise 409). |
 | `POST /api/conversations/{id}/computer-use/stop` | Stops the conversation's sessions, declines their pending requests, and returns `lifecycleIDs` |
 | `POST /api/conversations/{id}/computer-use/takeover` | `{"on": true}`, optionally with `lifecycleID`. Returns `lifecycleIDs`, or 404 when nothing is running. |
@@ -525,7 +543,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Release reasons | A `no-progress` ending releases the lease as `aborted` and a `deadline` ending as `expired`, since `ReleaseReason` has no closer match. |
 | Idle timeout events | The spec resets the idle clock on any `DelegateEvent`. In-process delegates have no `DelegateEvent` stream, so the child-run port reports each streamed delta and orchestration state change instead, and a pending approval for the child's run counts as `awaiting-approval`. The cancelled run's `run_cancelled` marker records `idle-timeout` as its `reason` and its terminal detail. Other cancellations still record the harness's own reason strings there, such as `task_cancelled_iter_N`, rather than the spec's `user-cancel`, `parent-cancel`, `deadline`, or `budget`. Remote delegates take `limits.idleTimeoutSeconds` from `subAgentHostingPolicy`, since their agent entries come from host-registered tools rather than config. An A2A task in `input-required` or `auth-required` is waiting on input the harness can't route to anyone yet, so it counts as idle rather than paused. |
 | `humanPresence` values | The manifest example shows only `shared`. `none` was added for VMs, containers, and managed browsers. |
-| Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes; neither the host desktop nor the managed browser, which launches per lease, is one. The noVNC observer tokens the spec describes aren't implemented for the browser sandbox either. Both belong with isolated (VM or container) targets. |
+| Registry | The spec says display targets register in the same backend registry as sandboxes and reuse its lifecycle, pruning, and observer-token machinery. `SandboxBackendRegistry` is a static, `SandboxBackendHandle`-typed table, so display targets have their own injected `DisplayTargetRegistry` instance. There is nothing to reuse yet. Pruning (`SandboxPruneService`) applies to persistent runtimes; neither the host desktop nor the managed browser, which launches per lease, is one. The sandbox side has no observer-token machinery to reuse either, so display targets' live-view tokens live in `DisplayLiveViewServer`. |
 
 **Grants and classification**
 
@@ -607,7 +625,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | `CUHostProtocol` shape | The spec names `CUHostProtocol` "Codable request/response + capability negotiation" without a format. Messages are JSON, so a host need not be written in Swift. The manifest in `welcome` is the capability declaration, and the protocol version is checked exactly. |
 | Holder liveness across a host | `LeaseRequest.isHolderAlive` is a closure and can't cross a connection. The host treats an open connection as a live holder. The client covers holders in its own process that die without releasing: it releases their leases when a new lease is refused as busy. |
 | Stop from the host | The spec's stop key and HUD Stop button live in the host. They reach the harness as a `stopRequested` event on `RemoteDisplayTarget.events`, and the integrator calls `stopComputerUse()` from it. |
-| Live view and observer tokens | They aren't carried. `liveView` passes through as the target returns it, and no target serves one yet. |
+| Live view and observer tokens | `liveView` passes through as the hosted target returns it, so the host serves its own link (a `DisplayLiveViewServer` in the host process, say) and reaching it is up to the integrator. |
 
 **Managed browser**
 
@@ -621,7 +639,10 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | Click on a ref | The spec lets a driver implement `click` on a ref as `press`. Here a click is a trusted mouse click at the element's live center, refused when something covers it, and `press` is the DOM `click()`, which isn't a trusted event and which some pages ignore. |
 | Dialogs, popups, and downloads | The spec doesn't cover them. Dialogs are dismissed and reported, popups are folded into the one tab, and downloads are denied, so the agent has one page, nothing it can't see blocks it, and nothing reaches the host's disk. |
 | Default target | The spec says the default target is the most isolated one that can do the job. Whether a task can be done in a browser isn't known from its arguments, so the rule is explicit: `defaults.webTarget` takes tasks that grant domains and no apps. |
-| Live view | The spec's observer access is an authenticated, view-only stream. None is served; a headed browser's window on the host stands in for it, and `observerAccess` is `none`. |
+| Live view transport | The spec asks for an authenticated stream or VNC link. The managed browser has no framebuffer to serve over VNC, so it streams Chromium's screencast over a WebSocket, and its own viewer page draws it. `observerAccess` is `stream`. |
+| Observer tokens | The spec borrows the browser sandbox's noVNC tokens: password-protected, short-lived, with the password in the URL fragment. Here a link's token is its password, and short-lived means it can only be used to connect for `linkLifetime`. An open stream isn't cut at that time, because the user may be in the middle of a handoff; it ends with the lease. Links are reusable until they expire, so a reload works. |
+| View-only and takeover | The spec makes links view-only unless takeover is on. There is one kind of link: it is view-only outside takeover and carries the user's input during it. Every link is minted through the user's own controls (the control service or the REST route behind tenancy), never by a tool the model can call, so there is no separate observer link for other people yet. `DisplayLiveView.viewOnly` reports the state when the link was minted. |
+| Input during takeover | The spec doesn't say how a remote user acts in an isolated target. Viewer input is delivered as CDP input to the page only, so the user can't reach the browser's UI or the host, and the network policy applies to wherever the user goes. A page left on a blocked URL is cleared at hand-back. |
 
 **Not built yet**
 
@@ -630,5 +651,6 @@ Spec features with no implementation so far. Each needs something the harness do
 | Feature | State |
 |---|---|
 | Isolated targets | The host desktop and the managed browser exist. The desktop container, local VM, user's real browser, and paired device targets aren't built. |
-| Live view | No target serves a live-view URL or observer tokens. A headed managed browser shows its window on the host instead. |
+| Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. The TUI doesn't show links yet, and there are no view-only links for observers other than the user. |
+| Sensitive-domain watch mode | The spec continues a session after a vendor's sensitive-domain signal only while a live view is open. Vendor safety signals aren't read yet; `DisplayLiveViewServer.viewerCount(_:)` is what such a check would use. |
 | Code execution as a peer path | Scripts run against the leased target, gated as a whole, aren't offered. |

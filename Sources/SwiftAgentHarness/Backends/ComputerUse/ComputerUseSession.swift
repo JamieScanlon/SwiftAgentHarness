@@ -865,6 +865,12 @@ public actor ComputerUseSession {
 
     // MARK: - Oversight
 
+    /// A link for the user to watch the target, and to control it during takeover. `nil` when the target serves none.
+    public func liveView() async throws -> DisplayLiveView? {
+        if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
+        return try await target.liveView(lease)
+    }
+
     public func setTakeover(_ on: Bool) async throws {
         if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
         guard on != isTakeoverActive else { return }

@@ -7,6 +7,8 @@ public struct ComputerUseSessionStatus: Sendable, Codable, Equatable {
     public var step: Int
     public var maxSteps: Int
     public var takenOver: Bool
+    /// Whether the target can serve a live view; ask for a link with ``ComputerUseControlService/liveView(conversationID:lifecycleID:)``.
+    public var liveView: Bool
 }
 
 /// What is waiting on the user, and what is running, for one conversation.
@@ -46,7 +48,8 @@ public struct ComputerUseControlService: Sendable {
                 target: entry.targetLabel,
                 step: await entry.session.stepCount,
                 maxSteps: await entry.session.budgets.steps,
-                takenOver: await entry.session.isTakeoverActive
+                takenOver: await entry.session.isTakeoverActive,
+                liveView: entry.session.manifest.observerAccess != .none
             ))
         }
         return ComputerUseControlStatus(pending: pending, sessions: sessions)
@@ -116,6 +119,15 @@ public struct ComputerUseControlService: Sendable {
         }
         await installation.replays.updateRetention(parent: conversationID, lifecycleID: lifecycleID, auditMarked: marked, expiresAt: expiresAt)
         return ComputerUseAuditStatus(lifecycleID: lifecycleID, auditMarked: marked, released: true, expiresAt: expiresAt)
+    }
+
+    /// A new live-view link to a live run. `nil` when the conversation has no such live run or its target serves no
+    /// live view. Each call mints a new short-lived link.
+    public func liveView(conversationID: UUID, lifecycleID: String) async throws -> DisplayLiveView? {
+        guard let entry = await installation.sessions.entries(parent: conversationID).first(where: { $0.lifecycleID == lifecycleID }),
+              await entry.session.terminalReason == nil
+        else { return nil }
+        return try await entry.session.liveView()
     }
 
     /// Takes over (or hands back) the conversation's live sessions, or just `lifecycleID`'s. Returns the lifecycle

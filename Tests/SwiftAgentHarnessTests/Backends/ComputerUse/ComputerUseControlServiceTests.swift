@@ -24,7 +24,7 @@ struct ComputerUseControlServiceTests {
         let status = await control.status(conversationID: parent)
         #expect(status.pending.map(\.prompt) == ["Which file?"])
         #expect(status.sessions == [
-            ComputerUseSessionStatus(lifecycleID: "call-1", target: "Fake host desktop", step: 0, maxSteps: 12, takenOver: false),
+            ComputerUseSessionStatus(lifecycleID: "call-1", target: "Fake host desktop", step: 0, maxSteps: 12, takenOver: false, liveView: false),
         ])
     }
 
@@ -56,6 +56,21 @@ struct ComputerUseControlServiceTests {
         #expect(try await control.setTakeover(false, conversationID: parent, lifecycleID: "call-1") == ["call-1"])
         #expect(await target.takeoverStates == [true, false])
         #expect(try await control.setTakeover(true, conversationID: parent, lifecycleID: "call-missing").isEmpty)
+    }
+
+    @Test("A live view link comes from the run's target, and none from an unknown or ended run")
+    func liveView() async throws {
+        let installation = installation()
+        let control = ComputerUseControlService(installation: installation)
+        let (session, target) = try await ComputerUseFixtures.registerLiveSession(in: installation, parent: parent, lifecycleID: "call-1")
+        let link = DisplayLiveView(url: "http://127.0.0.1:9/view#t", viewOnly: true, expiresAt: ComputerUseFixtures.epoch)
+        await target.setLiveViewLink(link)
+
+        #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-1") == link)
+        #expect(try await control.liveView(conversationID: UUID(), lifecycleID: "call-1") == nil)
+        #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-missing") == nil)
+        await session.stop()
+        #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-1") == nil)
     }
 
     @Test("Resolving a request reports unknown ids and kind mismatches separately")

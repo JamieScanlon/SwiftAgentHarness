@@ -1930,6 +1930,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view:
+    post:
+      operationId: createConversationComputerUseLiveViewLink
+      tags: [ComputerUse]
+      summary: Mint a live-view link for a live computer-use run
+      description: |
+        Each call mints a new link whose token is in the URL fragment. The link can be used to connect until
+        `expiresAt`; a connected viewer watches until the run's lease ends. Viewers are view-only, and their
+        input reaches the target only while the run is taken over. Sent with `Cache-Control: no-store`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A new live-view link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisplayLiveView"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live run, its target serves no live view, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to make a link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /conversations/{id}/computer-use/replays:
     get:
       operationId: listConversationComputerUseReplays
@@ -3651,7 +3693,7 @@ components:
 
     ComputerUseSessionStatus:
       type: object
-      required: [lifecycleID, target, step, maxSteps, takenOver]
+      required: [lifecycleID, target, step, maxSteps, takenOver, liveView]
       properties:
         lifecycleID:
           type: string
@@ -3663,6 +3705,9 @@ components:
           type: integer
         takenOver:
           type: boolean
+        liveView:
+          type: boolean
+          description: Whether the run's target serves a live view.
 
     ComputerUseControlStatus:
       type: object
@@ -3729,6 +3774,21 @@ components:
           type: string
           format: date-time
           description: When the replay and its images expire. Absent while they are held.
+
+    DisplayLiveView:
+      type: object
+      required: [url, viewOnly, expiresAt]
+      properties:
+        url:
+          type: string
+          description: The viewer page, with the link's token in the URL fragment.
+        viewOnly:
+          type: boolean
+          description: Whether the link's input was being ignored when it was minted; it carries input during takeover.
+        expiresAt:
+          type: string
+          format: date-time
+          description: After this the link no longer connects.
 
     ComputerUseAuditStatus:
       type: object

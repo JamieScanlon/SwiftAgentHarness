@@ -224,6 +224,31 @@ struct APILayerComputerUseRouteTests {
         #expect(store.expiries["doc"] == .some(nil))
     }
 
+    @Test("POST …/runs/{lifecycleID}/live-view mints a link, and 404s when there's no run or no live view")
+    func liveView() async throws {
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
+        let (_, target) = try await ComputerUseFixtures.registerLiveSession(in: installation, parent: conversationID, lifecycleID: "call-1")
+        try await ComputerUseFixtures.registerLiveSession(in: installation, parent: conversationID, lifecycleID: "call-blind")
+        await target.setLiveViewLink(DisplayLiveView(url: "http://127.0.0.1:9/view#secret", viewOnly: true, expiresAt: Date(timeIntervalSince1970: 1_800_000_000)))
+
+        try await withRoutes(installation) { app in
+            try await app.testing().test(.POST, "\(base)/runs/call-1/live-view") { res async throws in
+                #expect(res.status == .ok)
+                #expect(res.headers.first(name: .cacheControl) == "no-store")
+                let body = try json(res)
+                #expect(body["url"] as? String == "http://127.0.0.1:9/view#secret")
+                #expect(body["viewOnly"] as? Bool == true)
+                #expect(body["expiresAt"] as? String == "2027-01-15T08:00:00Z")
+            }
+            try await app.testing().test(.POST, "\(base)/runs/call-blind/live-view") { res async throws in
+                #expect(res.status == .notFound)
+            }
+            try await app.testing().test(.POST, "\(base)/runs/call-nope/live-view") { res async throws in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
     @Test("Routes 404 when the host has no computer use, and 400 on a bad conversation id")
     func unavailable() async throws {
         try await withRoutes(nil) { app in

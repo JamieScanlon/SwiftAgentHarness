@@ -48,6 +48,8 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var observeCalls: [ObserveRequest] = []
     private(set) var releases: [ReleaseReason] = []
     private(set) var takeoverStates: [Bool] = []
+    /// What ``liveView(_:)`` returns.
+    var liveViewLink: DisplayLiveView?
     /// Like a remote target, work requested from a cancelled task never reaches the screen.
     private(set) var failsWhenCancelled = false
 
@@ -142,6 +144,13 @@ actor FakeDisplayTarget: DisplayTarget {
             if outcome.effect.stopsBatch { break }
         }
         return results
+    }
+
+    func setLiveViewLink(_ link: DisplayLiveView?) { liveViewLink = link }
+
+    func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
+        try await requireLease(lease)
+        return liveViewLink
     }
 
     func takeover(_ lease: Lease, on: Bool) async throws {
