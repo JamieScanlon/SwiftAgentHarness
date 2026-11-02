@@ -38,6 +38,9 @@ public protocol TUIAppHost: AnyObject, Sendable {
 
     /// Takes over the screen from the computer-use specialist, or hands it back.
     func setComputerUseTakeover(_ on: Bool) async
+
+    /// A new live-view link to a computer-use run, or `nil` when the run has ended or its target serves none.
+    func computerUseLiveView(lifecycleID: String) async -> DisplayLiveView?
 }
 
 public extension TUIAppHost {
@@ -48,6 +51,7 @@ public extension TUIAppHost {
     func resolveComputerUseRequest(requestID: String, resolution: ComputerUseRequestResolution) async {}
     func stopComputerUse() async {}
     func setComputerUseTakeover(_ on: Bool) async {}
+    func computerUseLiveView(lifecycleID: String) async -> DisplayLiveView? { nil }
 }
 
 /// A host assembled from closures.
@@ -63,6 +67,7 @@ public final class ClosureTUIAppHost: TUIAppHost {
     private let onResolveComputerUseRequest: @Sendable (String, ComputerUseRequestResolution) async -> Void
     private let onStopComputerUse: @Sendable () async -> Void
     private let onSetComputerUseTakeover: @Sendable (Bool) async -> Void
+    private let onComputerUseLiveView: @Sendable (String) async -> DisplayLiveView?
 
     public init(
         submit: @escaping @Sendable (ComposerSubmission) async throws -> ChatStreamResponse?,
@@ -72,7 +77,8 @@ public final class ClosureTUIAppHost: TUIAppHost {
         slashCommandRegistry: @escaping @Sendable () async -> SlashCommandRegistry? = { nil },
         resolveComputerUseRequest: @escaping @Sendable (String, ComputerUseRequestResolution) async -> Void = { _, _ in },
         stopComputerUse: @escaping @Sendable () async -> Void = {},
-        setComputerUseTakeover: @escaping @Sendable (Bool) async -> Void = { _ in }
+        setComputerUseTakeover: @escaping @Sendable (Bool) async -> Void = { _ in },
+        computerUseLiveView: @escaping @Sendable (String) async -> DisplayLiveView? = { _ in nil }
     ) {
         self.onSubmit = submit
         self.onCancel = cancelTurn
@@ -82,6 +88,7 @@ public final class ClosureTUIAppHost: TUIAppHost {
         self.onResolveComputerUseRequest = resolveComputerUseRequest
         self.onStopComputerUse = stopComputerUse
         self.onSetComputerUseTakeover = setComputerUseTakeover
+        self.onComputerUseLiveView = computerUseLiveView
     }
 
     public func submit(_ submission: ComposerSubmission) async throws -> ChatStreamResponse? {
@@ -105,6 +112,10 @@ public final class ClosureTUIAppHost: TUIAppHost {
 
     public func stopComputerUse() async { await onStopComputerUse() }
     public func setComputerUseTakeover(_ on: Bool) async { await onSetComputerUseTakeover(on) }
+
+    public func computerUseLiveView(lifecycleID: String) async -> DisplayLiveView? {
+        await onComputerUseLiveView(lifecycleID)
+    }
 }
 
 /// In-process host bound to the agent runtime.
@@ -188,5 +199,9 @@ public final class RuntimeTUIHost: TUIAppHost {
 
     public func setComputerUseTakeover(_ on: Bool) async {
         _ = try? await computerUse?.setTakeover(on, conversationID: conversationID, lifecycleID: nil)
+    }
+
+    public func computerUseLiveView(lifecycleID: String) async -> DisplayLiveView? {
+        try? await computerUse?.liveView(conversationID: conversationID, lifecycleID: lifecycleID)
     }
 }

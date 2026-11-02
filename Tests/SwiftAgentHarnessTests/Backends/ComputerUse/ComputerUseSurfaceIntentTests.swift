@@ -25,6 +25,9 @@ struct ComputerUseSurfaceIntentTests {
         .computerUseActivity(ComputerUseSurfaceIntentPayload(
             target: "This Mac", lifecycleID: "call-1", status: .acting, step: 3, maxSteps: 40, app: "com.apple.TextEdit", action: "click"
         )),
+        .computerUseActivity(ComputerUseSurfaceIntentPayload(
+            target: "Managed browser", lifecycleID: "call-2", status: .takenOver, step: 41, maxSteps: 60, extensions: 1, liveView: true
+        )),
     ]
 
     @Test("Every intent kind the harness emits is declared in the wire schema")

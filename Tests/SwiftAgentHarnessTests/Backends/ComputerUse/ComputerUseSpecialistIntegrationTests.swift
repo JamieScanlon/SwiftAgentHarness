@@ -301,6 +301,7 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(statuses.last == .ended)
         #expect(statuses.contains(.acting))
         #expect(await seen.published.allSatisfy { $0.1.computerUse?.lifecycleID == "call-cu-1" })
+        #expect(await seen.published.allSatisfy { $0.1.computerUse?.liveView == true }, "the fake VM serves a live view")
     }
 
     @Test("A finished run leaves a replay for the parent conversation, with thumbnails readable through the control plane")

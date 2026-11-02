@@ -36,6 +36,8 @@ public actor TUIApp {
     private var activeApprovalID: String?
     /// Computer-use requests that arrived while another dialog was open, shown in order once it closes.
     private var queuedComputerUseRequests: [ComputerUseSurfaceIntentPayload] = []
+    /// Runs with a link request in flight, so a burst of takeover activity mints one link.
+    private var mintingLiveViews: Set<String> = []
     private var keyDecoder = TUIKeyDecoder()
     /// Invoked when a mode dialog selection is confirmed.
     private var onModeSelected: (@Sendable (ModeOption) -> Void)?
@@ -523,6 +525,11 @@ public actor TUIApp {
             case ComputerUseShortcut.stop:
                 await host?.stopComputerUse()
                 return
+            case ComputerUseShortcut.liveView:
+                for lifecycleID in computerUseIndicator.liveViewSessions {
+                    await showComputerUseLiveView(lifecycleID)
+                }
+                return
             default:
                 break
             }
@@ -732,6 +739,11 @@ public actor TUIApp {
         case .computerUseActivity:
             guard let activity = intent.computerUse else { return }
             computerUseIndicator.apply(activity)
+            // Taking over a target the user can't otherwise see (a headless browser) is useless without its view.
+            if activity.status == .takenOver, activity.liveView == true, let lifecycleID = activity.lifecycleID,
+               computerUseIndicator.liveView(for: lifecycleID) == nil {
+                await showComputerUseLiveView(lifecycleID)
+            }
         case .openFileForEdit:
             break
         }
@@ -740,7 +752,16 @@ public actor TUIApp {
     private func showComputerUseRequest(_ request: ComputerUseSurfaceIntentPayload) {
         installOverlayDismissHandler()
         composer.isFocused = false
-        overlayHost.show(ComputerUseRequestDialogComponent(request: request))
+        let showsLiveView = request.lifecycleID.flatMap(computerUseIndicator.liveView(for:)) != nil
+        overlayHost.show(ComputerUseRequestDialogComponent(request: request, showsLiveView: showsLiveView))
+        renderFrame()
+    }
+
+    private func showComputerUseLiveView(_ lifecycleID: String) async {
+        guard mintingLiveViews.insert(lifecycleID).inserted else { return }
+        defer { mintingLiveViews.remove(lifecycleID) }
+        guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID) else { return }
+        computerUseIndicator.setLiveView(link, for: lifecycleID)
         renderFrame()
     }
 

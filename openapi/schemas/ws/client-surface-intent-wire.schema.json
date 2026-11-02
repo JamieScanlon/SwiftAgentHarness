@@ -33,9 +33,14 @@
         "status": { "type": "string", "enum": ["started", "acting", "taken-over", "ended"] },
         "step": { "type": "integer", "minimum": 0 },
         "maxSteps": { "type": "integer", "minimum": 0 },
+        "extensions": { "type": "integer", "minimum": 0 },
         "app": { "type": "string" },
         "action": { "type": "string" },
-        "terminalReason": { "type": "string" }
+        "terminalReason": { "type": "string" },
+        "liveView": {
+          "type": "boolean",
+          "description": "On computerUseActivity: whether the target serves a live view. Mint a link with POST …/computer-use/runs/{lifecycleID}/live-view."
+        }
       },
       "additionalProperties": false
     }

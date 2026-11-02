@@ -135,6 +135,7 @@ extension SubAgentSpawnService {
         // Approvals, questions, and activity go to the user's conversation, not the specialist's child. Waiting on
         // the user pauses the child's idle clock, and every action the session reports is a sign of life.
         let targetLabel = grant.target.manifest.label
+        let servesLiveView = grant.target.manifest.observerAccess != .none
         let liveness = DelegateLiveness()
         var approvals = configuration.approvals
         if approvals == nil {
@@ -155,7 +156,7 @@ extension SubAgentSpawnService {
             }
             if changed { on ? liveness.pause() : liveness.resume() } else { liveness.touch() }
             guard publish != nil || observer != nil else { return }
-            let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID)
+            let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID, liveView: servesLiveView)
             await publish?(conversationID, .computerUseActivity(payload))
             await observer?(payload)
         }
@@ -230,7 +231,7 @@ extension SubAgentSpawnService {
         return ComputerUseNativeDialect(toolset: toolset, displayWidthPx: size.width, displayHeightPx: size.height)
     }
 
-    static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String) -> ComputerUseSurfaceIntentPayload {
+    static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String, liveView: Bool) -> ComputerUseSurfaceIntentPayload {
         ComputerUseSurfaceIntentPayload(
             target: target,
             lifecycleID: lifecycleID,
@@ -240,7 +241,8 @@ extension SubAgentSpawnService {
             extensions: activity.extensions,
             app: activity.app,
             action: activity.action?.rawValue,
-            terminalReason: activity.terminalReason?.rawValue
+            terminalReason: activity.terminalReason?.rawValue,
+            liveView: liveView
         )
     }
 

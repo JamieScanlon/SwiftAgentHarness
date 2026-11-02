@@ -99,6 +99,8 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
     public var app: String?
     public var action: String?
     public var terminalReason: String?
+    /// On activity: whether the target serves a live view, so the surface can offer to mint a link.
+    public var liveView: Bool?
 
     public init(
         requestID: String? = nil,
@@ -113,7 +115,8 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         extensions: Int? = nil,
         app: String? = nil,
         action: String? = nil,
-        terminalReason: String? = nil
+        terminalReason: String? = nil,
+        liveView: Bool? = nil
     ) {
         self.requestID = requestID
         self.requestKind = requestKind
@@ -128,6 +131,7 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         self.app = app
         self.action = action
         self.terminalReason = terminalReason
+        self.liveView = liveView
     }
 }
 

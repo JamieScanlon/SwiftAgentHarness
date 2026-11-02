@@ -41,18 +41,21 @@ await app.setHost(ClosureTUIAppHost(
     slashCommandRegistry: { await transport.conversationScopedRegistry() },
     resolveComputerUseRequest: { id, resolution in await transport.resolveComputerUseRequest(id, resolution) },
     stopComputerUse: { await transport.stopComputerUse() },
-    setComputerUseTakeover: { on in await transport.setComputerUseTakeover(on) }
+    setComputerUseTakeover: { on in await transport.setComputerUseTakeover(on) },
+    computerUseLiveView: { lifecycleID in await transport.computerUseLiveView(lifecycleID) }
 ))
 ```
 
-The computer-use closures map onto `POST /api/conversations/{id}/computer-use/requests/{requestID}`, `…/stop`
-and `…/takeover`.
+The computer-use closures map onto `POST /api/conversations/{id}/computer-use/requests/{requestID}`, `…/stop`,
+`…/takeover` and `…/runs/{lifecycleID}/live-view`.
 
 ### Computer use
 
 While a computer-use specialist runs, a line above the status line shows the target, step, app, and last
-action. **Ctrl-T** takes over the screen (and hands it back) and **Ctrl-X** stops the conversation's
-sessions. Both work while a dialog is open. A question opens a dialog with a text field, and a handoff opens one
+action. **Ctrl-T** takes over the screen (and hands it back), **Ctrl-X** stops the conversation's
+sessions, and **Ctrl-O** shows a live-view link under the line for each run whose target serves one. Taking over
+such a run shows its link without asking. All three work while a dialog is open. The link is printed as its own
+OSC 8 hyperlink label, so it can be copied where hyperlinks aren't supported, and drops off once it expires. A question opens a dialog with a text field, and a handoff opens one
 with *Hand back control* and *Decline*. Esc or Ctrl-C declines either one. Requests that arrive while another
 dialog is open wait their turn. Approval cards show a computer-use crop as its alt-text placeholder, because the
 overlay is composited into base rows and can't hold graphics escapes.

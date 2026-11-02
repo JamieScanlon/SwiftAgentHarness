@@ -1,29 +1,41 @@
 import Foundation
 
-/// Terminal shortcuts for the computer-use controls. Both work while a dialog is open.
+/// Terminal shortcuts for the computer-use controls. All of them work while a dialog is open.
 public enum ComputerUseShortcut: Sendable {
     /// Ctrl-T: take over the screen, or hand it back.
     public static let toggleTakeover = "\u{14}"
     /// Ctrl-X: stop every computer-use session in this conversation.
     public static let stop = "\u{18}"
+    /// Ctrl-O: show a fresh live-view link for each session whose target serves one.
+    public static let liveView = "\u{0F}"
 }
 
 /// The "agent is using <target>" line, shown between the transcript and the status line while a computer-use
-/// specialist runs. Renders nothing otherwise.
+/// specialist runs, with a clickable live-view link under it once one is minted. Renders nothing otherwise.
 public final class ComputerUseIndicatorComponent: TUIComponent {
     /// Latest activity per specialist run, in arrival order.
     public private(set) var sessions: [ComputerUseSurfaceIntentPayload] = []
+    private var liveViews: [String: DisplayLiveView] = [:]
+    private let now: @Sendable () -> Date
 
-    public init() {}
+    public init(now: @escaping @Sendable () -> Date = Date.init) {
+        self.now = now
+    }
 
     public var isActive: Bool { !sessions.isEmpty }
     public var isTakenOver: Bool { sessions.contains { $0.status == .takenOver } }
 
+    /// Runs whose target serves a live view.
+    public var liveViewSessions: [String] {
+        sessions.compactMap { $0.liveView == true ? $0.lifecycleID : nil }
+    }
+
     public func apply(_ activity: ComputerUseSurfaceIntentPayload) {
-        let key = activity.lifecycleID ?? activity.target ?? ""
-        let index = sessions.firstIndex { ($0.lifecycleID ?? $0.target ?? "") == key }
+        let key = Self.key(activity)
+        let index = sessions.firstIndex { Self.key($0) == key }
         if activity.status == .ended {
             if let index { sessions.remove(at: index) }
+            liveViews[key] = nil
         } else if let index {
             sessions[index] = activity
         } else {
@@ -31,19 +43,40 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
         }
     }
 
+    /// Shows `link` under its run's line, replacing any earlier one. Ignored once the run has ended, or when the
+    /// link isn't a plain http(s) URL: it is written into an escape sequence.
+    public func setLiveView(_ link: DisplayLiveView, for lifecycleID: String) {
+        guard sessions.contains(where: { $0.lifecycleID == lifecycleID }),
+              let scheme = URL(string: link.url)?.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              !link.url.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7F || !$0.isASCII })
+        else { return }
+        liveViews[lifecycleID] = link
+    }
+
+    /// The run's link while it can still admit a viewer.
+    public func liveView(for lifecycleID: String) -> DisplayLiveView? {
+        liveViews[lifecycleID].flatMap { $0.expiresAt > now() ? $0 : nil }
+    }
+
     public func clear() {
         sessions.removeAll()
+        liveViews.removeAll()
+    }
+
+    private static func key(_ activity: ComputerUseSurfaceIntentPayload) -> String {
+        activity.lifecycleID ?? activity.target ?? ""
     }
 
     public func render(width: Int) -> [String] {
         guard width > 0 else { return [] }
-        return sessions.map { activity in
+        return sessions.flatMap { activity -> [String] in
             let target = TUITextSanitizer.sanitizeSingleLine(activity.target ?? "the screen")
+            let link = activity.lifecycleID.flatMap(liveView(for:))
             var parts: [String]
-            let hints: String
+            var hints: [String]
             if activity.status == .takenOver {
                 parts = ["You have control of \(target)"]
-                hints = "^T hand back · ^X stop"
+                hints = ["^T hand back", "^X stop"]
             } else {
                 parts = ["Computer use on \(target)"]
                 if let step = activity.step, let maxSteps = activity.maxSteps {
@@ -51,10 +84,20 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
                 }
                 if let app = activity.app { parts.append(TUITextSanitizer.sanitizeSingleLine(app)) }
                 if let action = activity.action { parts.append(action) }
-                hints = "^T take over · ^X stop"
+                hints = ["^T take over", "^X stop"]
             }
-            let line = ANSIStyle.color("●", fg: 214) + " " + parts.joined(separator: ANSIStyle.dim(" · ")) + "  " + ANSIStyle.dim(hints)
-            return ANSIStyle.finishLine(ANSITruncate.truncate(line, toWidth: width))
+            if activity.liveView == true, link == nil { hints.append("^O live view") }
+            let line = ANSIStyle.color("●", fg: 214) + " " + parts.joined(separator: ANSIStyle.dim(" · ")) + "  "
+                + ANSIStyle.dim(hints.joined(separator: " · "))
+            var lines = [ANSIStyle.finishLine(ANSITruncate.truncate(line, toWidth: width))]
+            if let link {
+                let deadline = link.expiresAt.formatted(date: .omitted, time: .shortened)
+                // The link is its own label so it can still be copied where the terminal doesn't support hyperlinks.
+                let linkLine = "  " + ANSIStyle.dim("Live view ") + TUIEscapes.hyperlink(link.url, label: link.url)
+                    + ANSIStyle.dim(" · open by \(deadline)")
+                lines.append(ANSIStyle.finishLine(ANSITruncate.truncate(linkLine, toWidth: width)))
+            }
+            return lines
         }
     }
 
@@ -66,6 +109,8 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
 /// Decline is Esc (or Ctrl-C); the dialog only reports the user's choice through ``takeResolution()``.
 public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
     public let request: ComputerUseSurfaceIntentPayload
+    /// Whether the indicator shows a live-view link for the request's run, which a handoff then points to.
+    public let showsLiveView: Bool
     public var isFocused: Bool = true
     public private(set) var answer = ""
     public var selectedButtonIndex = 0
@@ -73,8 +118,9 @@ public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
 
     public static let maximumWidth = 60
 
-    public init(request: ComputerUseSurfaceIntentPayload) {
+    public init(request: ComputerUseSurfaceIntentPayload, showsLiveView: Bool = false) {
         self.request = request
+        self.showsLiveView = showsLiveView
     }
 
     public var requestID: String { request.requestID ?? "" }
@@ -122,7 +168,9 @@ public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
         } else {
             if let reason = request.reason { add(ANSIStyle.dim("Needs you for: \(TUITextSanitizer.sanitizeSingleLine(reason))")) }
             add(prompt)
-            add(ANSIStyle.dim("The agent has paused. Use \(target), then hand back control."))
+            add(ANSIStyle.dim(showsLiveView
+                ? "The agent has paused. Use \(target) through the live view link, then hand back control."
+                : "The agent has paused. Use \(target), then hand back control."))
             lines.append(ANSIStyle.finishLine(buttonLine(boxWidth: boxWidth)))
         }
         lines.append(ANSIStyle.finishLine(DialogChrome.bottom(width: boxWidth)))

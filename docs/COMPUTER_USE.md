@@ -50,7 +50,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Anthropic's native computer toolset (`computer_toolset_20260801`, and `computer_20251124` / `computer_20250124` for older models) | Done. Other vendors' toolsets: not yet. |
 | `grounder` and `vision-describe` roles (`computer_locate`, `computer_describe`), specialists on models without vision | Done |
 | Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
-| Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; REST link minting | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser. The TUI doesn't offer links yet. |
+| Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; REST link minting; TUI links | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser. |
 
 ## How it fits together
 
@@ -244,6 +244,7 @@ session.installComputerUse(ComputerUseConfiguration(
 - **Links.** `target.liveView(lease)`, `ComputerUseControlService.liveView(conversationID:lifecycleID:)`, or `POST /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view` mints a link like `http://127.0.0.1:52144/view#<token>`. Each call makes a new 256-bit token. It sits in the URL fragment, which browsers never send, so it appears in no request line, log, or referrer. The page clears it from the address bar and presents it as the stream's first message. A link can be used to connect until `linkLifetime` (10 minutes by default) passes; a viewer that connected keeps watching until the lease ends. Releasing the lease ends its viewers and revokes its links.
 - **Control.** A viewer is view-only. Its input reaches the page only while the session is taken over, through `POST …/takeover` or a handoff. The viewer shows which state it's in. Mouse, wheel, and key events are sent as CDP input in the viewport's CSS pixels, clamped to the viewport, and pasted text is inserted as typed, so the user can paste from a password manager. The server drops input outside takeover, and the target checks again.
 - **Page hardening.** The page and stream refuse to be framed (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), are sent `no-store` and `no-referrer`, and load no scripts but their own. A stream opened from another site's page is refused by its `Origin` even with a token, and one that doesn't present a token within `authenticationTimeout` is closed. At most `maxViewersPerFeed` viewers watch one feed.
+- **In the terminal.** The TUI shows a run's link as a clickable URL under its indicator line. **Ctrl-O** mints a new one for each run whose target serves a live view, and taking over (with **Ctrl-T** or through a handoff) mints one on its own, since a headless browser can't be used any other way. While a link is shown, a handoff dialog says to use the target through it. A link drops off once it can no longer admit a viewer, and one that isn't a plain http or https URL is never shown.
 - **Reaching it from elsewhere.** The server listens on loopback. For a viewer on another machine, put it behind a tunnel or TLS reverse proxy and set `publicBaseURL`; the proxy must pass `/view`, `/viewer.js`, and `/stream` (a WebSocket upgrade) through.
 
 ```swift
@@ -404,7 +405,7 @@ A specialist runs in a child conversation the user never opens, so everything th
 
 - **Approval cards.** Consequential actions are confirmed through the parent conversation's approval delivery, the same `ExecApprovalDelivering` cards exec approvals use. Set `ComputerUseConfiguration.approvals` to replace it. Each card lists the action, the target element, why it needs confirming, and the intent-check verdict. When the cited observation has pixels, an `image` block carries a crop of the target region (the element's padded frame, or a box around a point, at most 480 px). Surfaces that can't show images get its alt text.
 - **Questions and handoffs.** `computer_ask_user` and `computer_handoff` publish a `computerUseRequest` surface intent on `conversation/{id}/events` and block the specialist until a client answers. When the request is resolved, times out, or the run is cancelled, a `computerUseRequestCleared` intent follows. Set `ComputerUseConfiguration.oversight` to answer in-process instead.
-- **Activity.** Every action batch, takeover change, and session end publishes a `computerUseActivity` intent with the target, step, current allotment (`maxSteps`), `extensions`, app, action, and terminal reason. The macOS HUD shows it as "Step 34 of 45, extended twice". This feeds the "agent is using <target>" indicator.
+- **Activity.** Every action batch, takeover change, and session end publishes a `computerUseActivity` intent with the target, step, current allotment (`maxSteps`), `extensions`, app, action, terminal reason, and `liveView` (whether the target serves a live view). The macOS HUD shows it as "Step 34 of 45, extended twice". This feeds the "agent is using <target>" indicator.
 
 All three use the `surfaceIntent` semantic kind. The payload is the `computerUse` object in [`client-surface-intent-wire.schema.json`](../openapi/schemas/ws/client-surface-intent-wire.schema.json).
 
@@ -418,7 +419,7 @@ Clients answer and steer through REST. Each route checks conversation tenancy:
 | `POST /api/conversations/{id}/computer-use/stop` | Stops the conversation's sessions, declines their pending requests, and returns `lifecycleIDs` |
 | `POST /api/conversations/{id}/computer-use/takeover` | `{"on": true}`, optionally with `lifecycleID`. Returns `lifecycleIDs`, or 404 when nothing is running. |
 
-The terminal surface renders all of this: an indicator line with the target, step, app, and last action; a dialog with a text field for a question; *Hand back control* and *Decline* for a handoff; **Ctrl-T** to take over or hand back and **Ctrl-X** to stop. Pass `HarnessRuntimeSession.computerUseControl` to `RuntimeTUIHost(computerUse:)`. Surfaces that render it declare `SurfaceCapabilities.computerUse`.
+The terminal surface renders all of this: an indicator line with the target, step, app, and last action; a dialog with a text field for a question; *Hand back control* and *Decline* for a handoff; **Ctrl-T** to take over or hand back, **Ctrl-X** to stop, and **Ctrl-O** for a live-view link (shown under the indicator, and minted on its own at takeover). Pass `HarnessRuntimeSession.computerUseControl` to `RuntimeTUIHost(computerUse:)`. Surfaces that render it declare `SurfaceCapabilities.computerUse`.
 
 ### Replays
 
@@ -651,6 +652,6 @@ Spec features with no implementation so far. Each needs something the harness do
 | Feature | State |
 |---|---|
 | Isolated targets | The host desktop and the managed browser exist. The desktop container, local VM, user's real browser, and paired device targets aren't built. |
-| Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. The TUI doesn't show links yet, and there are no view-only links for observers other than the user. |
+| Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. There are no view-only links for observers other than the user. |
 | Sensitive-domain watch mode | The spec continues a session after a vendor's sensitive-domain signal only while a live view is open. Vendor safety signals aren't read yet; `DisplayLiveViewServer.viewerCount(_:)` is what such a check would use. |
 | Code execution as a peer path | Scripts run against the leased target, gated as a whole, aren't offered. |
