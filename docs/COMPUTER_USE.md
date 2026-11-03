@@ -52,6 +52,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
 | Desktop container (`X11DisplayTarget.desktopContainer`): a throwaway Linux desktop per lease, driven with `xdotool` inside it, with a live view | Done. Verified by unit tests and an opt-in smoke test against Docker (`SWIFTAGENTHARNESS_DOCKER_SMOKE=1`). |
 | Local VMs (`VirtualMachineDisplayTarget`): a clean VM per lease from a `VirtualMachineController` (Tart built in), Linux guests over SSH and macOS guests through a display host over `DisplayHostTCP` | Done. Verified by unit tests, including a loopback TCP host; not yet against a real VM, since Tart isn't installed on the development machine. |
+| Paired devices: Android over `adb` (`AndroidDisplayTarget`); a second machine through its own display host over `DisplayHostTCP` | Done. Verified by unit tests with a scripted `adb`; not yet on a real device or emulator. |
 | The user's own browser (`ManagedBrowserDisplayTarget.userBrowser`), attached over remote debugging | Done. Verified by unit tests and the Chrome smoke test against a Chrome started with a debugging port. |
 | Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; observer links for other people; REST link minting; TUI links and sharing | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser, observer links included. |
 | Code execution as a peer path: `computer_run_script` runs a JavaScript script in a browser target's page as one gated action | Done for the managed browser. Verified by unit tests and the Chrome smoke test. |
@@ -321,6 +322,21 @@ let mac = VirtualMachineDisplayTarget.macOS(
 | macOS guests | `macOS(controller:configuration:)` connects to a display host in the guest: a `DisplayHostServer` serving the macOS driver and listening with `DisplayHostTCP` on `port`, which the guest's image starts and has the screen-capture and accessibility permissions for. It retries while the guest boots, up to `connectTimeout`. The manifest is `vm` and `humanPresence: none` whatever the guest's driver declares, since nobody uses the guest. |
 | `DisplayHostTCP` | The display host protocol over TCP. Both ends prove they hold a `DisplayHostSecret` (256 bits or more) with HMAC-SHA256 over fresh nonces before any message passes; a peer that can't is closed, and one that doesn't answer within 10 seconds is dropped. Traffic isn't encrypted: use it on a network only the two ends share, such as Tart's host-only network, or in a tunnel. |
 
+## Paired devices
+
+`AndroidDisplayTarget` drives an Android phone or emulator over `adb`. A second machine is paired differently: run a display host on it and reach it with `RemoteDisplayTarget` over `DisplayHostTCP` (see [Hosting a target in another process](#hosting-a-target-in-another-process)).
+
+```swift
+let phone = AndroidDisplayTarget(configuration: AndroidDeviceConfiguration(serial: "R5CT1234ABC"))
+```
+
+| Piece | Behavior |
+|---|---|
+| Manifest | `remote-device`, `humanPresence: shared` by default (a paired phone is someone's), so interact actions are confirmed unless an intent check passes them. Delivery is `background`: the phone is its own display and never touches this machine's. |
+| Perception | Screenshots with `screencap`, cropped and scaled to the model's limit in the harness (ImageIO), and the accessibility tree with `uiautomator`. The tree lists clickable, focusable, and labeled nodes, with their class, label, resource id, and frame; password fields are marked secure. The observation names the focused package as the app and its activity as the window. |
+| Actions | Taps, long presses (a right click), two-point swipes, scrolls as swipes, typing with `input text`, and key events. A ref is tapped at its center in a fresh tree, and refused if the same element (class, resource id, label) isn't within 24 pixels of where it was. A point is refused once another activity is in front. `launch` takes a package name and `open-url` sends a view intent. Every argument is quoted for the device's shell. |
+| Limits | `adb` types only printable ASCII, so other text is refused and left to the user. Modifier keys, pointer moves, holds, multi-point drags, set-value, menus, and scripts are refused. Takeover pauses the agent while the user uses the phone; there is no live view. |
+
 ## Hosting a target in another process
 
 A *display host* is a process that owns a `DisplayTarget` and serves it to harnesses elsewhere. The library ships the parts; the host process itself is yours to build. It can be a menu-bar app, an `SMAppService` login item, a daemon, your existing app, or an agent inside a VM.
@@ -349,6 +365,7 @@ Task { for await case .stopRequested in remote.events { await session.stopComput
 | `DisplayHostSocket` | A Unix-domain socket with length-prefixed frames. The socket file is owner-only. Both ends check the other's peer (pid, uid, audit token) against a `DisplayHostPeerRequirement`. The default is the same user. |
 | `DisplayHostPeerRequirement.codeSignature(_:)`, `.sameTeamAsThisProcess()` | Mac only. Checks the peer's code signature through its audit token, so a reused pid can't pass. |
 | `DisplayHostXPC` | Mac only, macOS 26 or later. Serves a launchd Mach service or an anonymous listener's endpoint, with an `XPCPeerRequirement` enforced on both ends. |
+| `DisplayHostTCP` | TCP, for a host on another machine or in a VM. Both ends prove they hold a `DisplayHostSecret` before any message passes. Unencrypted: for a network only the two ends share, or a tunnel. |
 | `InMemoryDisplayHostConnection` | Both ends in one process, for tests and for putting an in-process target behind the protocol. |
 
 Any transport works if it implements `DisplayHostConnection` and keeps message boundaries. A VM transport over vsock or TCP is one example. A host that wants a HUD wraps its target in a decorator, or calls the HUD from its stop handling.
@@ -719,6 +736,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | View-only and takeover | The spec makes observer links view-only by default and accepts input only during takeover. The user's links are view-only outside takeover and carry the user's input during it. Observer links, for anyone else, are view-only always: the spec doesn't say whether someone other than the user may type during a takeover, and the takeover is the user's. Every link is minted through the user's own controls (the control service or the REST route behind tenancy), never by a tool the model can call. `DisplayLiveView.viewOnly` reports the state when the link was minted. |
 | Observers during takeover | The spec doesn't say what observers see while the user has control. Takeover pauses the agent's capture because the user may be entering credentials or payment details, so observers are paused too and see nothing until hand-back. |
 | Ending observers | The spec's observer tokens are short-lived but say nothing about revoking them. Since a connected viewer stays until the lease ends, `endObservers` lets the user stop sharing without stopping the run. The display host protocol carries it, at version 3. |
+| Paired devices | The spec lists a "paired device (phone, second machine)" as `remote-device` with device-specific delivery and pixels plus accessibility. Phones are built for Android, over `adb`; an iPhone has no comparable host-side automation channel without a developer tool chain on the device, so it isn't. A second machine is a display host reached over TCP, and keeps the manifest its own host declares. A phone is `shared` by default, as someone's own device, and declares `background` delivery because its screen is its own, as the spec's VM row does. The spec's host-target rule (a present operator only) is written for `host` isolation, so it doesn't apply to a phone; a host that wants it can wrap the target or register it only for interactive runs. |
 | Local VMs | The spec says to drive a VM from inside it, over a forwarded port or vsock, and keep VNC for the human observer. The guest's driver is reached over the VM's network: SSH for Linux guests, `DisplayHostTCP` for macOS guests (vsock needs the harness to run the VM itself, which Tart does). A Linux guest's live view is the harness's stream, as for the container. A macOS guest has no live view: Tart's VNC can't be held to view-only outside takeover, so it isn't offered, and the guest's display host would have to serve one. The guest's platform permissions are its own business; the VM target declares none, and a revoked one fails the guest's actions. |
 | Desktop container | The spec gives the container "pixels, accessibility (where available)" and a VNC observer. AT-SPI isn't read, so it is pixels only. Its observer is the same token-protected stream as the managed browser rather than VNC: a VNC client can't be held to view-only outside takeover, and the stream carries observer links and watch mode. The spec's "drive a VM from inside it" is followed for containers too: the tools run inside the container through `docker exec`. The container has no network by default, since the spec's network policy is written for browser targets and a desktop's browser would otherwise reach the host's network. |
 | The user's real browser | The spec lists it as attached "via extension or remote-debugging." Remote debugging is built; an extension isn't, since Chrome's own remote-debugging consent now covers the user's running browser. The spec says nothing on how the agent shares the browser with the user. Here it gets one tab and never sees the others, so the user's other sites stay out of its observations, and its popups and downloads are handled in that tab only. The user's download settings aren't touched for the length of the lease; downloads from the agent's tab are cancelled one by one instead. |
@@ -728,9 +746,9 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 
 **Not built yet**
 
-Spec features with no implementation so far. Each needs something the harness doesn't have yet, or is optional in the spec.
+Every target family in the spec has an implementation. What remains depends on other work:
 
 | Feature | State |
 |---|---|
-| Isolated targets | The host desktop, the managed browser, the user's own browser, the desktop container, and local VMs exist. The paired device target isn't built. |
-| Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. |
+| Vendor safety signals from other vendors | The session handles them (`ComputerUseSafetySignal`, watch mode), but no bundled codec emits them: Anthropic's toolset has none, and OpenAI's and Gemini's computer-use toolsets aren't implemented. |
+| Live view on every target | The managed browser, the user's browser, the desktop container, and Linux VMs serve one. The host desktop doesn't need one (it is the user's own screen), nor does a phone the user holds. A macOS VM would need its guest's display host to serve one. |
