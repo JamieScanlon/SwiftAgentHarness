@@ -9,7 +9,7 @@ import Foundation
 /// concurrently; responses echo the id. Leases are named by id only, and a host honours only the leases it
 /// issued on the same connection.
 public enum DisplayHostProtocol {
-    public static let version = 3
+    public static let version = 4
     /// The largest message either side accepts.
     public static let maxMessageBytes = 64 * 1024 * 1024
 }
@@ -61,6 +61,7 @@ public enum DisplayHostRequest: Sendable, Codable, Hashable {
     case act(leaseID: UUID, batch: ActionBatch)
     case liveView(leaseID: UUID, role: DisplayLiveViewRole)
     case endObservers(leaseID: UUID)
+    case liveViewers(leaseID: UUID)
     case takeover(leaseID: UUID, on: Bool)
 }
 
@@ -73,6 +74,7 @@ public enum DisplayHostResponse: Sendable, Codable, Hashable {
     case observation(DisplayObservation)
     case outcomes([ActionOutcome])
     case liveView(DisplayLiveView?)
+    case liveViewers(Int)
     case failure(DisplayHostFailure)
 }
 

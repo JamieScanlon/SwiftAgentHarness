@@ -52,6 +52,8 @@ actor FakeDisplayTarget: DisplayTarget {
     var liveViewLink: DisplayLiveView?
     private(set) var liveViewRoles: [DisplayLiveViewRole] = []
     private(set) var observerEnds = 0
+    /// The user's viewers ``liveViewers(_:)`` reports.
+    var userViewers = 0
     /// Like a remote target, work requested from a cancelled task never reaches the screen.
     private(set) var failsWhenCancelled = false
 
@@ -154,6 +156,13 @@ actor FakeDisplayTarget: DisplayTarget {
         try await requireLease(lease)
         liveViewRoles.append(role)
         return liveViewLink.map { DisplayLiveView(url: $0.url, viewOnly: $0.viewOnly || role == .observer, expiresAt: $0.expiresAt, role: role) }
+    }
+
+    func setUserViewers(_ count: Int) { userViewers = count }
+
+    func liveViewers(_ lease: Lease) async throws -> Int {
+        try await requireLease(lease)
+        return userViewers
     }
 
     func endObservers(_ lease: Lease) async throws {

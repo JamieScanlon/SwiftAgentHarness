@@ -30,7 +30,7 @@
         "reason": { "type": "string" },
         "target": { "type": "string" },
         "lifecycleID": { "type": "string" },
-        "status": { "type": "string", "enum": ["started", "acting", "taken-over", "ended"] },
+        "status": { "type": "string", "enum": ["started", "acting", "taken-over", "waiting-for-live-view", "ended"] },
         "step": { "type": "integer", "minimum": 0 },
         "maxSteps": { "type": "integer", "minimum": 0 },
         "extensions": { "type": "integer", "minimum": 0 },

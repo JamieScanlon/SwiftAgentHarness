@@ -73,14 +73,14 @@ public struct ComputerUseClassificationContext: Sendable {
     /// The page actions that carry no target land on, on a target with no app (a managed browser).
     public var focusedURL: String?
     /// Vendor safety signals attached to this action.
-    public var safetySignals: [String]
+    public var safetySignals: [ComputerUseSafetySignal]
 
     public init(
         grants: ComputerUseGrantSet,
         observation: @escaping @Sendable (ObservationID) -> DisplayObservation?,
         focusedApp: AppIdentity?,
         focusedURL: String? = nil,
-        safetySignals: [String] = []
+        safetySignals: [ComputerUseSafetySignal] = []
     ) {
         self.grants = grants
         self.observation = observation
@@ -396,7 +396,7 @@ public struct ComputerUseActionClassifier: Sendable {
         app: AppIdentity?,
         context: ComputerUseClassificationContext
     ) -> [String] {
-        var reasons: [String] = context.safetySignals.map { "vendor safety signal: \($0)" }
+        var reasons: [String] = context.safetySignals.map { "vendor safety signal: \($0.rawValue)" }
         switch action {
         case .type, .setValue:
             if let element {

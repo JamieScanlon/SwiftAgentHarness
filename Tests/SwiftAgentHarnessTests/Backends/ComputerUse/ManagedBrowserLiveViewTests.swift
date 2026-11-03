@@ -116,8 +116,10 @@ struct ManagedBrowserLiveViewTests {
         try await observer.roundTrip()
         #expect(await browser.methods("Input.").isEmpty)
 
+        #expect(try await target.liveViewers(lease) == 0, "an observer isn't the user watching")
         let user = try Viewer(try #require(try await target.liveView(lease)))
         _ = try await user.status()
+        #expect(try await target.liveViewers(lease) == 1)
         try await target.endObservers(lease)
         #expect(try await observer.status().reason == .sharingStopped)
         await browser.emit(Self.frameEvent(DisplayLiveViewServerTests.jpeg, ack: 1))

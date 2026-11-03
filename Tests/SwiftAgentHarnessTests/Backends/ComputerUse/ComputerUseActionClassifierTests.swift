@@ -11,7 +11,7 @@ struct ComputerUseActionClassifierTests {
         grants: [ComputerUseGrant] = [.app(bundleID: "com.apple.TextEdit", tier: .full)],
         observations: [DisplayObservation] = [ComputerUseFixtures.observation(id: "o_1")],
         focusedApp: AppIdentity? = ComputerUseFixtures.textEdit,
-        safetySignals: [String] = []
+        safetySignals: [ComputerUseSafetySignal] = []
     ) -> ComputerUseClassification {
         let byID = Dictionary(uniqueKeysWithValues: observations.map { ($0.id, $0) })
         return classifier.classify(
@@ -156,7 +156,7 @@ struct ComputerUseActionClassifierTests {
         #expect(classify(.setValue(at: .ref("e9", observation: "o_1"), value: "4111")).actionClass.isConsequential)
         #expect(classify(.press(at: .ref("e8", observation: "o_1"))).actionClass.isConsequential)
         #expect(classify(.key(combo: try KeyCombo(parsing: "shift+cmd+delete"))).actionClass.isConsequential)
-        #expect(classify(.click(at: .ref("e2", observation: "o_1")), safetySignals: ["malicious-instructions"]).actionClass.isConsequential)
+        #expect(classify(.click(at: .ref("e2", observation: "o_1")), safetySignals: [.maliciousInstructions]).actionClass.isConsequential)
 
         let settings = ComputerUseFixtures.observation(id: "o_s", app: ComputerUseFixtures.systemSettings)
         let result = classify(

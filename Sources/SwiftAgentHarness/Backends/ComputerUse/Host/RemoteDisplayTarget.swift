@@ -102,6 +102,11 @@ public actor RemoteDisplayTarget: DisplayTarget {
         return view
     }
 
+    public func liveViewers(_ lease: Lease) async throws -> Int {
+        guard case .liveViewers(let count) = try await call(.liveViewers(leaseID: lease.id)) else { throw unexpected("viewer count") }
+        return count
+    }
+
     public func endObservers(_ lease: Lease) async throws {
         guard case .done = try await call(.endObservers(leaseID: lease.id)) else { throw unexpected("done") }
     }

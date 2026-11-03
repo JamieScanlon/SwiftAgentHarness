@@ -404,6 +404,10 @@ enum ComputerUseResultBuilder {
             result.status = .deadline
             result.reason = terminalDetail ?? "the deadline passed"
             return result
+        case .liveViewRequired?:
+            result.status = .needsUser
+            result.reason = terminalDetail ?? "the session needed the user to watch its live view"
+            return result
         case .killSwitch?:
             result.status = .blocked
             result.reason = "stopped by the user"

@@ -246,6 +246,12 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         if let liveFeed { await liveViewServer?.endObservers(liveFeed) }
     }
 
+    public func liveViewers(_ lease: Lease) async throws -> Int {
+        try await requireLease(lease)
+        guard let liveViewServer, let liveFeed else { return 0 }
+        return await liveViewServer.viewerCount(liveFeed, role: .user)
+    }
+
     private func openPage() async throws -> Page {
         let session = try await launcher()
         do {

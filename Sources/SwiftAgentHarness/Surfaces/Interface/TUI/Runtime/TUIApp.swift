@@ -744,8 +744,10 @@ public actor TUIApp {
         case .computerUseActivity:
             guard let activity = intent.computerUse else { return }
             computerUseIndicator.apply(activity)
-            // Taking over a target the user can't otherwise see (a headless browser) is useless without its view.
-            if activity.status == .takenOver, activity.liveView == true, let lifecycleID = activity.lifecycleID,
+            // Taking over a target the user can't otherwise see (a headless browser) is useless without its view, and
+            // watch mode goes on only while the user watches it.
+            if activity.status == .takenOver || activity.status == .waitingForLiveView,
+               activity.liveView == true, let lifecycleID = activity.lifecycleID,
                computerUseIndicator.liveView(for: lifecycleID) == nil {
                 await showComputerUseLiveView(lifecycleID)
             }

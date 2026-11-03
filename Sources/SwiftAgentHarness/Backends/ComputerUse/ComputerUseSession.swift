@@ -48,6 +48,9 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// Anthropic's native toolset, when the bound model speaks it over Anthropic's API; `nil` uses the harness's
     /// own `computer_*` tools.
     public var nativeDialect: ComputerUseNativeDialect?
+    /// In watch mode, how long an action waits for the user to open the live view before the session ends.
+    public var watchModeWait: Duration = .seconds(120)
+    public var watchModePollInterval: Duration = .seconds(1)
 
     public static let defaultReplayThumbnailEdgePx = 320
 
@@ -86,13 +89,15 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case noProgress = "no-progress"
     /// The cutoff the task stated passed.
     case deadline
+    /// In watch mode, nobody watched the live view, or the target serves none.
+    case liveViewRequired = "live-view-required"
     case ended
 
     var releaseReason: ReleaseReason {
         switch self {
         case .stepBudget, .costBudget: return .budgetExhausted
         case .timeBudget, .deadline: return .expired
-        case .noProgress: return .aborted
+        case .noProgress, .liveViewRequired: return .aborted
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
         case .ended: return .completed
@@ -239,6 +244,8 @@ public struct ComputerUseSessionEvent: Sendable, Codable, Hashable {
         case extended
         case timeExtended = "time-extended"
         case ceilingQuestion = "ceiling-question"
+        /// A sensitive-domain signal put the session in watch mode.
+        case watchMode = "watch-mode"
         case ended
     }
 
@@ -327,6 +334,9 @@ public actor ComputerUseSession {
     /// The time-ceiling decision in flight, so an action and the child run's timer reaching it together ask once.
     private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
+    /// Set by a sensitive-domain signal for the rest of the session: every action then waits until the user
+    /// watches the live view.
+    public private(set) var isWatchModeOn = false
     public private(set) var auditLog: [ComputerUseActionRecord] = []
     /// Records ever appended, so a record can be found after older ones were trimmed.
     private var auditCount = 0
@@ -395,7 +405,10 @@ public actor ComputerUseSession {
 
     /// Gates and runs a batch, one action at a time. Stops at the first refusal or failure; every action after it is
     /// reported `not-executed`.
-    public func perform(_ actions: [ComputerAction], safetySignals: [Int: [String]] = [:]) async -> ComputerUseBatchResult {
+    public func perform(
+        _ actions: [ComputerAction],
+        safetySignals: [Int: [ComputerUseSafetySignal]] = [:]
+    ) async -> ComputerUseBatchResult {
         var result = ComputerUseBatchResult(outcomes: [], records: [], observations: [], terminal: nil, escalation: nil)
         if terminalReason == nil, let reason = await budgetOrPermissionViolation() {
             await end(reason)
@@ -424,7 +437,18 @@ public actor ComputerUseSession {
                 stopped = true
                 continue
             }
-            let (outcome, record, observation) = await performOne(action, index: index, signals: safetySignals[index] ?? [])
+            let signals = safetySignals[index] ?? []
+            if signals.contains(.sensitiveDomain), !isWatchModeOn {
+                isWatchModeOn = true
+                events.append(ComputerUseSessionEvent(kind: .watchMode, at: now(), step: steps))
+            }
+            if isWatchModeOn, !(await waitForWatcher()) {
+                let reason = terminalReason?.rawValue ?? ComputerUseTerminalReason.liveViewRequired.rawValue
+                result.outcomes.append(ActionOutcome(action: index, effect: .notExecuted, evidence: "session ended: \(reason)"))
+                stopped = true
+                continue
+            }
+            let (outcome, record, observation) = await performOne(action, index: index, signals: signals)
             result.outcomes.append(outcome)
             result.records.append(record)
             if let observation { result.observations.append(observation) }
@@ -443,7 +467,7 @@ public actor ComputerUseSession {
     private func performOne(
         _ action: ComputerAction,
         index: Int,
-        signals: [String]
+        signals: [ComputerUseSafetySignal]
     ) async -> (ActionOutcome, ComputerUseActionRecord, DisplayObservation?) {
         let layout = action.citedTargets.isEmpty && Self.needsFocusedApp(action) ? try? await target.describe(lease) : nil
         let classification = configuration.classifier.classify(
@@ -861,6 +885,39 @@ public actor ComputerUseSession {
             await target.release(lease, reason: reason.releaseReason)
         }.value
         await report(.ended)
+    }
+
+    // MARK: - Watch mode
+
+    /// Whether the user watches the live view, waiting up to ``ComputerUseSessionConfiguration/watchModeWait`` for
+    /// them to open it. Ends the session when nobody can or does.
+    private func waitForWatcher() async -> Bool {
+        let rule = "after a sensitive-domain signal the session continues only while the user watches its live view"
+        guard lease.userPresent else {
+            await end(.liveViewRequired, detail: "\(rule), and nobody is present")
+            return false
+        }
+        guard manifest.observerAccess != .none else {
+            await end(.liveViewRequired, detail: "\(rule), and \(manifest.label) serves none")
+            return false
+        }
+        if await isWatched() { return true }
+        await report(.waitingForLiveView)
+        let deadline = ContinuousClock.now.advanced(by: configuration.watchModeWait)
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: configuration.watchModePollInterval)
+            guard terminalReason == nil, !Task.isCancelled else { return false }
+            if await isWatched() {
+                await report(.acting)
+                return true
+            }
+        }
+        await end(.liveViewRequired, detail: "\(rule), and nobody opened it")
+        return false
+    }
+
+    private func isWatched() async -> Bool {
+        ((try? await target.liveViewers(lease)) ?? 0) > 0
     }
 
     // MARK: - Oversight

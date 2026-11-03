@@ -267,8 +267,11 @@ public actor DisplayLiveViewServer {
         }
     }
 
-    public func viewerCount(_ id: UUID) -> Int {
-        feeds[id]?.viewers.count ?? 0
+    /// The feed's viewers, or only those with `role`.
+    public func viewerCount(_ id: UUID, role: DisplayLiveViewRole? = nil) -> Int {
+        guard let feed = feeds[id] else { return 0 }
+        guard let role else { return feed.viewers.count }
+        return feed.count(role)
     }
 
     // MARK: - Viewers

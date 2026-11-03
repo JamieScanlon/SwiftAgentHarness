@@ -106,6 +106,8 @@ public actor DisplayHostServer {
                 return .outcomes(try await target.act(try lease(leaseID, connection: id), batch))
             case .liveView(let leaseID, let role):
                 return .liveView(try await target.liveView(try lease(leaseID, connection: id), role: role))
+            case .liveViewers(let leaseID):
+                return .liveViewers(try await target.liveViewers(try lease(leaseID, connection: id)))
             case .endObservers(let leaseID):
                 try await target.endObservers(try lease(leaseID, connection: id))
                 return .done

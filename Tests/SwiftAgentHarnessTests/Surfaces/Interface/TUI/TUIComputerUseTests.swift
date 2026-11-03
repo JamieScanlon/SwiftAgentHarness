@@ -318,6 +318,17 @@ struct TUIComputerUseTests {
         #expect(await frame(app).contains("token-1"))
     }
 
+    @Test("A session waiting for its live view says so and shows the link without asking")
+    func waitingForLiveView() async {
+        let (app, recorder) = await makeApp()
+        await app.ingest(activity(.waitingForLiveView, liveView: true))
+        await app.ingest(activity(.waitingForLiveView, liveView: true))
+        #expect(await recorder.liveViewRoles == [.user])
+        let rendered = await frame(app)
+        #expect(rendered.contains("Open the live view to let the agent go on with This Mac"))
+        #expect(rendered.contains("token-1"))
+    }
+
     @Test("A handoff on a target with a live view points the user to its link")
     func handoffPointsToLiveView() async {
         let (app, _) = await makeApp()

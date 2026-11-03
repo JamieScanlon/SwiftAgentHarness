@@ -66,6 +66,8 @@ struct DisplayHostTests {
         #expect(await target.liveViewRoles == [.user, .observer])
         try await remote.endObservers(lease)
         #expect(await target.observerEnds == 1)
+        await target.setUserViewers(2)
+        #expect(try await remote.liveViewers(lease) == 2)
 
         await remote.release(lease, reason: .completed)
         #expect(await target.releases == [.completed])

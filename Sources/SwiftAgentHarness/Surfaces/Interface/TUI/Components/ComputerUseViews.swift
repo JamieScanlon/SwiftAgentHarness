@@ -112,6 +112,9 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
             if activity.status == .takenOver {
                 parts = ["You have control of \(target)"]
                 hints = ["^T hand back", "^X stop"]
+            } else if activity.status == .waitingForLiveView {
+                parts = ["Open the live view to let the agent go on with \(target)"]
+                hints = ["^X stop"]
             } else {
                 parts = ["Computer use on \(target)"]
                 if let step = activity.step, let maxSteps = activity.maxSteps {

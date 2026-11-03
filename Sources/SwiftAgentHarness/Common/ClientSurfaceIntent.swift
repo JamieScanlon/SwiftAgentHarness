@@ -77,6 +77,8 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         case started
         case acting
         case takenOver = "taken-over"
+        /// Watch mode: the session waits until the user opens the live view.
+        case waitingForLiveView = "waiting-for-live-view"
         case ended
     }
 

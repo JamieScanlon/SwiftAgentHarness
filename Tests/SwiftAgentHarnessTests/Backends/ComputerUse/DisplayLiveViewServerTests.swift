@@ -353,6 +353,8 @@ struct DisplayLiveViewServerTests {
         _ = try await observer.status()
         let user = try Viewer(userLink)
         _ = try await user.status()
+        #expect(await Self.eventually { await server.viewerCount(feed, role: .user) == 1 })
+        #expect(await server.viewerCount(feed, role: .observer) == 1)
 
         await server.endObservers(feed)
         let ended = try await observer.status()

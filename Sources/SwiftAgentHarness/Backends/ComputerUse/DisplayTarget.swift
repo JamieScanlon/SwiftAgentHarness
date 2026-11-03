@@ -156,6 +156,9 @@ public protocol DisplayTarget: Sendable {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView?
     /// Ends every observer's stream and revokes the observer links; the user's are kept.
     func endObservers(_ lease: Lease) async throws
+    /// How many of the user's viewers watch the lease's live view now. Observers don't count.
+    func liveViewers(_ lease: Lease) async throws -> Int
+
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
 }
@@ -163,6 +166,7 @@ public protocol DisplayTarget: Sendable {
 public extension DisplayTarget {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? { nil }
     func endObservers(_ lease: Lease) async throws {}
+    func liveViewers(_ lease: Lease) async throws -> Int { 0 }
 
     func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
         try await liveView(lease, role: .user)
