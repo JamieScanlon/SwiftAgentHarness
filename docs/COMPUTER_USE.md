@@ -40,7 +40,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Screenshots as image blocks in tool results (Anthropic, OpenAI, LM Studio, Ollama) | Done |
 | `computer-use` feature on model descriptors, resize to the model's `maxImageEdgePx` and `maxPixels`, step-counted screenshot pruning | Done. The bundled Claude entries declare it with Anthropic's documented values. |
 | Computer-use specialist sub-agent (`ComputerUseTask` / `ComputerUseResult`) and composition wiring (`installComputerUse`) | Done. Synchronous runs only. |
-| macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process or served by a display host. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. VM targets are not built yet. |
+| macOS host-desktop driver (`SwiftAgentHarnessComputerUseMac`) | Done, in-process or served by a display host. Verified by unit tests and an opt-in smoke test, not yet on a range of real apps. |
 | Display host protocol: `RemoteDisplayTarget`, `DisplayHostServer`, Unix-socket transport, XPC transport (macOS 26+), code-signature peer checks | Done. No host app ships; integrators build their own. |
 | Oversight control plane: approval cards, questions, handoffs, and activity routed to the user's conversation; REST answer, hand-back, stop, and takeover | Done |
 | Approval-card target crops, TUI indicator, question and handoff dialogs, takeover and stop shortcuts, `computer-use` surface capability | Done. The TUI shows crops as alt text. |
@@ -51,6 +51,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | `grounder` and `vision-describe` roles (`computer_locate`, `computer_describe`), specialists on models without vision | Done |
 | Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
 | Desktop container (`X11DisplayTarget.desktopContainer`): a throwaway Linux desktop per lease, driven with `xdotool` inside it, with a live view | Done. Verified by unit tests and an opt-in smoke test against Docker (`SWIFTAGENTHARNESS_DOCKER_SMOKE=1`). |
+| Local VMs (`VirtualMachineDisplayTarget`): a clean VM per lease from a `VirtualMachineController` (Tart built in), Linux guests over SSH and macOS guests through a display host over `DisplayHostTCP` | Done. Verified by unit tests, including a loopback TCP host; not yet against a real VM, since Tart isn't installed on the development machine. |
 | The user's own browser (`ManagedBrowserDisplayTarget.userBrowser`), attached over remote debugging | Done. Verified by unit tests and the Chrome smoke test against a Chrome started with a debugging port. |
 | Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; observer links for other people; REST link minting; TUI links and sharing | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser, observer links included. |
 | Code execution as a peer path: `computer_run_script` runs a JavaScript script in a browser target's page as one gated action | Done for the managed browser. Verified by unit tests and the Chrome smoke test. |
@@ -294,6 +295,31 @@ Build the image first: `docker build -t swiftagentharness/desktop:latest docker/
 | Live view | With a `DisplayLiveViewServer`, the screen is captured as JPEG every `liveViewFrameInterval` (500 ms) while someone watches, and a viewer's input reaches the desktop through `xdotool` during takeover, with the same tokens, observers, and controls as the managed browser. |
 
 `X11DisplayTarget(configuration:liveView:provisioner:)` drives any other X display: give it a provisioner that returns an `X11DesktopSession` with a runner for where the display is. `SSHDisplayCommandRunner` runs the tools on another machine, quoting every argument for the remote shell.
+
+## Local VMs
+
+`VirtualMachineDisplayTarget` starts a VM from a clean image for each lease and drives it through a driver inside the guest, so delivery lands on the guest's own display. Release releases the guest's lease and stops and deletes the VM.
+
+```swift
+let vms = TartVirtualMachineController(configuration: TartVirtualMachineConfiguration(baseImage: "ubuntu-desktop"))
+let linux = VirtualMachineDisplayTarget.linux(
+    controller: vms,
+    configuration: LinuxGuestConfiguration(user: "admin", identityFile: "~/.ssh/vm"),
+    liveView: liveView,
+    host: LocalDisplayCommandRunner()
+)
+let mac = VirtualMachineDisplayTarget.macOS(
+    controller: TartVirtualMachineController(configuration: TartVirtualMachineConfiguration(baseImage: "macos-agent")),
+    configuration: MacGuestConfiguration(port: 7420, secret: guestSecret)
+)
+```
+
+| Piece | Behavior |
+|---|---|
+| `TartVirtualMachineController` | Runs VMs with Tart. Each start clones `baseImage` to `sah-vm-<pid>-…`, runs it with `--no-graphics`, and waits for its address (`tart ip --wait`). Stop stops and deletes the clone. Each start deletes clones whose harness has died. Any other `VirtualMachineController` works. |
+| Linux guests | `linux(controller:configuration:liveView:host:)` drives the guest with `X11DisplayTarget`, its tools run over SSH (`SSHDisplayCommandRunner`, key authentication, every argument quoted for the remote shell). The guest needs `xdotool`, ImageMagick, `xprop`, and an X session for `user` on `display`. It behaves like the desktop container: pixels only, with the same live view. |
+| macOS guests | `macOS(controller:configuration:)` connects to a display host in the guest: a `DisplayHostServer` serving the macOS driver and listening with `DisplayHostTCP` on `port`, which the guest's image starts and has the screen-capture and accessibility permissions for. It retries while the guest boots, up to `connectTimeout`. The manifest is `vm` and `humanPresence: none` whatever the guest's driver declares, since nobody uses the guest. |
+| `DisplayHostTCP` | The display host protocol over TCP. Both ends prove they hold a `DisplayHostSecret` (256 bits or more) with HMAC-SHA256 over fresh nonces before any message passes; a peer that can't is closed, and one that doesn't answer within 10 seconds is dropped. Traffic isn't encrypted: use it on a network only the two ends share, such as Tart's host-only network, or in a tunnel. |
 
 ## Hosting a target in another process
 
@@ -693,6 +719,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | View-only and takeover | The spec makes observer links view-only by default and accepts input only during takeover. The user's links are view-only outside takeover and carry the user's input during it. Observer links, for anyone else, are view-only always: the spec doesn't say whether someone other than the user may type during a takeover, and the takeover is the user's. Every link is minted through the user's own controls (the control service or the REST route behind tenancy), never by a tool the model can call. `DisplayLiveView.viewOnly` reports the state when the link was minted. |
 | Observers during takeover | The spec doesn't say what observers see while the user has control. Takeover pauses the agent's capture because the user may be entering credentials or payment details, so observers are paused too and see nothing until hand-back. |
 | Ending observers | The spec's observer tokens are short-lived but say nothing about revoking them. Since a connected viewer stays until the lease ends, `endObservers` lets the user stop sharing without stopping the run. The display host protocol carries it, at version 3. |
+| Local VMs | The spec says to drive a VM from inside it, over a forwarded port or vsock, and keep VNC for the human observer. The guest's driver is reached over the VM's network: SSH for Linux guests, `DisplayHostTCP` for macOS guests (vsock needs the harness to run the VM itself, which Tart does). A Linux guest's live view is the harness's stream, as for the container. A macOS guest has no live view: Tart's VNC can't be held to view-only outside takeover, so it isn't offered, and the guest's display host would have to serve one. The guest's platform permissions are its own business; the VM target declares none, and a revoked one fails the guest's actions. |
 | Desktop container | The spec gives the container "pixels, accessibility (where available)" and a VNC observer. AT-SPI isn't read, so it is pixels only. Its observer is the same token-protected stream as the managed browser rather than VNC: a VNC client can't be held to view-only outside takeover, and the stream carries observer links and watch mode. The spec's "drive a VM from inside it" is followed for containers too: the tools run inside the container through `docker exec`. The container has no network by default, since the spec's network policy is written for browser targets and a desktop's browser would otherwise reach the host's network. |
 | The user's real browser | The spec lists it as attached "via extension or remote-debugging." Remote debugging is built; an extension isn't, since Chrome's own remote-debugging consent now covers the user's running browser. The spec says nothing on how the agent shares the browser with the user. Here it gets one tab and never sees the others, so the user's other sites stay out of its observations, and its popups and downloads are handled in that tab only. The user's download settings aren't touched for the length of the lease; downloads from the agent's tab are cancelled one by one instead. |
 | Code execution as a peer path | The spec makes scripts rung 2 inside the leased target, under the same grants and domain policy, gated as a whole script, and consequential when they touch a shared target. A script is one `script` action: it needs the page's domain at full tier (a script can type), is interact on isolated targets (so the intent check sees it), and consequential on shared ones. Only browser targets run scripts, in JavaScript. A desktop automation script (AppleScript, a shell driving input) can reach any app, so it couldn't be held to per-app grants, and the host desktop declares no scripting. The spec's examples are browser-automation libraries; the script here is plain JavaScript against the DOM, with no library loaded. |
@@ -705,5 +732,5 @@ Spec features with no implementation so far. Each needs something the harness do
 
 | Feature | State |
 |---|---|
-| Isolated targets | The host desktop, the managed browser, the user's own browser, and the desktop container exist. The local VM and paired device targets aren't built. |
+| Isolated targets | The host desktop, the managed browser, the user's own browser, the desktop container, and local VMs exist. The paired device target isn't built. |
 | Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. |

@@ -79,7 +79,11 @@ public actor X11DisplayTarget: DisplayTarget {
         self.configuration = configuration
         self.provisioner = provisioner
         liveViewServer = liveView
-        manifest = DisplayTargetManifest(
+        manifest = Self.manifest(for: configuration, servesLiveView: liveView != nil)
+    }
+
+    static func manifest(for configuration: X11DesktopConfiguration, servesLiveView: Bool) -> DisplayTargetManifest {
+        DisplayTargetManifest(
             id: configuration.id,
             label: configuration.label,
             platform: "linux",
@@ -87,7 +91,7 @@ public actor X11DisplayTarget: DisplayTarget {
             perception: [.pixels],
             delivery: [.background],
             semanticActions: [.launchApp, .openURL],
-            observerAccess: liveView == nil ? .none : .stream,
+            observerAccess: servesLiveView ? .stream : .none,
             humanPresence: configuration.humanPresence
         )
     }
