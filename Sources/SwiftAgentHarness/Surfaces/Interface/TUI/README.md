@@ -42,19 +42,22 @@ await app.setHost(ClosureTUIAppHost(
     resolveComputerUseRequest: { id, resolution in await transport.resolveComputerUseRequest(id, resolution) },
     stopComputerUse: { await transport.stopComputerUse() },
     setComputerUseTakeover: { on in await transport.setComputerUseTakeover(on) },
-    computerUseLiveView: { lifecycleID in await transport.computerUseLiveView(lifecycleID) }
+    computerUseLiveView: { lifecycleID, role in await transport.computerUseLiveView(lifecycleID, role: role) },
+    endComputerUseObservers: { lifecycleID in await transport.endComputerUseObservers(lifecycleID) }
 ))
 ```
 
 The computer-use closures map onto `POST /api/conversations/{id}/computer-use/requests/{requestID}`, `…/stop`,
-`…/takeover` and `…/runs/{lifecycleID}/live-view`.
+`…/takeover`, `…/runs/{lifecycleID}/live-view` (with `{"role": "observer"}` to share) and
+`DELETE …/runs/{lifecycleID}/live-view/observers`.
 
 ### Computer use
 
 While a computer-use specialist runs, a line above the status line shows the target, step, app, and last
 action. **Ctrl-T** takes over the screen (and hands it back), **Ctrl-X** stops the conversation's
-sessions, and **Ctrl-O** shows a live-view link under the line for each run whose target serves one. Taking over
-such a run shows its link without asking. All three work while a dialog is open. The link is printed as its own
+sessions, **Ctrl-O** shows a live-view link under the line for each run whose target serves one, and **Ctrl-G** shares
+a view-only link to pass on, or stops sharing. Taking over
+such a run shows its link without asking. All four work while a dialog is open. The link is printed as its own
 OSC 8 hyperlink label, so it can be copied where hyperlinks aren't supported, and drops off once it expires. A question opens a dialog with a text field, and a handoff opens one
 with *Hand back control* and *Decline*. Esc or Ctrl-C declines either one. Requests that arrive while another
 dialog is open wait their turn. Approval cards show a computer-use crop as its alt-text placeholder, because the

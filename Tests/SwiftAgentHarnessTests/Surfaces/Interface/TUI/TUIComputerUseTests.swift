@@ -9,15 +9,27 @@ private actor ComputerUseHostRecorder {
     private(set) var stops = 0
     private(set) var approvals: [(String, String)] = []
     private(set) var liveViews: [String] = []
+    private(set) var liveViewRoles: [DisplayLiveViewRole] = []
+    private(set) var observerEnds: [String] = []
+    var endsObservers = true
 
     func resolve(_ id: String, _ resolution: ComputerUseRequestResolution) { resolutions.append((id, resolution)) }
     func takeover(_ on: Bool) { takeovers.append(on) }
     func stop() { stops += 1 }
     func approve(_ id: String, _ action: String) { approvals.append((id, action)) }
-    func liveView(_ lifecycleID: String) -> DisplayLiveView {
+    func liveView(_ lifecycleID: String, _ role: DisplayLiveViewRole) -> DisplayLiveView {
         liveViews.append(lifecycleID)
-        return DisplayLiveView(url: "http://127.0.0.1:4100/view#token-\(liveViews.count)", viewOnly: true, expiresAt: Date().addingTimeInterval(600))
+        liveViewRoles.append(role)
+        let prefix = role == .observer ? "observer-" : ""
+        return DisplayLiveView(
+            url: "http://127.0.0.1:4100/view#\(prefix)token-\(liveViews.count)", viewOnly: true, expiresAt: Date().addingTimeInterval(600), role: role
+        )
     }
+    func endObservers(_ lifecycleID: String) -> Bool {
+        observerEnds.append(lifecycleID)
+        return endsObservers
+    }
+    func setEndsObservers(_ value: Bool) { endsObservers = value }
 }
 
 @Suite("TUI computer-use oversight")
@@ -31,7 +43,8 @@ struct TUIComputerUseTests {
             resolveComputerUseRequest: { await recorder.resolve($0, $1) },
             stopComputerUse: { await recorder.stop() },
             setComputerUseTakeover: { await recorder.takeover($0) },
-            computerUseLiveView: { await recorder.liveView($0) }
+            computerUseLiveView: { await recorder.liveView($0, $1) },
+            endComputerUseObservers: { await recorder.endObservers($0) }
         ))
         return (app, recorder)
     }
@@ -198,6 +211,97 @@ struct TUIComputerUseTests {
 
         await app.ingest(activity(.ended))
         #expect(await !frame(app).contains("token-2"))
+        #expect(await recorder.liveViewRoles == [.user, .user])
+    }
+
+    @Test("Ctrl-G shares a view-only link and pressing it again stops sharing, only for sessions that offer a live view")
+    func shareShortcut() async {
+        let (app, recorder) = await makeApp()
+        await app.handleRawInput(ComputerUseShortcut.share)
+        await app.ingest(activity(.acting))
+        #expect(await !frame(app).contains("^G share"))
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await recorder.liveViews.isEmpty)
+
+        await app.ingest(activity(.acting, liveView: true))
+        #expect(await frame(app).contains("^G share"))
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await recorder.liveViewRoles == [.observer])
+        var rendered = await frame(app)
+        let url = "http://127.0.0.1:4100/view#observer-token-1"
+        #expect(rendered.contains(TUIEscapes.hyperlink(url, label: url)))
+        #expect(rendered.contains("Shared, view only"))
+        #expect(rendered.contains("^G stop sharing"))
+        #expect(rendered.contains("^O live view"), "sharing doesn't show the user's own link")
+
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await recorder.observerEnds == ["call-1"])
+        #expect(await recorder.liveViews.count == 1, "stopping doesn't mint another link")
+        rendered = await frame(app)
+        #expect(!rendered.contains("observer-token-1"))
+        #expect(rendered.contains("^G share"))
+    }
+
+    @Test("Sharing works over a dialog, and stopping keeps the user's own link")
+    func shareOverDialog() async {
+        let (app, recorder) = await makeApp()
+        await app.ingest(activity(.takenOver, liveView: true))
+        await app.ingest(handoff())
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await frame(app).contains("observer-token-2"))
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await recorder.observerEnds == ["call-1"])
+        let rendered = await frame(app)
+        #expect(rendered.contains("view#token-1"))
+        #expect(!rendered.contains("observer-token-2"))
+        #expect(await app.hasOverlay())
+    }
+
+    @Test("A share that couldn't be stopped stays shown")
+    func failedStopSharing() async {
+        let (app, recorder) = await makeApp()
+        await recorder.setEndsObservers(false)
+        await app.ingest(activity(.acting, liveView: true))
+        await app.handleRawInput(ComputerUseShortcut.share)
+        await app.handleRawInput(ComputerUseShortcut.share)
+        #expect(await recorder.observerEnds == ["call-1"])
+        #expect(await frame(app).contains("^G stop sharing"))
+    }
+
+    @Test("A shared run whose link has expired still says it's shared, and ending the run clears it")
+    func expiredShare() {
+        let clock = Mutex(Date(timeIntervalSince1970: 1_000))
+        let indicator = ComputerUseIndicatorComponent(now: { clock.withLock { $0 } })
+        let running = ComputerUseSurfaceIntentPayload(target: "Managed browser", lifecycleID: "call-1", status: .acting, liveView: true)
+        indicator.apply(running)
+        indicator.setObserverLink(
+            DisplayLiveView(url: "http://127.0.0.1:4100/view#obs", viewOnly: true, expiresAt: Date(timeIntervalSince1970: 1_600), role: .observer),
+            for: "call-1"
+        )
+        #expect(indicator.isSharing)
+        #expect(indicator.render(width: 120).joined().contains("view#obs"))
+        clock.withLock { $0 = Date(timeIntervalSince1970: 1_601) }
+        var rendered = indicator.render(width: 120).joined()
+        #expect(!rendered.contains("view#obs"))
+        #expect(rendered.contains("new viewers can't join"))
+        #expect(rendered.contains("^G stop sharing"))
+        #expect(indicator.observerLink(for: "call-1") == nil)
+
+        indicator.apply(ComputerUseSurfaceIntentPayload(target: "Managed browser", lifecycleID: "call-1", status: .ended))
+        indicator.apply(running)
+        rendered = indicator.render(width: 120).joined()
+        #expect(!indicator.isSharing)
+        #expect(!rendered.contains("new viewers can't join"))
+    }
+
+    @Test("An unsafe share link is never shown")
+    func unsafeShareLink() {
+        let indicator = ComputerUseIndicatorComponent()
+        indicator.apply(ComputerUseSurfaceIntentPayload(target: "Managed browser", lifecycleID: "call-1", status: .acting, liveView: true))
+        indicator.setObserverLink(
+            DisplayLiveView(url: "javascript:alert(1)", viewOnly: true, expiresAt: Date().addingTimeInterval(600), role: .observer), for: "call-1"
+        )
+        #expect(!indicator.isSharing)
     }
 
     @Test("Taking over shows a live view link without asking, once")
@@ -253,6 +357,26 @@ struct TUIComputerUseTests {
         }
         indicator.setLiveView(DisplayLiveView(url: "https://agent.example.com/live/view#abc", viewOnly: true, expiresAt: later), for: "call-2")
         #expect(indicator.liveView(for: "call-2") == nil, "no such run")
+    }
+
+    @Test("The in-process host mints user and observer links from the run's target and ends its observers")
+    func runtimeHostSharing() async throws {
+        let parent = UUID()
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
+        let (_, target) = try await ComputerUseFixtures.registerLiveSession(in: installation, parent: parent, lifecycleID: "call-1")
+        await target.setLiveViewLink(DisplayLiveView(url: "http://127.0.0.1:9/view#t", viewOnly: true, expiresAt: ComputerUseFixtures.epoch))
+        let host = RuntimeTUIHost(
+            session: try MinimalAgentRuntimeSession.make(),
+            conversationID: parent,
+            computerUse: ComputerUseControlService(installation: installation)
+        )
+
+        #expect(await host.computerUseLiveView(lifecycleID: "call-1", role: .user)?.role == .user)
+        #expect(await host.computerUseLiveView(lifecycleID: "call-1", role: .observer)?.role == .observer)
+        #expect(await target.liveViewRoles == [.user, .observer])
+        #expect(await host.endComputerUseObservers(lifecycleID: "call-1"))
+        #expect(await target.observerEnds == 1)
+        #expect(await !host.endComputerUseObservers(lifecycleID: "call-missing"))
     }
 
     @Test("Approval cards show an image block as its placeholder")

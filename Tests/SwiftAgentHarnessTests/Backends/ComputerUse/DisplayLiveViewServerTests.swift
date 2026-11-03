@@ -250,7 +250,9 @@ struct DisplayLiveViewServerTests {
         let viewer = try Viewer(link)
         _ = try await viewer.status()
         await server.close(feed)
-        #expect(try await viewer.status().type == "ended")
+        let ended = try await viewer.status()
+        #expect(ended.type == "ended")
+        #expect(ended.reason?.rawValue == "sessionEnded")
         let late = try Viewer(link)
         #expect(await late.next() == nil)
     }
@@ -353,7 +355,9 @@ struct DisplayLiveViewServerTests {
         _ = try await user.status()
 
         await server.endObservers(feed)
-        #expect(try await observer.status().type == "ended")
+        let ended = try await observer.status()
+        #expect(ended.type == "ended")
+        #expect(ended.reason?.rawValue == "sharingStopped")
         #expect(await (try Viewer(observerLink)).next(within: .seconds(1)) == nil)
         #expect(await Self.eventually { await server.viewerCount(feed) == 1 })
         #expect(try await (try Viewer(userLink)).status().type == "status")

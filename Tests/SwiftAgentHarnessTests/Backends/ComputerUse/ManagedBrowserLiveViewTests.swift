@@ -119,7 +119,7 @@ struct ManagedBrowserLiveViewTests {
         let user = try Viewer(try #require(try await target.liveView(lease)))
         _ = try await user.status()
         try await target.endObservers(lease)
-        #expect(try await observer.status().type == "ended")
+        #expect(try await observer.status().reason == .sharingStopped)
         await browser.emit(Self.frameEvent(DisplayLiveViewServerTests.jpeg, ack: 1))
         #expect(try await user.frame().width == 1280, "the user's viewer stays")
         await target.release(lease, reason: .completed)
@@ -135,7 +135,7 @@ struct ManagedBrowserLiveViewTests {
         let viewer = try Viewer(link)
         _ = try await viewer.status()
         await target.release(lease, reason: .completed)
-        #expect(try await viewer.status().type == "ended")
+        #expect(try await viewer.status().reason == .sessionEnded)
         #expect(await (try Viewer(link)).next(within: .seconds(1)) == nil)
         await #expect(throws: DisplayTargetError.leaseNotHeld) { try await target.liveView(lease) }
     }

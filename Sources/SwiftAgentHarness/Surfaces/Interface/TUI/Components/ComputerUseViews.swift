@@ -8,14 +8,19 @@ public enum ComputerUseShortcut: Sendable {
     public static let stop = "\u{18}"
     /// Ctrl-O: show a fresh live-view link for each session whose target serves one.
     public static let liveView = "\u{0F}"
+    /// Ctrl-G: share a view-only link to each session whose target serves a live view, or stop sharing.
+    public static let share = "\u{07}"
 }
 
 /// The "agent is using <target>" line, shown between the transcript and the status line while a computer-use
-/// specialist runs, with a clickable live-view link under it once one is minted. Renders nothing otherwise.
+/// specialist runs, with clickable live-view and share links under it once they're minted. Renders nothing otherwise.
 public final class ComputerUseIndicatorComponent: TUIComponent {
     /// Latest activity per specialist run, in arrival order.
     public private(set) var sessions: [ComputerUseSurfaceIntentPayload] = []
     private var liveViews: [String: DisplayLiveView] = [:]
+    /// Observer links per shared run. A run stays shared after its link stops admitting viewers, since those
+    /// already watching keep their view.
+    private var observerLinks: [String: DisplayLiveView] = [:]
     private let now: @Sendable () -> Date
 
     public init(now: @escaping @Sendable () -> Date = Date.init) {
@@ -24,6 +29,8 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
 
     public var isActive: Bool { !sessions.isEmpty }
     public var isTakenOver: Bool { sessions.contains { $0.status == .takenOver } }
+    /// Whether any run has been shared with observers and not stopped since.
+    public var isSharing: Bool { !observerLinks.isEmpty }
 
     /// Runs whose target serves a live view.
     public var liveViewSessions: [String] {
@@ -36,6 +43,7 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
         if activity.status == .ended {
             if let index { sessions.remove(at: index) }
             liveViews[key] = nil
+            observerLinks[key] = nil
         } else if let index {
             sessions[index] = activity
         } else {
@@ -46,10 +54,7 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
     /// Shows `link` under its run's line, replacing any earlier one. Ignored once the run has ended, or when the
     /// link isn't a plain http(s) URL: it is written into an escape sequence.
     public func setLiveView(_ link: DisplayLiveView, for lifecycleID: String) {
-        guard sessions.contains(where: { $0.lifecycleID == lifecycleID }),
-              let scheme = URL(string: link.url)?.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              !link.url.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7F || !$0.isASCII })
-        else { return }
+        guard accepts(link, for: lifecycleID) else { return }
         liveViews[lifecycleID] = link
     }
 
@@ -58,9 +63,37 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
         liveViews[lifecycleID].flatMap { $0.expiresAt > now() ? $0 : nil }
     }
 
+    /// Marks the run shared and shows `link` for passing on, under the same rules as ``setLiveView(_:for:)``.
+    public func setObserverLink(_ link: DisplayLiveView, for lifecycleID: String) {
+        guard accepts(link, for: lifecycleID) else { return }
+        observerLinks[lifecycleID] = link
+    }
+
+    /// The run's observer link while it can still admit a viewer.
+    public func observerLink(for lifecycleID: String) -> DisplayLiveView? {
+        observerLinks[lifecycleID].flatMap { $0.expiresAt > now() ? $0 : nil }
+    }
+
+    /// Runs shared with observers.
+    public var sharedSessions: [String] {
+        sessions.compactMap { activity in activity.lifecycleID.flatMap { observerLinks[$0] == nil ? nil : $0 } }
+    }
+
+    public func stopSharing(_ lifecycleID: String) {
+        observerLinks[lifecycleID] = nil
+    }
+
     public func clear() {
         sessions.removeAll()
         liveViews.removeAll()
+        observerLinks.removeAll()
+    }
+
+    private func accepts(_ link: DisplayLiveView, for lifecycleID: String) -> Bool {
+        guard sessions.contains(where: { $0.lifecycleID == lifecycleID }),
+              let scheme = URL(string: link.url)?.scheme?.lowercased(), scheme == "http" || scheme == "https"
+        else { return false }
+        return !link.url.unicodeScalars.contains { $0.value < 0x21 || $0.value == 0x7F || !$0.isASCII }
     }
 
     private static func key(_ activity: ComputerUseSurfaceIntentPayload) -> String {
@@ -72,6 +105,8 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
         return sessions.flatMap { activity -> [String] in
             let target = TUITextSanitizer.sanitizeSingleLine(activity.target ?? "the screen")
             let link = activity.lifecycleID.flatMap(liveView(for:))
+            let shared = activity.lifecycleID.map { observerLinks[$0] != nil } ?? false
+            let observerLink = activity.lifecycleID.flatMap(observerLink(for:))
             var parts: [String]
             var hints: [String]
             if activity.status == .takenOver {
@@ -86,7 +121,10 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
                 if let action = activity.action { parts.append(action) }
                 hints = ["^T take over", "^X stop"]
             }
-            if activity.liveView == true, link == nil { hints.append("^O live view") }
+            if activity.liveView == true {
+                if link == nil { hints.append("^O live view") }
+                if !shared { hints.append("^G share") }
+            }
             let line = ANSIStyle.color("●", fg: 214) + " " + parts.joined(separator: ANSIStyle.dim(" · ")) + "  "
                 + ANSIStyle.dim(hints.joined(separator: " · "))
             var lines = [ANSIStyle.finishLine(ANSITruncate.truncate(line, toWidth: width))]
@@ -96,6 +134,15 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
                 let linkLine = "  " + ANSIStyle.dim("Live view ") + TUIEscapes.hyperlink(link.url, label: link.url)
                     + ANSIStyle.dim(" · open by \(deadline)")
                 lines.append(ANSIStyle.finishLine(ANSITruncate.truncate(linkLine, toWidth: width)))
+            }
+            if let observerLink {
+                let deadline = observerLink.expiresAt.formatted(date: .omitted, time: .shortened)
+                let shareLine = "  " + ANSIStyle.dim("Shared, view only ") + TUIEscapes.hyperlink(observerLink.url, label: observerLink.url)
+                    + ANSIStyle.dim(" · open by \(deadline) · ^G stop sharing")
+                lines.append(ANSIStyle.finishLine(ANSITruncate.truncate(shareLine, toWidth: width)))
+            } else if shared {
+                let shareLine = "  " + ANSIStyle.dim("Shared, view only · new viewers can't join; anyone watching still can · ^G stop sharing")
+                lines.append(ANSIStyle.finishLine(ANSITruncate.truncate(shareLine, toWidth: width)))
             }
             return lines
         }

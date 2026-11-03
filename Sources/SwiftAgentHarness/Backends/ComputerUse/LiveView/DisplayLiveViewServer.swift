@@ -66,7 +66,7 @@ public actor DisplayLiveViewServer {
     enum Outgoing: Sendable {
         case frame(DisplayLiveViewFrame, control: Bool)
         case status(StatusMessage)
-        case ended
+        case ended(StatusMessage.EndReason)
     }
 
     private struct Viewer {
@@ -206,7 +206,7 @@ public actor DisplayLiveViewServer {
     public func close(_ id: UUID) {
         guard let feed = feeds.removeValue(forKey: id) else { return }
         for viewer in feed.viewers.values {
-            viewer.messages.yield(.ended)
+            viewer.messages.yield(.ended(.sessionEnded))
             viewer.messages.finish()
         }
         links = links.filter { $0.value.feedID != id }
@@ -239,7 +239,7 @@ public actor DisplayLiveViewServer {
     public func endObservers(_ id: UUID) {
         guard let feed = feeds[id] else { return }
         for viewer in feed.viewers.values where viewer.role == .observer {
-            viewer.messages.yield(.ended)
+            viewer.messages.yield(.ended(.sharingStopped))
             viewer.messages.finish()
         }
         links = links.filter { $0.value.feedID != id || $0.value.role != .observer }
@@ -326,8 +326,8 @@ public actor DisplayLiveViewServer {
                                 try await outbound.write(Self.binaryFrame(frame, control: control))
                             case .status(let status):
                                 try await outbound.write(Self.textFrame(status))
-                            case .ended:
-                                try await outbound.write(Self.textFrame(StatusMessage(type: "ended")))
+                            case .ended(let reason):
+                                try await outbound.write(Self.textFrame(StatusMessage(type: "ended", reason: reason)))
                                 try await outbound.write(Self.closeFrame(code: 1000))
                                 raw.close(promise: nil)
                                 return
@@ -409,6 +409,14 @@ public actor DisplayLiveViewServer {
         var observer: Bool?
         /// Whether the user has control, so an observer is sent no frames.
         var paused: Bool?
+        /// Why an `ended` stream ended.
+        var reason: EndReason?
+
+        enum EndReason: String, Codable, Sendable {
+            case sessionEnded
+            /// The user stopped sharing with observers; the session goes on.
+            case sharingStopped
+        }
     }
 
     private static func textFrame(_ message: StatusMessage) -> WebSocketFrame {

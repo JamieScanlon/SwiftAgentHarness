@@ -23,7 +23,7 @@ enum DisplayLiveViewViewer {
     </head>
     <body>
     <div id="bar" data-control="false"><span id="label"></span><span id="state">Connecting…</span></div>
-    <div id="stage"><img id="screen" alt="Live view of the agent's screen" draggable="false" tabindex="0"></div>
+    <div id="stage"><img id="screen" alt="Live view of the agent's screen" draggable="false" tabindex="0" hidden></div>
     <script src="viewer.js"></script>
     </body>
     </html>
@@ -57,6 +57,7 @@ enum DisplayLiveViewViewer {
       function setPaused(paused) {
         state.textContent = paused ? "The user has control. The view is paused until they hand back." : "Watching. View only.";
         if (paused && shown) {
+          screen.hidden = true;
           screen.removeAttribute("src");
           URL.revokeObjectURL(shown);
           shown = null;
@@ -71,7 +72,10 @@ enum DisplayLiveViewViewer {
             observer = message.observer === true;
             if (observer) setPaused(message.paused === true); else setControl(message.control);
           }
-          if (message.type === "ended") { ended = true; state.textContent = "The session ended."; }
+          if (message.type === "ended") {
+            ended = true;
+            state.textContent = message.reason === "sharingStopped" ? "The user stopped sharing this view." : "The session ended.";
+          }
           return;
         }
         const view = new DataView(event.data);
@@ -83,6 +87,7 @@ enum DisplayLiveViewViewer {
         shown = next;
         screen.onload = () => { if (previous) URL.revokeObjectURL(previous); };
         screen.src = next;
+        screen.hidden = false;
       };
 
       function send(message) {

@@ -38,6 +38,8 @@ public actor TUIApp {
     private var queuedComputerUseRequests: [ComputerUseSurfaceIntentPayload] = []
     /// Runs with a link request in flight, so a burst of takeover activity mints one link.
     private var mintingLiveViews: Set<String> = []
+    /// Set while a share or stop-sharing request is in flight, so a repeated Ctrl-G doesn't undo it.
+    private var changingShare = false
     private var keyDecoder = TUIKeyDecoder()
     /// Invoked when a mode dialog selection is confirmed.
     private var onModeSelected: (@Sendable (ModeOption) -> Void)?
@@ -530,6 +532,9 @@ public actor TUIApp {
                     await showComputerUseLiveView(lifecycleID)
                 }
                 return
+            case ComputerUseShortcut.share:
+                await toggleComputerUseSharing()
+                return
             default:
                 break
             }
@@ -760,8 +765,27 @@ public actor TUIApp {
     private func showComputerUseLiveView(_ lifecycleID: String) async {
         guard mintingLiveViews.insert(lifecycleID).inserted else { return }
         defer { mintingLiveViews.remove(lifecycleID) }
-        guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID) else { return }
+        guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID, role: .user) else { return }
         computerUseIndicator.setLiveView(link, for: lifecycleID)
+        renderFrame()
+    }
+
+    /// Stops sharing every shared run when any is shared, so one press always ends it; shares every run otherwise.
+    private func toggleComputerUseSharing() async {
+        guard !changingShare else { return }
+        changingShare = true
+        defer { changingShare = false }
+        let shared = computerUseIndicator.sharedSessions
+        if shared.isEmpty {
+            for lifecycleID in computerUseIndicator.liveViewSessions {
+                guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID, role: .observer) else { continue }
+                computerUseIndicator.setObserverLink(link, for: lifecycleID)
+            }
+        } else {
+            for lifecycleID in shared where await host?.endComputerUseObservers(lifecycleID: lifecycleID) == true {
+                computerUseIndicator.stopSharing(lifecycleID)
+            }
+        }
         renderFrame()
     }
 
