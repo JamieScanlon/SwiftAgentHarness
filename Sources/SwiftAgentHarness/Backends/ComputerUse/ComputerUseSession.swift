@@ -477,7 +477,8 @@ public actor ComputerUseSession {
                 observation: { [retained] in retained[$0] },
                 focusedApp: layout?.focusedApp,
                 focusedURL: layout?.tabs.first(where: \.isActive)?.url,
-                safetySignals: signals
+                safetySignals: signals,
+                sharedTarget: manifest.humanPresence == .shared
             )
         )
         let gate = await gate(classification, action: action)
@@ -691,12 +692,16 @@ public actor ComputerUseSession {
         var element = classification.element?.role ?? "—"
         if let label = classification.element?.label, !label.isEmpty { element += " \"\(label)\"" }
         let title = "Computer use: confirm \(classification.kind.rawValue) on \(target.label)"
-        let context = [
+        var context = [
             "Action: \(canonical)",
             "Target: \(element) in \(location)",
             "Why confirm: \(reasons.joined(separator: "; "))",
             "Intent check: \(intent?.summary ?? "not run")",
         ]
+        // The command keeps only the script's hash, so the card shows the whole script to review.
+        if case .script(let language, let source, _)? = action {
+            context.append("Script (\(language.rawValue)):\n\(source)")
+        }
         var presentation = ApprovalPresentation.standard(
             title: title,
             context: context,
@@ -1129,7 +1134,7 @@ public actor ComputerUseSession {
 
     private static func needsFocusedApp(_ action: ComputerAction) -> Bool {
         switch action {
-        case .type, .key, .hold, .pointer, .scroll, .menu: return true
+        case .type, .key, .hold, .pointer, .scroll, .menu, .script: return true
         default: return false
         }
     }
@@ -1152,6 +1157,8 @@ enum ComputerUseCanonicalForm {
             redacted = .type(text: hashed(text), into: into, mode: mode)
         case .setValue(let at, let value):
             redacted = .setValue(at: at, value: hashed(value))
+        case .script(let language, let source, let timeout):
+            redacted = .script(language: language, source: hashed(source), timeoutMilliseconds: timeout)
         default:
             redacted = action
         }

@@ -71,6 +71,8 @@ public struct DisplayTargetManifest: Sendable, Codable, Hashable {
     public var observerAccess: DisplayObserverAccess
     public var requires: [DisplayPlatformPermission]
     public var humanPresence: DisplayHumanPresence
+    /// Script languages ``ComputerAction/script(language:source:timeoutMilliseconds:)`` runs in.
+    public var scripting: [ScriptLanguage]
 
     public init(
         id: DisplayTargetID,
@@ -83,6 +85,7 @@ public struct DisplayTargetManifest: Sendable, Codable, Hashable {
         multiDisplay: Bool = false,
         observerAccess: DisplayObserverAccess = .none,
         requires: [DisplayPlatformPermission] = [],
+        scripting: [ScriptLanguage] = [],
         humanPresence: DisplayHumanPresence
     ) {
         self.id = id
@@ -96,11 +99,12 @@ public struct DisplayTargetManifest: Sendable, Codable, Hashable {
         self.observerAccess = observerAccess
         self.requires = requires
         self.humanPresence = humanPresence
+        self.scripting = scripting
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, label, kind, platform, isolation, perception, delivery, semanticActions, multiDisplay
-        case observerAccess, requires, humanPresence
+        case observerAccess, requires, humanPresence, scripting
     }
 
     public init(from decoder: any Decoder) throws {
@@ -124,6 +128,7 @@ public struct DisplayTargetManifest: Sendable, Codable, Hashable {
             multiDisplay: try container.decodeIfPresent(Bool.self, forKey: .multiDisplay) ?? false,
             observerAccess: try container.decodeIfPresent(DisplayObserverAccess.self, forKey: .observerAccess) ?? .none,
             requires: try container.decodeIfPresent([DisplayPlatformPermission].self, forKey: .requires) ?? [],
+            scripting: try container.decodeIfPresent([ScriptLanguage].self, forKey: .scripting) ?? [],
             humanPresence: try container.decode(DisplayHumanPresence.self, forKey: .humanPresence)
         )
     }
@@ -142,5 +147,6 @@ public struct DisplayTargetManifest: Sendable, Codable, Hashable {
         try container.encode(observerAccess, forKey: .observerAccess)
         try container.encode(requires, forKey: .requires)
         try container.encode(humanPresence, forKey: .humanPresence)
+        try container.encode(scripting, forKey: .scripting)
     }
 }

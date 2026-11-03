@@ -19,6 +19,8 @@ struct ManagedBrowserDisplayTargetTests {
         var redirects: [String: String] = [:]
         var lostContexts = 0
         var mutatesOnInput = false
+        /// What a script's wrapper resolves to.
+        var scriptReply = #"{"ok":true,"json":"null"}"#
         private(set) var calls: [(method: String, params: JSON)] = []
         private(set) var shutdowns = 0
         private var continuations: [AsyncStream<CDPEvent>.Continuation] = []
@@ -33,6 +35,7 @@ struct ManagedBrowserDisplayTargetTests {
         func setRedirect(_ from: String, to: String) { redirects[from] = to }
         func loseContext() { lostContexts += 1 }
         func setMutatesOnInput() { mutatesOnInput = true }
+        func setScriptReply(_ reply: String) { scriptReply = reply }
         func shutDown() { shutdowns += 1 }
 
         func emit(_ event: CDPEvent) {
@@ -79,6 +82,10 @@ struct ManagedBrowserDisplayTargetTests {
                 if lostContexts > 0 {
                     lostContexts -= 1
                     throw CDPError(code: -32000, message: "Cannot find context with specified id")
+                }
+                if case .boolean(true)? = params[wire: "awaitPromise"] {
+                    if scriptReply == "terminated" { throw CDPError(code: -32603, message: "Internal error") }
+                    return .object(["result": .object(["value": .string(scriptReply)])])
                 }
                 return .object(["result": .object(["value": .string(try evaluate(params[wire: "expression"]?.wireString ?? ""))])])
             default:
@@ -364,6 +371,62 @@ struct ManagedBrowserDisplayTargetTests {
         let enter = try #require(CDPInput.keyEvents(try KeyCombo(parsing: "enter")))
         #expect(enter.down["windowsVirtualKeyCode"]?.wireInt == 13)
         #expect(CDPInput.keyEvents(try KeyCombo(parsing: "nosuchkey")) == nil)
+    }
+
+    @Test("A script runs in a fresh world of its own, never the tree builder's, and returns its value")
+    func script() async throws {
+        let fixture = try await Self.fixture()
+        _ = try await Self.observe(fixture)
+        #expect(fixture.target.manifest.scripting == [.javascript])
+        await fixture.browser.setScriptReply(#"{"ok":true,"json":"{\"title\":\"Fixture\",\"count\":3}"}"#)
+        let source = "return { title: document.title, count: 3 };"
+        let outcome = try #require(try await fixture.target.act(fixture.lease, ActionBatch([
+            .script(language: .javascript, source: source, timeoutMilliseconds: 4_000),
+        ])).first)
+        #expect(outcome.effect == .unverifiable)
+        #expect(outcome.evidence?.contains(#"returned: {"title":"Fixture","count":3}"#) == true)
+
+        let worlds = await fixture.browser.params(of: "Page.createIsolatedWorld")
+        let scriptWorld = try #require(worlds.last)
+        #expect(scriptWorld[wire: "worldName"]?.wireString == "computer-use-script")
+        let evaluations = await fixture.browser.params(of: "Runtime.evaluate")
+        let call = try #require(evaluations.first { if case .boolean(true)? = $0[wire: "awaitPromise"] { true } else { false } })
+        #expect(call[wire: "expression"]?.wireString?.contains(source) == true)
+        #expect(call[wire: "timeout"]?.wireInt == 4_000)
+        #expect(call[wire: "contextId"]?.wireInt != nil)
+        #expect(call[wire: "contextId"]?.wireInt != evaluations.first?[wire: "contextId"]?.wireInt)
+
+        _ = try await fixture.target.act(fixture.lease, ActionBatch([.script(language: .javascript, source: "return 1;", timeoutMilliseconds: 1_000)]))
+        let scriptWorlds = await fixture.browser.params(of: "Page.createIsolatedWorld").filter { $0[wire: "worldName"]?.wireString == "computer-use-script" }
+        #expect(scriptWorlds.count == 2, "every script starts from a clean world")
+    }
+
+    @Test("A script that throws or times out is partial, and a long result is cut")
+    func scriptFailures() async throws {
+        let fixture = try await Self.fixture()
+        _ = try await Self.observe(fixture)
+        let script = ComputerAction.script(language: .javascript, source: "x.y", timeoutMilliseconds: 1_000)
+        await fixture.browser.setScriptReply(#"{"ok":false,"error":"ReferenceError: x is not defined"}"#)
+        let thrown = try #require(try await fixture.target.act(fixture.lease, ActionBatch([script])).first)
+        #expect(thrown.effect == .partial)
+        #expect(thrown.evidence?.contains("threw: ReferenceError: x is not defined") == true)
+        #expect(thrown.escalation == .observe)
+
+        await fixture.browser.setScriptReply(#"{"ok":false,"timedOut":true}"#)
+        let slow = try #require(try await fixture.target.act(fixture.lease, ActionBatch([script])).first)
+        #expect(slow.effect == .partial)
+        #expect(slow.evidence?.contains("timed out after 1000 ms") == true)
+
+        await fixture.browser.setScriptReply("terminated")
+        let spun = try #require(try await fixture.target.act(fixture.lease, ActionBatch([script])).first)
+        #expect(spun.effect == .partial)
+        #expect(spun.evidence?.contains("stopped after 1000 ms") == true)
+
+        let long = String(repeating: "a", count: 5_000)
+        await fixture.browser.setScriptReply(#"{"ok":true,"json":"\""# + long + #"\""}"#)
+        let cut = try #require(try await fixture.target.act(fixture.lease, ActionBatch([script])).first)
+        #expect((cut.evidence?.count ?? 0) < 2_200)
+        #expect(cut.evidence?.contains("…") == true)
     }
 
     @Test("Apps and menus don't exist in a managed browser")

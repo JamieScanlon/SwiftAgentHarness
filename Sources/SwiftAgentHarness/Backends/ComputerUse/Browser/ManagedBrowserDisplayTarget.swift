@@ -117,6 +117,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             delivery: [.background],
             semanticActions: [.press, .setValue, .focus, .openURL],
             observerAccess: liveView == nil ? .none : .stream,
+            scripting: [.javascript],
             humanPresence: .none
         )
     }
@@ -656,10 +657,51 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
                 return refused("the managed browser runs no apps; open a page with open-url")
             case .observe, .zoom:
                 return refused("observe through the session, not as a driver action")
+            case .script(let language, let source, let timeout):
+                guard language == .javascript else { return refused("the managed browser runs only JavaScript") }
+                return try await runScript(source, timeoutMilliseconds: timeout)
             }
         } catch {
             return ActionOutcome(action: 0, effect: .unverifiable, evidence: "driver error: \(error)", escalation: .observe)
         }
+    }
+
+    /// Runs the model's script in a fresh isolated world: it shares the DOM, but neither the page's JavaScript nor the
+    /// world the tree builder keeps its refs in, so it can't forge what observations report.
+    private func runScript(_ source: String, timeoutMilliseconds timeout: Int) async throws -> ActionOutcome {
+        let tree = try await send("Page.getFrameTree")
+        guard let frameID = tree[wire: "frameTree"]?[wire: "frame"]?[wire: "id"]?.wireString else {
+            throw DisplayTargetError.driverFailure("the page has no main frame")
+        }
+        let world = try await send("Page.createIsolatedWorld", [
+            "frameId": .string(frameID),
+            "worldName": .string(ManagedBrowserScript.worldName),
+            "grantUniveralAccess": .boolean(false),
+        ])
+        guard let context = world[wire: "executionContextId"]?.wireInt else { throw DisplayTargetError.driverFailure("no script context") }
+        let result: JSON
+        do {
+            result = try await send("Runtime.evaluate", [
+                "expression": .string(ManagedBrowserScript.expression(source, timeoutMilliseconds: timeout)),
+                "contextId": .integer(context),
+                "awaitPromise": .boolean(true),
+                "returnByValue": .boolean(true),
+                "userGesture": .boolean(true),
+                "timeout": .integer(timeout),
+            ])
+        } catch let error as CDPError {
+            // Chromium answers a script it terminated at `timeout`, such as a busy loop, with an internal error.
+            return ActionOutcome(
+                action: 0, effect: .partial,
+                evidence: "stopped after \(timeout) ms (\(error.message)); it may have run in part", escalation: .observe
+            )
+        }
+        if let details = result[wire: "exceptionDetails"] {
+            let text = details[wire: "exception"]?[wire: "description"]?.wireString ?? details[wire: "text"]?.wireString ?? "script error"
+            return ActionOutcome(action: 0, effect: .partial, evidence: "stopped: \(ManagedBrowserScript.clip(text, to: 500))", escalation: .observe)
+        }
+        let reply = result[wire: "result"]?[wire: "value"]?.wireString.flatMap { try? JSONDecoder().decode(ManagedBrowserScript.Reply.self, from: Data($0.utf8)) }
+        return ManagedBrowserScript.outcome(reply, timeoutMilliseconds: timeout)
     }
 
     /// Text goes in as inserted text; line breaks and tabs are pressed as keys, so they submit and move focus as

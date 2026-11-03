@@ -74,14 +74,18 @@ public struct ComputerUseClassificationContext: Sendable {
     public var focusedURL: String?
     /// Vendor safety signals attached to this action.
     public var safetySignals: [ComputerUseSafetySignal]
+    /// Whether a person may be using the target (`humanPresence: shared`).
+    public var sharedTarget: Bool
 
     public init(
         grants: ComputerUseGrantSet,
         observation: @escaping @Sendable (ObservationID) -> DisplayObservation?,
         focusedApp: AppIdentity?,
         focusedURL: String? = nil,
-        safetySignals: [ComputerUseSafetySignal] = []
+        safetySignals: [ComputerUseSafetySignal] = [],
+        sharedTarget: Bool = false
     ) {
+        self.sharedTarget = sharedTarget
         self.grants = grants
         self.observation = observation
         self.focusedApp = focusedApp
@@ -237,7 +241,7 @@ public struct ComputerUseActionClassifier: Sendable {
         switch action {
         case .scroll, .move: return (.click, .navigate)
         case .click, .drag, .pointer, .press: return (.click, .interact)
-        case .type, .key, .hold, .setValue, .menu: return (.full, .interact)
+        case .type, .key, .hold, .setValue, .menu, .script: return (.full, .interact)
         case .launch, .openURL: return (.click, .navigate)
         case .observe, .zoom, .wait, .waitFor: return (.view, .observe)
         }
@@ -398,6 +402,9 @@ public struct ComputerUseActionClassifier: Sendable {
     ) -> [String] {
         var reasons: [String] = context.safetySignals.map { "vendor safety signal: \($0.rawValue)" }
         switch action {
+        case .script where context.sharedTarget:
+            // A script can do far more than one click, and per-element checks can't see inside it.
+            reasons.append("a script on a target someone is using")
         case .type, .setValue:
             if let element {
                 if element.isSecureInput {

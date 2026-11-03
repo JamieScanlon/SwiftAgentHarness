@@ -2,6 +2,36 @@ import Foundation
 import Testing
 @testable import SwiftAgentHarness
 
+@Suite("Computer use: script classification")
+struct ComputerUseScriptClassificationTests {
+    private let classifier = ComputerUseActionClassifier()
+    private let script = ComputerAction.script(language: .javascript, source: "return 1;", timeoutMilliseconds: 1_000)
+
+    private func classify(tier: ComputerUseGrantTier, sharedTarget: Bool = false, url: String = "https://app.example.com/") -> ComputerUseClassification {
+        classifier.classify(script, context: ComputerUseClassificationContext(
+            grants: ComputerUseGrantSet([.domain("example.com", tier: tier)]),
+            observation: { _ in nil },
+            focusedApp: nil,
+            focusedURL: url,
+            sharedTarget: sharedTarget
+        ))
+    }
+
+    @Test("A script runs in the focused page at full tier, gated as one interact action")
+    func interact() {
+        #expect(classify(tier: .full).actionClass == .interact)
+        #expect(classify(tier: .full).domain == "app.example.com")
+        #expect(classify(tier: .click).actionClass == .outOfGrant(reason: "app.example.com is granted at click; script needs full"))
+        #expect(classify(tier: .full, url: "https://other.org/").actionClass == .outOfGrant(reason: "domain other.org is not granted"))
+    }
+
+    @Test("A script on a target someone uses is consequential, so the user reviews it")
+    func shared() {
+        let classification = classify(tier: .full, sharedTarget: true)
+        #expect(classification.actionClass.isConsequential)
+    }
+}
+
 @Suite("Computer use action classification")
 struct ComputerUseActionClassifierTests {
     private let classifier = ComputerUseActionClassifier()

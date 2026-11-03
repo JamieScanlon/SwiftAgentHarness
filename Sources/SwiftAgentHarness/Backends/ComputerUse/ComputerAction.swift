@@ -48,6 +48,12 @@ public enum TypeMode: String, Sendable, Codable, Hashable {
     case paste
 }
 
+/// A language a target runs automation scripts in.
+public enum ScriptLanguage: String, Sendable, Codable, Hashable, CaseIterable {
+    /// Run in the page, with the page's DOM but not its JavaScript.
+    case javascript
+}
+
 public enum ComputerActionKind: String, Sendable, Codable, Hashable, CaseIterable {
     case click, move, drag, pointer, scroll, type, key, hold, press
     case setValue = "set-value"
@@ -55,7 +61,7 @@ public enum ComputerActionKind: String, Sendable, Codable, Hashable, CaseIterabl
     case openURL = "open-url"
     case wait
     case waitFor = "wait-for"
-    case observe, zoom
+    case observe, zoom, script
 }
 
 /// The canonical action model every model dialect is decoded into.
@@ -80,6 +86,8 @@ public enum ComputerAction: Sendable, Codable, Hashable {
     case observe(ObserveRequest)
     /// A full-resolution crop; coordinates stay in the parent observation's space.
     case zoom(region: DisplayRect, observation: ObservationID)
+    /// An automation script run inside the target as one action: the scripting rung of the control ladder.
+    case script(language: ScriptLanguage, source: String, timeoutMilliseconds: Int)
 
     public var kind: ComputerActionKind {
         switch self {
@@ -100,6 +108,7 @@ public enum ComputerAction: Sendable, Codable, Hashable {
         case .waitFor: return .waitFor
         case .observe: return .observe
         case .zoom: return .zoom
+        case .script: return .script
         }
     }
 
@@ -110,7 +119,7 @@ public enum ComputerAction: Sendable, Codable, Hashable {
         case .drag(let path, _): return path
         case .scroll(let at, _, _, _): return at.map { [$0] } ?? []
         case .type(_, let into, _): return into.map { [$0] } ?? []
-        case .pointer, .key, .hold, .menu, .launch, .openURL, .wait, .waitFor, .observe, .zoom: return []
+        case .pointer, .key, .hold, .menu, .launch, .openURL, .wait, .waitFor, .observe, .zoom, .script: return []
         }
     }
 

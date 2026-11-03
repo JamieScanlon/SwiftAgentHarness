@@ -269,6 +269,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         switch action {
         case .observe, .zoom:
             return refused("observations go through observe, not act")
+        case .script:
+            // A desktop script can't be held to the app grants, so the host desktop declares no scripting.
+            return refused("this target runs no scripts")
         case .wait(let milliseconds):
             try? await Task.sleep(for: .milliseconds(max(0, milliseconds)))
             return ActionOutcome(action: 0, effect: .confirmed, evidence: "waited \(milliseconds) ms")

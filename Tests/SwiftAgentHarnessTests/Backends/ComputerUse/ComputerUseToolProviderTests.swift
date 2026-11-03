@@ -229,6 +229,45 @@ struct ComputerUseToolProviderTests {
         #expect(!ToolExternalContentPolicy.resolve(toolName: "computer_ask_user", entry: nil).shouldWrap)
         #expect(!ToolExternalContentPolicy.resolve(toolName: "computer_verify", entry: nil).shouldWrap)
         #expect(!ToolExternalContentPolicy.resolve(toolName: "computer_handoff", entry: nil).shouldWrap)
+        #expect(ToolExternalContentPolicy.resolve(toolName: "computer_run_script", entry: nil).source == .screen)
+    }
+
+    static let scriptingManifest = DisplayTargetManifest(
+        id: "fake-scripting",
+        label: "Fake scripting VM",
+        platform: "linux",
+        isolation: .vm,
+        perception: [.pixels, .accessibility],
+        delivery: [.background],
+        scripting: [.javascript],
+        humanPresence: .none
+    )
+
+    @Test("Run-script is offered only on targets that run scripts, and becomes one script action")
+    func runScript() async throws {
+        let (_, _, plain) = try await provider()
+        #expect(await !plain.availableTools().contains { $0.name == "computer_run_script" })
+
+        #expect(await plain.availableTools().first?.description.contains("computer_run_script") == false)
+        let (target, _, provider) = try await provider(manifest: Self.scriptingManifest)
+        let tools = await provider.availableTools()
+        #expect(tools.first { $0.name == "computer_observe" }?.description.contains("computer_run_script runs a whole script") == true)
+        let names = tools.map(\.name)
+        #expect(names.firstIndex(of: "computer_run_script") == names.firstIndex(of: "computer_open_url").map { $0 + 1 })
+        let result = try await call(provider, "computer_run_script", ["source": .string("return document.title;")])
+        #expect(result.success)
+        #expect(await target.actCalls.last == [.script(language: .javascript, source: "return document.title;", timeoutMilliseconds: 10_000)])
+
+        _ = try await call(provider, "computer_run_script", ["source": .string("return 1;"), "timeout_ms": .integer(500)])
+        #expect(await target.actCalls.last == [.script(language: .javascript, source: "return 1;", timeoutMilliseconds: 500)])
+        let calls = await target.actCalls.count
+        let long = try await call(provider, "computer_run_script", ["source": .string(String(repeating: "x", count: 8_001))])
+        #expect(!long.success)
+        let slow = try await call(provider, "computer_run_script", ["source": .string("return 1;"), "timeout_ms": .integer(60_001)])
+        #expect(!slow.success)
+        let blank = try await call(provider, "computer_run_script", ["source": .string("  ")])
+        #expect(!blank.success)
+        #expect(await target.actCalls.count == calls)
     }
 
     @Test("Observe returns the screenshot as an image part sized as its recorded geometry")

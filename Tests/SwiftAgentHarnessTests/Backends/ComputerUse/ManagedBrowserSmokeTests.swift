@@ -187,6 +187,47 @@ struct ManagedBrowserSmokeTests {
         await browser.shutdown()
     }
 
+    @Test("Runs scripts against the page's DOM, out of reach of the page's JavaScript and the tree builder")
+    func scripts() async throws {
+        let server = try await Self.server()
+        defer { Task { try? await server.channel.close(); await server.task.value } }
+        let target = ManagedBrowserDisplayTarget.localChromium(
+            configuration: ManagedBrowserConfiguration(network: BrowserNetworkPolicy(allowsPrivateNetwork: true, blockedDomains: ["tracker.test"])),
+            chromium: ManagedChromiumConfiguration(headless: true)
+        )
+        let lease = try await Self.lease(target)
+        _ = try await target.act(lease, ActionBatch([.openURL("http://127.0.0.1:\(server.port)/")]))
+        func run(_ source: String, timeout: Int = 5_000) async throws -> ActionOutcome {
+            try #require(try await target.act(lease, ActionBatch([.script(language: .javascript, source: source, timeoutMilliseconds: timeout)])).first)
+        }
+
+        let read = try await run("""
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        document.getElementById("name").value = "Ada";
+        return { title: document.title, heading: document.querySelector("h1").textContent, pageGlobal: typeof window.onclickHandlerFromPage };
+        """)
+        #expect(read.evidence?.contains(#"returned: {"title":"Smoke page","heading":"Managed browser","pageGlobal":"undefined"}"#) == true, "\(read)")
+        let observed = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))
+        #expect(observed.tree?.text.contains("Managed browser") == true, "the tree builder's world is untouched")
+
+        let thrown = try await run("missing.call();")
+        #expect(thrown.effect == .partial)
+        #expect(thrown.evidence?.contains("threw: ReferenceError") == true, "\(thrown)")
+
+        let slow = try await run("await new Promise(() => {});", timeout: 300)
+        #expect(slow.evidence?.contains("timed out after 300 ms") == true, "\(slow)")
+
+        let spin = try await run("while (true) {}", timeout: 300)
+        #expect(spin.effect == .partial, "\(spin)")
+        #expect(spin.evidence?.contains("stopped after 300 ms") == true, "\(spin)")
+        let after = try await run("return 1 + 1;")
+        #expect(after.evidence?.contains("returned: 2") == true, "the page still answers after a runaway script: \(after)")
+
+        let blocked = try await run(#"location.href = "http://tracker.test/"; await new Promise((r) => setTimeout(r, 500)); return 0;"#)
+        #expect(blocked.evidence?.contains("tracker.test") == true, "\(blocked)")
+        await target.release(lease, reason: .completed)
+    }
+
     @Test("Loopback is unreachable under the default policy, even through a page")
     func defaultPolicy() async throws {
         let server = try await Self.server()

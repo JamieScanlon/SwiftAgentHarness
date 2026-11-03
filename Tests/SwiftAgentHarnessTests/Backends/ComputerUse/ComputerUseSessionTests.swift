@@ -350,6 +350,21 @@ struct ComputerUseSessionGatingTests {
         #expect(await target.actCount == 1)
     }
 
+    @Test("A script on a shared target is shown to the user whole; the command and the log keep only its hash")
+    func scriptApproval() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (target, session) = try await ComputerUseSessionFixtures.make(approvals: approvals)
+        let source = "document.querySelector('#title').textContent = 'Draft';"
+        let result = await session.perform([.script(language: .javascript, source: source, timeoutMilliseconds: 2_000)])
+        #expect(result.outcomes.map(\.effect) == [.confirmed])
+        let request = try #require(await approvals.requests.first)
+        #expect(request.description.contains(source))
+        #expect(request.description.contains("a script on a target someone is using"))
+        #expect(!request.command.contains("textContent"))
+        #expect(await session.auditLog.allSatisfy { !$0.canonical.contains("textContent") })
+        #expect(await target.actCalls.count == 1)
+    }
+
     @Test("Audit records carry classification and decision but never the typed text")
     func auditRecords() async throws {
         let (_, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)

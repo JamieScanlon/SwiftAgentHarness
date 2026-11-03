@@ -234,7 +234,7 @@ extension ComputerAction {
             return .press(at: at.mappingElementRef(transform))
         case .setValue(let at, let value):
             return .setValue(at: at.mappingElementRef(transform), value: value)
-        case .pointer, .key, .hold, .menu, .launch, .openURL, .wait, .waitFor, .observe, .zoom:
+        case .pointer, .key, .hold, .menu, .launch, .openURL, .wait, .waitFor, .observe, .zoom, .script:
             return self
         }
     }
