@@ -107,6 +107,15 @@ public actor RemoteDisplayTarget: DisplayTarget {
         return count
     }
 
+    public func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
+        guard case .liveFrame(let frame) = try await call(.liveFrame(leaseID: lease.id)) else { throw unexpected("live frame") }
+        return frame
+    }
+
+    public func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {
+        guard case .done = try await call(.liveInput(leaseID: lease.id, input: input)) else { throw unexpected("done") }
+    }
+
     public func endObservers(_ lease: Lease) async throws {
         guard case .done = try await call(.endObservers(leaseID: lease.id)) else { throw unexpected("done") }
     }

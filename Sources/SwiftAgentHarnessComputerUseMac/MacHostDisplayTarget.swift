@@ -18,13 +18,26 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// Called when delivery escalates to the foreground and the target activates an app (its bundle id), so
         /// the HUD can announce it.
         public var onForegroundDelivery: (@Sendable (String?) async -> Void)?
+        /// Gives the whole screen out as live-view frames and takes a viewer's input during takeover, for a
+        /// display host whose harness serves the live view, as in a VM guest. Off for the user's own Mac, whose
+        /// screen is theirs.
+        public var servesLiveFrames: Bool
+        /// The long edge of a live-view frame.
+        public var liveFrameLongEdge: Int
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
         var workspace: any MacWorkspaceReading
 
-        public init(id: DisplayTargetID = MacHostDisplayTarget.defaultID, excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs) {
+        public init(
+            id: DisplayTargetID = MacHostDisplayTarget.defaultID,
+            excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs,
+            servesLiveFrames: Bool = false,
+            liveFrameLongEdge: Int = 1_600
+        ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
+            self.servesLiveFrames = servesLiveFrames
+            self.liveFrameLongEdge = liveFrameLongEdge
         }
 
         init(
@@ -41,6 +54,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.eventPoster = eventPoster
             self.workspace = workspace
             self.axBudget = axBudget
+            self.servesLiveFrames = false
+            self.liveFrameLongEdge = 1_600
         }
 
         public static var defaultExcludedBundleIDs: Set<String> {
@@ -67,6 +82,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var observationOrder: [ObservationID] = []
     private var observationCounter = 0
     private var takeoverActive = false
+    private var liveFrameSpace: MacLiveFrameSpace?
+    private var liveHeldButton: MouseButton?
     private var grants = ComputerUseGrantSet([])
     private var foregroundAllowed = false
     /// The app that was frontmost before a foreground action, restored on release unless the user moved on.
@@ -85,7 +102,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             delivery: [.background, .foreground],
             semanticActions: [.press, .setValue, .focus, .menuPath, .launchApp, .openURL],
             multiDisplay: true,
-            observerAccess: .none,
+            observerAccess: configuration.servesLiveFrames ? .stream : .none,
             requires: [.screenCapture, .accessibility, .postEvents],
             humanPresence: .shared
         )
@@ -260,8 +277,34 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     public func takeover(_ lease: Lease, on: Bool) async throws {
         try await requireLease(lease)
-        if on { await input.releaseAll() }
+        await input.releaseAll()
+        liveHeldButton = nil
         takeoverActive = on
+    }
+
+    // MARK: - Live frames
+
+    public func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
+        try await requireLease(lease)
+        guard configuration.servesLiveFrames else { return nil }
+        let shot = try await capture.captureLiveFrame(excludedBundleIDs: configuration.excludedBundleIDs, maxLongEdge: configuration.liveFrameLongEdge)
+        noteLiveFrame(shot.space)
+        return DisplayLiveViewFrame(jpeg: shot.jpeg, width: shot.space.frame.width, height: shot.space.frame.height)
+    }
+
+    /// Viewers' points are in the latest frame's space.
+    func noteLiveFrame(_ space: MacLiveFrameSpace) {
+        liveFrameSpace = space
+    }
+
+    public func liveInput(_ lease: Lease, _ viewerInput: DisplayLiveViewInput) async throws {
+        try await requireLease(lease)
+        guard configuration.servesLiveFrames, takeoverActive, let liveFrameSpace else { return }
+        let events = MacLiveInput.events(for: viewerInput, space: liveFrameSpace, held: liveHeldButton)
+        if case .mouse(let action, _, _, let button, _, _) = viewerInput {
+            if action == .down { liveHeldButton = button } else if action == .up { liveHeldButton = nil }
+        }
+        await input.post(events, delivery: .foreground)
     }
 
     private func perform(_ action: ComputerAction) async -> ActionOutcome {

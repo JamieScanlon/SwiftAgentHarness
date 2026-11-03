@@ -165,15 +165,27 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
     private let guest: @Sendable (VirtualMachineInstance) async throws -> any DisplayTarget
     private let lock = DisplayTargetLeaseLock()
     private var current: (lease: Lease, guest: any DisplayTarget, guestLease: Lease, instance: VirtualMachineInstance)?
+    private let liveViewServer: DisplayLiveViewServer?
+    private let liveViewFrameInterval: Duration
+    private var liveFeed: UUID?
+    private var frames: Task<Void, Never>?
+    private var takeoverActive = false
 
-    /// - Parameter guest: Connects to the guest's driver. Called once per lease, after the VM has an address.
+    /// - Parameters:
+    ///   - guest: Connects to the guest's driver. Called once per lease, after the VM has an address.
+    ///   - liveView: Serves the live view here, from the guest's ``DisplayTarget/liveFrame(_:)`` frames, for a guest
+    ///     whose own view can't be reached. Without it, live-view calls go to the guest.
     public init(
         manifest: DisplayTargetManifest,
         controller: any VirtualMachineController,
+        liveView: DisplayLiveViewServer? = nil,
+        liveViewFrameInterval: Duration = .milliseconds(500),
         guest: @escaping @Sendable (VirtualMachineInstance) async throws -> any DisplayTarget
     ) {
         self.manifest = manifest
         self.controller = controller
+        self.liveViewServer = liveView
+        self.liveViewFrameInterval = liveViewFrameInterval
         self.guest = guest
     }
 
@@ -189,6 +201,14 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
             guestRequest.target = target.manifest.id
             let guestLease = try await target.lease(guestRequest)
             current = (lease, target, guestLease, started)
+            takeoverActive = false
+            if let liveViewServer {
+                liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
+                    label: manifest.label,
+                    viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
+                    input: { [weak self] input in await self?.relayInput(input) }
+                ))
+            }
             return lease
         } catch {
             if let instance { await controller.stop(instance) }
@@ -200,6 +220,11 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.holds(leaseID: lease.id), let current, current.lease.id == lease.id else { return }
         self.current = nil
+        frames?.cancel()
+        frames = nil
+        takeoverActive = false
+        if let liveFeed { await liveViewServer?.close(liveFeed) }
+        liveFeed = nil
         await current.guest.release(current.guestLease, reason: reason)
         await controller.stop(current.instance)
         await lock.release(leaseID: lease.id)
@@ -227,22 +252,75 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
 
     public func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
         let (guest, guestLease) = try await leased(lease)
+        if let liveViewServer {
+            guard let liveFeed else { return nil }
+            return try await liveViewServer.link(for: liveFeed, role: role)
+        }
         return try await guest.liveView(guestLease, role: role)
     }
 
     public func endObservers(_ lease: Lease) async throws {
         let (guest, guestLease) = try await leased(lease)
+        if let liveViewServer {
+            if let liveFeed { await liveViewServer.endObservers(liveFeed) }
+            return
+        }
         try await guest.endObservers(guestLease)
     }
 
     public func liveViewers(_ lease: Lease) async throws -> Int {
         let (guest, guestLease) = try await leased(lease)
+        if let liveViewServer {
+            guard let liveFeed else { return 0 }
+            return await liveViewServer.viewerCount(liveFeed, role: .user)
+        }
         return try await guest.liveViewers(guestLease)
+    }
+
+    public func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
+        let (guest, guestLease) = try await leased(lease)
+        return try await guest.liveFrame(guestLease)
+    }
+
+    public func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {
+        let (guest, guestLease) = try await leased(lease)
+        try await guest.liveInput(guestLease, input)
     }
 
     public func takeover(_ lease: Lease, on: Bool) async throws {
         let (guest, guestLease) = try await leased(lease)
         try await guest.takeover(guestLease, on: on)
+        takeoverActive = on
+        if let liveFeed { await liveViewServer?.setControl(on, for: liveFeed) }
+    }
+
+    // MARK: - Live view
+
+    private func viewersChanged(_ count: Int) {
+        guard current != nil else { return }
+        if count > 0, frames == nil {
+            frames = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    await self.publishFrame()
+                    try? await Task.sleep(for: self.liveViewFrameInterval)
+                }
+            }
+        } else if count == 0 {
+            frames?.cancel()
+            frames = nil
+        }
+    }
+
+    private func publishFrame() async {
+        guard let current, let liveFeed, let liveViewServer,
+              let frame = try? await current.guest.liveFrame(current.guestLease) else { return }
+        await liveViewServer.publish(frame, to: liveFeed)
+    }
+
+    private func relayInput(_ input: DisplayLiveViewInput) async {
+        guard takeoverActive, let current else { return }
+        try? await current.guest.liveInput(current.guestLease, input)
     }
 
     private func leased(_ lease: Lease) async throws -> (any DisplayTarget, Lease) {
@@ -291,13 +369,22 @@ public struct MacGuestConfiguration: Sendable {
     public var secret: DisplayHostSecret
     /// How long to keep trying to reach the guest's display host while the guest finishes booting.
     public var connectTimeout: Duration
+    public var liveViewFrameInterval: Duration
 
-    public init(id: DisplayTargetID = "macos-vm", label: String = "macOS desktop (VM)", port: Int, secret: DisplayHostSecret, connectTimeout: Duration = .seconds(120)) {
+    public init(
+        id: DisplayTargetID = "macos-vm",
+        label: String = "macOS desktop (VM)",
+        port: Int,
+        secret: DisplayHostSecret,
+        connectTimeout: Duration = .seconds(120),
+        liveViewFrameInterval: Duration = .milliseconds(500)
+    ) {
         self.id = id
         self.label = label
         self.port = port
         self.secret = secret
         self.connectTimeout = connectTimeout
+        self.liveViewFrameInterval = liveViewFrameInterval
     }
 }
 
@@ -333,7 +420,13 @@ extension VirtualMachineDisplayTarget {
     /// A macOS guest whose own display host (a ``DisplayHostServer`` serving the macOS driver, listening with
     /// ``DisplayHostTCP``) has the guest's screen-capture and accessibility permissions. Nobody uses the guest, so
     /// it is unshared, whatever the guest's driver declares.
-    public static func macOS(controller: any VirtualMachineController, configuration: MacGuestConfiguration) -> VirtualMachineDisplayTarget {
+    /// - Parameter liveView: Serves the guest's screen, from frames its display host sends, to the user and
+    ///   observers. The guest's display host must give frames out (`MacHostDisplayTarget`'s `servesLiveFrames`).
+    public static func macOS(
+        controller: any VirtualMachineController,
+        configuration: MacGuestConfiguration,
+        liveView: DisplayLiveViewServer? = nil
+    ) -> VirtualMachineDisplayTarget {
         let manifest = DisplayTargetManifest(
             id: configuration.id,
             label: configuration.label,
@@ -342,9 +435,15 @@ extension VirtualMachineDisplayTarget {
             perception: [.pixels, .accessibility, .ocr],
             delivery: [.background, .foreground],
             semanticActions: [.press, .setValue, .focus, .menuPath, .launchApp, .openURL],
+            observerAccess: liveView == nil ? .none : .stream,
             humanPresence: .none
         )
-        return VirtualMachineDisplayTarget(manifest: manifest, controller: controller) { instance in
+        return VirtualMachineDisplayTarget(
+            manifest: manifest,
+            controller: controller,
+            liveView: liveView,
+            liveViewFrameInterval: configuration.liveViewFrameInterval
+        ) { instance in
             let deadline = ContinuousClock.now.advanced(by: configuration.connectTimeout)
             while true {
                 do {

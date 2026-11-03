@@ -159,6 +159,13 @@ public protocol DisplayTarget: Sendable {
     /// How many of the user's viewers watch the lease's live view now. Observers don't count.
     func liveViewers(_ lease: Lease) async throws -> Int
 
+    /// The whole screen as a live-view frame, for a target whose live view something else serves, such as the
+    /// harness serving a VM guest's. Unlike an observation it works during takeover. `nil` when the target gives
+    /// none out.
+    func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame?
+    /// A live viewer's input, in the coordinate space of ``liveFrame(_:)``. Delivered only during takeover.
+    func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws
+
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
 }
@@ -167,6 +174,8 @@ public extension DisplayTarget {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? { nil }
     func endObservers(_ lease: Lease) async throws {}
     func liveViewers(_ lease: Lease) async throws -> Int { 0 }
+    func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? { nil }
+    func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {}
 
     func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
         try await liveView(lease, role: .user)

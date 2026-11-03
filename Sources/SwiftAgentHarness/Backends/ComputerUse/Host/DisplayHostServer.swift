@@ -114,6 +114,11 @@ public actor DisplayHostServer {
             case .takeover(let leaseID, let on):
                 try await target.takeover(try lease(leaseID, connection: id), on: on)
                 return .done
+            case .liveFrame(let leaseID):
+                return .liveFrame(try await target.liveFrame(try lease(leaseID, connection: id)))
+            case .liveInput(let leaseID, let input):
+                try await target.liveInput(try lease(leaseID, connection: id), input)
+                return .done
             }
         } catch let error as DisplayTargetError {
             return .failure(.target(error))

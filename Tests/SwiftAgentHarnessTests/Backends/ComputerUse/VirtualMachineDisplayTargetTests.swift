@@ -28,6 +28,12 @@ struct DisplayHostTCPTests {
         let lease = try await remote.lease(Self.request())
         let observation = try await remote.observe(lease, ObserveRequest(modes: [.pixels], scope: .display(nil)))
         #expect(observation.id == "o_1")
+        #expect(try await remote.liveFrame(lease) == nil)
+        await target.setServedFrame(DisplayLiveViewFrame(jpeg: Data([0xFF, 0xD8]), width: 1440, height: 900))
+        #expect(try await remote.liveFrame(lease) == DisplayLiveViewFrame(jpeg: Data([0xFF, 0xD8]), width: 1440, height: 900))
+        let click = DisplayLiveViewInput.mouse(.down, x: 10, y: 20, button: .left, clickCount: 1, modifiers: [.shift])
+        try await remote.liveInput(lease, click)
+        #expect(await target.liveInputs == [click])
         await remote.release(lease, reason: .completed)
         await remote.close()
         await listener.close()
@@ -204,6 +210,38 @@ struct VirtualMachineDisplayTargetTests {
         await target.release(lease, reason: .completed)
     }
 
+    @Test("A guest's frames are served here while someone watches, and a viewer's input reaches it only during takeover")
+    func relayedLiveView() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let guest = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
+        await guest.setServedFrame(DisplayLiveViewFrame(jpeg: Data([0xFF, 0xD8, 0xFF]), width: 1440, height: 900))
+        let target = VirtualMachineDisplayTarget(manifest: Self.manifest, controller: Controller(), liveView: server, liveViewFrameInterval: .milliseconds(10)) { _ in guest }
+        let lease = try await target.lease(Self.request())
+        #expect(await guest.liveFrameCalls == 0, "no frames while nobody watches")
+        #expect(await guest.liveViewRoles.isEmpty, "the view is served here, not by the guest")
+
+        let viewer = try DisplayLiveViewServerTests.Viewer(try #require(try await target.liveView(lease)))
+        _ = try await viewer.status()
+        #expect(try await target.liveViewers(lease) == 1)
+        let frame = try await viewer.frame()
+        #expect(frame.jpeg == Data([0xFF, 0xD8, 0xFF]))
+        #expect(frame.width == 1440 && frame.height == 900)
+
+        let mouse = #"{"type":"mouse","action":"down","x":40,"y":50,"button":"left","clickCount":1,"modifiers":[]}"#
+        try await viewer.send(mouse)
+        try await viewer.roundTrip()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await guest.liveInputs.isEmpty, "input waits for takeover")
+        try await target.takeover(lease, on: true)
+        #expect(await guest.takeoverStates == [true])
+        try await viewer.send(mouse)
+        try await viewer.roundTrip()
+        for _ in 0..<100 where await guest.liveInputs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await guest.liveInputs == [.mouse(.down, x: 40, y: 50, button: .left, clickCount: 1, modifiers: [])])
+        await target.release(lease, reason: .completed)
+    }
+
     @Test("A macOS guest is unshared and reached through its display host over TCP")
     func macGuest() async throws {
         let secret = DisplayHostSecret.random()
@@ -218,6 +256,10 @@ struct VirtualMachineDisplayTargetTests {
         let target = VirtualMachineDisplayTarget.macOS(controller: Loopback(), configuration: MacGuestConfiguration(port: listener.port, secret: secret))
         #expect(target.manifest.isolation == .vm)
         #expect(target.manifest.humanPresence == .none)
+        #expect(target.manifest.observerAccess == .none)
+        #expect(VirtualMachineDisplayTarget.macOS(
+            controller: Loopback(), configuration: MacGuestConfiguration(port: listener.port, secret: secret), liveView: DisplayLiveViewServer()
+        ).manifest.observerAccess == .stream)
         var request = Self.request()
         request.target = "macos-vm"
         let lease = try await target.lease(request)

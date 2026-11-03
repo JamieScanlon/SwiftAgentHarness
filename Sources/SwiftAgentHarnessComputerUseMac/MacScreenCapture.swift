@@ -117,6 +117,26 @@ actor MacScreenCapture {
         return try await capture(filter: filter, rect: clipped, scale: CGFloat(filter.pointPixelScale), maxLongEdge: nil, sourceRect: local)
     }
 
+    /// The main display as a live-view frame: every app's windows except `excludedBundleIDs`, with the pointer, as
+    /// JPEG.
+    func captureLiveFrame(excludedBundleIDs: Set<String>, maxLongEdge: Int) async throws -> (jpeg: Data, space: MacLiveFrameSpace) {
+        let content = try await content()
+        guard let display = content.displays.first(where: { CGDisplayIsMain($0.displayID) != 0 }) ?? content.displays.first else {
+            throw MacCaptureError.noDisplay
+        }
+        let excluded = content.applications.filter { excludedBundleIDs.contains($0.bundleIdentifier) }
+        let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+        let size = MacCaptureSizing.pixelSize(for: display.frame, nativeScale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge)
+        let configuration = SCStreamConfiguration()
+        configuration.width = size.width
+        configuration.height = size.height
+        configuration.scalesToFit = true
+        configuration.showsCursor = true
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        guard let jpeg = Self.jpeg(image) else { throw MacCaptureError.encodingFailed }
+        return (jpeg, MacLiveFrameSpace(display: display.frame, frame: ImagePixelSize(width: image.width, height: image.height)))
+    }
+
     /// The window under a frontmost app, for pinning an observation to its window.
     func frontWindow(pid: pid_t) async throws -> SCWindow? {
         try await content().windows.first { $0.owningApplication?.processID == pid && $0.isOnScreen && $0.windowLayer == 0 }
@@ -145,6 +165,13 @@ actor MacScreenCapture {
         recorded.imageSize = ImagePixelSize(width: image.width, height: image.height)
         guard let data = Self.png(image) else { throw MacCaptureError.encodingFailed }
         return Capture(data: data, mediaType: "image/png", geometry: recorded, capturedAt: Date())
+    }
+
+    static func jpeg(_ image: CGImage, quality: Double = 0.6) -> Data? {
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
     static func png(_ image: CGImage) -> Data? {

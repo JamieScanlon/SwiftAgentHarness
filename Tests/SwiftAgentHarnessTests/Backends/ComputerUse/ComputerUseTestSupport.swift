@@ -54,6 +54,9 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var observerEnds = 0
     /// The user's viewers ``liveViewers(_:)`` reports.
     var userViewers = 0
+    var servedFrame: DisplayLiveViewFrame?
+    private(set) var liveFrameCalls = 0
+    private(set) var liveInputs: [DisplayLiveViewInput] = []
     /// Like a remote target, work requested from a cancelled task never reaches the screen.
     private(set) var failsWhenCancelled = false
 
@@ -159,6 +162,19 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func setUserViewers(_ count: Int) { userViewers = count }
+
+    func setServedFrame(_ frame: DisplayLiveViewFrame?) { servedFrame = frame }
+
+    func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
+        try await requireLease(lease)
+        liveFrameCalls += 1
+        return servedFrame
+    }
+
+    func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {
+        try await requireLease(lease)
+        liveInputs.append(input)
+    }
 
     func liveViewers(_ lease: Lease) async throws -> Int {
         try await requireLease(lease)

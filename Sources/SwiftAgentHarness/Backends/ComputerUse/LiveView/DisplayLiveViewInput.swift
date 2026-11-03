@@ -1,7 +1,7 @@
 import Foundation
 
 /// A frame of a live view: a JPEG and the size of the coordinate space it shows.
-public struct DisplayLiveViewFrame: Sendable, Hashable {
+public struct DisplayLiveViewFrame: Sendable, Hashable, Codable {
     public var jpeg: Data
     public var width: Int
     public var height: Int
@@ -14,8 +14,8 @@ public struct DisplayLiveViewFrame: Sendable, Hashable {
 }
 
 /// What a viewer sends while it has control. Points are in the frame's coordinate space.
-public enum DisplayLiveViewInput: Sendable, Hashable {
-    public enum MouseAction: String, Sendable, Hashable {
+public enum DisplayLiveViewInput: Sendable, Hashable, Codable {
+    public enum MouseAction: String, Sendable, Hashable, Codable {
         case down
         case up
         case move
