@@ -50,6 +50,7 @@ The core in `SwiftAgentHarness` builds and tests without screen-capture, accessi
 | Anthropic's native computer toolset (`computer_toolset_20260801`, and `computer_20251124` / `computer_20250124` for older models) | Done. Other vendors' toolsets: not yet. |
 | `grounder` and `vision-describe` roles (`computer_locate`, `computer_describe`), specialists on models without vision | Done |
 | Managed browser (`ManagedBrowserDisplayTarget`): a launched Chromium on its debugging pipe, or a hosted one over WebSocket; browser network policy and proxy | Done. Verified by unit tests and an opt-in smoke test against Chrome. |
+| The user's own browser (`ManagedBrowserDisplayTarget.userBrowser`), attached over remote debugging | Done. Verified by unit tests and the Chrome smoke test against a Chrome started with a debugging port. |
 | Live view (`DisplayLiveViewServer`): a token-protected stream of the managed browser, view-only except during takeover; observer links for other people; REST link minting; TUI links and sharing | Done for the managed browser. Verified by unit tests, the Chrome smoke test, and by hand in a browser, observer links included. |
 | Code execution as a peer path: `computer_run_script` runs a JavaScript script in a browser target's page as one gated action | Done for the managed browser. Verified by unit tests and the Chrome smoke test. |
 | Vendor safety signals (`ComputerUseSafetySignal`) and sensitive-domain watch mode | Done in the session. No bundled codec emits signals yet: Anthropic's toolset has none, and OpenAI's and Gemini's toolsets aren't implemented. |
@@ -223,6 +224,20 @@ session.installComputerUse(ComputerUseConfiguration(
 ```
 
 `ManagedBrowserDisplayTarget.hosted(endpoint:)` drives a browser reached by its DevTools WebSocket URL instead, such as a hosted one.
+
+### The user's own browser
+
+`ManagedBrowserDisplayTarget.userBrowser(endpoint:)` attaches to the user's running Chrome, for web tasks that need their sign-ins. It is the same driver in the `user` profile mode:
+
+```swift
+let yours = ManagedBrowserDisplayTarget.userBrowser()   // .chrome: Chrome's DevToolsActivePort file
+```
+
+- **Reaching it.** Chrome writes a `DevToolsActivePort` file into its user data directory while it accepts a debugger: when the user allows remote debugging at `chrome://inspect/#remote-debugging` (Chrome then asks them to allow each connection), or started it with `--remote-debugging-port`. `UserBrowserEndpoint.chrome` reads Chrome's default directory; `.devToolsActivePort(directory:)` reads another, and `.webSocket(_:)` takes a URL. A lease fails with those instructions when the file isn't there.
+- **A host target.** The manifest is `user-browser`, isolation `host`, `humanPresence: shared`. Like the host desktop it needs a present operator and is never a default: a task names it. Interact actions are confirmed unless an intent check passes them, and every script is confirmed.
+- **Its own tab.** Each lease opens a background tab in the user's profile and works only there; `describe` and observations show that tab alone, never the user's other tabs. Release closes the tab and disconnects; the browser keeps running.
+- **Popups and downloads.** Only windows the agent's tab opened are folded back into it; the user's own new tabs are left alone. The user's download settings aren't changed: a download the agent's tab starts is cancelled and reported in the next observation.
+- **Network.** The browser's network is the user's. The policy is applied to navigations and final URLs, as for a hosted browser.
 
 | Piece | Behavior |
 |---|---|
@@ -654,6 +669,7 @@ These are behavior calls made where the spec was silent or ambiguous, plus gaps 
 | View-only and takeover | The spec makes observer links view-only by default and accepts input only during takeover. The user's links are view-only outside takeover and carry the user's input during it. Observer links, for anyone else, are view-only always: the spec doesn't say whether someone other than the user may type during a takeover, and the takeover is the user's. Every link is minted through the user's own controls (the control service or the REST route behind tenancy), never by a tool the model can call. `DisplayLiveView.viewOnly` reports the state when the link was minted. |
 | Observers during takeover | The spec doesn't say what observers see while the user has control. Takeover pauses the agent's capture because the user may be entering credentials or payment details, so observers are paused too and see nothing until hand-back. |
 | Ending observers | The spec's observer tokens are short-lived but say nothing about revoking them. Since a connected viewer stays until the lease ends, `endObservers` lets the user stop sharing without stopping the run. The display host protocol carries it, at version 3. |
+| The user's real browser | The spec lists it as attached "via extension or remote-debugging." Remote debugging is built; an extension isn't, since Chrome's own remote-debugging consent now covers the user's running browser. The spec says nothing on how the agent shares the browser with the user. Here it gets one tab and never sees the others, so the user's other sites stay out of its observations, and its popups and downloads are handled in that tab only. The user's download settings aren't touched for the length of the lease; downloads from the agent's tab are cancelled one by one instead. |
 | Code execution as a peer path | The spec makes scripts rung 2 inside the leased target, under the same grants and domain policy, gated as a whole script, and consequential when they touch a shared target. A script is one `script` action: it needs the page's domain at full tier (a script can type), is interact on isolated targets (so the intent check sees it), and consequential on shared ones. Only browser targets run scripts, in JavaScript. A desktop automation script (AppleScript, a shell driving input) can reach any app, so it couldn't be held to per-app grants, and the host desktop declares no scripting. The spec's examples are browser-automation libraries; the script here is plain JavaScript against the DOM, with no library loaded. |
 | Watch mode | The spec says a sensitive-domain session "continues only while a live view is open." Here, open means at least one of the user's viewers is connected; an observer can't take over or stop, so one doesn't count. Watch mode lasts for the rest of the session rather than only while on the flagged domain, since the session can't tell when the vendor would stop flagging. An action waits for the user to open the view rather than failing at once, and the session ends if nobody does within `watchModeWait`. A target with no live view, such as the host desktop, can't be watched, so the session ends; the spec gives no alternative. The display host protocol carries the viewer count, at version 4. |
 | Input during takeover | The spec doesn't say how a remote user acts in an isolated target. Viewer input is delivered as CDP input to the page only, so the user can't reach the browser's UI or the host, and the network policy applies to wherever the user goes. A page left on a blocked URL is cleared at hand-back. |
@@ -664,5 +680,5 @@ Spec features with no implementation so far. Each needs something the harness do
 
 | Feature | State |
 |---|---|
-| Isolated targets | The host desktop and the managed browser exist. The desktop container, local VM, user's real browser, and paired device targets aren't built. |
+| Isolated targets | The host desktop, the managed browser, and the user's own browser exist. The desktop container, local VM, and paired device targets aren't built. |
 | Live view | The managed browser serves one. The host desktop doesn't need one (it is the user's own screen); container and VM targets would serve VNC. |

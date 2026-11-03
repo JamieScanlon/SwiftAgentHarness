@@ -62,6 +62,8 @@ struct ManagedBrowserDisplayTargetTests {
             case "Target.createBrowserContext": return .object(["browserContextId": .string("ctx")])
             case "Target.createTarget": return .object(["targetId": .string("page-1")])
             case "Target.attachToTarget": return .object(["sessionId": .string("s1")])
+            case "Target.getTargetInfo":
+                return .object(["targetInfo": .object(["targetId": .string("page-1"), "browserContextId": .string("default-ctx")])])
             case "Page.getFrameTree": return .object(["frameTree": .object(["frame": .object(["id": .string("f1")])])])
             case "Page.createIsolatedWorld": return .object(["executionContextId": .integer(7 + calls.count)])
             case "Page.captureScreenshot":
@@ -145,7 +147,8 @@ struct ManagedBrowserDisplayTargetTests {
 
     private static func fixture(
         network: BrowserNetworkPolicy = BrowserNetworkPolicy(),
-        denials: [BrowserNetworkDenial] = []
+        denials: [BrowserNetworkDenial] = [],
+        profile: ManagedBrowserProfile = .throwaway
     ) async throws -> Fixture {
         let browser = FakeBrowser()
         await browser.script(url: "https://app.example.com/", elements: [button, field, link], live: [
@@ -153,7 +156,8 @@ struct ManagedBrowserDisplayTargetTests {
         ])
         let target = ManagedBrowserDisplayTarget(
             configuration: ManagedBrowserConfiguration(network: network, settleDelay: .zero),
-            isolation: .container
+            isolation: profile == .user ? .host : .container,
+            profile: profile
         ) {
             ManagedBrowserSession(
                 connection: browser,
@@ -166,8 +170,8 @@ struct ManagedBrowserDisplayTargetTests {
             agentID: "specialist",
             grants: [.domain("example.com", tier: .full)],
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)),
-            operatorInitiated: false,
-            userPresent: false
+            operatorInitiated: profile == .user,
+            userPresent: profile == .user
         ))
         return Fixture(browser: browser, target: target, lease: lease, denials: denials)
     }
@@ -427,6 +431,80 @@ struct ManagedBrowserDisplayTargetTests {
         let cut = try #require(try await fixture.target.act(fixture.lease, ActionBatch([script])).first)
         #expect((cut.evidence?.count ?? 0) < 2_200)
         #expect(cut.evidence?.contains("…") == true)
+    }
+
+    @Test("The user's browser is a shared host target with their sign-ins, and a tab of the agent's own")
+    func userBrowser() async throws {
+        let target = ManagedBrowserDisplayTarget.userBrowser(endpoint: .webSocket(URL(string: "ws://127.0.0.1:9222/devtools/browser/x")!))
+        #expect(target.manifest.id == "user-browser")
+        #expect(target.manifest.isolation == .host)
+        #expect(target.manifest.humanPresence == .shared)
+        #expect(target.manifest.scripting == [.javascript])
+
+        let fixture = try await Self.fixture(profile: .user)
+        #expect(await fixture.browser.methods("Target.createBrowserContext").isEmpty, "the user's own profile, not a throwaway one")
+        #expect(await fixture.browser.methods("Browser.setDownloadBehavior").isEmpty, "the user's download settings are left alone")
+        let created = try #require(await fixture.browser.params(of: "Target.createTarget").first)
+        #expect(created[wire: "browserContextId"] == nil)
+        _ = try await Self.observe(fixture)
+        await fixture.target.release(fixture.lease, reason: .completed)
+        #expect(await fixture.browser.methods("Target.disposeBrowserContext").isEmpty)
+        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["page-1"])
+    }
+
+    @Test("In the user's browser only windows the agent's tab opened are folded in; the user's own tabs are left alone")
+    func userBrowserPopups() async throws {
+        let fixture = try await Self.fixture(profile: .user)
+        func page(_ id: String, _ url: String, opener: String?) -> CDPEvent {
+            var info: [String: JSON] = [
+                "type": .string("page"), "browserContextId": .string("default-ctx"), "targetId": .string(id), "url": .string(url),
+            ]
+            if let opener { info["openerId"] = .string(opener) }
+            return CDPEvent(method: "Target.targetInfoChanged", params: .object(["targetInfo": .object(info)]), sessionID: nil)
+        }
+        await fixture.browser.emit(page("user-tab", "https://mail.example.com/", opener: nil))
+        await fixture.browser.emit(page("popup", "https://app.example.com/popup", opener: "page-1"))
+        for _ in 0..<50 where await fixture.browser.params(of: "Target.closeTarget").isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["popup"])
+    }
+
+    @Test("A download the agent's tab starts in the user's browser is cancelled and reported")
+    func userBrowserDownloads() async throws {
+        let fixture = try await Self.fixture(profile: .user)
+        await fixture.browser.emit(CDPEvent(
+            method: "Page.downloadWillBegin",
+            params: .object(["guid": .string("dl-1"), "url": .string("https://app.example.com/setup.pkg"), "suggestedFilename": .string("setup.pkg")]),
+            sessionID: "s1"
+        ))
+        for _ in 0..<50 where await fixture.browser.params(of: "Browser.cancelDownload").isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let cancel = try #require(await fixture.browser.params(of: "Browser.cancelDownload").first)
+        #expect(cancel[wire: "guid"]?.wireString == "dl-1")
+        #expect(cancel[wire: "browserContextId"]?.wireString == "default-ctx")
+        let observation = try await Self.observe(fixture, modes: [.accessibility])
+        #expect(observation.tree?.text.contains("download of setup.pkg") == true)
+    }
+
+    @Test("The user's browser is found through the DevToolsActivePort file Chrome writes when debugging is allowed")
+    func devToolsActivePort() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chrome-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let endpoint = UserBrowserEndpoint.devToolsActivePort(directory: directory)
+        await #expect(throws: DisplayTargetError.self) { try endpoint.resolve() }
+        do {
+            _ = try endpoint.resolve()
+        } catch {
+            #expect(String(describing: error).contains("chrome://inspect/#remote-debugging"))
+        }
+        try Data("9222\n/devtools/browser/abc-123\n".utf8).write(to: directory.appendingPathComponent("DevToolsActivePort"))
+        #expect(try endpoint.resolve() == URL(string: "ws://127.0.0.1:9222/devtools/browser/abc-123"))
+        #expect(try UserBrowserEndpoint.webSocket(URL(string: "ws://h:1/x")!).resolve() == URL(string: "ws://h:1/x"))
+        #expect(UserBrowserEndpoint.chrome == .devToolsActivePort(directory: UserBrowserEndpoint.chromeUserDataDirectory))
     }
 
     @Test("Apps and menus don't exist in a managed browser")

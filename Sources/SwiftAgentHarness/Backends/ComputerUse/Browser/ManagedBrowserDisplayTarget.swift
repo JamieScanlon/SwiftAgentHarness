@@ -38,6 +38,15 @@ public struct ManagedBrowserConfiguration: Sendable {
     }
 }
 
+/// Whose browser profile a lease works in.
+public enum ManagedBrowserProfile: Sendable, Hashable {
+    /// A fresh browser context per lease, with downloads denied, thrown away on release.
+    case throwaway
+    /// The browser's own profile, with the user's sign-ins: the lease gets a tab of its own, closed on release.
+    /// Downloads the tab starts are cancelled, and only windows it opens are folded back into it.
+    case user
+}
+
 /// One browser the target drives for the length of a lease.
 public struct ManagedBrowserSession: Sendable {
     public var connection: any CDPSending
@@ -68,6 +77,7 @@ public struct ManagedBrowserSession: Sendable {
 public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public nonisolated let manifest: DisplayTargetManifest
     public nonisolated let configuration: ManagedBrowserConfiguration
+    public nonisolated let profile: ManagedBrowserProfile
     private let launcher: @Sendable () async throws -> ManagedBrowserSession
     private let liveViewServer: DisplayLiveViewServer?
     private var liveFeed: UUID?
@@ -102,10 +112,12 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public init(
         configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration(),
         isolation: DisplayTargetIsolation,
+        profile: ManagedBrowserProfile = .throwaway,
         liveView: DisplayLiveViewServer? = nil,
         launcher: @escaping @Sendable () async throws -> ManagedBrowserSession
     ) {
         self.configuration = configuration
+        self.profile = profile
         self.launcher = launcher
         liveViewServer = liveView
         manifest = DisplayTargetManifest(
@@ -118,7 +130,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             semanticActions: [.press, .setValue, .focus, .openURL],
             observerAccess: liveView == nil ? .none : .stream,
             scripting: [.javascript],
-            humanPresence: .none
+            humanPresence: profile == .user ? .shared : .none
         )
     }
 
@@ -131,6 +143,22 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     ) -> ManagedBrowserDisplayTarget {
         ManagedBrowserDisplayTarget(configuration: configuration, isolation: .remoteBrowser, liveView: liveView) {
             let connection = CDPConnection(transport: CDPWebSocketTransport(url: endpoint))
+            await connection.start()
+            return ManagedBrowserSession(connection: connection, shutdown: { await connection.close() })
+        }
+    }
+
+    /// The user's own Chrome, attached over remote debugging: their sign-ins, in a tab of the agent's own. It is a
+    /// host target a person uses, so it needs a present operator, and scripts and other interact actions are
+    /// confirmed unless an intent check passes them. Its network is the user's: the policy is applied to navigations
+    /// and final URLs only.
+    public static func userBrowser(
+        endpoint: UserBrowserEndpoint = .chrome,
+        configuration: ManagedBrowserConfiguration = ManagedBrowserConfiguration(id: "user-browser", label: "Your browser"),
+        liveView: DisplayLiveViewServer? = nil
+    ) -> ManagedBrowserDisplayTarget {
+        ManagedBrowserDisplayTarget(configuration: configuration, isolation: .host, profile: .user, liveView: liveView) {
+            let connection = CDPConnection(transport: CDPWebSocketTransport(url: try endpoint.resolve()))
             await connection.start()
             return ManagedBrowserSession(connection: connection, shutdown: { await connection.close() })
         }
@@ -201,7 +229,12 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         guard await lock.holds(leaseID: lease.id) else { return }
         if let page {
             page.events?.cancel()
-            _ = try? await page.session.connection.send("Target.disposeBrowserContext", ["browserContextId": .string(page.contextID)])
+            switch profile {
+            case .throwaway:
+                _ = try? await page.session.connection.send("Target.disposeBrowserContext", ["browserContextId": .string(page.contextID)])
+            case .user:
+                _ = try? await page.session.connection.send("Target.closeTarget", ["targetId": .string(page.targetID)])
+            }
             await page.session.shutdown()
         }
         page = nil
@@ -257,11 +290,24 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         let session = try await launcher()
         do {
             let connection = session.connection
-            let context = try await connection.send("Target.createBrowserContext", ["disposeOnDetach": .boolean(true)])
-            guard let contextID = context[wire: "browserContextId"]?.wireString else { throw DisplayTargetError.driverFailure("no browser context") }
-            _ = try? await connection.send("Browser.setDownloadBehavior", ["behavior": .string("deny"), "browserContextId": .string(contextID)])
-            let created = try await connection.send("Target.createTarget", ["url": .string("about:blank"), "browserContextId": .string(contextID)])
-            guard let targetID = created[wire: "targetId"]?.wireString else { throw DisplayTargetError.driverFailure("no page target") }
+            let contextID: String
+            let targetID: String
+            switch profile {
+            case .throwaway:
+                let context = try await connection.send("Target.createBrowserContext", ["disposeOnDetach": .boolean(true)])
+                guard let id = context[wire: "browserContextId"]?.wireString else { throw DisplayTargetError.driverFailure("no browser context") }
+                contextID = id
+                _ = try? await connection.send("Browser.setDownloadBehavior", ["behavior": .string("deny"), "browserContextId": .string(contextID)])
+                let created = try await connection.send("Target.createTarget", ["url": .string("about:blank"), "browserContextId": .string(contextID)])
+                guard let id = created[wire: "targetId"]?.wireString else { throw DisplayTargetError.driverFailure("no page target") }
+                targetID = id
+            case .user:
+                let created = try await connection.send("Target.createTarget", ["url": .string("about:blank"), "background": .boolean(true)])
+                guard let id = created[wire: "targetId"]?.wireString else { throw DisplayTargetError.driverFailure("no page target") }
+                targetID = id
+                let info = try await connection.send("Target.getTargetInfo", ["targetId": .string(targetID)])
+                contextID = info[wire: "targetInfo"]?[wire: "browserContextId"]?.wireString ?? ""
+            }
             let attached = try await connection.send("Target.attachToTarget", ["targetId": .string(targetID), "flatten": .boolean(true)])
             guard let sessionID = attached[wire: "sessionId"]?.wireString else { throw DisplayTargetError.driverFailure("could not attach to the page") }
             var page = Page(session: session, contextID: contextID, targetID: targetID, sessionID: sessionID)
@@ -299,10 +345,20 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             let accept = type == "beforeunload"
             _ = try? await connection.send("Page.handleJavaScriptDialog", ["accept": .boolean(accept)], session: page.sessionID)
             notices.append("The page showed a \(type) dialog, which was \(accept ? "accepted" : "dismissed"): \"\(message.prefix(200))\"")
+        case "Page.downloadWillBegin" where event.sessionID == page.sessionID && profile == .user:
+            // The user's download settings are theirs to keep, so the agent's downloads are cancelled one by one.
+            guard let guid = event.params[wire: "guid"]?.wireString else { return }
+            var cancel: [String: JSON] = ["guid": .string(guid)]
+            if !page.contextID.isEmpty { cancel["browserContextId"] = .string(page.contextID) }
+            _ = try? await connection.send("Browser.cancelDownload", cancel)
+            let name = event.params[wire: "suggestedFilename"]?.wireString ?? "a file"
+            notices.append("The page started a download of \(name.prefix(120)), which was cancelled.")
         case "Target.targetInfoChanged", "Target.targetCreated":
             guard let info = event.params[wire: "targetInfo"],
                   info[wire: "type"]?.wireString == "page",
                   info[wire: "browserContextId"]?.wireString == page.contextID,
+                  // In the user's profile every tab shares the context; only the agent's own popups are its to fold.
+                  profile == .throwaway || info[wire: "openerId"]?.wireString == page.targetID,
                   let other = info[wire: "targetId"]?.wireString, other != page.targetID,
                   let url = info[wire: "url"]?.wireString, !url.isEmpty, url != "about:blank" else { return }
             _ = try? await connection.send("Target.closeTarget", ["targetId": .string(other)])

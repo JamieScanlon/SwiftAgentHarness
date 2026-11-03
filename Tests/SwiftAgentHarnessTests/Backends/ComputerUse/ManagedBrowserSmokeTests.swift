@@ -41,8 +41,11 @@ struct ManagedBrowserSmokeTests {
                                     request += String(buffer: buffer)
                                     if request.contains("\r\n\r\n") { break }
                                 }
-                                let body = request.hasPrefix("GET /second") ? second : page
-                                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                                let body = request.hasPrefix("GET /second") ? second : request.hasPrefix("GET /file") ? "payload" : page
+                                let type = request.hasPrefix("GET /file")
+                                    ? "application/octet-stream\r\nContent-Disposition: attachment; filename=\"setup.pkg\""
+                                    : "text/html"
+                                let response = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
                                 try await output.write(ByteBuffer(string: response))
                             }
                         }
@@ -226,6 +229,56 @@ struct ManagedBrowserSmokeTests {
         let blocked = try await run(#"location.href = "http://tracker.test/"; await new Promise((r) => setTimeout(r, 500)); return 0;"#)
         #expect(blocked.evidence?.contains("tracker.test") == true, "\(blocked)")
         await target.release(lease, reason: .completed)
+    }
+
+    @Test("Attaches to a running browser's own profile: a tab of its own, the user's tabs untouched, downloads cancelled")
+    func userBrowser() async throws {
+        let server = try await Self.server()
+        defer { Task { try? await server.channel.close(); await server.task.value } }
+        let executable = try #require(ManagedChromiumConfiguration().resolvedExecutable())
+        let profile = FileManager.default.temporaryDirectory.appendingPathComponent("user-browser-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: profile) }
+        let chrome = Process()
+        chrome.executableURL = executable
+        chrome.arguments = [
+            "--headless=new", "--remote-debugging-port=0", "--user-data-dir=\(profile.path)", "--no-first-run",
+            "--no-default-browser-check", "--use-mock-keychain", "about:blank",
+        ]
+        chrome.standardOutput = FileHandle.nullDevice
+        chrome.standardError = FileHandle.nullDevice
+        try chrome.run()
+        defer { chrome.terminate() }
+        let endpoint = UserBrowserEndpoint.devToolsActivePort(directory: profile)
+        for _ in 0..<100 where (try? endpoint.resolve()) == nil { try await Task.sleep(for: .milliseconds(100)) }
+        let port = try #require(try endpoint.resolve().port)
+        func pages() async throws -> [String] {
+            let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/json/list")!)
+            let list = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+            return list.filter { $0["type"] as? String == "page" }.compactMap { $0["id"] as? String }.sorted()
+        }
+        let userTabs = try await pages()
+        #expect(userTabs.count == 1)
+
+        let target = ManagedBrowserDisplayTarget.userBrowser(
+            endpoint: endpoint,
+            configuration: ManagedBrowserConfiguration(id: "user-browser", label: "Your browser", network: BrowserNetworkPolicy(allowsPrivateNetwork: true))
+        )
+        let lease = try await Self.lease(target)
+        #expect(try await pages().count == 2, "the agent gets a tab of its own")
+        let home = "http://127.0.0.1:\(server.port)/"
+        let opened = try await target.act(lease, ActionBatch([.openURL(home)]))
+        #expect(opened.first?.effect == .confirmed, "\(opened)")
+        let title = try await target.act(lease, ActionBatch([.script(language: .javascript, source: "return document.title;", timeoutMilliseconds: 2_000)]))
+        #expect(title.first?.evidence?.contains(#"returned: "Smoke page""#) == true, "\(title)")
+
+        _ = try await target.act(lease, ActionBatch([.openURL(home + "file")]))
+        try await Task.sleep(for: .milliseconds(500))
+        let observed = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))
+        #expect(observed.tree?.text.contains("download of setup.pkg, which was cancelled") == true, "\(observed.tree?.text ?? "")")
+
+        await target.release(lease, reason: .completed)
+        #expect(try await pages() == userTabs, "release closes only the agent's tab")
+        #expect(chrome.isRunning, "the user's browser keeps running")
     }
 
     @Test("Loopback is unreachable under the default policy, even through a page")
