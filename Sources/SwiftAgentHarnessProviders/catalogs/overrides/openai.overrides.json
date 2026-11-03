@@ -3,6 +3,18 @@
   "models": {
     "gpt-4.1": {
       "modelFamily": "gpt-4.1"
+    },
+    "gpt-6.1-sol": {
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer",
+          "params": {
+            "coordinates": "pixels",
+            "maxEdgePx": 1600
+          }
+        }
+      }
     }
   },
   "modelFamilies": {

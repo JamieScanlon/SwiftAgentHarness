@@ -45,6 +45,7 @@ public func registerDefaults(
         try? registerOpenAI()
         try? registerAnthropic()
         try? registerOpenRouter()
+        try? registerGemini()
         for runtime in options.inferenceRuntimes {
             try? registerInferenceRuntime(runtime)
         }
@@ -79,6 +80,14 @@ private func registerAnthropic() throws {
         manifest: manifest,
         textInference: AnthropicTextInferenceProvider(manifest: manifest),
         mediaUnderstanding: StubMediaUnderstandingProvider(manifest: manifest)
+    ))
+}
+
+private func registerGemini() throws {
+    let manifest = try BundledProviderManifestLoader.loadManifest(for: "gemini")
+    try ProviderRegistry.register(ProviderRegistration(
+        manifest: manifest,
+        textInference: GeminiTextInferenceProvider(manifest: manifest)
     ))
 }
 
@@ -136,6 +145,7 @@ private func templateManifestID(for adapterKind: ProviderAdapterKind) -> Provide
     case .openAICompat: return "openai"
     case .anthropic: return "anthropic"
     case .openRouter: return "openrouter"
+    case .gemini: return "gemini"
     default: return adapterKind.rawValue
     }
 }

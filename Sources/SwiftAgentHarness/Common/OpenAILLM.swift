@@ -32,6 +32,8 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     private let supportsEagerToolInputStreaming: Bool
     private let authProbePermissiveForEmptyToken: Bool
     private let streamSource: any OpenAIChatStreamSourcing
+    private let responsesURL: URL
+    private let responsesTransport: ProviderHTTPStatus.Transport
     /// "Never timeout" represented as a very large finite interval.
     private static let effectivelyNoTimeoutInterval: TimeInterval = 60 * 60 * 24 * 365 * 10
     
@@ -46,9 +48,12 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         authProbeTransport: AuthProbeTransport? = nil,
         supportsEagerToolInputStreaming: Bool = false,
         authProbePermissiveForEmptyToken: Bool = false,
-        streamSource: (any OpenAIChatStreamSourcing)? = nil
+        streamSource: (any OpenAIChatStreamSourcing)? = nil,
+        responsesTransport: ProviderHTTPStatus.Transport? = nil
     ) {
         let parsedURL = URL(string: baseURL)!
+        self.responsesURL = parsedURL.appendingPathComponent("responses")
+        self.responsesTransport = responsesTransport ?? ProviderHTTPStatus.liveTransport
         self.model = model
         self.capabilities = capabilities
         self.requestFeatures = requestFeatures
@@ -131,6 +136,10 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             throw LLMError.unsupportedCapability(.completion)
         }
         
+        if Self.usesComputerResponses(config) {
+            return try await sendComputerResponses(messages, config: config)
+        }
+
         let openAIMessages = try await openAIChatCompletionMessageParams(from: messages, config: config)
         logPromptCacheNoOpIfNeeded(config: config)
         
@@ -161,6 +170,30 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
             }
         }
         
+        if Self.usesComputerResponses(config) {
+            return AsyncThrowingStream { continuation in
+                Task {
+                    var emitter = NormalizedStreamEmitter(
+                        continuation: continuation,
+                        supportsEagerToolInputStreaming: self.supportsEagerToolInputStreaming
+                    )
+                    do {
+                        let response = try await self.sendComputerResponses(messages, config: config)
+                        emitter.finishSuccess(
+                            content: response.content,
+                            toolCalls: response.toolCalls,
+                            availableTools: config.availableTools,
+                            metadata: response.metadata
+                        )
+                    } catch is CancellationError {
+                        emitter.finishCancelled()
+                    } catch {
+                        emitter.finishFailed(with: error)
+                    }
+                }
+            }
+        }
+
         return AsyncThrowingStream { continuation in
             Task {
                 var emitter = NormalizedStreamEmitter(
@@ -295,6 +328,80 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
         }
     }
     
+    // MARK: - Computer use
+
+    /// A computer-use session on OpenAI's `computer` tool, which only the Responses API offers.
+    static func usesComputerResponses(_ config: LLMRequestConfig) -> Bool {
+        ComputerUseNativeDialect(additionalParameters: config.additionalParameters)?.toolset.vendor == .openAI
+    }
+
+    private func sendComputerResponses(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        let body = try await computerResponsesBody(messages, config: config)
+        var request = URLRequest(url: responsesURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.effectivelyNoTimeoutInterval
+        request.setValue("Bearer \(authProbeAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try ProviderHTTPStatus.encode(body)
+        let data: Data
+        do {
+            let (received, response) = try await responsesTransport(request)
+            try ProviderHTTPStatus.validate(response, body: received, provider: "OpenAI Responses")
+            data = received
+        } catch let error as LLMError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw LLMError.networkError(error)
+        }
+        let decoded = try OpenAIResponsesComputerCodec.decode(try ProviderHTTPStatus.decode(data))
+        let metadata = LLMTokenMetadataBuilder.build(
+            inputTokens: decoded.usage?.inputTokens,
+            outputTokens: decoded.usage?.outputTokens,
+            remainingContextTokens: nil,
+            totalTokens: decoded.usage?.totalTokens,
+            contextWindowTokens: config.maxTokens,
+            cacheReadTokens: decoded.usage?.cachedTokens,
+            usageIsProviderReported: decoded.usage != nil,
+            finishReason: decoded.finishReason
+        )
+        return LLMResponse.llmResponse(from: decoded.content, availableTools: config.availableTools)
+            .appending(toolCalls: decoded.toolCalls)
+            .updatingMetadata(with: metadata)
+    }
+
+    private func computerResponsesBody(_ messages: [Message], config: LLMRequestConfig) async throws -> JSON {
+        let plan = try await SystemPromptDispatchCodec.resolve(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            promptMetadata: SystemPromptDispatchCodec.extractPromptMetadata(from: config.additionalParameters),
+            providerStablePrefix: SystemPromptDispatchCodec.extractProviderStablePrefix(from: config.additionalParameters)
+        )
+        return OpenAIResponsesComputerCodec.requestBody(
+            model: model,
+            messages: plan.resolvedMessages,
+            config: config,
+            reasoningEffort: extractReasoningEffort(from: config.additionalParameters).map(Self.wireValue)
+        )
+    }
+
+    private static func wireValue(_ effort: ChatQuery.ReasoningEffort) -> String {
+        switch effort {
+        case .none: "none"
+        case .minimal: "minimal"
+        case .low: "low"
+        case .medium: "medium"
+        case .high: "high"
+        case .customValue(let value): value
+        }
+    }
+
+    /// Test hook: the Responses body a computer-use request sends (no network).
+    func testComputerResponsesBody(_ messages: [Message], config: LLMRequestConfig) async throws -> JSON {
+        try await computerResponsesBody(messages, config: config)
+    }
+
     // MARK: - Private Methods
     
     /// OpenAI-compatible: `estimated_context_left = model_context_limit - input_tokens - reserved_output_tokens`.

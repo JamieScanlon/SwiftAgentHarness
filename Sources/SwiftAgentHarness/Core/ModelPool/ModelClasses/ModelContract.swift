@@ -270,6 +270,7 @@ public struct ContractSurface: RawRepresentable, Sendable, Codable, Hashable, Ex
     public static let anthropicMessages: ContractSurface = "anthropic-messages"
     public static let openAIChat: ContractSurface = "openai-chat"
     public static let openAIResponses: ContractSurface = "openai-responses"
+    public static let geminiInteractions: ContractSurface = "gemini-interactions"
     public static let ollamaChat: ContractSurface = "ollama-chat"
     public static let systemOne: ContractSurface = "systemone"
     public static let openAIDecisions: ContractSurface = "openai-decisions"

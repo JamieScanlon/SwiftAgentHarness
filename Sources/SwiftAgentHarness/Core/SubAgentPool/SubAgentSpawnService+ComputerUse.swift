@@ -130,8 +130,13 @@ extension SubAgentSpawnService {
             model: model,
             profile: profile,
             imageLimit: sessionConfiguration.imageLimit,
-            layout: try? await grant.target.describe(grant.lease)
+            layout: try? await grant.target.describe(grant.lease),
+            manifest: grant.target.manifest
         )
+        // Gemini's functions take the 0–999 grid whatever the catalog says; the mode is frozen with the session.
+        if sessionConfiguration.nativeDialect?.toolset.vendor == .gemini {
+            sessionConfiguration.coordinateMode = .normalized1000
+        }
         // Approvals, questions, and activity go to the user's conversation, not the specialist's child. Waiting on
         // the user pauses the child's idle clock, and every action the session reports is a sign of life.
         let targetLabel = grant.target.manifest.label
@@ -207,17 +212,24 @@ extension SubAgentSpawnService {
         return reply(result)
     }
 
-    /// Anthropic's native toolset when the model speaks Anthropic's API and its catalog version names one. The
-    /// older single-tool versions also declare the screen size, which is what a display screenshot comes out as.
+    /// The vendor's native toolset when the model speaks that vendor's API and its catalog version names one.
+    /// Anthropic's older single-tool versions also declare the screen size, which is what a display screenshot comes
+    /// out as; Gemini's environment follows the target.
     static func nativeDialect(
         model: Model,
         profile: ContractProfile?,
         imageLimit: ObservationImageLimit?,
-        layout: TargetLayout?
+        layout: TargetLayout?,
+        manifest: DisplayTargetManifest? = nil
     ) -> ComputerUseNativeDialect? {
-        guard model.modelProtocol == .anthropic,
-              let toolset = ComputerUseNativeToolset(version: profile.flatMap(ComputerUseModelSupport.init(profile:))?.version)
+        guard let toolset = ComputerUseNativeToolset(version: profile.flatMap(ComputerUseModelSupport.init(profile:))?.version),
+              model.modelProtocol == toolset.modelProtocol
         else { return nil }
+        switch toolset.vendor {
+        case .anthropic: break
+        case .openAI: return ComputerUseNativeDialect(toolset: toolset)
+        case .gemini: return ComputerUseNativeDialect(toolset: toolset, environment: manifest.map(GeminiComputerEnvironment.init(manifest:)) ?? .browser)
+        }
         guard !toolset.isToolset else { return ComputerUseNativeDialect(toolset: toolset) }
         guard let display = layout?.displays.first(where: \.isPrimary) ?? layout?.displays.first else {
             return ComputerUseNativeDialect(toolset: toolset)

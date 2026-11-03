@@ -963,11 +963,15 @@ public actor OrchestratorRuntimeService {
             if let conversationID = activeConversation?.id,
                let session = await deps.computerUse.sessions.session(for: conversationID) {
                 if let native = session.configuration.nativeDialect {
-                    providers.append(ComputerUseNativeToolProvider(
-                        session: session,
-                        toolset: native.toolset,
-                        failures: deps.computerUse.nativeFailures
-                    ))
+                    let failures = deps.computerUse.nativeFailures
+                    switch native.toolset.vendor {
+                    case .anthropic:
+                        providers.append(ComputerUseNativeToolProvider(session: session, toolset: native.toolset, failures: failures))
+                    case .openAI:
+                        providers.append(ComputerUseOpenAIToolProvider(session: session, failures: failures))
+                    case .gemini:
+                        providers.append(ComputerUseGeminiToolProvider(session: session, dialect: native, failures: failures))
+                    }
                     providers.append(ComputerUseToolProvider(session: session, offering: ComputerUseToolProvider.nativeCompanionToolNames))
                 } else {
                     providers.append(ComputerUseToolProvider(session: session))

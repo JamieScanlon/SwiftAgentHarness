@@ -12,7 +12,7 @@ struct ProviderCatalogLoaderTests {
     @Test("Bundled frontier catalogs decode from module resources")
     func bundledCatalogsDecode() throws {
         prepare()
-        for providerID in ["openai", "anthropic", "openrouter"] {
+        for providerID in ["openai", "anthropic", "openrouter", "gemini"] {
             let entries = try ProviderCatalogLoader.decodeBundledCatalog(for: providerID)
             #expect(!entries.isEmpty, "Expected non-empty catalog for \(providerID)")
             for entry in entries {
@@ -23,6 +23,17 @@ struct ProviderCatalogLoaderTests {
                 #expect(!(entry.capabilities ?? []).isEmpty)
             }
         }
+    }
+
+    @Test("OpenAI's and Gemini's computer-use models declare their vendor toolsets and coordinate dialects")
+    func vendorComputerUse() throws {
+        prepare()
+        let sol = try #require(try ProviderCatalogLoader.decodeBundledCatalog(for: "openai").first { $0.endpointModelId == "gpt-6.1-sol" })
+        #expect(sol.generateFeatures[ComputerUseModelSupport.featureKey]?.version == "computer")
+        let flash = try #require(try ProviderCatalogLoader.decodeBundledCatalog(for: "gemini").first { $0.endpointModelId == "gemini-3.8-flash" })
+        #expect(flash.modelConfig.modelProtocol == .gemini)
+        #expect(flash.generateFeatures[ComputerUseModelSupport.featureKey]?.version == "computer_use")
+        #expect(ComputerUseNativeToolset(version: flash.generateFeatures[ComputerUseModelSupport.featureKey]?.version) == .geminiComputerUse)
     }
 
     @Test("OpenAI gpt-4o row carries strict tool schema compat")

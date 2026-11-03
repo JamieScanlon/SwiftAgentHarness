@@ -332,6 +332,14 @@ public actor ModelManager {
                 reasoningEfforts: [],
                 toolChoiceModes: [.auto, .required, .specific]
             )
+        case .gemini:
+            return ModelRequestFeatures(
+                streaming: true,
+                responseFormats: [.text],
+                parallelToolCalls: .uncapped,
+                reasoningEfforts: [],
+                toolChoiceModes: [.auto, .none, .required]
+            )
         }
     }
 
@@ -428,7 +436,7 @@ public actor ModelManager {
             return ModelRoutingMetadata(
                 rateLimit: ModelRateLimitMetadata(requests: 12, tokens: 200_000, windowMs: 60_000)
             )
-        case .anthropic:
+        case .anthropic, .gemini:
             return ModelRoutingMetadata(
                 rateLimit: ModelRateLimitMetadata(requests: 20, tokens: 300_000, windowMs: 60_000)
             )

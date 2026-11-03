@@ -8,6 +8,7 @@ public enum DefaultProviderAdapterFactories {
         ProviderAdapterFactoryRegistry.register(OllamaAdapterFactory())
         ProviderAdapterFactoryRegistry.register(LMStudioAdapterFactory())
         ProviderAdapterFactoryRegistry.register(OpenRouterAdapterFactory())
+        ProviderAdapterFactoryRegistry.register(GeminiAdapterFactory())
     }
 }
 
@@ -31,6 +32,18 @@ private struct AnthropicAdapterFactory: ProviderAdapterFactory {
         return ProviderRegistration(
             manifest: merged,
             textInference: AnthropicTextInferenceProvider(manifest: merged)
+        )
+    }
+}
+
+private struct GeminiAdapterFactory: ProviderAdapterFactory {
+    let adapterKind = ProviderAdapterKind.gemini.rawValue
+
+    func makeRegistration(manifest: ProviderManifest, config: ProviderInstanceConfig) throws -> ProviderRegistration {
+        let merged = try config.mergedManifest(base: manifest)
+        return ProviderRegistration(
+            manifest: merged,
+            textInference: GeminiTextInferenceProvider(manifest: merged)
         )
     }
 }

@@ -139,6 +139,7 @@ public extension ModelRegistryEntry {
     private static func surface(for modelProtocol: ModelProtocol?) -> ContractSurface {
         switch modelProtocol {
         case .anthropic: return .anthropicMessages
+        case .gemini: return .geminiInteractions
         case .ollama: return .ollamaChat
         case .openAIAPI, .lmStudio, .none: return .openAIChat
         }

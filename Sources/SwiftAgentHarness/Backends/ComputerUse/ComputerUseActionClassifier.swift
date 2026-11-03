@@ -157,6 +157,10 @@ public struct ComputerUseActionClassifier: Sendable {
 
         switch action {
         case .observe, .wait, .waitFor:
+            // A vendor's safety signal flags the call, whatever it does, so even a wait carrying one is asked.
+            if !context.safetySignals.isEmpty {
+                result.actionClass = .consequential(reasons: context.safetySignals.map { "vendor safety signal: \($0.rawValue)" })
+            }
             return result
         case .zoom(_, let observation):
             if context.observation(observation) == nil {

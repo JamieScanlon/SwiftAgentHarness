@@ -155,7 +155,7 @@ public enum ProviderRuntimeHooks {
             return PromptCacheBreakpointSelectionPolicy.anthropic(candidates: candidates, context: context)
         case .lmStudio:
             return PromptCacheBreakpointSelectionPolicy.lmStudio(candidates: candidates, context: context)
-        case .openAIAPI, .ollama:
+        case .openAIAPI, .ollama, .gemini:
             return PromptCacheBreakpointSelectionPolicy.implicit(candidates: candidates, context: context)
         }
     }

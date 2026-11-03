@@ -1,0 +1,35 @@
+{
+  "providerId": "gemini",
+  "generatedAt": "2026-11-03T00:00:00Z",
+  "models": [
+    {
+      "registryId": "a4000001-0001-4000-8000-000000000001",
+      "endpointModelId": "gemini-3.8-flash",
+      "displayName": "Gemini 3.8 Flash",
+      "modelProtocol": "gemini",
+      "capabilities": [
+        "completion",
+        "tools",
+        "vision",
+        "thinking"
+      ],
+      "maxContextLength": 1048576,
+      "maxOutputTokens": 65536,
+      "cost": {
+        "inputPer1MUSD": 0.75,
+        "outputPer1MUSD": 3.75,
+        "cachedInputPer1MUSD": 0.075
+      },
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer_use",
+          "params": {
+            "coordinates": "normalized-1000",
+            "maxEdgePx": 1440
+          }
+        }
+      }
+    }
+  ]
+}

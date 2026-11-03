@@ -97,6 +97,33 @@
         "supportsEagerToolInputStreaming": true,
         "toolSchemaProfile": { "toolSchemaMode": "openAIStrict" }
       }
+    },
+    {
+      "registryId": "a1000001-0001-4000-8000-000000000006",
+      "endpointModelId": "gpt-6.1-sol",
+      "displayName": "GPT-6.1 Sol",
+      "modelProtocol": "openAIAPI",
+      "capabilities": ["completion", "tools", "vision", "thinking"],
+      "maxContextLength": 1050000,
+      "maxOutputTokens": 128000,
+      "cost": {
+        "inputPer1MUSD": 2.0,
+        "outputPer1MUSD": 10.0,
+        "cachedInputPer1MUSD": 0.1
+      },
+      "requestFeatures": {
+        "reasoningEfforts": ["low", "medium", "high"]
+      },
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer",
+          "params": { "coordinates": "pixels", "maxEdgePx": 1600 }
+        }
+      },
+      "compat": {
+        "supportsEagerToolInputStreaming": false
+      }
     }
   ]
 }

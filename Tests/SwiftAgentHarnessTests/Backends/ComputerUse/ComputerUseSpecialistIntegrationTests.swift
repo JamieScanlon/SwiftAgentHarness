@@ -489,6 +489,17 @@ struct ComputerUseSpecialistIntegrationTests {
             capabilities: [.completion, .tools, .vision], modelProtocol: .openAIAPI
         )
         #expect(SubAgentSpawnService.nativeDialect(model: openAI, profile: profile("computer_toolset_20260801"), imageLimit: limit, layout: layout) == nil)
+        #expect(SubAgentSpawnService.nativeDialect(model: openAI, profile: profile("computer"), imageLimit: limit, layout: layout)
+            == ComputerUseNativeDialect(toolset: .openAIComputer))
+        #expect(SubAgentSpawnService.nativeDialect(model: claude, profile: profile("computer"), imageLimit: limit, layout: layout) == nil)
+        let gemini = Model(
+            id: UUID(), protocol: .gemini, modelName: "gemini", serverURL: URL(string: "https://example.com")!,
+            capabilities: [.completion, .tools, .vision], modelProtocol: .gemini
+        )
+        #expect(SubAgentSpawnService.nativeDialect(
+            model: gemini, profile: profile("computer_use"), imageLimit: limit, layout: layout, manifest: FakeDisplayTarget.hostManifest
+        ) == ComputerUseNativeDialect(toolset: .geminiComputerUse, environment: .desktop))
+        #expect(SubAgentSpawnService.nativeDialect(model: openAI, profile: profile("computer_use"), imageLimit: limit, layout: layout) == nil)
     }
 
     @Test("The host's kill switch stops a running specialist and blocks it")

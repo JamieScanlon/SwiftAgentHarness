@@ -31,6 +31,18 @@ public enum ProviderLLMBridge {
         )
     }
 
+    public static func makeGeminiAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
+        GeminiLLM(
+            baseURL: context.binding.serverURL,
+            apiKey: context.resolvedBearerToken(),
+            model: context.binding.endpointModelId,
+            capabilities: context.model.capabilities,
+            requestFeatures: context.model.requestFeatures,
+            systemPrompt: context.systemPrompt,
+            logger: context.logger
+        )
+    }
+
     public static func makeOllamaAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
         OllamaLLM(
             model: context.binding.endpointModelId,

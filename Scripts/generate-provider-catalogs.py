@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CATALOGS_DIR = REPO_ROOT / "Sources/SwiftAgentHarness/Backends/Providers/catalogs"
 OVERRIDES_DIR = CATALOGS_DIR / "overrides"
 
-PROVIDERS = ("openai", "anthropic", "openrouter")
+PROVIDERS = ("openai", "anthropic", "openrouter", "gemini")
 
 REQUIRED_MODEL_KEYS = {"registryId", "endpointModelId", "modelProtocol"}
 
@@ -141,8 +141,8 @@ def fetch_vendor_models(provider_id: str) -> list[dict[str, Any]]:
         return fetch_openai_models()
     if provider_id == "openrouter":
         return fetch_openrouter_models()
-    if provider_id == "anthropic":
-        raise RuntimeError("anthropic has no public models list API; maintain seed catalog manually")
+    if provider_id in ("anthropic", "gemini"):
+        raise RuntimeError(f"{provider_id} has no models list fetch here; maintain seed catalog manually")
     raise RuntimeError(f"unsupported provider: {provider_id}")
 
 
