@@ -103,15 +103,25 @@ public struct PermissionSnapshot: Sendable, Codable, Hashable {
     }
 }
 
+/// Who a live-view link is for.
+public enum DisplayLiveViewRole: String, Sendable, Codable, Hashable, CaseIterable {
+    /// The user's own link: view-only, except that it carries their input during takeover.
+    case user
+    /// A link for someone else to watch. It never carries input, and shows nothing while the user has control.
+    case observer
+}
+
 public struct DisplayLiveView: Sendable, Codable, Hashable {
     public var url: String
     public var viewOnly: Bool
     public var expiresAt: Date
+    public var role: DisplayLiveViewRole
 
-    public init(url: String, viewOnly: Bool, expiresAt: Date) {
+    public init(url: String, viewOnly: Bool, expiresAt: Date, role: DisplayLiveViewRole = .user) {
         self.url = url
         self.viewOnly = viewOnly
         self.expiresAt = expiresAt
+        self.role = role
     }
 }
 
@@ -142,13 +152,21 @@ public protocol DisplayTarget: Sendable {
     /// Re-resolves cited elements and refuses on drift. Stops at the first failure.
     func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome]
 
-    func liveView(_ lease: Lease) async throws -> DisplayLiveView?
+    /// A new link to watch the target. `nil` when it serves no live view.
+    func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView?
+    /// Ends every observer's stream and revokes the observer links; the user's are kept.
+    func endObservers(_ lease: Lease) async throws
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
 }
 
 public extension DisplayTarget {
-    func liveView(_ lease: Lease) async throws -> DisplayLiveView? { nil }
+    func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? { nil }
+    func endObservers(_ lease: Lease) async throws {}
+
+    func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
+        try await liveView(lease, role: .user)
+    }
 }
 
 /// The single-controller lock a target driver holds its lease with.

@@ -97,9 +97,13 @@ public actor RemoteDisplayTarget: DisplayTarget {
         return outcomes
     }
 
-    public func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
-        guard case .liveView(let view) = try await call(.liveView(leaseID: lease.id)) else { throw unexpected("live view") }
+    public func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
+        guard case .liveView(let view) = try await call(.liveView(leaseID: lease.id, role: role)) else { throw unexpected("live view") }
         return view
+    }
+
+    public func endObservers(_ lease: Lease) async throws {
+        guard case .done = try await call(.endObservers(leaseID: lease.id)) else { throw unexpected("done") }
     }
 
     public func takeover(_ lease: Lease, on: Bool) async throws {

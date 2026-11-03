@@ -102,6 +102,30 @@ struct ManagedBrowserLiveViewTests {
         await target.release(lease, reason: .completed)
     }
 
+    @Test("An observer watches but never controls, and ending observers leaves the user's viewer")
+    func observer() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let (browser, target, lease) = try await Self.leased(liveView: server)
+        try await target.takeover(lease, on: true)
+        let link = try #require(try await target.liveView(lease, role: .observer))
+        #expect(link.role == .observer && link.viewOnly)
+        let observer = try Viewer(link)
+        #expect(try await observer.status().paused == true)
+        try await observer.send(#"{"type":"text","text":"hunter2"}"#)
+        try await observer.roundTrip()
+        #expect(await browser.methods("Input.").isEmpty)
+
+        let user = try Viewer(try #require(try await target.liveView(lease)))
+        _ = try await user.status()
+        try await target.endObservers(lease)
+        #expect(try await observer.status().type == "ended")
+        await browser.emit(Self.frameEvent(DisplayLiveViewServerTests.jpeg, ack: 1))
+        #expect(try await user.frame().width == 1280, "the user's viewer stays")
+        await target.release(lease, reason: .completed)
+        await #expect(throws: DisplayTargetError.leaseNotHeld) { try await target.endObservers(lease) }
+    }
+
     @Test("Release ends the viewers and revokes the link")
     func release() async throws {
         let server = DisplayLiveViewServer()

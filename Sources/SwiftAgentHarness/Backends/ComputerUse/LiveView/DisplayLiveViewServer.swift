@@ -16,7 +16,11 @@ public struct DisplayLiveViewConfiguration: Sendable {
     public var publicBaseURL: URL?
     /// How long a link can be used to connect. A viewer that connected stays until the lease ends.
     public var linkLifetime: Duration
+    /// How many of the user's viewers can watch one feed.
     public var maxViewersPerFeed: Int
+    /// How many observers can watch one feed, counted apart from the user's viewers so they can't crowd them out.
+    /// `0` turns observer links off.
+    public var maxObserversPerFeed: Int
     /// How long a new stream has to present its link's token.
     public var authenticationTimeout: Duration
 
@@ -26,6 +30,7 @@ public struct DisplayLiveViewConfiguration: Sendable {
         publicBaseURL: URL? = nil,
         linkLifetime: Duration = .seconds(600),
         maxViewersPerFeed: Int = 4,
+        maxObserversPerFeed: Int = 4,
         authenticationTimeout: Duration = .seconds(5)
     ) {
         self.host = host
@@ -33,13 +38,15 @@ public struct DisplayLiveViewConfiguration: Sendable {
         self.publicBaseURL = publicBaseURL
         self.linkLifetime = linkLifetime
         self.maxViewersPerFeed = max(1, maxViewersPerFeed)
+        self.maxObserversPerFeed = max(0, maxObserversPerFeed)
         self.authenticationTimeout = authenticationTimeout
     }
 }
 
 /// Serves live views of display targets: a viewer page and a WebSocket stream of frames. Links carry a short-lived
-/// token in the URL fragment, so it never appears in a request line or a log. A viewer is view-only, and its input
-/// reaches the target only while the feed has control, which a target gives it during takeover.
+/// token in the URL fragment, so it never appears in a request line or a log. A viewer is view-only, and the user's
+/// input reaches the target only while the feed has control, which a target gives it during takeover. An observer's
+/// input never does, and observers see no frames while the feed has control.
 ///
 /// One server can carry many feeds, one per leased target.
 public actor DisplayLiveViewServer {
@@ -58,19 +65,44 @@ public actor DisplayLiveViewServer {
 
     enum Outgoing: Sendable {
         case frame(DisplayLiveViewFrame, control: Bool)
-        case status(label: String, control: Bool)
+        case status(StatusMessage)
         case ended
+    }
+
+    private struct Viewer {
+        var role: DisplayLiveViewRole
+        var messages: AsyncStream<Outgoing>.Continuation
     }
 
     private struct Feed {
         var feed: DisplayLiveViewFeed
         var control = false
         var lastFrame: DisplayLiveViewFrame?
-        var viewers: [UUID: AsyncStream<Outgoing>.Continuation] = [:]
+        var viewers: [UUID: Viewer] = [:]
+
+        func count(_ role: DisplayLiveViewRole) -> Int {
+            viewers.values.count { $0.role == role }
+        }
+
+        func status(for role: DisplayLiveViewRole) -> StatusMessage {
+            switch role {
+            case .user: StatusMessage(type: "status", label: feed.label, control: control)
+            case .observer: StatusMessage(type: "status", label: feed.label, control: false, observer: true, paused: control)
+            }
+        }
+
+        /// What the viewer is sent of `frame`: nothing for an observer while the user has control.
+        func outgoing(_ frame: DisplayLiveViewFrame, for role: DisplayLiveViewRole) -> Outgoing? {
+            switch role {
+            case .user: .frame(frame, control: control)
+            case .observer: control ? nil : .frame(frame, control: false)
+            }
+        }
     }
 
     private struct Link {
         var feedID: UUID
+        var role: DisplayLiveViewRole
         var expiresAt: Date
     }
 
@@ -174,39 +206,65 @@ public actor DisplayLiveViewServer {
     public func close(_ id: UUID) {
         guard let feed = feeds.removeValue(forKey: id) else { return }
         for viewer in feed.viewers.values {
-            viewer.yield(.ended)
-            viewer.finish()
+            viewer.messages.yield(.ended)
+            viewer.messages.finish()
         }
         links = links.filter { $0.value.feedID != id }
     }
 
-    /// A new link to the feed. `viewOnly` is whether its input is ignored right now; it changes with control.
-    public func link(for id: UUID) async throws -> DisplayLiveView {
+    /// A new link to the feed. `viewOnly` is whether its input is ignored right now; for the user's links it changes
+    /// with control, and an observer's is always view-only.
+    public func link(for id: UUID, role: DisplayLiveViewRole = .user) async throws -> DisplayLiveView {
         guard feeds[id] != nil else { throw DisplayTargetError.leaseNotHeld }
+        if role == .observer, configuration.maxObserversPerFeed == 0 {
+            throw DisplayTargetError.unsupported("observer links are turned off")
+        }
         let base = try await start()
         guard let feed = feeds[id] else { throw DisplayTargetError.leaseNotHeld }
         let token = Self.token()
         let expiresAt = now().addingTimeInterval(configuration.linkLifetime.timeInterval)
         links = links.filter { $0.value.expiresAt > now() }
-        links[token] = Link(feedID: id, expiresAt: expiresAt)
+        links[token] = Link(feedID: id, role: role, expiresAt: expiresAt)
         var components = URLComponents(url: base.appendingPathComponent("view"), resolvingAgainstBaseURL: false)!
         components.fragment = token
-        return DisplayLiveView(url: components.url!.absoluteString, viewOnly: !feed.control, expiresAt: expiresAt)
+        return DisplayLiveView(
+            url: components.url!.absoluteString,
+            viewOnly: role == .observer || !feed.control,
+            expiresAt: expiresAt,
+            role: role
+        )
+    }
+
+    /// Ends the feed's observers and revokes its observer links. The user's viewers and links are kept.
+    public func endObservers(_ id: UUID) {
+        guard let feed = feeds[id] else { return }
+        for viewer in feed.viewers.values where viewer.role == .observer {
+            viewer.messages.yield(.ended)
+            viewer.messages.finish()
+        }
+        links = links.filter { $0.value.feedID != id || $0.value.role != .observer }
     }
 
     public func publish(_ frame: DisplayLiveViewFrame, to id: UUID) {
         guard var feed = feeds[id] else { return }
         feed.lastFrame = frame
         feeds[id] = feed
-        for viewer in feed.viewers.values { viewer.yield(.frame(frame, control: feed.control)) }
+        for viewer in feed.viewers.values {
+            if let message = feed.outgoing(frame, for: viewer.role) { viewer.messages.yield(message) }
+        }
     }
 
-    /// Whether viewers' input reaches the target.
+    /// Whether the user's viewers' input reaches the target. Observers are paused while it does.
     public func setControl(_ on: Bool, for id: UUID) {
         guard var feed = feeds[id], feed.control != on else { return }
         feed.control = on
         feeds[id] = feed
-        for viewer in feed.viewers.values { viewer.yield(.status(label: feed.feed.label, control: on)) }
+        for viewer in feed.viewers.values {
+            viewer.messages.yield(.status(feed.status(for: viewer.role)))
+            if viewer.role == .observer, let frame = feed.lastFrame, let message = feed.outgoing(frame, for: .observer) {
+                viewer.messages.yield(message)
+            }
+        }
     }
 
     public func viewerCount(_ id: UUID) -> Int {
@@ -216,27 +274,28 @@ public actor DisplayLiveViewServer {
     // MARK: - Viewers
 
     private func admit(_ token: String) async -> (feed: UUID, viewer: UUID, messages: AsyncStream<Outgoing>)? {
-        guard let link = links[token], link.expiresAt > now(), var feed = feeds[link.feedID],
-              feed.viewers.count < configuration.maxViewersPerFeed else { return nil }
+        guard let link = links[token], link.expiresAt > now(), var feed = feeds[link.feedID] else { return nil }
+        let limit = link.role == .user ? configuration.maxViewersPerFeed : configuration.maxObserversPerFeed
+        guard feed.count(link.role) < limit else { return nil }
         let viewer = UUID()
         let (messages, continuation) = AsyncStream<Outgoing>.makeStream(bufferingPolicy: .bufferingNewest(4))
-        continuation.yield(.status(label: feed.feed.label, control: feed.control))
-        if let frame = feed.lastFrame { continuation.yield(.frame(frame, control: feed.control)) }
-        feed.viewers[viewer] = continuation
+        continuation.yield(.status(feed.status(for: link.role)))
+        if let frame = feed.lastFrame, let message = feed.outgoing(frame, for: link.role) { continuation.yield(message) }
+        feed.viewers[viewer] = Viewer(role: link.role, messages: continuation)
         feeds[link.feedID] = feed
         await feed.feed.viewersChanged(feed.viewers.count)
         return (link.feedID, viewer, messages)
     }
 
     private func leave(_ feedID: UUID, _ viewer: UUID) async {
-        guard var feed = feeds[feedID], let continuation = feed.viewers.removeValue(forKey: viewer) else { return }
-        continuation.finish()
+        guard var feed = feeds[feedID], let removed = feed.viewers.removeValue(forKey: viewer) else { return }
+        removed.messages.finish()
         feeds[feedID] = feed
         await feed.feed.viewersChanged(feed.viewers.count)
     }
 
-    private func receive(_ input: DisplayLiveViewInput, from feedID: UUID) async {
-        guard let feed = feeds[feedID], feed.control else { return }
+    private func receive(_ input: DisplayLiveViewInput, from feedID: UUID, viewer: UUID) async {
+        guard let feed = feeds[feedID], feed.control, feed.viewers[viewer]?.role == .user else { return }
         await feed.feed.input(input)
     }
 
@@ -265,8 +324,8 @@ public actor DisplayLiveViewServer {
                             switch message {
                             case .frame(let frame, let control):
                                 try await outbound.write(Self.binaryFrame(frame, control: control))
-                            case .status(let label, let control):
-                                try await outbound.write(Self.textFrame(StatusMessage(type: "status", label: label, control: control)))
+                            case .status(let status):
+                                try await outbound.write(Self.textFrame(status))
                             case .ended:
                                 try await outbound.write(Self.textFrame(StatusMessage(type: "ended")))
                                 try await outbound.write(Self.closeFrame(code: 1000))
@@ -279,7 +338,7 @@ public actor DisplayLiveViewServer {
                         switch frame.opcode {
                         case .text:
                             if let input = DisplayLiveViewInput(message: Data(frame.unmaskedData.readableBytesView)) {
-                                await self.receive(input, from: admitted.feed)
+                                await self.receive(input, from: admitted.feed, viewer: admitted.viewer)
                             }
                         case .ping:
                             try await outbound.write(WebSocketFrame(fin: true, opcode: .pong, data: frame.unmaskedData))
@@ -342,10 +401,14 @@ public actor DisplayLiveViewServer {
         return WebSocketFrame(fin: true, opcode: .binary, data: buffer)
     }
 
-    struct StatusMessage: Codable, Equatable {
+    struct StatusMessage: Codable, Equatable, Sendable {
         var type: String
         var label: String?
         var control: Bool?
+        /// Set only for observers.
+        var observer: Bool?
+        /// Whether the user has control, so an observer is sent no frames.
+        var paused: Bool?
     }
 
     private static func textFrame(_ message: StatusMessage) -> WebSocketFrame {

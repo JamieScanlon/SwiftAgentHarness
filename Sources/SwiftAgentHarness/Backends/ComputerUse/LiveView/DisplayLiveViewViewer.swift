@@ -37,7 +37,7 @@ enum DisplayLiveViewViewer {
       const label = document.getElementById("label");
       const state = document.getElementById("state");
       const screen = document.getElementById("screen");
-      let control = false, width = 0, height = 0, shown = null, ended = false, pendingMove = null;
+      let control = false, observer = false, width = 0, height = 0, shown = null, ended = false, pendingMove = null;
 
       const streamURL = new URL("stream", location.href);
       streamURL.protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -54,17 +54,30 @@ enum DisplayLiveViewViewer {
         if (on) screen.focus();
       }
 
+      function setPaused(paused) {
+        state.textContent = paused ? "The user has control. The view is paused until they hand back." : "Watching. View only.";
+        if (paused && shown) {
+          screen.removeAttribute("src");
+          URL.revokeObjectURL(shown);
+          shown = null;
+        }
+      }
+
       socket.onmessage = (event) => {
         if (typeof event.data === "string") {
           const message = JSON.parse(event.data);
-          if (message.type === "status") { label.textContent = message.label; setControl(message.control); }
+          if (message.type === "status") {
+            label.textContent = message.label;
+            observer = message.observer === true;
+            if (observer) setPaused(message.paused === true); else setControl(message.control);
+          }
           if (message.type === "ended") { ended = true; state.textContent = "The session ended."; }
           return;
         }
         const view = new DataView(event.data);
         width = view.getUint32(0);
         height = view.getUint32(4);
-        setControl(view.getUint8(8) === 1);
+        if (!observer) setControl(view.getUint8(8) === 1);
         const next = URL.createObjectURL(new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }));
         const previous = shown;
         shown = next;

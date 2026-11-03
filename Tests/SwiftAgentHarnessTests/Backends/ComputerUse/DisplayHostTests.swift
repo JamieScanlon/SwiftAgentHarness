@@ -62,6 +62,10 @@ struct DisplayHostTests {
         try await remote.takeover(lease, on: true)
         #expect(await target.takeoverStates == [true])
         #expect(try await remote.liveView(lease) == nil)
+        #expect(try await remote.liveView(lease, role: .observer) == nil)
+        #expect(await target.liveViewRoles == [.user, .observer])
+        try await remote.endObservers(lease)
+        #expect(await target.observerEnds == 1)
 
         await remote.release(lease, reason: .completed)
         #expect(await target.releases == [.completed])

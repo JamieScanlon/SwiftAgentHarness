@@ -104,8 +104,11 @@ public actor DisplayHostServer {
                 return .observation(try await target.observe(try lease(leaseID, connection: id), observe))
             case .act(let leaseID, let batch):
                 return .outcomes(try await target.act(try lease(leaseID, connection: id), batch))
-            case .liveView(let leaseID):
-                return .liveView(try await target.liveView(try lease(leaseID, connection: id)))
+            case .liveView(let leaseID, let role):
+                return .liveView(try await target.liveView(try lease(leaseID, connection: id), role: role))
+            case .endObservers(let leaseID):
+                try await target.endObservers(try lease(leaseID, connection: id))
+                return .done
             case .takeover(let leaseID, let on):
                 try await target.takeover(try lease(leaseID, connection: id), on: on)
                 return .done

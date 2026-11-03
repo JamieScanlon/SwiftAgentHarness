@@ -122,12 +122,26 @@ public struct ComputerUseControlService: Sendable {
     }
 
     /// A new live-view link to a live run. `nil` when the conversation has no such live run or its target serves no
-    /// live view. Each call mints a new short-lived link.
-    public func liveView(conversationID: UUID, lifecycleID: String) async throws -> DisplayLiveView? {
+    /// live view. Each call mints a new short-lived link. An observer link is for someone other than the user to
+    /// watch: it never carries input, and shows nothing while the user has control.
+    public func liveView(conversationID: UUID, lifecycleID: String, role: DisplayLiveViewRole = .user) async throws -> DisplayLiveView? {
+        guard let session = await liveSession(conversationID: conversationID, lifecycleID: lifecycleID) else { return nil }
+        return try await session.liveView(role: role)
+    }
+
+    /// Ends a live run's observers and revokes its observer links; the user's are kept. `false` when the
+    /// conversation has no such live run.
+    public func endObservers(conversationID: UUID, lifecycleID: String) async throws -> Bool {
+        guard let session = await liveSession(conversationID: conversationID, lifecycleID: lifecycleID) else { return false }
+        try await session.endObservers()
+        return true
+    }
+
+    private func liveSession(conversationID: UUID, lifecycleID: String) async -> ComputerUseSession? {
         guard let entry = await installation.sessions.entries(parent: conversationID).first(where: { $0.lifecycleID == lifecycleID }),
               await entry.session.terminalReason == nil
         else { return nil }
-        return try await entry.session.liveView()
+        return entry.session
     }
 
     /// Takes over (or hands back) the conversation's live sessions, or just `lifecycleID`'s. Returns the lifecycle

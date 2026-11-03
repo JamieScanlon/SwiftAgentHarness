@@ -67,10 +67,17 @@ struct ComputerUseControlServiceTests {
         await target.setLiveViewLink(link)
 
         #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-1") == link)
+        let observerLink = try #require(try await control.liveView(conversationID: parent, lifecycleID: "call-1", role: .observer))
+        #expect(observerLink.role == .observer)
+        #expect(await target.liveViewRoles == [.user, .observer])
+        #expect(try await control.endObservers(conversationID: parent, lifecycleID: "call-1"))
+        #expect(await target.observerEnds == 1)
+        #expect(try await control.endObservers(conversationID: parent, lifecycleID: "call-missing") == false)
         #expect(try await control.liveView(conversationID: UUID(), lifecycleID: "call-1") == nil)
         #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-missing") == nil)
         await session.stop()
         #expect(try await control.liveView(conversationID: parent, lifecycleID: "call-1") == nil)
+        #expect(try await control.endObservers(conversationID: parent, lifecycleID: "call-1") == false)
     }
 
     @Test("Resolving a request reports unknown ids and kind mismatches separately")

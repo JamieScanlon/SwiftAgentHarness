@@ -865,10 +865,17 @@ public actor ComputerUseSession {
 
     // MARK: - Oversight
 
-    /// A link for the user to watch the target, and to control it during takeover. `nil` when the target serves none.
-    public func liveView() async throws -> DisplayLiveView? {
+    /// A link to watch the target: for the user, who also controls it through the link during takeover, or for an
+    /// observer, who only watches. `nil` when the target serves none.
+    public func liveView(role: DisplayLiveViewRole = .user) async throws -> DisplayLiveView? {
         if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
-        return try await target.liveView(lease)
+        return try await target.liveView(lease, role: role)
+    }
+
+    /// Ends every observer's stream and revokes the observer links.
+    public func endObservers() async throws {
+        if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
+        try await target.endObservers(lease)
     }
 
     public func setTakeover(_ on: Bool) async throws {

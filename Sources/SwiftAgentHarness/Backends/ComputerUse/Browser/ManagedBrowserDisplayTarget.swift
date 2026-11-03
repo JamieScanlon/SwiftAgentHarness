@@ -235,10 +235,15 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         }
     }
 
-    public func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
+    public func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
         try await requireLease(lease)
         guard let liveViewServer, let liveFeed else { return nil }
-        return try await liveViewServer.link(for: liveFeed)
+        return try await liveViewServer.link(for: liveFeed, role: role)
+    }
+
+    public func endObservers(_ lease: Lease) async throws {
+        try await requireLease(lease)
+        if let liveFeed { await liveViewServer?.endObservers(liveFeed) }
     }
 
     private func openPage() async throws -> Page {

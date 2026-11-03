@@ -122,7 +122,8 @@ When session blob storage is configured, the server stores bytes in the session 
 | GET | `/api/conversations/:id/computer-use/replays/:lifecycleID` | — | `ComputerUseReplay`: action log plus thumbnail rows; **404** when unknown |
 | GET | `/api/conversations/:id/computer-use/replays/:lifecycleID/thumbnails/:observationID` | — | Image bytes for a thumbnail the replay lists; **404** otherwise |
 | POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/audit` | `{"marked":<Bool>}` | `ComputerUseAuditStatus`; **404** when no live or retained run matches |
-| POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/live-view` | — | `DisplayLiveView` (`url`, `viewOnly`, `expiresAt`), sent `no-store`: a new short-lived link whose token is in the URL fragment; **404** when no live run matches or its target serves no live view (see `liveView` in the session status). |
+| POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/live-view` | `{"role":"user"\|"observer"}`, optional | `DisplayLiveView` (`url`, `viewOnly`, `expiresAt`, `role`), sent `no-store`: a new short-lived link whose token is in the URL fragment. An observer link never carries input and is paused during takeover; **400** on another role; **404** when no live run matches or its target serves no live view (see `liveView` in the session status). |
+| DELETE | `/api/conversations/:id/computer-use/runs/:lifecycleID/live-view/observers` | — | **204**: ends the run's observer streams and revokes its observer links, keeping the user's; **404** when no live run matches. |
 | POST | `/api/conversations/:id/computer-use/takeover` | `{"on":<Bool>,"lifecycleID":<String>?}` | `{"lifecycleIDs":[String]}`; **404** when no live session matches; **409** when the target refuses. |
 
 ### Conversations

@@ -21,6 +21,8 @@ struct DisplayLiveViewServerTests {
     /// A viewer as a browser would connect: to `/stream`, presenting the fragment's token first.
     struct Viewer {
         let task: URLSessionWebSocketTask
+        /// Read continuously, since URLSession handles a pong only while a receive is pending.
+        private let inbox: AsyncStream<URLSessionWebSocketTask.Message>
 
         init(_ link: DisplayLiveView, origin: String? = nil, token: String? = nil, authenticates: Bool = true) throws {
             let url = try #require(URL(string: link.url))
@@ -31,8 +33,15 @@ struct DisplayLiveViewServerTests {
             components.scheme = "ws"
             var request = URLRequest(url: try #require(components.url))
             if let origin { request.setValue(origin, forHTTPHeaderField: "Origin") }
-            task = URLSession.shared.webSocketTask(with: request)
+            let task = URLSession.shared.webSocketTask(with: request)
+            self.task = task
+            let (inbox, received) = AsyncStream.makeStream(of: URLSessionWebSocketTask.Message.self)
+            self.inbox = inbox
             task.resume()
+            Task {
+                while let message = try? await task.receive() { received.yield(message) }
+                received.finish()
+            }
             if authenticates, let value = token ?? fragment {
                 task.send(.string(#"{"type":"auth","token":"\#(value)"}"#)) { _ in }
             }
@@ -45,10 +54,12 @@ struct DisplayLiveViewServerTests {
         /// The next message, or `nil` when the stream closed or nothing came within the timeout.
         func next(within timeout: Duration = .seconds(3)) async -> URLSessionWebSocketTask.Message? {
             await withTaskGroup(of: URLSessionWebSocketTask.Message?.self) { group in
-                group.addTask { try? await task.receive() }
+                group.addTask {
+                    var messages = inbox.makeAsyncIterator()
+                    return await messages.next()
+                }
                 group.addTask {
                     guard (try? await Task.sleep(for: timeout)) != nil else { return nil }
-                    // receive() ignores task cancellation; cancelling the socket ends it.
                     task.cancel(with: .goingAway, reason: nil)
                     return nil
                 }
@@ -254,6 +265,101 @@ struct DisplayLiveViewServerTests {
         _ = try await first.status()
         let second = try Viewer(link)
         #expect(await second.next() == nil)
+    }
+
+    @Test("An observer link never carries input, even during takeover")
+    func observerInput() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let log = FeedLog()
+        let feed = await server.open(log.feed)
+        await server.setControl(true, for: feed)
+        let link = try await server.link(for: feed, role: .observer)
+        #expect(link.role == .observer)
+        #expect(link.viewOnly, "an observer link is view-only during takeover too")
+        #expect(try await server.link(for: feed).role == .user)
+
+        let observer = try Viewer(link)
+        #expect(try await observer.status() == DisplayLiveViewServer.StatusMessage(type: "status", label: "Managed browser", control: false, observer: true, paused: true))
+        try await observer.send(#"{"type":"text","text":"from the observer"}"#)
+        try await observer.roundTrip()
+        let user = try Viewer(try await server.link(for: feed))
+        #expect(try await user.status().control == true)
+        try await user.send(#"{"type":"text","text":"from the user"}"#)
+        #expect(await Self.eventually { await log.inputs.count == 1 })
+        try await observer.send(#"{"type":"text","text":"from the observer"}"#)
+        try await observer.roundTrip()
+        #expect(await log.inputs == [.text("from the user")])
+    }
+
+    @Test("Observers see no frames while the user has control, and catch up when it ends")
+    func observerPause() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let feed = await server.open(FeedLog().feed)
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 100, height: 100), to: feed)
+        let observer = try Viewer(try await server.link(for: feed, role: .observer))
+        #expect(try await observer.status() == DisplayLiveViewServer.StatusMessage(type: "status", label: "Managed browser", control: false, observer: true, paused: false))
+        #expect(try await observer.frame().width == 100)
+        let user = try Viewer(try await server.link(for: feed))
+        _ = try await user.frame()
+
+        await server.setControl(true, for: feed)
+        #expect(try await observer.status().paused == true)
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 200, height: 200), to: feed)
+        #expect(try await user.frame().width == 200)
+        let late = try Viewer(try await server.link(for: feed, role: .observer))
+        #expect(try await late.status().paused == true)
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 300, height: 300), to: feed)
+        #expect(try await user.frame().width == 300)
+
+        await server.setControl(false, for: feed)
+        #expect(try await observer.status().paused == false)
+        #expect(try await observer.frame().width == 300, "the frames sent during takeover never reached it")
+        #expect(try await late.status().paused == false)
+        #expect(try await late.frame().width == 300)
+    }
+
+    @Test("Observers have their own viewer limit, so they can't crowd out the user")
+    func observerLimit() async throws {
+        let server = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(maxViewersPerFeed: 1, maxObserversPerFeed: 1))
+        defer { Task { await server.stop() } }
+        let feed = await server.open(FeedLog().feed)
+        let observerLink = try await server.link(for: feed, role: .observer)
+        let first = try Viewer(observerLink)
+        _ = try await first.status()
+        let second = try Viewer(observerLink)
+        #expect(await second.next() == nil)
+        let user = try Viewer(try await server.link(for: feed))
+        #expect(try await user.status().observer == nil)
+        #expect(await server.viewerCount(feed) == 2)
+
+        let closed = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(maxObserversPerFeed: 0))
+        defer { Task { await closed.stop() } }
+        let closedFeed = await closed.open(FeedLog().feed)
+        await #expect(throws: DisplayTargetError.self) { try await closed.link(for: closedFeed, role: .observer) }
+    }
+
+    @Test("Ending observers closes their streams and revokes their links, and leaves the user's")
+    func endObservers() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let feed = await server.open(FeedLog().feed)
+        let observerLink = try await server.link(for: feed, role: .observer)
+        let userLink = try await server.link(for: feed)
+        let observer = try Viewer(observerLink)
+        _ = try await observer.status()
+        let user = try Viewer(userLink)
+        _ = try await user.status()
+
+        await server.endObservers(feed)
+        #expect(try await observer.status().type == "ended")
+        #expect(await (try Viewer(observerLink)).next(within: .seconds(1)) == nil)
+        #expect(await Self.eventually { await server.viewerCount(feed) == 1 })
+        #expect(try await (try Viewer(userLink)).status().type == "status")
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 50, height: 50), to: feed)
+        #expect(try await user.frame().width == 50)
+        #expect(try await server.link(for: feed, role: .observer).role == .observer, "new observer links can still be made")
     }
 
     @Test("Viewer messages parse into input, and malformed ones are dropped")

@@ -224,7 +224,7 @@ struct APILayerComputerUseRouteTests {
         #expect(store.expiries["doc"] == .some(nil))
     }
 
-    @Test("POST …/runs/{lifecycleID}/live-view mints a link, and 404s when there's no run or no live view")
+    @Test("POST …/runs/{lifecycleID}/live-view mints a user or observer link, DELETE …/observers ends observers, and both 404 without a run")
     func liveView() async throws {
         let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
         let (_, target) = try await ComputerUseFixtures.registerLiveSession(in: installation, parent: conversationID, lifecycleID: "call-1")
@@ -239,6 +239,28 @@ struct APILayerComputerUseRouteTests {
                 #expect(body["url"] as? String == "http://127.0.0.1:9/view#secret")
                 #expect(body["viewOnly"] as? Bool == true)
                 #expect(body["expiresAt"] as? String == "2027-01-15T08:00:00Z")
+                #expect(body["role"] as? String == "user")
+            }
+            try await app.testing().test(.POST, "\(base)/runs/call-1/live-view", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.body = .init(string: #"{"role":"observer"}"#)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                #expect(try json(res)["role"] as? String == "observer")
+            })
+            try await app.testing().test(.POST, "\(base)/runs/call-1/live-view", beforeRequest: { req in
+                req.headers.contentType = .json
+                req.body = .init(string: #"{"role":"admin"}"#)
+            }, afterResponse: { res async throws in
+                #expect(res.status == .badRequest)
+            })
+            #expect(await target.liveViewRoles == [.user, .observer])
+            try await app.testing().test(.DELETE, "\(base)/runs/call-1/live-view/observers") { res async throws in
+                #expect(res.status == .noContent)
+            }
+            #expect(await target.observerEnds == 1)
+            try await app.testing().test(.DELETE, "\(base)/runs/call-nope/live-view/observers") { res async throws in
+                #expect(res.status == .notFound)
             }
             try await app.testing().test(.POST, "\(base)/runs/call-blind/live-view") { res async throws in
                 #expect(res.status == .notFound)
