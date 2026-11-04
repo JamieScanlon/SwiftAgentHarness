@@ -162,6 +162,9 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func setViewers(_ count: Int) { viewers = count }
+    var leaseDownloads: [DisplayDownload] = []
+    func setDownloads(_ downloads: [DisplayDownload]) { leaseDownloads = downloads }
+    func downloads(_ lease: Lease) async -> [DisplayDownload] { leaseDownloads }
 
     func setServedFrame(_ frame: DisplayLiveViewFrame?) { servedFrame = frame }
 

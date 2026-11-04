@@ -16,6 +16,8 @@ public struct ManagedBrowserConfiguration: Sendable {
     /// Most elements in one tree.
     public var maxElements: Int
     public var retainedObservations: Int
+    /// Where each lease's downloads go, in a folder of their own. Defaults to the temporary directory.
+    public var downloadsDirectory: URL?
 
     public init(
         id: DisplayTargetID = "managed-browser",
@@ -25,7 +27,8 @@ public struct ManagedBrowserConfiguration: Sendable {
         navigationTimeout: Duration = .seconds(15),
         settleDelay: Duration = .milliseconds(150),
         maxElements: Int = 600,
-        retainedObservations: Int = 8
+        retainedObservations: Int = 8,
+        downloadsDirectory: URL? = nil
     ) {
         self.id = id
         self.label = label
@@ -35,15 +38,17 @@ public struct ManagedBrowserConfiguration: Sendable {
         self.settleDelay = settleDelay
         self.maxElements = max(1, maxElements)
         self.retainedObservations = max(1, retainedObservations)
+        self.downloadsDirectory = downloadsDirectory
     }
 }
 
 /// Whose browser profile a lease works in.
 public enum ManagedBrowserProfile: Sendable, Hashable {
-    /// A fresh browser context per lease, with downloads denied, thrown away on release.
+    /// A fresh browser context per lease, thrown away on release. Downloads go to a lease folder.
     case throwaway
-    /// The browser's own profile, with the user's sign-ins: the lease gets a tab of its own, closed on release.
-    /// Downloads the tab starts are cancelled, and only windows it opens are folded back into it.
+    /// The browser's own profile, with the user's sign-ins: the lease gets tabs of its own, the one it opens and
+    /// the popups those open, closed on release. The agent never sees the user's other tabs. Its downloads go to a
+    /// lease folder and are listed in the result.
     case user
 }
 
@@ -89,8 +94,18 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     private var observations: [ObservationID: ObservationMeta] = [:]
     private var observationOrder: [ObservationID] = []
     private var lastPointer: DisplayPoint?
-    /// Things the page did on its own that the next observation reports, such as a dismissed dialog.
+    /// Things the page did on its own that the next observation reports, such as a new tab or a download.
     private var notices: [String] = []
+    /// The lease's tabs besides the active `page`, oldest first.
+    private var otherTabs: [Page] = []
+    private var events: Task<Void, Never>?
+    private var grants = ComputerUseGrantSet([])
+    /// A JavaScript dialog the page is paused on, by tab session. The model answers it; it is never auto-accepted.
+    private var dialogs: [String: Dialog] = [:]
+    private var downloadsFolder: URL?
+    private var downloadsByGUID: [String: Download] = [:]
+    /// Downloads a tab of the lease's started; in the user's profile the others are the user's.
+    private var agentDownloads: Set<String> = []
 
     struct Page {
         var session: ManagedBrowserSession
@@ -99,7 +114,18 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         var sessionID: String
         var frameID: String?
         var world: Int?
-        var events: Task<Void, Never>?
+        var url: String?
+    }
+
+    struct Dialog {
+        var type: String
+        var message: String
+        var promptText: String
+    }
+
+    struct Download {
+        var name: String
+        var completed: Bool
     }
 
     struct ObservationMeta {
@@ -107,6 +133,8 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         var scrollX: Double
         var scrollY: Double
         var elements: [String: ManagedBrowserPageSnapshot.Element]
+        /// Taken while the page was paused on a dialog.
+        var dialog = false
     }
 
     public init(
@@ -215,6 +243,11 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         observationOrder = []
         notices = []
         lastPointer = nil
+        grants = ComputerUseGrantSet(request.grants)
+        dialogs = [:]
+        downloadsByGUID = [:]
+        agentDownloads = []
+        await prepareDownloads(lease: lease)
         if let liveViewServer {
             liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
                 label: configuration.label,
@@ -228,16 +261,24 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.holds(leaseID: lease.id) else { return }
         if let page {
-            page.events?.cancel()
+            events?.cancel()
+            let connection = page.session.connection
             switch profile {
             case .throwaway:
-                _ = try? await page.session.connection.send("Target.disposeBrowserContext", ["browserContextId": .string(page.contextID)])
+                _ = try? await connection.send("Target.disposeBrowserContext", ["browserContextId": .string(page.contextID)])
             case .user:
-                _ = try? await page.session.connection.send("Target.closeTarget", ["targetId": .string(page.targetID)])
+                for tab in [page] + otherTabs {
+                    _ = try? await connection.send("Target.closeTarget", ["targetId": .string(tab.targetID)])
+                }
+                // The user's own download setting comes back once the lease's tabs are gone.
+                _ = try? await connection.send("Browser.setDownloadBehavior", ["behavior": .string("default")])
             }
             await page.session.shutdown()
         }
+        events = nil
         page = nil
+        otherTabs = []
+        dialogs = [:]
         takeoverActive = false
         casting = false
         if let liveFeed { await liveViewServer?.close(liveFeed) }
@@ -256,6 +297,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         return TargetLayout(
             displays: [DisplayInfo(id: "viewport", frame: viewportRect(state), scaleFactor: 1, isPrimary: true)],
             tabs: [TabInfo(id: page.targetID, url: state.url, isActive: true)]
+                + otherTabs.map { TabInfo(id: $0.targetID, url: $0.url ?? "", isActive: false) }
         )
     }
 
@@ -297,7 +339,6 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
                 let context = try await connection.send("Target.createBrowserContext", ["disposeOnDetach": .boolean(true)])
                 guard let id = context[wire: "browserContextId"]?.wireString else { throw DisplayTargetError.driverFailure("no browser context") }
                 contextID = id
-                _ = try? await connection.send("Browser.setDownloadBehavior", ["behavior": .string("deny"), "browserContextId": .string(contextID)])
                 let created = try await connection.send("Target.createTarget", ["url": .string("about:blank"), "browserContextId": .string(contextID)])
                 guard let id = created[wire: "targetId"]?.wireString else { throw DisplayTargetError.driverFailure("no page target") }
                 targetID = id
@@ -308,20 +349,11 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
                 let info = try await connection.send("Target.getTargetInfo", ["targetId": .string(targetID)])
                 contextID = info[wire: "targetInfo"]?[wire: "browserContextId"]?.wireString ?? ""
             }
-            let attached = try await connection.send("Target.attachToTarget", ["targetId": .string(targetID), "flatten": .boolean(true)])
-            guard let sessionID = attached[wire: "sessionId"]?.wireString else { throw DisplayTargetError.driverFailure("could not attach to the page") }
-            var page = Page(session: session, contextID: contextID, targetID: targetID, sessionID: sessionID)
-            let events = await connection.events()
-            _ = try await connection.send("Page.enable", session: sessionID)
-            _ = try await connection.send("Emulation.setDeviceMetricsOverride", [
-                "width": .integer(configuration.viewport.width),
-                "height": .integer(configuration.viewport.height),
-                "deviceScaleFactor": .integer(1),
-                "mobile": .boolean(false),
-            ], session: sessionID)
+            let stream = await connection.events()
+            let page = try await attach(session: session, contextID: contextID, targetID: targetID)
             _ = try? await connection.send("Target.setDiscoverTargets", ["discover": .boolean(true)])
-            page.events = Task { [weak self] in
-                for await event in events {
+            events = Task { [weak self] in
+                for await event in stream {
                     await self?.handle(event)
                 }
             }
@@ -332,42 +364,131 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         }
     }
 
-    /// Dialogs are dismissed and popups are folded back into the one page, so the agent always has a single tab
-    /// and nothing it can't see blocks the page.
+    private func attach(session: ManagedBrowserSession, contextID: String, targetID: String) async throws -> Page {
+        let connection = session.connection
+        let attached = try await connection.send("Target.attachToTarget", ["targetId": .string(targetID), "flatten": .boolean(true)])
+        guard let sessionID = attached[wire: "sessionId"]?.wireString else { throw DisplayTargetError.driverFailure("could not attach to the page") }
+        _ = try await connection.send("Page.enable", session: sessionID)
+        _ = try await connection.send("Emulation.setDeviceMetricsOverride", [
+            "width": .integer(configuration.viewport.width),
+            "height": .integer(configuration.viewport.height),
+            "deviceScaleFactor": .integer(1),
+            "mobile": .boolean(false),
+        ], session: sessionID)
+        return Page(session: session, contextID: contextID, targetID: targetID, sessionID: sessionID)
+    }
+
+    /// Downloads go to a folder of the lease's own, with events on so each file is tracked; nothing is opened. In
+    /// the user's profile this is the browser-wide setting, restored on release, and downloads from the user's own
+    /// tabs are moved on to their Downloads folder.
+    private func prepareDownloads(lease: Lease) async {
+        guard let page else { return }
+        let base = configuration.downloadsDirectory ?? FileManager.default.temporaryDirectory.appendingPathComponent("swiftagentharness-downloads")
+        let folder = base.appendingPathComponent(lease.id.uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        downloadsFolder = folder
+        var params: [String: JSON] = ["behavior": .string("allow"), "downloadPath": .string(folder.path), "eventsEnabled": .boolean(true)]
+        if profile == .throwaway { params["browserContextId"] = .string(page.contextID) }
+        _ = try? await page.session.connection.send("Browser.setDownloadBehavior", params)
+    }
+
+    private var tabSessions: Set<String> {
+        Set(([page] + otherTabs.map { Optional($0) }).compactMap { $0?.sessionID })
+    }
+
+    private func isAgentTarget(_ info: JSON) -> Bool {
+        guard let page, info[wire: "type"]?.wireString == "page", info[wire: "browserContextId"]?.wireString == page.contextID else {
+            return false
+        }
+        // In the user's profile every tab shares the context; only tabs the agent's own tabs open are its.
+        guard profile == .user else { return true }
+        let opener = info[wire: "openerId"]?.wireString
+        return ([page] + otherTabs).contains { $0.targetID == opener }
+    }
+
+    /// A tab a lease's tab opened becomes the active tab, under the same grants and network policy.
+    private func adoptTab(targetID: String, url: String) async {
+        guard let page, page.targetID != targetID, !otherTabs.contains(where: { $0.targetID == targetID }) else { return }
+        let connection = page.session.connection
+        if let reason = configuration.network.evaluate(url: url).denialReason {
+            _ = try? await connection.send("Target.closeTarget", ["targetId": .string(targetID)])
+            notices.append("The page opened a new tab, which was closed: network policy blocks it (\(reason)).")
+            return
+        }
+        guard var tab = try? await attach(session: page.session, contextID: page.contextID, targetID: targetID) else { return }
+        tab.url = url
+        if casting { _ = try? await send("Page.stopScreencast") }
+        otherTabs.append(page)
+        self.page = tab
+        if casting { await startScreencast() }
+        notices.append("The page opened a new tab (\(url)); it is now the active tab. Observe a tab by id to switch.")
+    }
+
+    private func switchTab(to targetID: String) async throws {
+        guard let page, page.targetID != targetID else { return }
+        guard let index = otherTabs.firstIndex(where: { $0.targetID == targetID }) else {
+            throw DisplayTargetError.unsupported("tab \(targetID) is not one of this lease's tabs")
+        }
+        if casting { _ = try? await send("Page.stopScreencast") }
+        let next = otherTabs.remove(at: index)
+        otherTabs.append(page)
+        self.page = next
+        if casting { await startScreencast() }
+    }
+
     private func handle(_ event: CDPEvent) async {
         guard let page else { return }
         let connection = page.session.connection
         switch event.method {
-        case "Page.javascriptDialogOpening" where event.sessionID == page.sessionID:
-            let type = event.params[wire: "type"]?.wireString ?? "dialog"
-            let message = event.params[wire: "message"]?.wireString ?? ""
-            // A beforeunload prompt is accepted so the navigation the agent started goes ahead.
-            let accept = type == "beforeunload"
-            _ = try? await connection.send("Page.handleJavaScriptDialog", ["accept": .boolean(accept)], session: page.sessionID)
-            notices.append("The page showed a \(type) dialog, which was \(accept ? "accepted" : "dismissed"): \"\(message.prefix(200))\"")
-        case "Page.downloadWillBegin" where event.sessionID == page.sessionID && profile == .user:
-            // The user's download settings are theirs to keep, so the agent's downloads are cancelled one by one.
+        case "Page.javascriptDialogOpening" where event.sessionID.map(tabSessions.contains) == true:
+            // The page waits on the dialog, and so does the agent: the next observation shows it to be answered.
+            dialogs[event.sessionID ?? ""] = Dialog(
+                type: event.params[wire: "type"]?.wireString ?? "alert",
+                message: event.params[wire: "message"]?.wireString ?? "",
+                promptText: event.params[wire: "defaultPrompt"]?.wireString ?? ""
+            )
+        case "Page.javascriptDialogClosed":
+            if let session = event.sessionID { dialogs[session] = nil }
+        case "Page.downloadWillBegin" where event.sessionID.map(tabSessions.contains) == true:
+            if let guid = event.params[wire: "guid"]?.wireString { agentDownloads.insert(guid) }
+        case "Browser.downloadWillBegin":
             guard let guid = event.params[wire: "guid"]?.wireString else { return }
-            var cancel: [String: JSON] = ["guid": .string(guid)]
-            if !page.contextID.isEmpty { cancel["browserContextId"] = .string(page.contextID) }
-            _ = try? await connection.send("Browser.cancelDownload", cancel)
-            let name = event.params[wire: "suggestedFilename"]?.wireString ?? "a file"
-            notices.append("The page started a download of \(name.prefix(120)), which was cancelled.")
-        case "Target.targetInfoChanged", "Target.targetCreated":
-            guard let info = event.params[wire: "targetInfo"],
-                  info[wire: "type"]?.wireString == "page",
-                  info[wire: "browserContextId"]?.wireString == page.contextID,
-                  // In the user's profile every tab shares the context; only the agent's own popups are its to fold.
-                  profile == .throwaway || info[wire: "openerId"]?.wireString == page.targetID,
-                  let other = info[wire: "targetId"]?.wireString, other != page.targetID,
-                  let url = info[wire: "url"]?.wireString, !url.isEmpty, url != "about:blank" else { return }
-            _ = try? await connection.send("Target.closeTarget", ["targetId": .string(other)])
-            if let reason = configuration.network.evaluate(url: url).denialReason {
-                notices.append("The page opened a new window, which was closed: network policy blocks it (\(reason)).")
-            } else {
-                _ = try? await connection.send("Page.navigate", ["url": .string(url)], session: page.sessionID)
-                notices.append("The page opened a new window; it was closed and its page opened here instead.")
+            let name = (event.params[wire: "suggestedFilename"]?.wireString).flatMap { $0.isEmpty ? nil : $0 } ?? guid
+            downloadsByGUID[guid] = Download(name: name, completed: false)
+            if profile == .throwaway { agentDownloads.insert(guid) }
+        case "Browser.downloadProgress":
+            guard let guid = event.params[wire: "guid"]?.wireString, var download = downloadsByGUID[guid],
+                  event.params[wire: "state"]?.wireString == "completed", let folder = downloadsFolder else { return }
+            download.completed = true
+            downloadsByGUID[guid] = download
+            let file = folder.appendingPathComponent(download.name)
+            if agentDownloads.contains(guid) {
+                notices.append("The page downloaded \(download.name.prefix(120)) to the lease's downloads folder; it wasn't opened.")
+            } else if let home = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+                // The user's own download, caught by the lease's folder: it goes where the user expects it.
+                try? FileManager.default.moveItem(at: file, to: home.appendingPathComponent(download.name))
+                downloadsByGUID[guid] = nil
             }
+        case "Target.targetDestroyed":
+            guard let id = event.params[wire: "targetId"]?.wireString else { return }
+            otherTabs.removeAll { $0.targetID == id }
+            if page.targetID == id, let next = otherTabs.popLast() {
+                self.page = next
+                notices.append("The active tab closed; the previous tab is active again.")
+            }
+        case "Target.targetInfoChanged", "Target.targetCreated":
+            guard let info = event.params[wire: "targetInfo"], let other = info[wire: "targetId"]?.wireString else { return }
+            let url = info[wire: "url"]?.wireString ?? ""
+            if other == page.targetID {
+                self.page?.url = url
+                return
+            }
+            if let index = otherTabs.firstIndex(where: { $0.targetID == other }) {
+                otherTabs[index].url = url
+                return
+            }
+            guard isAgentTarget(info), !url.isEmpty, url != "about:blank" else { return }
+            await adoptTab(targetID: other, url: url)
         case "Page.screencastFrame" where event.sessionID == page.sessionID:
             if let frame = event.params[wire: "sessionId"] {
                 _ = try? await connection.send("Page.screencastFrameAck", .object(["sessionId": frame]), session: page.sessionID)
@@ -384,16 +505,20 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
 
     // MARK: - Live view
 
+    private func startScreencast() async {
+        _ = try? await send("Page.startScreencast", [
+            "format": .string("jpeg"),
+            "quality": .integer(70),
+            "maxWidth": .integer(configuration.viewport.width),
+            "maxHeight": .integer(configuration.viewport.height),
+        ])
+    }
+
     private func viewersChanged(_ count: Int) async {
         guard page != nil else { return }
         if count > 0, !casting {
             casting = true
-            _ = try? await send("Page.startScreencast", [
-                "format": .string("jpeg"),
-                "quality": .integer(70),
-                "maxWidth": .integer(configuration.viewport.width),
-                "maxHeight": .integer(configuration.viewport.height),
-            ])
+            await startScreencast()
         } else if count == 0, casting {
             casting = false
             _ = try? await send("Page.stopScreencast")
@@ -451,15 +576,23 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
         try await requireLease(lease)
         guard !takeoverActive else { throw DisplayTargetError.unsupported("the user has taken over; capture is paused") }
+        if case .tab(let tab) = request.scope { try await switchTab(to: tab) }
         let page = try await self.page(of: lease)
         observationCounter += 1
         let id: ObservationID = "o_\(observationCounter)"
         let now = Date()
+        if let dialog = dialogs[page.sessionID] {
+            return dialogObservation(dialog, id: id, page: page, at: now)
+        }
         let wantsTree = request.modes.contains(.dom) || request.modes.contains(.accessibility)
         let state: ManagedBrowserPageSnapshot = wantsTree
             ? try await evaluate(ManagedBrowserDOM.call("snapshot", [String(configuration.maxElements)]))
             : try await pageState()
         let treeAt = Date()
+        // Observations are scoped to granted domains: a page on any other domain is reported by URL only.
+        guard grants.tier(forURL: state.url) != nil else {
+            return urlOnlyObservation(state, id: id, page: page, at: now)
+        }
 
         let viewport = viewportRect(state)
         var captured = viewport
@@ -506,11 +639,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
 
         var tree: ObservationTree?
         if wantsTree {
-            var text = ManagedBrowserDOM.render(state, observationID: id)
-            if !notices.isEmpty {
-                text += "\n" + notices.map { "note: \($0)" }.joined(separator: "\n")
-                notices.removeAll()
-            }
+            let text = ManagedBrowserDOM.render(state, observationID: id) + tabsLine(active: page) + takeNotices()
             tree = ObservationTree(
                 text: text,
                 elements: ManagedBrowserDOM.elements(state, url: state.url),
@@ -537,6 +666,124 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         )
     }
 
+    private func takeNotices() -> String {
+        guard !notices.isEmpty else { return "" }
+        defer { notices.removeAll() }
+        return "\n" + notices.map { "note: \($0)" }.joined(separator: "\n")
+    }
+
+    private func tabsLine(active page: Page) -> String {
+        guard !otherTabs.isEmpty else { return "" }
+        let others = otherTabs.map { "\($0.targetID) \($0.url ?? "")" }.joined(separator: "; ")
+        return "\nother tabs: \(others)"
+    }
+
+    private func urlOnlyObservation(_ state: ManagedBrowserPageSnapshot, id: ObservationID, page: Page, at now: Date) -> DisplayObservation {
+        retain(ObservationMeta(doc: state.doc, scrollX: state.scrollX, scrollY: state.scrollY, elements: [:]), for: id)
+        let text = "page url=\(state.url) obs=\(id)\n(this page's domain isn't granted, so only its URL is reported)"
+            + tabsLine(active: page) + takeNotices()
+        return DisplayObservation(
+            id: id,
+            at: now,
+            target: ObservationTarget(tabID: page.targetID, url: state.url, bounds: viewportRect(state)),
+            tree: ObservationTree(text: text, elements: [:], capturedAt: now)
+        )
+    }
+
+    /// The page is paused on a dialog: its buttons, and a prompt's field, are the elements, answered with an
+    /// explicit press or click. The page can't be read or drawn until it is answered.
+    private func dialogObservation(_ dialog: Dialog, id: ObservationID, page: Page, at now: Date) -> DisplayObservation {
+        let url = page.url ?? ""
+        var elements: [String: ElementRef] = [:]
+        var lines = ["dialog \(dialog.type) \(Self.quoted(dialog.message)) url=\(url) obs=\(id)"]
+        for (ref, label, _) in Self.dialogButtons(dialog.type) {
+            elements[ref] = ElementRef(id: ref, role: "button", label: label, url: url)
+            lines.append("  [\(ref)] button \(Self.quoted(label))")
+        }
+        if dialog.type == "prompt" {
+            elements["d3"] = ElementRef(id: "d3", role: "textbox", label: "Answer", url: url, value: dialog.promptText, isFocused: true)
+            lines.append("  [d3] textbox \"Answer\" value=\(Self.quoted(dialog.promptText)) focused")
+        }
+        lines.append("(the page waits on this dialog; answer it with one of its buttons)")
+        retain(ObservationMeta(doc: nil, scrollX: 0, scrollY: 0, elements: [:], dialog: true), for: id)
+        return DisplayObservation(
+            id: id,
+            at: now,
+            target: ObservationTarget(tabID: page.targetID, url: url, bounds: DisplayRect(x: 0, y: 0, width: Double(configuration.viewport.width), height: Double(configuration.viewport.height))),
+            tree: ObservationTree(text: lines.joined(separator: "\n") + takeNotices(), elements: elements, capturedAt: now, returnTarget: "d1")
+        )
+    }
+
+    /// The dialog's buttons: ref, label, and whether it accepts.
+    static func dialogButtons(_ type: String) -> [(ref: String, label: String, accepts: Bool)] {
+        switch type {
+        case "alert": [("d1", "OK", true)]
+        case "beforeunload": [("d1", "Leave", true), ("d2", "Stay", false)]
+        default: [("d1", "OK", true), ("d2", "Cancel", false)]
+        }
+    }
+
+    private static func quoted(_ text: String) -> String {
+        "\"" + text.prefix(300).replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ") + "\""
+    }
+
+    /// Answers the paused dialog, or refuses anything else while it is open.
+    private func answerDialog(_ dialog: Dialog, action: ComputerAction, page: Page) async -> ActionOutcome {
+        func respond(_ accept: Bool) async -> ActionOutcome {
+            var params: [String: JSON] = ["accept": .boolean(accept)]
+            if dialog.type == "prompt", accept { params["promptText"] = .string(dialog.promptText) }
+            _ = try? await page.session.connection.send("Page.handleJavaScriptDialog", params, session: page.sessionID)
+            dialogs[page.sessionID] = nil
+            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "answered the \(dialog.type) dialog: \(accept ? "accepted" : "dismissed")", escalation: .observe)
+        }
+        let buttons = Self.dialogButtons(dialog.type)
+        switch action {
+        case .click(.ref(let ref, _), _, _, _), .press(.ref(let ref, _)):
+            if let button = buttons.first(where: { $0.ref == ref }) { return await respond(button.accepts) }
+        case .type(let text, let into, _) where dialog.type == "prompt" && (into == nil || into?.elementRef == "d3"):
+            var updated = dialog
+            updated.promptText = text.hasSuffix("\n") ? String(text.dropLast()) : text
+            dialogs[page.sessionID] = updated
+            if text.hasSuffix("\n") { return await respond(true) }
+            return ActionOutcome(action: 0, effect: .confirmed, evidence: "typed the prompt's answer")
+        case .setValue(.ref("d3", _), let value) where dialog.type == "prompt":
+            var updated = dialog
+            updated.promptText = value
+            dialogs[page.sessionID] = updated
+            return ActionOutcome(action: 0, effect: .confirmed, evidence: "set the prompt's answer")
+        case .key(let combo, _) where combo.modifiers.isEmpty && combo.key == "return":
+            return await respond(true)
+        case .key(let combo, _) where combo.modifiers.isEmpty && combo.key == "escape" && buttons.count > 1:
+            return await respond(false)
+        case .observe, .zoom, .wait, .waitFor:
+            return ActionOutcome(action: 0, effect: .confirmed)
+        default:
+            break
+        }
+        return ActionOutcome(
+            action: 0,
+            effect: .refused,
+            evidence: "a \(dialog.type) dialog is open: answer it with one of its buttons first",
+            escalation: .observe
+        )
+    }
+
+    /// Files the lease's tabs downloaded into its folder.
+    public func downloads(_ lease: Lease) async -> [DisplayDownload] {
+        guard let folder = downloadsFolder else { return [] }
+        return downloadsByGUID
+            .filter { agentDownloads.contains($0.key) }
+            .map { _, download in
+                DisplayDownload(
+                    name: download.name,
+                    path: folder.appendingPathComponent(download.name).path,
+                    completed: download.completed,
+                    disposable: profile == .throwaway
+                )
+            }
+            .sorted { $0.name < $1.name }
+    }
+
     /// The screenshot scale that keeps the image inside the model's limits. Chromium renders at that scale, so the
     /// image needs no resizing; a zoom renders at up to twice the CSS resolution.
     static func scale(for rect: DisplayRect, limit: ObservationImageLimit?, zoom: Bool) -> Double {
@@ -561,13 +808,24 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome] {
         try await requireLease(lease)
         guard !takeoverActive else { throw DisplayTargetError.unsupported("the user has taken over; agent input is paused") }
-        let page = try await self.page(of: lease)
         var outcomes: [ActionOutcome] = []
         for (index, action) in batch.actions.enumerated() {
+            let page = try await self.page(of: lease)
+            if let dialog = dialogs[page.sessionID] {
+                var outcome = await answerDialog(dialog, action: action, page: page)
+                outcome.action = index
+                outcomes.append(outcome)
+                if outcome.effect.stopsBatch || outcome.escalation == .observe { break }
+                continue
+            }
             let started = Date()
             let before = try? await pageState()
             var outcome = await perform(action, page: page)
-            if outcome.effect.mayHaveBeenDelivered, Self.mayNavigate(action) {
+            if let dialog = dialogs[page.sessionID] {
+                outcome.evidence = [outcome.evidence, "the page opened a \(dialog.type) dialog, which waits on an answer"]
+                    .compactMap { $0 }.joined(separator: "; ")
+                outcome.escalation = .observe
+            } else if outcome.effect.mayHaveBeenDelivered, Self.mayNavigate(action) {
                 outcome = await settle(outcome, before: before)
             }
             let denials = await page.session.networkDenials(started)
@@ -1008,7 +1266,48 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
     @discardableResult
     private func send(_ method: String, _ params: [String: JSON] = [:]) async throws -> JSON {
         guard let page else { throw DisplayTargetError.leaseNotHeld }
-        return try await page.session.connection.send(method, .object(params), session: page.sessionID)
+        let connection = page.session.connection
+        let session = page.sessionID
+        guard method.hasPrefix("Input.") || method.hasPrefix("Runtime.") else {
+            return try await connection.send(method, .object(params), session: session)
+        }
+        // A JavaScript dialog blocks the page, and Chromium holds input and script replies until it's answered.
+        if let reply = try await unlessDialog(session, { try await connection.send(method, .object(params), session: session) }) {
+            return reply
+        }
+        guard method.hasPrefix("Input.") else { throw DisplayTargetError.driverFailure("the page is waiting on a dialog") }
+        return .object([:])
+    }
+
+    /// Runs `work` unless the tab opens a dialog first, in which case it returns nil and `work` finishes unattended.
+    private func unlessDialog<T: Sendable>(
+        _ session: String,
+        _ work: @escaping @Sendable () async throws -> T
+    ) async throws -> T? {
+        guard dialogs[session] == nil else { return nil }
+        let (stream, continuation) = AsyncStream.makeStream(of: Result<T, any Error>?.self)
+        Task {
+            do { continuation.yield(.success(try await work())) } catch { continuation.yield(.failure(error)) }
+        }
+        let watch = Task { [weak self] in
+            while !Task.isCancelled {
+                if await self?.hasDialog(session) ?? true {
+                    continuation.yield(nil)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        defer {
+            watch.cancel()
+            continuation.finish()
+        }
+        for await first in stream { return try first?.get() }
+        return nil
+    }
+
+    private func hasDialog(_ session: String) -> Bool {
+        dialogs[session] != nil
     }
 
     private func mouse(

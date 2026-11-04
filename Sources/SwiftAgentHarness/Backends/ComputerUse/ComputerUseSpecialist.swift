@@ -326,6 +326,13 @@ public struct ComputerUseResult: Sendable, Codable {
     public var missingGrants: [MissingGrant]? = nil
     /// Requested grants that can't do what they ask, such as a browser above view.
     public var grantNotes: [String]? = nil
+    /// Files the run downloaded and kept, never opened.
+    public var downloads: [Download]? = nil
+
+    public struct Download: Sendable, Codable, Hashable {
+        public var name: String
+        public var path: String
+    }
 
     public var jsonString: String {
         let encoder = JSONEncoder()

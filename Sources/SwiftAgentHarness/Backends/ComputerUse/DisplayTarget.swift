@@ -183,6 +183,9 @@ public protocol DisplayTarget: Sendable {
     /// A live viewer's input, in the coordinate space of ``liveFrame(_:)``. Delivered only during takeover.
     func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws
 
+    /// Files the lease downloaded, into a folder of its own. Read before release.
+    func downloads(_ lease: Lease) async -> [DisplayDownload]
+
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
 }
@@ -193,6 +196,7 @@ public extension DisplayTarget {
     func liveViewers(_ lease: Lease) async throws -> Int { 0 }
     func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? { nil }
     func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {}
+    func downloads(_ lease: Lease) async -> [DisplayDownload] { [] }
 
     func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
         try await liveView(lease, role: .user)
@@ -244,5 +248,21 @@ extension Duration {
     var timeInterval: TimeInterval {
         let parts = components
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+}
+
+/// A file a lease downloaded, into the lease's own folder. Never opened.
+public struct DisplayDownload: Sendable, Codable, Hashable {
+    public var name: String
+    public var path: String
+    public var completed: Bool
+    /// Deleted when the session ends unless its result names the file; otherwise kept and listed.
+    public var disposable: Bool
+
+    public init(name: String, path: String, completed: Bool, disposable: Bool) {
+        self.name = name
+        self.path = path
+        self.completed = completed
+        self.disposable = disposable
     }
 }

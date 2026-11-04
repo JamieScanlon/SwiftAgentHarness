@@ -24,6 +24,15 @@ struct ManagedBrowserSmokeTests {
 
     static let second = "<!doctype html><title>Second</title><p>You made it.</p>"
 
+    static let bits = """
+    <!doctype html><html><head><title>Bits</title></head><body>
+    <form action="/second"><label>Amount <input id="amount"></label><button type="submit">Pay now</button></form>
+    <button id="ask" onclick="this.textContent = confirm('Really?') ? 'Confirmed' : 'Declined'">Ask</button>
+    <a id="pop" href="/second" target="_blank">Open second</a>
+    <a id="dl" href="/file">Get file</a>
+    </body></html>
+    """
+
     /// Serves the two pages over plain HTTP on loopback.
     private static func server() async throws -> (port: Int, channel: any Channel, task: Task<Void, Never>) {
         let server = try await ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
@@ -41,7 +50,9 @@ struct ManagedBrowserSmokeTests {
                                     request += String(buffer: buffer)
                                     if request.contains("\r\n\r\n") { break }
                                 }
-                                let body = request.hasPrefix("GET /second") ? second : request.hasPrefix("GET /file") ? "payload" : page
+                                let body = request.hasPrefix("GET /second") ? second
+                                    : request.hasPrefix("GET /file") ? "payload"
+                                    : request.hasPrefix("GET /bits") ? bits : page
                                 let type = request.hasPrefix("GET /file")
                                     ? "application/octet-stream\r\nContent-Disposition: attachment; filename=\"setup.pkg\""
                                     : "text/html"
@@ -56,11 +67,11 @@ struct ManagedBrowserSmokeTests {
         return (try #require(server.channel.localAddress?.port), server.channel, task)
     }
 
-    private static func lease(_ target: ManagedBrowserDisplayTarget) async throws -> Lease {
+    private static func lease(_ target: ManagedBrowserDisplayTarget, domain: String = "127.0.0.1") async throws -> Lease {
         try await target.lease(LeaseRequest(
             target: target.manifest.id,
             agentID: "smoke",
-            grants: [.domain("127.0.0.1", tier: .full)],
+            grants: [.domain(domain, tier: .full)],
             budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
             initiator: .operator,
             userPresent: true
@@ -123,6 +134,63 @@ struct ManagedBrowserSmokeTests {
         let scheme = try await target.act(lease, ActionBatch([.openURL("file:///etc/hosts")]))
         #expect(scheme.first?.effect == .refused)
         await target.release(lease, reason: .completed)
+    }
+
+    @Test("Names Return's control, pauses on dialogs until answered, opens popups as tabs, and keeps downloads in the lease folder")
+    func pageEvents() async throws {
+        let server = try await Self.server()
+        defer { Task { try? await server.channel.close(); await server.task.value } }
+        let target = ManagedBrowserDisplayTarget.localChromium(
+            configuration: ManagedBrowserConfiguration(network: BrowserNetworkPolicy(allowsPrivateNetwork: true)),
+            chromium: ManagedChromiumConfiguration(headless: true)
+        )
+        let lease = try await Self.lease(target)
+        let home = "http://127.0.0.1:\(server.port)/bits"
+        _ = try await target.act(lease, ActionBatch([.openURL(home)]))
+        let first = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        let tree = try #require(first.tree)
+        let amount = try #require(tree.elements.values.first { $0.role == "textbox" })
+        _ = try await target.act(lease, ActionBatch([.click(at: .ref(amount.id, observation: first.id))]))
+        let focused = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        let submit = try #require(focused.tree?.returnTarget)
+        #expect(focused.tree?.elements[submit]?.label == "Pay now")
+
+        let ask = try #require(focused.tree?.elements.values.first { $0.label == "Ask" })
+        _ = try await target.act(lease, ActionBatch([.click(at: .ref(ask.id, observation: focused.id))]))
+        try await Task.sleep(for: .milliseconds(200))
+        let dialog = try await target.observe(lease, ObserveRequest(modes: [.dom, .pixels], scope: .display(nil)))
+        #expect(dialog.tree?.text.hasPrefix("dialog confirm \"Really?\"") == true, "\(dialog.tree?.text ?? "")")
+        _ = try await target.act(lease, ActionBatch([.click(at: .ref("d1", observation: dialog.id))]))
+        try await Task.sleep(for: .milliseconds(200))
+        let answered = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        #expect(answered.tree?.elements.values.contains { $0.label == "Confirmed" } == true, "\(answered.tree?.text ?? "")")
+
+        let pop = try #require(answered.tree?.elements.values.first { $0.label == "Open second" })
+        _ = try await target.act(lease, ActionBatch([.click(at: .ref(pop.id, observation: answered.id))]))
+        var popup = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        for _ in 0..<30 where popup.target.tabID == answered.target.tabID {
+            try await Task.sleep(for: .milliseconds(100))
+            popup = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        }
+        #expect(popup.target.tabID != answered.target.tabID)
+        #expect(popup.tree?.text.contains("You made it.") == true, "\(popup.tree?.text ?? "")")
+        let back = try await target.observe(lease, ObserveRequest(modes: [.dom], scope: .tab(try #require(answered.target.tabID))))
+        #expect(back.target.url == home)
+
+        let file = try #require(back.tree?.elements.values.first { $0.label == "Get file" })
+        _ = try await target.act(lease, ActionBatch([.click(at: .ref(file.id, observation: back.id))]))
+        var downloads: [DisplayDownload] = []
+        for _ in 0..<50 where !(downloads.first?.completed ?? false) {
+            try await Task.sleep(for: .milliseconds(100))
+            downloads = await target.downloads(lease)
+        }
+        let download = try #require(downloads.first)
+        #expect(download.name == "setup.pkg")
+        #expect(download.completed)
+        #expect(download.disposable)
+        #expect(FileManager.default.fileExists(atPath: download.path))
+        await target.release(lease, reason: .completed)
+        try? FileManager.default.removeItem(atPath: URL(fileURLWithPath: download.path).deletingLastPathComponent().path)
     }
 
     @Test("Streams the page to a live view and takes the viewer's input during takeover")
@@ -231,7 +299,7 @@ struct ManagedBrowserSmokeTests {
         await target.release(lease, reason: .completed)
     }
 
-    @Test("Attaches to a running browser's own profile: a tab of its own, the user's tabs untouched, downloads cancelled")
+    @Test("Attaches to a running browser's own profile: a tab of its own, the user's tabs untouched, downloads kept and listed")
     func userBrowser() async throws {
         let server = try await Self.server()
         defer { Task { try? await server.channel.close(); await server.task.value } }
@@ -272,11 +340,19 @@ struct ManagedBrowserSmokeTests {
         #expect(title.first?.evidence?.contains(#"returned: "Smoke page""#) == true, "\(title)")
 
         _ = try await target.act(lease, ActionBatch([.openURL(home + "file")]))
-        try await Task.sleep(for: .milliseconds(500))
+        var downloads: [DisplayDownload] = []
+        for _ in 0..<50 where !(downloads.first?.completed ?? false) {
+            try await Task.sleep(for: .milliseconds(100))
+            downloads = await target.downloads(lease)
+        }
+        let download = try #require(downloads.first)
+        #expect(download.completed)
+        #expect(!download.disposable, "the user's browser's downloads are kept")
         let observed = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))
-        #expect(observed.tree?.text.contains("download of setup.pkg, which was cancelled") == true, "\(observed.tree?.text ?? "")")
+        #expect(observed.tree?.text.contains("downloaded setup.pkg") == true, "\(observed.tree?.text ?? "")")
 
         await target.release(lease, reason: .completed)
+        try? FileManager.default.removeItem(atPath: URL(fileURLWithPath: download.path).deletingLastPathComponent().path)
         #expect(try await pages() == userTabs, "release closes only the agent's tab")
         #expect(chrome.isRunning, "the user's browser keeps running")
     }
@@ -298,7 +374,7 @@ struct ManagedBrowserSmokeTests {
     @Test("Public pages load through the proxy")
     func publicPage() async throws {
         let target = ManagedBrowserDisplayTarget.localChromium(chromium: ManagedChromiumConfiguration(headless: true))
-        let lease = try await Self.lease(target)
+        let lease = try await Self.lease(target, domain: "example.com")
         let opened = try await target.act(lease, ActionBatch([.openURL("https://example.com/")]))
         print(opened)
         let observed = try await target.observe(lease, ObserveRequest(modes: [.accessibility], scope: .display(nil)))

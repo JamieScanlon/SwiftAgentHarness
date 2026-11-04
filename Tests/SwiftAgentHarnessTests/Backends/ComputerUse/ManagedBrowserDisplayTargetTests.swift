@@ -22,6 +22,9 @@ struct ManagedBrowserDisplayTargetTests {
         var submit: String?
         /// What a script's wrapper resolves to.
         var scriptReply = #"{"ok":true,"json":"null"}"#
+        /// A click opens this confirm dialog, and the release isn't answered until the dialog is, as in Chromium.
+        var confirmOnClick: String?
+        private var blockedOnDialog: [CheckedContinuation<Void, Never>] = []
         private(set) var calls: [(method: String, params: JSON)] = []
         private(set) var shutdowns = 0
         private var continuations: [AsyncStream<CDPEvent>.Continuation] = []
@@ -38,6 +41,7 @@ struct ManagedBrowserDisplayTargetTests {
         func loseContext() { lostContexts += 1 }
         func setMutatesOnInput() { mutatesOnInput = true }
         func setScriptReply(_ reply: String) { scriptReply = reply }
+        func setConfirmOnClick(_ message: String) { confirmOnClick = message }
         func shutDown() { shutdowns += 1 }
 
         func emit(_ event: CDPEvent) {
@@ -63,7 +67,9 @@ struct ManagedBrowserDisplayTargetTests {
             switch method {
             case "Target.createBrowserContext": return .object(["browserContextId": .string("ctx")])
             case "Target.createTarget": return .object(["targetId": .string("page-1")])
-            case "Target.attachToTarget": return .object(["sessionId": .string("s1")])
+            case "Target.attachToTarget":
+                let target = params[wire: "targetId"]?.wireString ?? "page-1"
+                return .object(["sessionId": .string(target == "page-1" ? "s1" : "s-\(target)")])
             case "Target.getTargetInfo":
                 return .object(["targetInfo": .object(["targetId": .string("page-1"), "browserContextId": .string("default-ctx")])])
             case "Page.getFrameTree": return .object(["frameTree": .object(["frame": .object(["id": .string("f1")])])])
@@ -81,6 +87,19 @@ struct ManagedBrowserDisplayTargetTests {
                 return .object(["frameId": .string("f1")])
             case "Input.dispatchMouseEvent", "Input.insertText", "Input.dispatchKeyEvent":
                 if mutatesOnInput { mutations += 1 }
+                if let message = confirmOnClick, params[wire: "type"]?.wireString == "mouseReleased" {
+                    confirmOnClick = nil
+                    emit(CDPEvent(
+                        method: "Page.javascriptDialogOpening",
+                        params: .object(["type": .string("confirm"), "message": .string(message)]),
+                        sessionID: session
+                    ))
+                    await withCheckedContinuation { blockedOnDialog.append($0) }
+                }
+                return .object([:])
+            case "Page.handleJavaScriptDialog":
+                for blocked in blockedOnDialog { blocked.resume() }
+                blockedOnDialog = []
                 return .object([:])
             case "Runtime.evaluate":
                 if lostContexts > 0 {
@@ -203,12 +222,15 @@ struct ManagedBrowserDisplayTargetTests {
         #expect(ManagedBrowserDisplayTarget.hosted(endpoint: URL(string: "ws://browser.example/devtools")!).manifest.isolation == .remoteBrowser)
     }
 
-    @Test("Each lease gets a fresh browser context with downloads denied, disposed with the browser on release")
+    @Test("Each lease gets a fresh browser context with downloads in a lease folder, disposed with the browser on release")
     func leaseLifecycle() async throws {
         let fixture = try await Self.fixture()
         let opened = await fixture.browser.methods()
-        #expect(Array(opened.prefix(4)) == ["Target.createBrowserContext", "Browser.setDownloadBehavior", "Target.createTarget", "Target.attachToTarget"])
-        #expect(await fixture.browser.params(of: "Browser.setDownloadBehavior").first?[wire: "behavior"]?.wireString == "deny")
+        #expect(Array(opened.prefix(3)) == ["Target.createBrowserContext", "Target.createTarget", "Target.attachToTarget"])
+        let downloads = try #require(await fixture.browser.params(of: "Browser.setDownloadBehavior").first)
+        #expect(downloads[wire: "behavior"]?.wireString == "allow")
+        #expect(downloads[wire: "browserContextId"]?.wireString == "ctx")
+        #expect(downloads[wire: "downloadPath"]?.wireString?.contains(fixture.lease.id.uuidString) == true)
         #expect(await fixture.browser.params(of: "Emulation.setDeviceMetricsOverride").first?[wire: "width"]?.wireInt == 1280)
 
         await #expect(throws: DisplayTargetError.targetBusy(holder: "specialist")) {
@@ -455,50 +477,59 @@ struct ManagedBrowserDisplayTargetTests {
 
         let fixture = try await Self.fixture(profile: .user)
         #expect(await fixture.browser.methods("Target.createBrowserContext").isEmpty, "the user's own profile, not a throwaway one")
-        #expect(await fixture.browser.methods("Browser.setDownloadBehavior").isEmpty, "the user's download settings are left alone")
         let created = try #require(await fixture.browser.params(of: "Target.createTarget").first)
         #expect(created[wire: "browserContextId"] == nil)
         _ = try await Self.observe(fixture)
         await fixture.target.release(fixture.lease, reason: .completed)
         #expect(await fixture.browser.methods("Target.disposeBrowserContext").isEmpty)
         #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["page-1"])
+        let behaviors = await fixture.browser.params(of: "Browser.setDownloadBehavior").compactMap { $0[wire: "behavior"]?.wireString }
+        #expect(behaviors == ["allow", "default"], "downloads go to the lease folder, and the user's own setting comes back")
     }
 
-    @Test("In the user's browser only windows the agent's tab opened are folded in; the user's own tabs are left alone")
+    private static func pageInfo(_ id: String, _ url: String, context: String = "ctx", opener: String? = nil) -> CDPEvent {
+        var info: [String: JSON] = ["type": .string("page"), "browserContextId": .string(context), "targetId": .string(id), "url": .string(url)]
+        if let opener { info["openerId"] = .string(opener) }
+        return CDPEvent(method: "Target.targetInfoChanged", params: .object(["targetInfo": .object(info)]), sessionID: nil)
+    }
+
+    private static func waitUntil(_ condition: @Sendable () async -> Bool) async throws {
+        for _ in 0..<100 where await !condition() { try await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    @Test("In the user's browser only tabs the agent's tabs open become its own; the user's tabs are left alone")
     func userBrowserPopups() async throws {
         let fixture = try await Self.fixture(profile: .user)
-        func page(_ id: String, _ url: String, opener: String?) -> CDPEvent {
-            var info: [String: JSON] = [
-                "type": .string("page"), "browserContextId": .string("default-ctx"), "targetId": .string(id), "url": .string(url),
-            ]
-            if let opener { info["openerId"] = .string(opener) }
-            return CDPEvent(method: "Target.targetInfoChanged", params: .object(["targetInfo": .object(info)]), sessionID: nil)
-        }
-        await fixture.browser.emit(page("user-tab", "https://mail.example.com/", opener: nil))
-        await fixture.browser.emit(page("popup", "https://app.example.com/popup", opener: "page-1"))
-        for _ in 0..<50 where await fixture.browser.params(of: "Target.closeTarget").isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        try await Task.sleep(for: .milliseconds(20))
-        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["popup"])
+        await fixture.browser.emit(Self.pageInfo("user-tab", "https://mail.example.com/", context: "default-ctx"))
+        await fixture.browser.emit(Self.pageInfo("popup", "https://app.example.com/popup", context: "default-ctx", opener: "page-1"))
+        try await Self.waitUntil { await fixture.browser.params(of: "Target.attachToTarget").count >= 2 }
+        let attached = await fixture.browser.params(of: "Target.attachToTarget").compactMap { $0[wire: "targetId"]?.wireString }
+        #expect(attached == ["page-1", "popup"])
+        let tabs = try await fixture.target.describe(fixture.lease).tabs
+        #expect(tabs.map(\.id) == ["popup", "page-1"])
+        await fixture.target.release(fixture.lease, reason: .completed)
+        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString }.sorted() == ["page-1", "popup"])
     }
 
-    @Test("A download the agent's tab starts in the user's browser is cancelled and reported")
+    @Test("A download the agent's tab starts goes to the lease folder, isn't opened, and is listed")
     func userBrowserDownloads() async throws {
         let fixture = try await Self.fixture(profile: .user)
+        await fixture.browser.emit(CDPEvent(method: "Page.downloadWillBegin", params: .object(["guid": .string("dl-1")]), sessionID: "s1"))
         await fixture.browser.emit(CDPEvent(
-            method: "Page.downloadWillBegin",
+            method: "Browser.downloadWillBegin",
             params: .object(["guid": .string("dl-1"), "url": .string("https://app.example.com/setup.pkg"), "suggestedFilename": .string("setup.pkg")]),
-            sessionID: "s1"
+            sessionID: nil
         ))
-        for _ in 0..<50 where await fixture.browser.params(of: "Browser.cancelDownload").isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let cancel = try #require(await fixture.browser.params(of: "Browser.cancelDownload").first)
-        #expect(cancel[wire: "guid"]?.wireString == "dl-1")
-        #expect(cancel[wire: "browserContextId"]?.wireString == "default-ctx")
+        await fixture.browser.emit(CDPEvent(method: "Browser.downloadProgress", params: .object(["guid": .string("dl-1"), "state": .string("completed")]), sessionID: nil))
+        try await Self.waitUntil { await !fixture.target.downloads(fixture.lease).isEmpty }
+        let download = try #require(await fixture.target.downloads(fixture.lease).first)
+        #expect(download.name == "setup.pkg")
+        #expect(download.completed)
+        #expect(download.path.contains(fixture.lease.id.uuidString))
+        #expect(!download.disposable, "the user's browser's downloads are kept and listed")
         let observation = try await Self.observe(fixture, modes: [.accessibility])
-        #expect(observation.tree?.text.contains("download of setup.pkg") == true)
+        #expect(observation.tree?.text.contains("downloaded setup.pkg") == true)
+        #expect(await fixture.browser.params(of: "Browser.cancelDownload").isEmpty)
     }
 
     @Test("The user's browser is found through the DevToolsActivePort file Chrome writes when debugging is allowed")
@@ -539,7 +570,7 @@ struct ManagedBrowserDisplayTargetTests {
         #expect(await fixture.browser.params(of: "Page.createIsolatedWorld").first?[wire: "worldName"]?.wireString == "computer-use")
     }
 
-    @Test("Dialogs are dismissed and reported in the next observation")
+    @Test("A dialog pauses the page: it is observed as its own buttons and answered only by an explicit action")
     func dialogs() async throws {
         let fixture = try await Self.fixture()
         await fixture.browser.emit(CDPEvent(
@@ -547,29 +578,74 @@ struct ManagedBrowserDisplayTargetTests {
             params: .object(["type": .string("confirm"), "message": .string("Delete everything?")]),
             sessionID: "s1"
         ))
-        for _ in 0..<50 where await fixture.browser.params(of: "Page.handleJavaScriptDialog").isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(await fixture.browser.params(of: "Page.handleJavaScriptDialog").first?[wire: "accept"].flatMap { if case .boolean(let flag) = $0 { flag } else { nil } } == false)
-        let observation = try await Self.observe(fixture, modes: [.accessibility])
-        #expect(observation.tree?.text.hasSuffix("note: The page showed a confirm dialog, which was dismissed: \"Delete everything?\"") == true)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await fixture.browser.params(of: "Page.handleJavaScriptDialog").isEmpty, "never auto-answered")
+        let observation = try await Self.observe(fixture)
+        let tree = try #require(observation.tree)
+        #expect(tree.text.hasPrefix("dialog confirm \"Delete everything?\""))
+        #expect(tree.elements["d1"]?.label == "OK" && tree.elements["d2"]?.label == "Cancel")
+        #expect(observation.image == nil)
+        let other = try #require(try await fixture.target.act(fixture.lease, ActionBatch([.key(combo: KeyCombo(modifiers: [], key: "tab"))])).first)
+        #expect(other.effect == .refused)
+        #expect(other.evidence?.contains("dialog is open") == true)
+        _ = try await fixture.target.act(fixture.lease, ActionBatch([.click(at: .ref("d2", observation: observation.id))]))
+        let answer = try #require(await fixture.browser.params(of: "Page.handleJavaScriptDialog").first)
+        #expect(answer[wire: "accept"].flatMap { if case .boolean(let flag) = $0 { flag } else { nil } } == false)
+        #expect(try await Self.observe(fixture).tree?.text.hasPrefix("page") == true)
     }
 
-    @Test("Popups are closed and their page opened in the one tab, unless policy blocks it")
+    @Test("A click that opens a dialog returns once the dialog shows, without waiting on the blocked page")
+    func clickOpensDialog() async throws {
+        let fixture = try await Self.fixture()
+        await fixture.browser.setConfirmOnClick("Leave?")
+        let observation = try await Self.observe(fixture)
+        let clock = ContinuousClock()
+        let started = clock.now
+        let outcome = try #require(try await fixture.target.act(
+            fixture.lease, ActionBatch([.click(at: .point(DisplayPoint(x: 10, y: 10), observation: observation.id))])
+        ).first)
+        #expect(clock.now - started < .seconds(5))
+        #expect(outcome.evidence?.contains("opened a confirm dialog") == true, "\(outcome)")
+        #expect(outcome.escalation == .observe)
+        let dialog = try await Self.observe(fixture)
+        #expect(dialog.tree?.text.hasPrefix("dialog confirm \"Leave?\"") == true)
+        _ = try await fixture.target.act(fixture.lease, ActionBatch([.click(at: .ref("d1", observation: dialog.id))]))
+        #expect(await fixture.browser.params(of: "Page.handleJavaScriptDialog").count == 1)
+    }
+
+    @Test("A prompt's answer is typed into its field and sent with OK")
+    func promptDialog() async throws {
+        let fixture = try await Self.fixture()
+        await fixture.browser.emit(CDPEvent(
+            method: "Page.javascriptDialogOpening",
+            params: .object(["type": .string("prompt"), "message": .string("Name?"), "defaultPrompt": .string("")]),
+            sessionID: "s1"
+        ))
+        try await Task.sleep(for: .milliseconds(30))
+        let observation = try await Self.observe(fixture)
+        #expect(observation.tree?.elements["d3"]?.role == "textbox")
+        _ = try await fixture.target.act(fixture.lease, ActionBatch([.type(text: "Ada", into: .ref("d3", observation: observation.id))]))
+        _ = try await fixture.target.act(fixture.lease, ActionBatch([.press(at: .ref("d1", observation: observation.id))]))
+        let answer = try #require(await fixture.browser.params(of: "Page.handleJavaScriptDialog").first)
+        #expect(answer[wire: "promptText"]?.wireString == "Ada")
+    }
+
+    @Test("A popup opens as a new, active tab under the same policy; observing a tab by id switches back")
     func popups() async throws {
         let fixture = try await Self.fixture(network: BrowserNetworkPolicy(blockedDomains: ["evil.example"]))
-        func popup(_ id: String, _ url: String) -> CDPEvent {
-            CDPEvent(method: "Target.targetInfoChanged", params: .object(["targetInfo": .object([
-                "type": .string("page"), "browserContextId": .string("ctx"), "targetId": .string(id), "url": .string(url),
-            ])]), sessionID: nil)
-        }
-        await fixture.browser.emit(popup("page-2", "https://app.example.com/popup"))
-        await fixture.browser.emit(popup("page-3", "https://evil.example/"))
-        for _ in 0..<50 where await fixture.browser.params(of: "Target.closeTarget").count < 2 {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["page-2", "page-3"])
-        #expect(await fixture.browser.params(of: "Page.navigate").compactMap { $0[wire: "url"]?.wireString } == ["https://app.example.com/popup"])
+        await fixture.browser.emit(Self.pageInfo("page-2", "https://app.example.com/popup"))
+        await fixture.browser.emit(Self.pageInfo("page-3", "https://evil.example/"))
+        try await Self.waitUntil { await !fixture.browser.params(of: "Target.closeTarget").isEmpty }
+        try await Self.waitUntil { await fixture.browser.params(of: "Target.attachToTarget").count >= 2 }
+        #expect(await fixture.browser.params(of: "Target.closeTarget").compactMap { $0[wire: "targetId"]?.wireString } == ["page-3"])
+        #expect(await fixture.browser.params(of: "Page.navigate").isEmpty, "the popup keeps its own tab")
+        #expect(try await fixture.target.describe(fixture.lease).tabs.map(\.id) == ["page-2", "page-1"])
+        let popup = try await Self.observe(fixture)
+        #expect(popup.target.tabID == "page-2")
+        #expect(popup.tree?.text.contains("opened a new tab") == true)
+        #expect(popup.tree?.text.contains("other tabs: page-1") == true)
+        let back = try await fixture.target.observe(fixture.lease, ObserveRequest(modes: [.dom], scope: .tab("page-1")))
+        #expect(back.target.tabID == "page-1")
     }
 }
 

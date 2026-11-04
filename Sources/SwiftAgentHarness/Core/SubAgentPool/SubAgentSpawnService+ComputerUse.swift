@@ -222,7 +222,7 @@ extension SubAgentSpawnService {
             }
         }
 
-        let result = await Self.specialistResult(
+        var result = await Self.specialistResult(
             task: task,
             session: session,
             outcome: outcome,
@@ -234,6 +234,10 @@ extension SubAgentSpawnService {
                 targetLabel: targetLabel
             )
         )
+        // A managed browser's downloads are deleted unless the report names them; the user's browser's are kept.
+        let report = result.jsonString
+        let kept = await session.finalizeDownloads { report.contains($0.name) || report.contains($0.path) }
+        if !kept.isEmpty { result.downloads = kept.map { ComputerUseResult.Download(name: $0.name, path: $0.path) } }
         await finishLocalAgentLifecycle(
             lifecycleID: lifecycleID,
             parentConversationID: conversationID,

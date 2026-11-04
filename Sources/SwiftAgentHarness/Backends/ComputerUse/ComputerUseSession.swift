@@ -364,6 +364,29 @@ public actor ComputerUseSession {
     public private(set) var scratchpad: String?
     public static let scratchpadLimit = 2_000
     public private(set) var replayFrames: [ComputerUseReplayFrame] = []
+    /// Files the lease downloaded, read when the session ended.
+    public private(set) var downloads: [DisplayDownload] = []
+
+    /// Deletes the downloads that are disposable and that `isReferenced` doesn't keep, such as files the result
+    /// doesn't name, and returns the rest.
+    @discardableResult
+    public func finalizeDownloads(keeping isReferenced: @Sendable (DisplayDownload) -> Bool) -> [DisplayDownload] {
+        var kept: [DisplayDownload] = []
+        for download in downloads {
+            if download.disposable, !isReferenced(download) {
+                try? FileManager.default.removeItem(atPath: download.path)
+            } else {
+                kept.append(download)
+            }
+        }
+        if let folder = downloads.first.map({ URL(fileURLWithPath: $0.path).deletingLastPathComponent() }),
+           (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
+            try? FileManager.default.removeItem(at: folder)
+        }
+        downloads = kept
+        return kept
+    }
+
     /// The observation the latest targeted action cited; its app is where untargeted input goes.
     private var lastCitedObservation: ObservationID?
     /// Where the last pointer action left the pointer, in the target's global space.
@@ -1082,9 +1105,11 @@ public actor ComputerUseSession {
         let handBack = isTakeoverActive
         isTakeoverActive = false
         // A task of its own: a cancelled caller's requests never reach a remote target, and cleanup must.
-        await Task { [target, lease] in
+        downloads = await Task { [target, lease] in
             if handBack { try? await target.takeover(lease, on: false) }
+            let downloads = await target.downloads(lease)
             await target.release(lease, reason: reason.releaseReason)
+            return downloads
         }.value
         await report(.ended)
     }

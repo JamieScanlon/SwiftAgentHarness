@@ -137,6 +137,30 @@ enum ComputerUseSessionFixtures {
 
 @Suite("Computer use session gating")
 struct ComputerUseSessionGatingTests {
+    @Test("Ending reads the lease's downloads; only disposable files the result doesn't cite are deleted")
+    func finalizeDownloads() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("downloads-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func file(_ name: String, disposable: Bool = true) throws -> DisplayDownload {
+            let path = folder.appendingPathComponent(name).path
+            try Data(name.utf8).write(to: URL(fileURLWithPath: path))
+            return DisplayDownload(name: name, path: path, completed: true, disposable: disposable)
+        }
+        let cited = try file("invoice.pdf")
+        let stray = try file("tracker.bin")
+        let kept = try file("user.zip", disposable: false)
+        await target.setDownloads([cited, stray, kept])
+        await session.end()
+        #expect(await session.downloads.map(\.name) == ["invoice.pdf", "tracker.bin", "user.zip"])
+        let remaining = await session.finalizeDownloads { $0.name == "invoice.pdf" }
+        #expect(remaining.map(\.name) == ["invoice.pdf", "user.zip"])
+        #expect(FileManager.default.fileExists(atPath: cited.path))
+        #expect(!FileManager.default.fileExists(atPath: stray.path))
+        #expect(FileManager.default.fileExists(atPath: kept.path))
+    }
+
     @Test("Observations run without approval and are retained for citing")
     func observeRetained() async throws {
         let (_, session) = try await ComputerUseSessionFixtures.make()
