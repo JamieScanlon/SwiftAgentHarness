@@ -104,8 +104,11 @@ actor ConversationMessagingRuntimeService {
                 harness: harnessPersistence,
                 ephemeralUntil: toolImageExpiry
             )
-            if toolImageExpiry != nil {
-                await deps.computerUse.blobs.hold(storedBlobIDs, childConversationID: conversationID)
+            if let toolImageExpiry {
+                // Another holder of the same bytes may keep them longer; the store gets the latest reference.
+                for expiry in await deps.computerUse.blobs.hold(storedBlobIDs, childConversationID: conversationID, until: toolImageExpiry) {
+                    _ = try? harnessPersistence.setBlobExpiry(blobId: expiry.blobID, expiresAt: expiry.expiresAt)
+                }
             }
             messages.append(rewrittenMessage)
             replayContext.append(rewrittenMessage)

@@ -85,6 +85,8 @@ struct ToolResultImageWireEncodingTests {
         #expect(roles == ["user", "assistant", "tool", "tool", "user", "assistant"])
         let tools = messages.filter { ($0["role"] as? String) == "tool" }
         #expect(tools.allSatisfy { $0["content"] is String })
+        #expect(tools.allSatisfy { ($0["content"] as? String)?.hasSuffix(OpenAICompatibleVisionContent.toolImageMarker(count: 1)) == true },
+                "each text-only result says its image follows")
         try expectImageCarrier(messages, imageCount: 2, mentions: ["call-1", "call-2"], mediaTypes: ["image/png", "image/webp"])
     }
 
@@ -101,6 +103,8 @@ struct ToolResultImageWireEncodingTests {
         let messages = try #require(json["messages"] as? [[String: Any]])
         let roles = messages.map { $0["role"] as? String ?? "" }.filter { $0 != "system" }
         #expect(roles == ["user", "assistant", "tool", "tool", "user", "assistant"])
+        let tools = messages.filter { ($0["role"] as? String) == "tool" }.compactMap { $0["content"] as? String }
+        #expect(tools.filter { $0.hasSuffix(OpenAICompatibleVisionContent.toolImageMarker(count: 1)) }.count == 1, "\(tools)")
         try expectImageCarrier(messages, imageCount: 1, mentions: ["call-1"], mediaTypes: ["image/png"])
     }
 
@@ -112,6 +116,7 @@ struct ToolResultImageWireEncodingTests {
         let data = try await llm.testEncodedChatMessagesJSON(from: plain, config: LLMRequestConfig())
         let messages = try #require(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
         #expect(messages.map { $0["role"] as? String ?? "" }.filter { $0 != "system" } == ["user", "assistant", "tool", "tool", "assistant"])
+        #expect(messages.allSatisfy { !(($0["content"] as? String)?.contains("next message") ?? false) })
     }
 
     private func expectImageCarrier(

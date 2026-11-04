@@ -569,7 +569,8 @@ actor LMStudioLLM: LLMProtocol, AdapterAuthProbing {
                     toolCalls: toolCalls
                 ))
             case .tool:
-                lmStudioMessages.append(LMStudioMessage(role: "tool", content: .text(message.content), toolCallId: message.toolCallId))
+                let marker = OpenAICompatibleVisionContent.toolImageMarker(for: message, dispositions: attachmentDispositions)
+                lmStudioMessages.append(LMStudioMessage(role: "tool", content: .text(message.content + marker), toolCallId: message.toolCallId))
             }
         }
         flushToolImages()

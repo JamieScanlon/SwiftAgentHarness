@@ -63,6 +63,14 @@ extension SubAgentSpawnService {
             ))
         }
         let profile = await deps.registryEntryProvider?(model.id)?.profile(for: .generate)
+        if configuration.requiresZeroRetention, seesImages, Self.retainsAtVendor(model: model, profile: profile) {
+            return reply(.notStarted(
+                .blocked,
+                reason: "model \(model.modelName) keeps every screenshot on the vendor's side (vendor-stored), and this host "
+                    + "requires zero retention; bind a computer-use model whose vendor doesn't store the conversation",
+                task: task
+            ))
+        }
 
         let lifecycleID = call.id ?? "model-\(conversationID.uuidString)-\(UUID().uuidString)"
         let grant: ComputerUseLeaseGrant
@@ -193,6 +201,14 @@ extension SubAgentSpawnService {
             ComputerUseSessionEntry(session: session, parentConversationID: userConversationID, lifecycleID: lifecycleID, targetLabel: targetLabel),
             for: childID
         )
+        let installation = deps.computerUse
+        let harnessForImages = await deps.persistenceDomain.harnessSessionPersistence
+        await session.observeEndsAt { endsAt in
+            let until = installation.sessionImageExpiry(endsAt: endsAt)
+            for expiry in await installation.blobs.moveSession(childConversationID: childID, until: until) {
+                _ = try? harnessForImages.setBlobExpiry(blobId: expiry.blobID, expiresAt: expiry.expiresAt)
+            }
+        }
         await session.announceStart()
         var outcome = await runLocalAgentChild(
             childConversationID: childID,
@@ -249,6 +265,16 @@ extension SubAgentSpawnService {
         return reply(result)
     }
 
+    /// Whether the model's computer-use calls would go to a vendor API that stores the conversation: its feature
+    /// says so, and its native toolset (if any) is one the model's codec speaks, so the stored API is used.
+    static func retainsAtVendor(model: Model, profile: ContractProfile?) -> Bool {
+        guard let support = profile.flatMap(ComputerUseModelSupport.init(profile:)), support.dataRetention == .vendorStored else {
+            return false
+        }
+        guard let toolset = ComputerUseNativeToolset(version: support.version) else { return true }
+        return toolset.modelProtocol == model.modelProtocol
+    }
+
     /// The vendor's native toolset when the model speaks that vendor's API and its catalog version names one.
     /// Anthropic's older single-tool versions also declare the screen size, which is what a display screenshot comes
     /// out as; Gemini's environment follows the target.
@@ -259,17 +285,19 @@ extension SubAgentSpawnService {
         layout: TargetLayout?,
         manifest: DisplayTargetManifest? = nil
     ) -> ComputerUseNativeDialect? {
-        guard let toolset = ComputerUseNativeToolset(version: profile.flatMap(ComputerUseModelSupport.init(profile:))?.version),
+        let support = profile.flatMap(ComputerUseModelSupport.init(profile:))
+        guard let toolset = ComputerUseNativeToolset(version: support?.version),
               model.modelProtocol == toolset.modelProtocol
         else { return nil }
+        let api = support?.api
         switch toolset.vendor {
         case .anthropic: break
-        case .openAI: return ComputerUseNativeDialect(toolset: toolset)
-        case .gemini: return ComputerUseNativeDialect(toolset: toolset, environment: manifest.map(GeminiComputerEnvironment.init(manifest:)) ?? .browser)
+        case .openAI: return ComputerUseNativeDialect(toolset: toolset, api: api)
+        case .gemini: return ComputerUseNativeDialect(toolset: toolset, environment: manifest.map(GeminiComputerEnvironment.init(manifest:)) ?? .browser, api: api)
         }
-        guard !toolset.isToolset else { return ComputerUseNativeDialect(toolset: toolset) }
+        guard !toolset.isToolset else { return ComputerUseNativeDialect(toolset: toolset, api: api) }
         guard let display = layout?.displays.first(where: \.isPrimary) ?? layout?.displays.first else {
-            return ComputerUseNativeDialect(toolset: toolset)
+            return ComputerUseNativeDialect(toolset: toolset, api: api)
         }
         let size = ObservationImageLimit.pixelSize(
             for: display.frame,
@@ -277,7 +305,7 @@ extension SubAgentSpawnService {
             maxLongEdge: imageLimit?.longEdgePx,
             maxPixels: imageLimit?.maxPixels
         )
-        return ComputerUseNativeDialect(toolset: toolset, displayWidthPx: size.width, displayHeightPx: size.height)
+        return ComputerUseNativeDialect(toolset: toolset, displayWidthPx: size.width, displayHeightPx: size.height, api: api)
     }
 
     static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String, liveView: Bool) -> ComputerUseSurfaceIntentPayload {
@@ -366,9 +394,9 @@ extension SubAgentSpawnService {
         }
     }
 
-    /// Stores the replay (full action log plus observation thumbnails) and starts the retention clock on every
-    /// image the run held: the release TTL, or the audit retention for a run the user marked. Returns the replay
-    /// document's ref.
+    /// Stores the replay (full action log plus observation thumbnails) and resets the run's image references: the
+    /// session's and the replay's run for the release TTL, and an audit mark placed while the run was live adds one
+    /// for the audit retention. Returns the replay document's ref.
     private func releaseRunBlobs(
         session: ComputerUseSession,
         childConversationID: UUID,
@@ -379,15 +407,26 @@ extension SubAgentSpawnService {
         let harness = await deps.persistenceDomain.harnessSessionPersistence
         let retention = deps.computerUse.retention
         let releasedAt = Date()
-        let auditMarked = await deps.computerUse.blobs.takeAuditMark(parent: parentConversationID, lifecycleID: lifecycleID)
+        let ledger = deps.computerUse.blobs
+        let auditMarked = await ledger.takeAuditMark(parent: parentConversationID, lifecycleID: lifecycleID)
         let expiresAt = retention.expiry(releasedAt: releasedAt, auditMarked: auditMarked)
-        var blobIDs = await deps.computerUse.blobs.takeHeld(childConversationID: childConversationID)
+        let normalExpiry = retention.expiry(releasedAt: releasedAt, auditMarked: false)
+        let screenshots = await ledger.takeHeld(childConversationID: childConversationID)
+        var blobIDs = screenshots
         let access = ComputerUseBlobAccess(
             load: { try harness.getBlob(blobId: $0) },
             setExpiry: { _ = try harness.setBlobExpiry(blobId: $0, expiresAt: $1) }
         )
-        defer {
-            for blobID in blobIDs { try? access.setExpiry(blobID, expiresAt) }
+        var expiries = await ledger.reference(screenshots, by: .session(childConversationID), until: normalExpiry)
+        func finish() async {
+            let run = (parent: parentConversationID, lifecycleID: lifecycleID)
+            expiries += await ledger.reference(blobIDs, by: .replay(parent: run.parent, lifecycleID: run.lifecycleID), until: normalExpiry)
+            if auditMarked {
+                expiries += await ledger.reference(blobIDs, by: .audit(parent: run.parent, lifecycleID: run.lifecycleID), until: expiresAt)
+            }
+            var latest: [String: Date] = [:]
+            for expiry in expiries { latest[expiry.blobID] = expiry.expiresAt }
+            for (blobID, date) in latest { try? access.setExpiry(blobID, date) }
             _ = try? harness.sweepExpiredBlobs()
         }
 
@@ -410,12 +449,19 @@ extension SubAgentSpawnService {
             targetLabel: targetLabel,
             endedAt: releasedAt,
             storeThumbnail: { try put($0, "computer-use-thumbnail.png", "image/png") }
-        ), !(replay.records.isEmpty && replay.thumbnails.isEmpty) else { return nil }
+        ), !(replay.records.isEmpty && replay.thumbnails.isEmpty) else {
+            await finish()
+            return nil
+        }
         replay.screenshotBlobIDs = blobIDs
         guard let data = try? JSONEncoder.computerUseReplay.encode(replay),
               let documentBlobID = try? put(data, "computer-use-replay-\(session.id.uuidString).json", "application/json")
-        else { return nil }
+        else {
+            await finish()
+            return nil
+        }
         blobIDs += replay.thumbnails.map(\.blobID) + [documentBlobID]
+        await finish()
         await deps.computerUse.replays.record(ComputerUseReplayIndexEntry(
             replay: replay,
             documentBlobID: documentBlobID,

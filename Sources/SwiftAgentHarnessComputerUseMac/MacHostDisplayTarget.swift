@@ -31,6 +31,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
         var workspace: any MacWorkspaceReading
+        /// Tells whether a background delivery changed anything; `nil` uses the live tree-and-pixels probe.
+        var deliveryProbe: (any MacDeliveryProbing)?
 
         public init(
             id: DisplayTargetID = MacHostDisplayTarget.defaultID,
@@ -51,8 +53,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
             permissionProbe: any MacPermissionProbing,
             eventPoster: any MacEventPosting,
             workspace: any MacWorkspaceReading = LiveMacWorkspace(),
-            axBudget: MacAXTraversalBudget = .default
+            axBudget: MacAXTraversalBudget = .default,
+            deliveryProbe: (any MacDeliveryProbing)? = nil
         ) {
+            self.deliveryProbe = deliveryProbe
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
@@ -97,6 +101,19 @@ public actor MacHostDisplayTarget: DisplayTarget {
     /// The app that was frontmost before a foreground action, restored on release unless the user moved on.
     private var restoreFrontmost: (previous: pid_t, activated: pid_t)?
     private let eventHub = DisplayTargetEventHub()
+    /// Apps whose later actions go to the foreground, after a background action in them changed nothing.
+    private var foregroundApps: Set<pid_t> = []
+    /// The action being delivered, for choosing its delivery.
+    private var currentAction: ComputerAction?
+    private var probe: any MacDeliveryProbing {
+        configuration.deliveryProbe ?? LiveMacDeliveryProbe(
+            accessibility: accessibility,
+            capture: capture,
+            workspace: workspace,
+            grantedBundleIDs: { [weak self] in await self?.grantedBundleIDs ?? [] },
+            excludedBundleIDs: configuration.excludedBundleIDs
+        )
+    }
     private var stopKeyMonitor: MacStopKeyMonitor?
 
     public init(configuration: Configuration = Configuration()) {
@@ -137,6 +154,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         foregroundAllowed = lease.delivery == .foregroundAllowed
         takeoverActive = false
         cited = nil
+        foregroundApps = []
         if let stopKey = configuration.stopKey {
             let hub = eventHub
             let leaseID = lease.id
@@ -296,7 +314,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         try await requireLease(lease)
         var outcomes: [ActionOutcome] = []
         for (index, action) in batch.actions.enumerated() {
+            currentAction = action
             var outcome = await perform(action)
+            currentAction = nil
             outcome.action = index
             outcomes.append(outcome)
             if outcome.effect.stopsBatch { break }
@@ -390,33 +410,28 @@ public actor MacHostDisplayTarget: DisplayTarget {
                 }
             }
             guard points.count >= 2, let delivery else { return refused("a drag needs at least two points") }
-            await input.post(MacInputPlanner.drag(points, modifiers: modifiers), delivery: delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "drag posted (\(Self.describe(delivery)))")
+            return await deliver(MacInputPlanner.drag(points, modifiers: modifiers), delivery: delivery, evidence: "drag posted")
         case .pointer(let state):
             let point = await input.currentPoint
             let event: MacInputEvent = state == .down ? .mouseDown(point, .left, 1, []) : .mouseUp(point, .left, 1, [])
             guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
-            await input.post([event], delivery: delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "pointer \(state.rawValue)")
+            return await deliver([event], delivery: delivery, evidence: "pointer \(state.rawValue)")
         case .scroll(let target, let dx, let dy, let unit):
             if let target {
                 return await pointer(target) { MacInputPlanner.scroll(at: $0, dx: dx, dy: dy, unit: unit) }
             }
             guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
-            await input.post(MacInputPlanner.scroll(at: await input.currentPoint, dx: dx, dy: dy, unit: unit), delivery: delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "scroll posted")
+            return await deliver(MacInputPlanner.scroll(at: await input.currentPoint, dx: dx, dy: dy, unit: unit), delivery: delivery, evidence: "scroll posted")
         case .type(let text, let into, let mode):
             return await type(text, into: into, mode: mode)
         case .key(let combo, let repeatCount):
             guard let plan = MacInputPlanner.key(combo, repeatCount: repeatCount) else { return refused("\(combo) has no key code") }
             guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
-            await input.post(plan, delivery: delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "\(combo) posted (\(Self.describe(delivery)))")
+            return await deliver(plan, delivery: delivery, evidence: "\(combo) posted")
         case .hold(let combo, let milliseconds):
             guard let plan = MacInputPlanner.hold(combo, milliseconds: milliseconds) else { return refused("\(combo) has no key code") }
             guard let delivery = await keyboardDelivery() else { return noWorkingApp() }
-            await input.post(plan, delivery: delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "\(combo) held \(milliseconds) ms")
+            return await deliver(plan, delivery: delivery, evidence: "\(combo) held \(milliseconds) ms")
         case .setValue(let target, let value):
             guard case .ref(let ref, let observation) = target else { return refused("set-value needs an element ref") }
             return semantic(await accessibility.setValue(ref: ref, observation: observation, value: value))
@@ -464,8 +479,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         if mode == .paste {
             return await paste(text, delivery: delivery)
         }
-        await input.post(MacInputPlanner.type(text), delivery: delivery)
-        return ActionOutcome(action: 0, effect: .unverifiable, evidence: "typed \(text.count) characters (\(Self.describe(delivery)))")
+        return await deliver(MacInputPlanner.type(text), delivery: delivery, evidence: "typed \(text.count) characters")
     }
 
     /// Save the clipboard, write, paste, and restore it.
@@ -502,12 +516,39 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private func pointer(_ target: ActionTarget, plan: (CGPoint) -> [MacInputEvent]) async -> ActionOutcome {
         switch await resolvePoint(target) {
         case .success(let resolved):
-            await input.post(plan(resolved.point), delivery: resolved.delivery)
-            return ActionOutcome(action: 0, effect: .unverifiable, evidence: "events posted (\(Self.describe(resolved.delivery)))")
+            return await deliver(plan(resolved.point), delivery: resolved.delivery, evidence: "events posted")
         case .failure(let refusal):
             return refused(refusal.message, escalation: .observe)
         }
     }
+
+    /// Posts `events`. A background delivery into an app is checked for any change in its window; when there is
+    /// none and the lease allows the foreground, later actions in that app go to the foreground. The action itself
+    /// is never delivered again, since it may have landed.
+    private func deliver(_ events: [MacInputEvent], delivery: MacInputDelivery, evidence: String) async -> ActionOutcome {
+        let described = "\(evidence) (\(Self.describe(delivery)))"
+        guard foregroundAllowed, case .process(let pid) = delivery, let app = await workspace.runningApp(pid: pid) else {
+            await input.post(events, delivery: delivery)
+            return ActionOutcome(action: 0, effect: .unverifiable, evidence: described)
+        }
+        let probe = probe
+        let before = await probe.state(of: pid, app: app.identity)
+        await input.post(events, delivery: delivery)
+        guard let before else { return ActionOutcome(action: 0, effect: .unverifiable, evidence: described) }
+        try? await Task.sleep(for: Self.deliverySettle)
+        guard await probe.state(of: pid, app: app.identity) == before else {
+            return ActionOutcome(action: 0, effect: .unverifiable, evidence: described)
+        }
+        foregroundApps.insert(pid)
+        return ActionOutcome(
+            action: 0,
+            effect: .suspectedNoop,
+            evidence: "\(described); nothing changed in \(app.identity.bundleID)'s window, so its later actions go to the foreground",
+            escalation: .foreground
+        )
+    }
+
+    static let deliverySettle: Duration = .milliseconds(150)
 
     /// Resolves a target to a point, checking the process generation and, for refs, element drift.
     private func resolvePoint(_ target: ActionTarget) async -> Result<ResolvedPoint, Refusal> {
@@ -536,18 +577,34 @@ public actor MacHostDisplayTarget: DisplayTarget {
             return .failure(Refusal(message: "(\(Int(point.x)), \(Int(point.y))) is not over a window of \(running.identity.bundleID)"))
         }
         cited = (pid, meta.processStart)
-        return .success(ResolvedPoint(point: point, delivery: await delivery(for: pid)))
+        let delivery = await delivery(for: pid)
+        if delivery == .foreground {
+            // A foreground event lands on whatever window is on top at the point.
+            let owner = MacAppFocus.topmostOwner(at: point, windows: await workspace.windows(), ignoring: getpid())
+            if owner != pid {
+                var name: String?
+                if let owner { name = await workspace.runningApp(pid: owner)?.identity.bundleID }
+                guard let name, grantedBundleIDs.contains(name) else {
+                    return .failure(Refusal(message: "(\(Int(point.x)), \(Int(point.y))) is covered by \(name ?? "a window") that isn't granted"))
+                }
+            }
+        }
+        return .success(ResolvedPoint(point: point, delivery: delivery))
     }
 
-    /// Background-first: events go to the target process. Foreground delivery is a consented escalation that
-    /// activates the app and is undone on release.
+    /// Background-first: events go to the target process. Foreground delivery is a consented escalation, used for
+    /// app classes background events are known to fail in and for apps where a background action changed nothing;
+    /// it activates the app and is undone on release.
     private func delivery(for pid: pid_t) async -> MacInputDelivery {
         guard foregroundAllowed else { return .process(pid) }
+        let app = await workspace.runningApp(pid: pid)
+        let upFront = app.map { MacForegroundPolicy.upFront($0.identity, for: currentAction) } ?? false
+        guard upFront || foregroundApps.contains(pid) else { return .process(pid) }
         let frontmost = await workspace.frontmostApp()?.pid
         if frontmost != pid, let frontmost {
             if restoreFrontmost == nil { restoreFrontmost = (frontmost, pid) }
             _ = await MacAppControl.activate(pid: pid)
-            await configuration.onForegroundDelivery?(await workspace.runningApp(pid: pid)?.identity.bundleID)
+            await configuration.onForegroundDelivery?(app?.identity.bundleID)
         }
         return .foreground
     }
@@ -583,6 +640,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
             if case .app(let bundleID, _, _) = grant { return bundleID }
             return nil
         }).subtracting(configuration.excludedBundleIDs)
+    }
+
+    /// Stands in for an observation of the app `pid`, for tests that act without capturing the screen.
+    func seedObservation(_ id: ObservationID, pid: pid_t, processStart: Date?) {
+        retain(ObservationMeta(pid: pid, processStart: processStart), for: id)
     }
 
     private func retain(_ meta: ObservationMeta, for id: ObservationID) {

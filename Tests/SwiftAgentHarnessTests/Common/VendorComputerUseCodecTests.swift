@@ -130,6 +130,13 @@ struct OpenAIResponsesComputerCodecTests {
         #expect(note.contains("suspected-noop"))
         #expect(!note.contains(ComputerUseOpenAIToolProvider.acknowledgedLine))
 
+        let shot = Message(id: UUID(), role: .tool, content: "Observation o_2", images: [F.png], toolCallId: "call_2@resp_1")
+        let inline = try #require(try self.body([system, task, turn(), shot])["input"] as? [[String: Any]])
+        let parts = try #require(inline.first?["output"] as? [[String: Any]], "a function's screenshot stays in its own output")
+        #expect(parts.map { $0["type"] as? String } == ["input_text", "input_image"])
+        #expect((parts[1]["image_url"] as? String)?.hasPrefix("data:image/png;base64,") == true)
+        #expect(inline.count == 1, "no separate user message carries it")
+
         let declined = Message(id: UUID(), role: .tool, content: "Action 1 refused: the user declined", images: [F.png], toolCallId: "call_1@resp_1")
         let unacknowledged = try #require(try self.body([system, task, turn(checks: checks), declined])["input"] as? [[String: Any]])
         #expect(unacknowledged[0]["acknowledged_safety_checks"] == nil)
@@ -152,6 +159,9 @@ struct OpenAIResponsesComputerCodecTests {
         #expect(OpenAILLM.usesComputerResponses(F.config(dialect)))
         #expect(!OpenAILLM.usesComputerResponses(F.config(nil)))
         #expect(!OpenAILLM.usesComputerResponses(F.config(ComputerUseNativeDialect(toolset: .toolset20260801))))
+        #expect(!OpenAILLM.usesComputerResponses(F.config(ComputerUseNativeDialect(toolset: .openAIComputer, api: ComputerUseToolsetAPI(rawValue: "chat")))),
+                "the codec follows the API the feature records")
+        #expect(ComputerUseNativeDialect(additionalParameters: .object([ComputerUseNativeDialect.parameterKey: dialect.wireParameters]))?.api == .responses)
     }
 }
 

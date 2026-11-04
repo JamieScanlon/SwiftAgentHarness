@@ -6,6 +6,8 @@ import Foundation
 /// The feature is a versioned key, not a boolean: `{supported, version, params: {coordinates, maxEdgePx, …}}`.
 /// The version names the vendor toolset; `coordinates` is the dialect the model emits; `maxEdgePx` caps screenshot
 /// size and `maxPixels` its area; `keepRecentScreenshots` and `pruneEvery` override the screenshot retention defaults.
+/// `api` names the vendor API the toolset needs when it isn't the provider's default, and `dataRetention` says
+/// whether that API keeps the conversation, and so every screenshot, on the vendor's side.
 public struct ComputerUseModelSupport: Sendable, Hashable {
     public static let featureKey = "computer-use"
 
@@ -17,6 +19,9 @@ public struct ComputerUseModelSupport: Sendable, Hashable {
     public var maxPixels: Int?
     public var keepRecentScreenshots: Int?
     public var pruneEvery: Int?
+    /// The vendor API the native toolset runs on.
+    public var api: ComputerUseToolsetAPI?
+    public var dataRetention: ComputerUseDataRetention
 
     /// `nil` when the profile has no supported `computer-use` feature.
     public init?(profile: ContractProfile) {
@@ -28,6 +33,17 @@ public struct ComputerUseModelSupport: Sendable, Hashable {
         maxPixels = Self.int(feature.param("maxPixels"))
         keepRecentScreenshots = Self.int(feature.param("keepRecentScreenshots"))
         pruneEvery = Self.int(feature.param("pruneEvery"))
+        let toolset = ComputerUseNativeToolset(version: feature.version)
+        if case .string(let raw)? = feature.param("api") {
+            api = ComputerUseToolsetAPI(rawValue: raw)
+        } else {
+            api = toolset?.defaultAPI
+        }
+        if case .string(let raw)? = feature.param("dataRetention"), let retention = ComputerUseDataRetention(rawValue: raw) {
+            dataRetention = retention
+        } else {
+            dataRetention = api?.storesConversation == true ? .vendorStored : .none
+        }
     }
 
     private static func coordinateMode(_ json: JSON?) -> ComputerUseCoordinateMode {
@@ -45,6 +61,36 @@ public struct ComputerUseModelSupport: Sendable, Hashable {
         default: return nil
         }
     }
+}
+
+/// The vendor API a native computer-use toolset is served on.
+public struct ComputerUseToolsetAPI: RawRepresentable, Sendable, Codable, Hashable {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    /// Anthropic's Messages API.
+    public static let messages = Self(rawValue: "messages")
+    /// OpenAI's Responses API, the only one with its `computer` tool.
+    public static let responses = Self(rawValue: "responses")
+    /// Google's Interactions API.
+    public static let interactions = Self(rawValue: "interactions")
+
+    /// Whether calls continue from a conversation the vendor stores.
+    var storesConversation: Bool {
+        self == .responses || self == .interactions
+    }
+}
+
+/// Where a model's computer-use conversation lives.
+public enum ComputerUseDataRetention: String, Sendable, Codable, Hashable {
+    /// Only in the request: the vendor keeps nothing past it under its retention policy.
+    case none
+    /// The vendor stores the conversation, every screenshot included, so harness-side pruning bounds what is
+    /// resent, not what the vendor keeps.
+    case vendorStored = "vendor-stored"
 }
 
 extension ContractProfile {

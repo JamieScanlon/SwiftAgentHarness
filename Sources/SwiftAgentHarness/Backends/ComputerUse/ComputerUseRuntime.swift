@@ -55,6 +55,9 @@ public struct ComputerUseConfiguration: Sendable {
     public var activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)?
     public var retention: ComputerUseRetention
     public var specialist: ComputerUseSpecialistProfile
+    /// Refuses computer-use models whose vendor stores the conversation (`dataRetention: "vendor-stored"`), for
+    /// hosts whose users or operators require that screenshots not be retained by the vendor.
+    public var requiresZeroRetention: Bool
 
     public init(
         registry: DisplayTargetRegistry,
@@ -65,7 +68,8 @@ public struct ComputerUseConfiguration: Sendable {
         oversight: (any ComputerUseOversight)? = nil,
         activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
         retention: ComputerUseRetention = ComputerUseRetention(),
-        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile()
+        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
+        requiresZeroRetention: Bool = false
     ) {
         self.registry = registry
         self.defaults = defaults
@@ -76,6 +80,7 @@ public struct ComputerUseConfiguration: Sendable {
         self.activityObserver = activityObserver
         self.retention = retention
         self.specialist = specialist
+        self.requiresZeroRetention = requiresZeroRetention
     }
 }
 
@@ -144,10 +149,17 @@ final class ComputerUseInstallation: Sendable {
     }
 
     /// When images a conversation's tool results store should expire, or `nil` for the durable lane. A live
-    /// specialist's child holds them until its lease's hard expiry plus the release TTL; release moves it.
+    /// specialist's session holds them a release TTL past its lease's hard limit; the reference moves with the time
+    /// ceiling and is reset at release.
     func toolImageExpiry(conversationID: UUID) async -> Date? {
         guard let session = await sessions.session(for: conversationID) else { return nil }
-        return session.lease.endsAt.addingTimeInterval(retention.afterRelease.timeInterval)
+        return sessionImageExpiry(endsAt: await session.endsAt)
+    }
+
+    /// The session's reference on its images for a lease ending at `endsAt`.
+    func sessionImageExpiry(endsAt: Date) -> Date {
+        let grace = configuration?.specialist.cleanupGraceSeconds ?? 0
+        return endsAt.addingTimeInterval(grace + retention.afterRelease.timeInterval)
     }
 
     func install(_ configuration: ComputerUseConfiguration, publish: ComputerUseOversightCoordinator.Publish? = nil) {

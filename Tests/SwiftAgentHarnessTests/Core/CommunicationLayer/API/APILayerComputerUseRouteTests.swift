@@ -215,13 +215,14 @@ struct APILayerComputerUseRouteTests {
                 #expect(res.status == .ok)
                 let body = try json(res)
                 #expect(body["released"] as? Bool == true)
-                #expect(body["expiresAt"] == nil, "default audit retention holds until unmarked")
+                #expect(body["expiresAt"] is String, "the default audit retention is a fixed length")
             }
             try await post("call-nope", #"{"marked":true}"#) { res in #expect(res.status == .notFound) }
             try await post("call-done", #"{"mark":1}"#) { res in #expect(res.status == .badRequest) }
         }
         #expect(await installation.blobs.takeAuditMark(parent: conversationID, lifecycleID: "call-live"))
-        #expect(store.expiries["doc"] == .some(nil))
+        let held = try #require(store.expiries["doc"] ?? nil)
+        #expect(held.timeIntervalSince(entry.releasedAt) > 29 * 86_400)
     }
 
     @Test("POST …/runs/{lifecycleID}/live-view mints a user or observer link, DELETE …/observers ends observers, and both 404 without a run")

@@ -44,6 +44,23 @@ struct ComputerUseModelSupportTests {
         #expect(support.pruneEvery == 10)
     }
 
+    @Test("The feature records the toolset's API and whether the vendor stores the conversation")
+    func apiAndRetention() throws {
+        let anthropic = try #require(ComputerUseModelSupport(profile: profile(feature: FeatureSupport(version: "computer_toolset_20260801"))))
+        #expect(anthropic.api == .messages)
+        #expect(anthropic.dataRetention == ComputerUseDataRetention.none)
+        let openAI = try #require(ComputerUseModelSupport(profile: profile(feature: FeatureSupport(version: "computer"))))
+        #expect(openAI.api == .responses)
+        #expect(openAI.dataRetention == .vendorStored, "the Responses API continues from stored responses")
+        let declared = try #require(ComputerUseModelSupport(profile: profile(feature: FeatureSupport(
+            version: "computer", params: ["api": .string("responses"), "dataRetention": .string("none")]
+        ))))
+        #expect(declared.dataRetention == ComputerUseDataRetention.none, "a declared retention wins")
+        let unknown = try #require(ComputerUseModelSupport(profile: profile(feature: FeatureSupport(version: "cu-2026"))))
+        #expect(unknown.api == nil)
+        #expect(unknown.dataRetention == ComputerUseDataRetention.none)
+    }
+
     @Test("A normalized-grid dialect selects the 0–999 codec")
     func normalizedDialect() throws {
         let feature = FeatureSupport(version: "cu-2026", params: ["coordinates": .string("normalized-1000")])

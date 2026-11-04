@@ -53,6 +53,15 @@ public enum ComputerUseNativeToolset: String, Sendable, Codable, Hashable, CaseI
         }
     }
 
+    /// The API the vendor serves this toolset on, when the feature names none.
+    var defaultAPI: ComputerUseToolsetAPI {
+        switch vendor {
+        case .anthropic: .messages
+        case .openAI: .responses
+        case .gemini: .interactions
+        }
+    }
+
     /// The model protocol whose codec speaks this toolset.
     var modelProtocol: ModelProtocol {
         switch vendor {
@@ -114,17 +123,21 @@ public struct ComputerUseNativeDialect: Sendable, Hashable {
     public var displayHeightPx: Int?
     /// Gemini's environment, which picks its predefined functions.
     public var environment: GeminiComputerEnvironment?
+    /// The API the provider codec sends the session's requests to.
+    public var api: ComputerUseToolsetAPI
 
     public init(
         toolset: ComputerUseNativeToolset,
         displayWidthPx: Int? = nil,
         displayHeightPx: Int? = nil,
-        environment: GeminiComputerEnvironment? = nil
+        environment: GeminiComputerEnvironment? = nil,
+        api: ComputerUseToolsetAPI? = nil
     ) {
         self.toolset = toolset
         self.displayWidthPx = displayWidthPx
         self.displayHeightPx = displayHeightPx
         self.environment = environment
+        self.api = api ?? toolset.defaultAPI
     }
 
     public var wireParameters: JSON {
@@ -132,6 +145,7 @@ public struct ComputerUseNativeDialect: Sendable, Hashable {
         if let displayWidthPx { object["displayWidthPx"] = .integer(displayWidthPx) }
         if let displayHeightPx { object["displayHeightPx"] = .integer(displayHeightPx) }
         if let environment { object["environment"] = .string(environment.rawValue) }
+        object["api"] = .string(api.rawValue)
         return .object(object)
     }
 
@@ -148,7 +162,9 @@ public struct ComputerUseNativeDialect: Sendable, Hashable {
         }
         var environment: GeminiComputerEnvironment?
         if case .string(let raw)? = object["environment"] { environment = GeminiComputerEnvironment(rawValue: raw) }
-        self.init(toolset: toolset, displayWidthPx: int("displayWidthPx"), displayHeightPx: int("displayHeightPx"), environment: environment)
+        var api: ComputerUseToolsetAPI?
+        if case .string(let raw)? = object["api"] { api = ComputerUseToolsetAPI(rawValue: raw) }
+        self.init(toolset: toolset, displayWidthPx: int("displayWidthPx"), displayHeightPx: int("displayHeightPx"), environment: environment, api: api)
     }
 
     /// The Gemini functions this dialect offers: its environment's predefined functions the harness can carry out.

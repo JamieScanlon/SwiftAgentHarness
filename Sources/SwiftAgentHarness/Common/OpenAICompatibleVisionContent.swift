@@ -34,6 +34,18 @@ enum OpenAICompatibleVisionContent {
     /// Chat-completions tool messages carry text only, so the images a run of tool messages returned travel in one
     /// user message placed right after the run (never between tool messages, which must follow their assistant
     /// message contiguously).
+    /// Left in a text-only tool result whose images travel in the next user message instead.
+    static func toolImageMarker(count: Int) -> String {
+        "[\(count == 1 ? "an image" : "\(count) images") from this result follow\(count == 1 ? "s" : "") in the next message]"
+    }
+
+    /// The marker for `message`'s images that the carrier moves, or `""` when it moves none.
+    static func toolImageMarker(for message: Message, dispositions: [String: String]) -> String {
+        guard message.role == .tool else { return "" }
+        let count = inlineImagesWithData(from: message.images, dispositions: dispositions).count
+        return count == 0 ? "" : "\n" + toolImageMarker(count: count)
+    }
+
     struct ToolImageCarrier {
         private(set) var pending: [(toolCallID: String, image: Message.Image)] = []
 

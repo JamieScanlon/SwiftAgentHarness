@@ -107,14 +107,19 @@ enum OpenAIResponsesComputerCodec {
                 let note = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !note.isEmpty { notes.append(.object(["type": .string("input_text"), "text": .string("Computer call \(callID): \(note)")])) }
             } else {
+                // A function's output can hold images, so a screenshot stays with the call it answers.
+                let urls = message.images.compactMap(ProviderHTTPStatus.dataURL)
+                let output: JSON = urls.isEmpty
+                    ? .string(message.content)
+                    : .array(
+                        (message.content.isEmpty ? [] : [.object(["type": .string("input_text"), "text": .string(message.content)])])
+                            + urls.map { .object(["type": .string("input_image"), "image_url": .string($0), "detail": .string("auto")]) }
+                    )
                 items.append(.object([
                     "type": .string("function_call_output"),
                     "call_id": .string(callID),
-                    "output": .string(message.content),
+                    "output": output,
                 ]))
-                for url in message.images.compactMap(ProviderHTTPStatus.dataURL) {
-                    notes.append(.object(["type": .string("input_image"), "image_url": .string(url), "detail": .string("auto")]))
-                }
             }
         }
         flushNotes()

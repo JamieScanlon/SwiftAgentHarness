@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import SwiftAgentHarness
 
@@ -142,12 +143,15 @@ struct ComputerUseExtensionTests {
             Self.budgets(maxDuration: .seconds(60), deadline: start.addingTimeInterval(75)),
             clock: clock
         )
+        let moved = Mutex<[Date]>([])
+        await session.observeEndsAt { endsAt in moved.withLock { $0.append(endsAt) } }
         clock.advance(seconds: 61)
         #expect(await session.endsAt == start.addingTimeInterval(60))
         let result = await session.perform([S.observe])
         #expect(result.outcomes.map(\.effect) == [.confirmed])
         #expect(await session.endsAt == start.addingTimeInterval(75))
         #expect(await session.events.contains { $0.kind == .timeExtended })
+        #expect(moved.withLock { $0 } == [start.addingTimeInterval(75)], "the image reference's observer hears the move")
     }
 
     @Test("Without a user present the time ceiling ends the session as time-budget")

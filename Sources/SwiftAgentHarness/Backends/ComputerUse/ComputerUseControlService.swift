@@ -113,10 +113,21 @@ public struct ComputerUseControlService: Sendable {
             return ComputerUseAuditStatus(lifecycleID: lifecycleID, auditMarked: marked, released: false, expiresAt: nil)
         }
         guard let entry = await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID) else { return nil }
-        let expiresAt = installation.retention.expiry(releasedAt: entry.releasedAt, auditMarked: marked)
-        for blobID in entry.blobIDs {
-            try? entry.access.setExpiry(blobID, expiresAt)
-        }
+        let retention = installation.retention
+        let ledger = installation.blobs
+        // The replay's own reference, restated for a run rediscovered after a restart; the mark adds or drops its own.
+        var expiries = await ledger.reference(
+            entry.blobIDs, by: .replay(parent: conversationID, lifecycleID: lifecycleID),
+            until: retention.expiry(releasedAt: entry.releasedAt, auditMarked: false)
+        )
+        expiries += await ledger.reference(
+            entry.blobIDs, by: .audit(parent: conversationID, lifecycleID: lifecycleID),
+            until: marked ? retention.expiry(releasedAt: entry.releasedAt, auditMarked: true) : nil
+        )
+        var latest: [String: Date] = [:]
+        for expiry in expiries { latest[expiry.blobID] = expiry.expiresAt }
+        for (blobID, date) in latest { try? entry.access.setExpiry(blobID, date) }
+        let expiresAt = latest[entry.documentBlobID] ?? retention.expiry(releasedAt: entry.releasedAt, auditMarked: marked)
         await installation.replays.updateRetention(parent: conversationID, lifecycleID: lifecycleID, auditMarked: marked, expiresAt: expiresAt)
         return ComputerUseAuditStatus(lifecycleID: lifecycleID, auditMarked: marked, released: true, expiresAt: expiresAt)
     }

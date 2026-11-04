@@ -252,14 +252,43 @@ struct ComputerUseReplayTests {
         #expect(ComputerUseReplayDiscovery.replayDocumentBlobID(inToolResult: "not json") == nil)
     }
 
-    @Test("Retention: the TTL runs from release, and audit retention replaces it")
+    @Test("Retention: the TTL runs from release, and an audit mark holds for its own fixed length, 30 days by default")
     func retentionRule() {
         let released = Date(timeIntervalSince1970: 1_800_000_000)
-        let retention = ComputerUseRetention(afterRelease: .seconds(60), audit: nil)
+        let retention = ComputerUseRetention(afterRelease: .seconds(60))
+        #expect(retention.audit == .seconds(30 * 86_400))
         #expect(retention.expiry(releasedAt: released, auditMarked: false) == released.addingTimeInterval(60))
-        #expect(retention.expiry(releasedAt: released, auditMarked: true) == nil)
+        #expect(retention.expiry(releasedAt: released, auditMarked: true) == released.addingTimeInterval(30 * 86_400))
         #expect(ComputerUseRetention(afterRelease: .seconds(60), audit: .seconds(600)).expiry(releasedAt: released, auditMarked: true)
             == released.addingTimeInterval(600))
+    }
+
+    @Test("Each holder's reference has its own expiry; a blob lasts until its last reference expires")
+    func references() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ledger = ComputerUseBlobLedger(now: { now })
+        let child = UUID(), parent = UUID()
+        let session = await ledger.hold(["a", "b"], childConversationID: child, until: now.addingTimeInterval(600))
+        #expect(session.map(\.expiresAt) == [now.addingTimeInterval(600), now.addingTimeInterval(600)])
+
+        let moved = await ledger.moveSession(childConversationID: child, until: now.addingTimeInterval(1_200))
+        #expect(moved.map(\.blobID) == ["a", "b"])
+        #expect(moved.allSatisfy { $0.expiresAt == now.addingTimeInterval(1_200) }, "the session's reference follows the time ceiling")
+
+        let audit = ComputerUseBlobLedger.Holder.audit(parent: parent, lifecycleID: "run")
+        _ = await ledger.reference(["a"], by: audit, until: now.addingTimeInterval(86_400))
+        let shortened = await ledger.reference(["a", "b"], by: .session(child), until: now.addingTimeInterval(60))
+        #expect(shortened == [
+            .init(blobID: "a", expiresAt: now.addingTimeInterval(86_400)),
+            .init(blobID: "b", expiresAt: now.addingTimeInterval(60)),
+        ], "shortening one holder's reference leaves another holder's")
+
+        let unmarked = await ledger.reference(["a"], by: audit, until: nil)
+        #expect(unmarked == [.init(blobID: "a", expiresAt: now.addingTimeInterval(60))])
+        let gone = await ledger.reference(["a"], by: .session(child), until: nil)
+        #expect(gone == [.init(blobID: "a", expiresAt: now)], "with no reference left it expires now")
+        #expect(await ledger.expiry(of: "a") == nil)
+        #expect(await ledger.takeHeld(childConversationID: child) == ["a", "b"])
     }
 }
 

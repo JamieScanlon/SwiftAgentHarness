@@ -330,9 +330,9 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
     
     // MARK: - Computer use
 
-    /// A computer-use session on OpenAI's `computer` tool, which only the Responses API offers.
+    /// A computer-use session whose toolset the model's feature puts on the Responses API.
     static func usesComputerResponses(_ config: LLMRequestConfig) -> Bool {
-        ComputerUseNativeDialect(additionalParameters: config.additionalParameters)?.toolset.vendor == .openAI
+        ComputerUseNativeDialect(additionalParameters: config.additionalParameters)?.api == .responses
     }
 
     private func sendComputerResponses(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
@@ -468,7 +468,7 @@ struct OpenAILLM: LLMProtocol, AdapterAuthProbing {
                     imageNames: message.images.map(\.name),
                     dispositions: attachmentDispositions,
                     additionalParameters: config.additionalParameters
-                )
+                ) + OpenAICompatibleVisionContent.toolImageMarker(for: message, dispositions: attachmentDispositions)
             }
             let role = ChatQuery.ChatCompletionMessageParam.Role(rawValue: message.role.rawValue) ?? .user
             if role == .user {

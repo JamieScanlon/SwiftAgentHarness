@@ -336,6 +336,7 @@ public actor ComputerUseSession {
     private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
     private var targetEvents: Task<Void, Never>?
+    private var endsAtObserver: (@Sendable (Date) async -> Void)?
     /// The user's latest keystroke on a shared desktop, as the target reported it.
     private var userTypedAt: Date?
     /// Set by a sensitive-domain signal for the rest of the session: every action then waits until the user
@@ -762,6 +763,11 @@ public actor ComputerUseSession {
         await report(.started)
     }
 
+    /// Called with the new end time whenever a present user moves the time ceiling.
+    public func observeEndsAt(_ observer: @escaping @Sendable (Date) async -> Void) {
+        endsAtObserver = observer
+    }
+
     /// How long after the user's last keystroke on a shared desktop the agent's input waits.
     public static let userTypingQuiet: TimeInterval = 2
 
@@ -1046,6 +1052,7 @@ public actor ComputerUseSession {
         timeCeiling = timeCeiling.addingTimeInterval(added)
         endsAt = [timeCeiling, budgets.deadline, grantExpiresAt].compactMap { $0 }.min() ?? timeCeiling
         events.append(ComputerUseSessionEvent(kind: .timeExtended, at: now(), step: steps, endsAt: endsAt))
+        await endsAtObserver?(endsAt)
     }
 
     private func ranOutOfSteps() async {

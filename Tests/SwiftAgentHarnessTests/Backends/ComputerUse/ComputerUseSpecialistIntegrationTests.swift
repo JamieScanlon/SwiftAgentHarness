@@ -135,7 +135,8 @@ struct ComputerUseSpecialistIntegrationTests {
         specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
         idleChild: Bool = false,
         otherModels: [ModelRegistryEntry] = [],
-        llmFactory: (any ModelLLMFactoring)? = nil
+        llmFactory: (any ModelLLMFactoring)? = nil,
+        requiresZeroRetention: Bool = false
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -172,7 +173,8 @@ struct ComputerUseSpecialistIntegrationTests {
             ),
             approveGrants: approve,
             activityObserver: activityObserver,
-            specialist: specialist
+            specialist: specialist,
+            requiresZeroRetention: requiresZeroRetention
         )
         if let publish {
             session.installComputerUse(configuration, publish: publish)
@@ -633,7 +635,7 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(try entry.access.load(thumbnail.blobID).isEmpty == false)
     }
 
-    @Test("An audit mark placed while the run is live holds its images at release")
+    @Test("An audit mark placed while the run is live holds its images for the audit retention at release")
     func auditMarkedWhileLive() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
         await target.setScreenshot(try ComputerUseFixtures.pngScreenshot())
@@ -651,11 +653,13 @@ struct ComputerUseSpecialistIntegrationTests {
         _ = try await invoke(session, parent: parent)
         let summary = try #require(await session.computerUseControl.replays(conversationID: parent.id).first)
         #expect(summary.auditMarked)
-        #expect(summary.expiresAt == nil)
         let entry = try #require(await session.runtimeDependencies.computerUse.replays.entry(parent: parent.id, lifecycleID: "call-cu-1"))
+        let auditExpiry = ComputerUseRetention().expiry(releasedAt: entry.releasedAt, auditMarked: true)
+        #expect(summary.expiresAt.map { abs($0.timeIntervalSince(auditExpiry)) < 1 } == true, "30 days, not indefinite")
         let harness = await session.runtimeDependencies.persistenceDomain.harnessSessionPersistence
         for blobID in entry.blobIDs {
-            #expect(try harness.statBlob(blobId: blobID).expiresAt == nil)
+            let expiry = try harness.statBlob(blobId: blobID).expiresAt
+            #expect(expiry.map { abs($0.timeIntervalSince(auditExpiry)) < 1 } == true)
         }
     }
 
@@ -747,6 +751,30 @@ struct ComputerUseSpecialistIntegrationTests {
         )
         #expect(result["status"] as? String == "needs-user")
         #expect(await recorder.childIDs.isEmpty)
+    }
+
+    @Test("Under zero retention, a model whose vendor stores the conversation is refused before leasing")
+    func zeroRetention() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let model = Model(
+            id: UUID(), protocol: .openAIAPI, modelName: "gpt-cu", serverURL: URL(string: "https://api.openai.com/v1")!,
+            capabilities: [.completion, .tools, .vision], modelProtocol: .openAIAPI
+        )
+        let generate = ContractProfile(
+            contract: .generate, surface: .anthropicMessages, interaction: [.unary], input: [.text, .image],
+            output: [.text, .toolCalls], guarantee: .freeText,
+            features: ["tools": FeatureSupport(), ComputerUseModelSupport.featureKey: FeatureSupport(version: "computer")]
+        )
+        let (session, parent) = try await makeSession(
+            model: model, target: target, script: [], reply: "ok", recorder: ChildRecorder(), contracts: [generate], requiresZeroRetention: true
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "blocked")
+        #expect((result["reason"] as? String)?.contains("vendor-stored") == true, "\(result)")
+        #expect(await target.releases.isEmpty)
+        #expect(await target.actCalls.isEmpty)
+        #expect(SubAgentSpawnService.retainsAtVendor(model: model, profile: generate))
+        #expect(!SubAgentSpawnService.retainsAtVendor(model: makeModel(), profile: generate), "an Anthropic model can't use OpenAI's stored API")
     }
 
     @Test("A model that cannot see images is refused before leasing")

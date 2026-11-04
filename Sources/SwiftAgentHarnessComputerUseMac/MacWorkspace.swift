@@ -75,6 +75,11 @@ enum MacAppFocus {
         return false
     }
 
+    /// The app whose window is on top at `point`, other than this process: where a foreground event lands.
+    static func topmostOwner(at point: CGPoint, windows: [MacWindowEntry], ignoring ownPID: pid_t) -> pid_t? {
+        windows.first { $0.bounds.contains(point) && $0.pid != ownPID }?.pid
+    }
+
     /// The browser to open pages in: the default one when granted, else the first granted one installed.
     static func browser(granted: Set<String>, _ browsers: MacBrowsers) -> String? {
         if let preferred = browsers.defaultBundleID, granted.contains(preferred) { return preferred }
