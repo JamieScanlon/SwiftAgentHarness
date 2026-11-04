@@ -269,9 +269,14 @@ struct ComputerUseSpecialistIntegrationTests {
         )
         let (outcome, result) = try await invoke(session, parent: parent)
         #expect(result["status"] as? String == "done")
-        #expect(result["result"] as? String == "Bolded and saved.")
+        #expect(result["result"] == nil, "the specialist's own text travels in the enveloped report")
+        let report = try #require(result["report"] as? String)
+        #expect(report.contains("EXTERNAL_UNTRUSTED_CONTENT"))
+        #expect(report.contains("Computer-use specialist report"))
+        #expect(report.contains("Bolded and saved."))
         let verification = try #require(result["verification"] as? [[String: Any]])
         #expect(verification.map { $0["met"] as? Bool } == [true, true])
+        #expect(verification.allSatisfy { $0["evidence"] == nil })
         #expect((result["actionsLog"] as? String)?.contains("blob://") == true)
         if case .completed(let message) = outcome {
             #expect(message.images.isEmpty)
@@ -285,6 +290,22 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(await session.runtimeDependencies.computerUse.sessions.session(for: childID) == nil)
         #expect(await recorder.prompts.first?.contains("Make the title bold in TextEdit.") == true)
         #expect(await recorder.prompts.first?.contains("1. title is bold") == true)
+    }
+
+    @Test("A report that doesn't match the return schema gets one resubmission, then is left out with the reason")
+    func schemaResubmission() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let recorder = ChildRecorder()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: recorder
+        )
+        let schema = #"{"type":"object","required":["saved"],"properties":{"saved":{"type":"boolean"}}}"#
+        let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["return_schema": .string(schema)]))
+        let prompts = await recorder.prompts
+        #expect(prompts.count == 2)
+        #expect(prompts.last?.contains("doesn't match the return schema") == true)
+        #expect(result["report"] == nil || !(result["report"] as? String ?? "").contains("\"result\""))
+        #expect((result["reason"] as? String)?.contains("didn't match the return schema") == true)
     }
 
     @Test("The host's activity observer sees the whole run, for its HUD")

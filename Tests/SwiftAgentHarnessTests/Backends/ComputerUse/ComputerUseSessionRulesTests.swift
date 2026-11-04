@@ -1,4 +1,6 @@
+import EasyJSON
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
@@ -119,5 +121,35 @@ struct ComputerUseSessionRulesTests {
         #expect(result.outcomes.map(\.effect) == [.refused])
         #expect(await approvals.withdrawn.count == 1)
         #expect(await target.actCalls.isEmpty)
+    }
+}
+
+@Suite("Computer use tool results: harness text and screen text")
+struct ComputerUseResultEnvelopeTests {
+    @Test("An observation's header and the reminder stay outside the envelope; the tree is inside")
+    func observeSplit() async throws {
+        let (_, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        let provider = ComputerUseToolProvider(session: session)
+        let result = try await provider.executeTool(ToolCall(name: "computer_observe", arguments: .object([:]), id: "c1"))
+        let content = result.content
+        let start = try #require(content.range(of: "EXTERNAL_UNTRUSTED_CONTENT"))
+        let outside = String(content[..<start.lowerBound])
+        let inside = String(content[start.lowerBound...])
+        #expect(outside.contains("Observation o_1"))
+        #expect(!outside.contains("[e2]"))
+        #expect(inside.contains("[e2]"))
+        #expect(ToolExternalContentPolicy.resolve(toolName: "computer_observe", entry: nil).selfEnveloping)
+        let rewrapped = ToolResultExternalContentMiddleware.apply(toolCall: ToolCall(name: "computer_observe", id: "c1"), result: result, entry: nil)
+        #expect(rewrapped.content == content, "the middleware doesn't wrap the harness's text again")
+    }
+
+    @Test("Arguments outside a computer tool's schema are rejected")
+    func unknownArguments() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        let provider = ComputerUseToolProvider(session: session)
+        let result = try await provider.executeTool(ToolCall(name: "computer_observe", arguments: .object(["max_minutes": .integer(5)]), id: "c1"))
+        #expect(!result.success)
+        #expect(result.content.contains("max_minutes is not a parameter of computer_observe"))
+        #expect(await target.observeCalls.isEmpty)
     }
 }

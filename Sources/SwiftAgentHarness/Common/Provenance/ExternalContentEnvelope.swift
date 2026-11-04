@@ -10,6 +10,8 @@ enum ExternalContentSourceLabel: String, Sendable {
     case webFetch = "web_fetch"
     /// Text read off a display target: accessibility trees, DOM, OCR.
     case screen
+    /// What a computer-use specialist reported, written by a model that read untrusted screens.
+    case specialistReport = "specialist_report"
     case unknown
 
     var humanLabel: String {
@@ -22,6 +24,7 @@ enum ExternalContentSourceLabel: String, Sendable {
         case .webSearch: return "Web search"
         case .webFetch: return "Web fetch"
         case .screen: return "Screen content"
+        case .specialistReport: return "Computer-use specialist report"
         case .unknown: return "Unknown external source"
         }
     }

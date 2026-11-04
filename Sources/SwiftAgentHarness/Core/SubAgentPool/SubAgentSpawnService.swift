@@ -1102,7 +1102,7 @@ public actor SubAgentSpawnService {
         return depth
     }
 
-    private func subAgentRootConversationID(for conversationID: UUID) async -> UUID {
+    func subAgentRootConversationID(for conversationID: UUID) async -> UUID {
         guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID),
               let metadata = conversation.metadata,
               case .object(let object) = metadata,
@@ -1112,7 +1112,7 @@ public actor SubAgentSpawnService {
         return parsed
     }
 
-    private func subAgentPathSegments(for conversationID: UUID) async -> [String] {
+    func subAgentPathSegments(for conversationID: UUID) async -> [String] {
         guard let conversation = await deps.persistenceDomain.modelConversation(id: conversationID),
               let metadata = conversation.metadata,
               case .object(let object) = metadata,

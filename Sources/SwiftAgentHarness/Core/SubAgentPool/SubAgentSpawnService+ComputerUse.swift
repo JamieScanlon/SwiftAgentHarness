@@ -33,7 +33,7 @@ extension SubAgentSpawnService {
         let reply: (ComputerUseResult) -> ToolDispatchOutcome = { result in
             var result = result
             if !grantNotes.isEmpty { result.grantNotes = grantNotes }
-            return .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.jsonString))
+            return .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.parentContent))
         }
 
         let definition = ComputerUseDelegateToolProvider.specialistDefinition(configuration.specialist)
@@ -137,18 +137,33 @@ extension SubAgentSpawnService {
         if sessionConfiguration.nativeDialect?.toolset.vendor == .gemini {
             sessionConfiguration.coordinateMode = .normalized1000
         }
-        // Approvals, questions, and activity go to the user's conversation, not the specialist's child. Waiting on
-        // the user pauses the child's idle clock, and every action the session reports is a sign of life.
+        // Approvals, questions, and activity go to the user's conversation: the root of the delegation tree, which
+        // is the parent unless the parent is itself a delegate. A nested specialist's requests name its path. Waiting
+        // on the user pauses the child's idle clock, and every action the session reports is a sign of life.
+        let userConversationID = await subAgentRootConversationID(for: conversationID)
+        let userConversation = userConversationID == conversationID
+            ? parentConversation
+            : await deps.persistenceDomain.modelConversation(id: userConversationID) ?? parentConversation
+        if userConversationID != conversationID {
+            let path = await subAgentPathSegments(for: childID)
+            sessionConfiguration.delegatePath = path.isEmpty ? ComputerUseDelegateToolProvider.toolName : path.joined(separator: "/")
+        }
         let targetLabel = grant.target.manifest.label
         let servesLiveView = grant.target.manifest.observerAccess != .none
         let liveness = DelegateLiveness()
         var approvals = configuration.approvals
         if approvals == nil {
-            approvals = await orchestratorRuntime.approvalDelivery(for: parentConversation)
+            approvals = await orchestratorRuntime.approvalDelivery(for: userConversation)
         }
         approvals = approvals.map { ComputerUseLivenessApprovals(base: $0, liveness: liveness) }
         let oversight: (any ComputerUseOversight)? = (configuration.oversight ?? deps.computerUse.coordinator.map {
-            ComputerUseConversationOversight(coordinator: $0, conversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel)
+            ComputerUseConversationOversight(
+                coordinator: $0,
+                conversationID: userConversationID,
+                lifecycleID: lifecycleID,
+                targetLabel: targetLabel,
+                delegatePath: sessionConfiguration.delegatePath
+            )
         }).map { ComputerUseLivenessOversight(base: $0, liveness: liveness) }
         let publish = deps.computerUse.publish
         let observer = configuration.activityObserver
@@ -162,7 +177,7 @@ extension SubAgentSpawnService {
             if changed { on ? liveness.pause() : liveness.resume() } else { liveness.touch() }
             guard publish != nil || observer != nil else { return }
             let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID, liveView: servesLiveView)
-            await publish?(conversationID, .computerUseActivity(payload))
+            await publish?(userConversationID, .computerUseActivity(payload))
             await observer?(payload)
         }
         let session = ComputerUseSession(
@@ -175,11 +190,11 @@ extension SubAgentSpawnService {
             activity: activity
         )
         await deps.computerUse.sessions.register(
-            ComputerUseSessionEntry(session: session, parentConversationID: conversationID, lifecycleID: lifecycleID, targetLabel: targetLabel),
+            ComputerUseSessionEntry(session: session, parentConversationID: userConversationID, lifecycleID: lifecycleID, targetLabel: targetLabel),
             for: childID
         )
         await session.announceStart()
-        let outcome = await runLocalAgentChild(
+        var outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: task.brief,
             deadline: { [grace = configuration.specialist.cleanupGraceSeconds] in await session.childRunDeadline(grace: grace) },
@@ -192,6 +207,19 @@ extension SubAgentSpawnService {
         case .idleTimedOut: await session.end(.idleTimeout)
         case .timedOut: await session.end(.timeBudget)
         case .failed, .cancelled: await session.end(.cancelled)
+        }
+        // One chance to fix a report that doesn't match the return schema; after that the builder leaves it out.
+        if case .completed(let text) = outcome, let schema = task.returnSchema {
+            let problems = ComputerUseResultBuilder.reportProblems(text, schema: schema)
+            if !problems.isEmpty {
+                let retry = await runLocalAgentChild(
+                    childConversationID: childID,
+                    prompt: ComputerUseResultBuilder.resubmitPrompt(problems, schema: schema),
+                    timeoutSeconds: configuration.specialist.cleanupGraceSeconds,
+                    idleTimeoutSeconds: configuration.specialist.idleTimeoutSeconds
+                )
+                if case .completed = retry { outcome = retry }
+            }
         }
 
         let result = await Self.specialistResult(

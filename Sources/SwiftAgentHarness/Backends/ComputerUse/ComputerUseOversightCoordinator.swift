@@ -10,6 +10,9 @@ public struct ComputerUsePendingRequest: Sendable, Codable, Equatable {
     public var prompt: String
     public var reason: String?
     public var target: String
+    /// For a specialist delegated by another delegate, its path in the delegation tree, so the user sees which is
+    /// asking.
+    public var delegatePath: String? = nil
     public var createdAt: Date
 }
 
@@ -44,7 +47,7 @@ actor ComputerUseOversightCoordinator {
         requests.values.filter { $0.conversationID == conversationID }.sorted { $0.createdAt < $1.createdAt }
     }
 
-    func ask(conversationID: UUID, lifecycleID: String?, target: String, question: String) async -> ComputerUseRequestResolution {
+    func ask(conversationID: UUID, lifecycleID: String?, target: String, delegatePath: String? = nil, question: String) async -> ComputerUseRequestResolution {
         await wait(for: ComputerUsePendingRequest(
             id: "cu-q-\(UUID().uuidString.lowercased())",
             kind: .question,
@@ -53,11 +56,18 @@ actor ComputerUseOversightCoordinator {
             prompt: question,
             reason: nil,
             target: target,
+            delegatePath: delegatePath,
             createdAt: Date()
         ), timeout: questionTimeout)
     }
 
-    func handoff(conversationID: UUID, lifecycleID: String?, target: String, request: ComputerUseHandoffRequest) async -> ComputerUseRequestResolution {
+    func handoff(
+        conversationID: UUID,
+        lifecycleID: String?,
+        target: String,
+        delegatePath: String? = nil,
+        request: ComputerUseHandoffRequest
+    ) async -> ComputerUseRequestResolution {
         await wait(for: ComputerUsePendingRequest(
             id: "cu-h-\(UUID().uuidString.lowercased())",
             kind: .handoff,
@@ -66,6 +76,7 @@ actor ComputerUseOversightCoordinator {
             prompt: request.prompt,
             reason: request.reason.rawValue,
             target: target,
+            delegatePath: delegatePath,
             createdAt: Date()
         ), timeout: handoffTimeout)
     }
@@ -91,7 +102,8 @@ actor ComputerUseOversightCoordinator {
             prompt: request.prompt,
             reason: request.reason,
             target: request.target,
-            lifecycleID: request.lifecycleID
+            lifecycleID: request.lifecycleID,
+            delegatePath: request.delegatePath
         )))
         let id = request.id
         let timer = Task { [weak self] in
@@ -129,9 +141,10 @@ struct ComputerUseConversationOversight: ComputerUseOversight {
     let conversationID: UUID
     let lifecycleID: String?
     let targetLabel: String
+    var delegatePath: String? = nil
 
     func askUser(_ question: String) async -> ComputerUseUserReply {
-        switch await coordinator.ask(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, question: question) {
+        switch await coordinator.ask(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, delegatePath: delegatePath, question: question) {
         case .answered(let answer): return .answered(answer)
         case .timedOut: return .timedOut
         case .handedBack, .declined: return .unavailable
@@ -139,7 +152,7 @@ struct ComputerUseConversationOversight: ComputerUseOversight {
     }
 
     func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult {
-        switch await coordinator.handoff(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, request: request) {
+        switch await coordinator.handoff(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, delegatePath: delegatePath, request: request) {
         case .handedBack(let note): return .handedBack(note: note)
         case .timedOut: return .timedOut
         case .declined, .answered: return .declined

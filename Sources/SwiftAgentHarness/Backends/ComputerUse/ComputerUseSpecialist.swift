@@ -333,6 +333,43 @@ public struct ComputerUseResult: Sendable, Codable {
         return (try? encoder.encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{\"status\":\"failed\"}"
     }
 
+    /// What the parent's tool result carries. The harness's fields stay plain JSON. The specialist's own text (its
+    /// report, each criterion's evidence, and a handoff's prompt) was written while reading untrusted screens, so it
+    /// travels in `report` inside the untrusted-content envelope, as content reported rather than instructions.
+    public var parentContent: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(self), case .object(var fields)? = try? JSONDecoder().decode(JSON.self, from: data) else {
+            return jsonString
+        }
+        var report: [String: JSON] = [:]
+        if let result = fields.removeValue(forKey: "result") { report["result"] = result }
+        if case .array(let entries)? = fields["verification"] {
+            var evidence: [JSON] = []
+            fields["verification"] = .array(entries.map { entry in
+                guard case .object(var criterion) = entry else { return entry }
+                if let text = criterion.removeValue(forKey: "evidence") {
+                    evidence.append(.object(["criterion": criterion["criterion"] ?? .string(""), "evidence": text]))
+                }
+                return .object(criterion)
+            })
+            if !evidence.isEmpty { report["evidence"] = .array(evidence) }
+        }
+        if case .object(var handoff)? = fields["handoff"], let prompt = handoff.removeValue(forKey: "prompt") {
+            report["handoffPrompt"] = prompt
+            fields["handoff"] = .object(handoff)
+        }
+        if !report.isEmpty, let text = (try? encoder.encode(JSON.object(report))).map({ String(decoding: $0, as: UTF8.self) }) {
+            fields["report"] = .string(ExternalContentEnvelope.wrap(text, options: ExternalContentEnvelopeOptions(
+                source: .specialistReport,
+                from: ComputerUseDelegateToolProvider.toolName,
+                subject: nil,
+                includeSecurityPreamble: true
+            )))
+        }
+        return (try? encoder.encode(JSON.object(fields))).map { String(decoding: $0, as: UTF8.self) } ?? jsonString
+    }
+
     /// A task that never reached the screen.
     static func notStarted(_ status: Status, reason: String, task: ComputerUseTask) -> ComputerUseResult {
         ComputerUseResult(
@@ -389,6 +426,33 @@ enum ComputerUseResultBuilder {
         finalText: String?,
         actionsLog: String
     ) -> ComputerUseResult {
+        var result = assemble(
+            task: task, verifications: verifications, terminal: terminal, terminalDetail: terminalDetail, budget: budget,
+            child: child, unresolvedHandoff: unresolvedHandoff, unresolvedQuestion: unresolvedQuestion,
+            headlessDenials: headlessDenials, missingGrants: missingGrants, finalText: finalText, actionsLog: actionsLog
+        )
+        let schemaProblems = reportProblems(finalText, schema: task.returnSchema)
+        if !schemaProblems.isEmpty {
+            let problem = "the report didn't match the return schema (\(schemaProblems.prefix(3).joined(separator: "; "))), so it was left out"
+            result.reason = result.reason.map { "\($0); \(problem)" } ?? problem
+        }
+        return result
+    }
+
+    private static func assemble(
+        task: ComputerUseTask,
+        verifications: [ComputerUseVerification],
+        terminal: ComputerUseTerminalReason?,
+        terminalDetail: String?,
+        budget: ComputerUseResult.Budget,
+        child: ComputerUseChildOutcome,
+        unresolvedHandoff: ComputerUseHandoffRequest?,
+        unresolvedQuestion: String?,
+        headlessDenials: [String],
+        missingGrants: [ComputerUseGrant],
+        finalText: String?,
+        actionsLog: String
+    ) -> ComputerUseResult {
         let verification = task.successCriteria.enumerated().map { index, criterion in
             let match = verifications.last { criterionMatches($0.criterion, criterion: criterion, index: index) }
             return ComputerUseResult.Verification(
@@ -397,9 +461,10 @@ enum ComputerUseResultBuilder {
                 evidence: match?.evidence ?? "not verified"
             )
         }
+        let schemaProblems = reportProblems(finalText, schema: task.returnSchema)
         var result = ComputerUseResult(
             status: .doneUnverified,
-            result: report(finalText, schema: task.returnSchema),
+            result: schemaProblems.isEmpty ? report(finalText, schema: task.returnSchema) : nil,
             verification: verification,
             handoff: nil,
             budget: budget,
@@ -407,6 +472,7 @@ enum ComputerUseResultBuilder {
             reason: nil,
             missingGrants: missingGrants.isEmpty ? nil : missingGrants.map(ComputerUseResult.MissingGrant.init)
         )
+
         // Refused for want of a grant with nothing achieved: the parent can fix this by delegating again.
         let blockedOnGrants = !missingGrants.isEmpty && !verification.contains(where: \.met)
         let grantsReason = "missing grants: delegate again with \(ComputerUseGrant.delegateArguments(missingGrants))"
@@ -501,6 +567,25 @@ enum ComputerUseResultBuilder {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
             .trimmingCharacters(in: CharacterSet(charactersIn: ".:"))
+    }
+
+    /// Why a final report fails the task's return schema; empty when it matches, has no schema, or is absent.
+    static func reportProblems(_ text: String?, schema: JSON?) -> [String] {
+        guard let schema, let report = report(text, schema: schema) else { return [] }
+        if case .string = report, !(Self.isStringSchema(schema)) { return ["$: not JSON"] }
+        return JSONSchemaSubset.problems(report, against: schema)
+    }
+
+    private static func isStringSchema(_ schema: JSON) -> Bool {
+        if case .object(let rules) = schema, case .string("string")? = rules["type"] { return true }
+        return false
+    }
+
+    /// The follow-up a specialist gets once when its report doesn't match the return schema.
+    static func resubmitPrompt(_ problems: [String], schema: JSON) -> String {
+        let schemaText = ComputerUseTask.compactJSON(schema) ?? "the return schema"
+        return "Your final report doesn't match the return schema: \(problems.prefix(5).joined(separator: "; ")). "
+            + "Reply with only the corrected JSON, matching \(schemaText). Don't use any tools."
     }
 
     private static func report(_ text: String?, schema: JSON?) -> JSON? {

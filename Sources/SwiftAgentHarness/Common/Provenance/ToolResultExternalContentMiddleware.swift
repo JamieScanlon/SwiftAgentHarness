@@ -14,7 +14,7 @@ enum ToolResultExternalContentMiddleware {
         guard !ExternalContentEnvelope.isAlreadyWrapped(result.content) else { return result }
 
         let decision = ToolExternalContentPolicy.resolve(toolName: toolCall.name, entry: entry)
-        guard decision.shouldWrap else { return result }
+        guard decision.shouldWrap, !decision.selfEnveloping else { return result }
 
         let wrapped = ExternalContentEnvelope.wrap(
             result.content,

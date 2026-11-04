@@ -37,6 +37,10 @@
         "app": { "type": "string" },
         "action": { "type": "string" },
         "terminalReason": { "type": "string" },
+        "delegatePath": {
+          "type": "string",
+          "description": "On computerUseRequest from a specialist that another delegate started: its path in the delegation tree."
+        },
         "liveView": {
           "type": "boolean",
           "description": "On computerUseActivity: whether the target serves a live view. Mint a link with POST …/computer-use/runs/{lifecycleID}/live-view."

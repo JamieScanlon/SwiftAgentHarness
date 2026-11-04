@@ -48,6 +48,8 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// Anthropic's native toolset, when the bound model speaks it over Anthropic's API; `nil` uses the harness's
     /// own `computer_*` tools.
     public var nativeDialect: ComputerUseNativeDialect?
+    /// For a specialist delegated by another delegate, its path in the delegation tree, shown on its cards.
+    public var delegatePath: String?
     /// In watch mode, how long an action waits for the user to open the live view before the session ends.
     public var watchModeWait: Duration = .seconds(120)
     public var watchModePollInterval: Duration = .seconds(1)
@@ -515,6 +517,7 @@ public actor ComputerUseSession {
         guard approvals != nil else { return "no approval surface for: \(why)" }
         let canonical = actions.map(ComputerUseCanonicalForm.describe)
         var context = ["Why confirm: \(why)", "Actions:"]
+        if let delegatePath = configuration.delegatePath { context.insert("Asked by: \(delegatePath)", at: 1) }
         for (index, form) in canonical.enumerated() {
             context.append("\(index + 1). \(form)")
             if let intent = intents[index] { context.append("   Model's stated intent (unverified): \(intent)") }
@@ -745,7 +748,8 @@ public actor ComputerUseSession {
             intent: intent,
             action: action,
             observation: action.citedObservations.first.flatMap(observation),
-            statedIntent: statedIntent
+            statedIntent: statedIntent,
+            delegatePath: configuration.delegatePath
         )
         switch await requestApproval(request) ?? .denied("the session ended") {
         case .approved:
@@ -773,7 +777,8 @@ public actor ComputerUseSession {
         intent: ComputerUseIntentVerdict?,
         action: ComputerAction? = nil,
         observation: DisplayObservation? = nil,
-        statedIntent: String? = nil
+        statedIntent: String? = nil,
+        delegatePath: String? = nil
     ) -> ExecApprovalRequest {
         var location = classification.domain ?? classification.app?.bundleID ?? target.label
         if classification.domain != nil, let app = classification.app?.bundleID { location += " (\(app))" }
@@ -787,6 +792,7 @@ public actor ComputerUseSession {
             "Intent check: \(intent?.summary ?? "not run")",
         ]
         if let statedIntent { context.append("Model's stated intent (unverified): \(statedIntent)") }
+        if let delegatePath { context.append("Asked by: \(delegatePath)") }
         // The command keeps only the script's hash, so the card shows the whole script to review.
         if case .script(let language, let source, _)? = action {
             context.append("Script (\(language.rawValue)):\n\(source)")
@@ -1121,7 +1127,7 @@ public actor ComputerUseSession {
             consecutiveFailures = 0
         case .timedOut:
             unresolvedQuestion = question
-            await end(.needsUser, detail: "the user didn't answer: \(question)")
+            await end(.needsUser, detail: "the user didn't answer the specialist's question")
         case .unavailable:
             break
         }
@@ -1152,7 +1158,7 @@ public actor ComputerUseSession {
             unresolvedHandoff = request
         }
         if case .timedOut = result {
-            await end(.needsUser, detail: "the user didn't hand back: \(request.prompt)")
+            await end(.needsUser, detail: "the user didn't hand back control")
         }
         return result
     }

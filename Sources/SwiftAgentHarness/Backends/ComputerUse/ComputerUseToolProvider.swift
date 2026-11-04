@@ -358,6 +358,16 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
 
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         let arguments = Arguments(toolCall.arguments)
+        // Arguments outside the schema are rejected, so a model repeating a stale call learns it rather than having
+        // part of its call silently dropped.
+        if case .object(let fields) = toolCall.arguments,
+           let definition = await availableTools().first(where: { $0.name == toolCall.name }) {
+            let unknown = Set(fields.keys).subtracting(definition.parameters.map(\.name)).sorted()
+            if !unknown.isEmpty {
+                let verb = unknown.count == 1 ? "is not a parameter" : "are not parameters"
+                return failure(toolCall, "\(unknown.joined(separator: ", ")) \(verb) of \(toolCall.name)")
+            }
+        }
         do {
             switch toolCall.name {
             case Self.observeToolName:
@@ -485,7 +495,12 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     private func run(_ action: ComputerAction, _ toolCall: ToolCall) async -> ToolResult {
         let batch = await session.perform([action])
         let outcome = batch.outcomes.first ?? ActionOutcome(action: 0, effect: .notExecuted)
-        var lines: [String] = ["\(action.kind.rawValue): \(outcome.effect.rawValue)" + (outcome.evidence.map { " — \($0)" } ?? "")]
+        // A refusal's evidence is the harness's reason; an action that ran reports the driver's evidence, which can
+        // carry page text, so it goes inside the envelope with the tree.
+        let ran = outcome.effect != .refused && outcome.effect != .notExecuted
+        var screen: [String] = []
+        var lines: [String] = ["\(action.kind.rawValue): \(outcome.effect.rawValue)" + (ran ? "" : outcome.evidence.map { " — \($0)" } ?? "")]
+        if ran, let evidence = outcome.evidence { screen.append("Driver evidence: \(evidence)") }
         switch outcome.effect {
         case .unverifiable, .partial, .suspectedNoop:
             lines.append("Do not repeat this action: it may already have taken effect. Observe and check first.")
@@ -515,14 +530,16 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         if let observation = batch.observations.last {
             let shown = session.configuration.showsScreenshots
             let labeled = shown && session.configuration.labelsScreenshots ? ComputerUseScreenshotLabels.labeled(observation) : nil
+            let rendered = Self.rendered(observation, mode: session.coordinateCodec.mode, shown: shown)
             lines.append("")
-            lines.append(Self.render(observation, mode: session.coordinateCodec.mode, shown: shown))
+            lines += rendered.harness
             if labeled != nil { lines.append(Self.screenshotTagsNote) }
+            screen += rendered.screen
             metadata["observation"] = Self.metadata(for: observation)
             screenshot = shown ? labeled ?? Self.screenshot(of: observation) : nil
         }
-        let succeeded = outcome.effect != .refused && outcome.effect != .notExecuted
-        let text = lines.joined(separator: "\n")
+        let succeeded = ran
+        let text = Self.compose(lines, screen: screen, tool: toolCall.name)
         let error = succeeded ? nil : outcome.evidence ?? outcome.effect.rawValue
         guard let screenshot else {
             return ToolResult(success: succeeded, content: text, metadata: .object(metadata), toolCallId: toolCall.id, error: error)
@@ -634,7 +651,13 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         return .failed(failure(toolCall, message))
     }
 
-    private func perceptionResult(_ lines: [String], action: String, observation: DisplayObservation, _ toolCall: ToolCall) async -> ToolResult {
+    private func perceptionResult(
+        _ lines: [String],
+        screen: [String] = [],
+        action: String,
+        observation: DisplayObservation,
+        _ toolCall: ToolCall
+    ) async -> ToolResult {
         var lines = lines
         if let reminder = await reminder() {
             lines.append("")
@@ -642,7 +665,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         }
         return ToolResult(
             success: true,
-            content: lines.joined(separator: "\n"),
+            content: Self.compose(lines, screen: screen, tool: toolCall.name),
             metadata: .object([
                 "source": .string("computer_use"),
                 "action": .string(action),
@@ -661,7 +684,8 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         do {
             let answer = try await describer.describe(question, in: observation)
             return await perceptionResult(
-                ["Observation \(observation.id), described by a vision model:", answer],
+                ["Observation \(observation.id), described by a vision model from the screenshot:"],
+                screen: [answer],
                 action: "describe",
                 observation: observation,
                 toolCall
@@ -765,7 +789,25 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     // MARK: - Rendering
 
     static func render(_ observation: DisplayObservation, mode: ComputerUseCoordinateMode, shown: Bool = true) -> String {
+        let parts = rendered(observation, mode: mode, shown: shown)
+        return (parts.harness + parts.screen).joined(separator: "\n")
+    }
+
+    /// Harness-written text and screen-derived text, kept apart: one result holds both, and only the screen's goes
+    /// inside the untrusted envelope.
+    static func compose(_ harness: [String], screen: [String], tool: String) -> String {
+        var text = harness.joined(separator: "\n")
+        let external = screen.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !external.isEmpty else { return text }
+        if !text.isEmpty { text += "\n\n" }
+        return text + ExternalContentEnvelope.wrap(external, options: ExternalContentEnvelopeOptions(
+            source: .screen, from: tool, subject: nil, includeSecurityPreamble: true
+        ))
+    }
+
+    static func rendered(_ observation: DisplayObservation, mode: ComputerUseCoordinateMode, shown: Bool = true) -> (harness: [String], screen: [String]) {
         var lines: [String] = []
+        var screen: [String] = []
         var header = "Observation \(observation.id)"
         if let app = observation.target.app { header += " — app \(app.bundleID)" }
         if let window = observation.target.windowID { header += ", window \(window)" }
@@ -778,9 +820,9 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         }
         if let tree = observation.tree {
             if let truncated = tree.truncated { lines.append("Tree is partial: \(truncated)") }
-            lines.append(tree.diff?.text ?? tree.text)
+            screen.append(tree.diff?.text ?? tree.text)
         }
-        return lines.joined(separator: "\n")
+        return (lines, screen)
     }
 
     /// The screenshot exactly as captured for the model. Its size must match the recorded geometry, which is what
