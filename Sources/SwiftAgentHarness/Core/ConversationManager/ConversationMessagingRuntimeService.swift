@@ -494,9 +494,13 @@ actor ConversationMessagingRuntimeService {
         let patches = await DecisionRolePatchLoader.patches(
             for: conversationID, persistenceDomain: deps.persistenceDomain, modeRegistry: deps.modeRegistry, logger: deps.logger
         )
+        var knownSecrets: [String] = []
+        if let conversationID, let session = await deps.computerUse.sessions.session(for: conversationID) {
+            knownSecrets = await session.knownSecrets()
+        }
         guard let warning = await probe.warning(
             toolName: toolCall.name,
-            content: ComputerUseSecrets.probeInput(result.content, source: external.source),
+            content: ComputerUseSecrets.probeInput(result.content, source: external.source, known: knownSecrets),
             conversationID: conversationID,
             rolePatches: patches
         ) else { return result }

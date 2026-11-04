@@ -293,7 +293,8 @@ extension ComputerUseFixtures {
     static func registerLiveSession(
         in installation: ComputerUseInstallation,
         parent: UUID,
-        lifecycleID: String
+        lifecycleID: String,
+        childID: UUID = UUID()
     ) async throws -> (ComputerUseSession, FakeDisplayTarget) {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, now: { Date() })
         let lease = try await target.lease(LeaseRequest(
@@ -311,7 +312,7 @@ extension ComputerUseFixtures {
         )
         await installation.sessions.register(
             ComputerUseSessionEntry(session: session, parentConversationID: parent, lifecycleID: lifecycleID, targetLabel: target.manifest.label),
-            for: UUID()
+            for: childID
         )
         return (session, target)
     }

@@ -414,6 +414,43 @@ struct DisplayLiveViewServerTests {
         #expect(await server.revoke(UUID(), in: feed) == false)
     }
 
+    @Test("Typing during takeover is gathered into values at Return, Tab, and the end of the takeover")
+    func typingBuffer() {
+        var buffer = DisplayLiveViewTypingBuffer()
+        func key(_ key: String, _ text: String? = nil, _ modifiers: Set<KeyModifier> = []) -> DisplayLiveViewInput {
+            .key(down: true, key: key, code: "", keyCode: 0, text: text, modifiers: modifiers)
+        }
+        #expect(buffer.record(key("h", "h")) == nil)
+        #expect(buffer.record(key("i", "i")) == nil)
+        #expect(buffer.record(key("x", "x")) == nil)
+        #expect(buffer.record(key("Backspace")) == nil)
+        #expect(buffer.record(key("c", "c", [.cmd])) == nil, "shortcuts aren't text")
+        #expect(buffer.record(.text("!2")) == nil)
+        #expect(buffer.record(key("Enter")) == "hi!2")
+        #expect(buffer.record(key("Tab")) == nil, "nothing typed since")
+        #expect(buffer.record(key("a", "a")) == nil)
+        #expect(buffer.flush() == "a")
+        #expect(buffer.flush() == nil)
+    }
+
+    @Test("The feed hears each value the user typed during takeover, including one left when control ends")
+    func typedValues() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let typed = Mutex<[String]>([])
+        let feed = await server.open(DisplayLiveViewFeed(label: "Feed", typed: { value in typed.withLock { $0.append(value) } }))
+        await server.setControl(true, for: feed)
+        let viewer = try Viewer(try await server.link(for: feed))
+        _ = try await viewer.status()
+        try await viewer.send(#"{"type":"text","text":"hunter2"}"#)
+        try await viewer.send(#"{"type":"key","action":"down","key":"Enter","code":"Enter","keyCode":13,"modifiers":[]}"#)
+        try await viewer.send(#"{"type":"text","text":"123456"}"#)
+        try await viewer.roundTrip()
+        #expect(await Self.eventually { typed.withLock { $0 } == ["hunter2"] })
+        await server.setControl(false, for: feed)
+        #expect(await Self.eventually { typed.withLock { $0 } == ["hunter2", "123456"] })
+    }
+
     @Test("Viewer messages parse into input, and malformed ones are dropped")
     func parsing() {
         func parse(_ text: String) -> DisplayLiveViewInput? { DisplayLiveViewInput(message: Data(text.utf8)) }

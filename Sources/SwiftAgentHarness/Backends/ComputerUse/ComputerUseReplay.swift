@@ -82,14 +82,15 @@ extension ComputerUseReplay {
     ) async throws {
         var thumbnails: [ComputerUseReplayThumbnail] = []
         for frame in await session.replayFrames {
+            guard let data = frame.image.inlineData else { continue }
             thumbnails.append(ComputerUseReplayThumbnail(
                 observationID: frame.observationID,
                 at: frame.at,
                 app: frame.app,
-                width: frame.image.width,
-                height: frame.image.height,
-                mediaType: frame.image.mediaType,
-                blobID: try storeThumbnail(frame.image.data)
+                width: frame.image.width ?? 0,
+                height: frame.image.height ?? 0,
+                mediaType: frame.image.mime ?? "image/png",
+                blobID: try storeThumbnail(data)
             ))
         }
         self.init(

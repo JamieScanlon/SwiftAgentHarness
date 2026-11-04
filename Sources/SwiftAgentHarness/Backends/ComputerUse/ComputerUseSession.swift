@@ -51,6 +51,9 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// For a specialist delegated by another delegate, its path in the delegation tree, shown on its cards.
     public var delegatePath: String?
     /// In watch mode, how long an action waits for the user to open the live view before the session ends.
+    /// Stores an approval card's image (PNG bytes) and returns its `blob://` ref; without it the image travels
+    /// inline as a `data:` URL.
+    public var storeApprovalImage: (@Sendable (Data) async -> String?)?
     public var watchModeWait: Duration = .seconds(120)
     public var watchModePollInterval: Duration = .seconds(1)
 
@@ -336,6 +339,7 @@ public actor ComputerUseSession {
     private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
     private var targetEvents: Task<Void, Never>?
+    private var secrets: Set<String> = []
     private var endsAtObserver: (@Sendable (Date) async -> Void)?
     /// The user's latest keystroke on a shared desktop, as the target reported it.
     private var userTypedAt: Date?
@@ -598,6 +602,33 @@ public actor ComputerUseSession {
         return stable
     }
 
+    /// Password and one-time-code fields, whose values are secrets.
+    private func isSecretField(_ element: ElementRef) -> Bool {
+        if element.isSecureInput { return true }
+        guard let purpose = element.inputPurpose?.lowercased() else { return false }
+        let classifier = configuration.classifier
+        return classifier.secureInputPurposes.contains(purpose) || classifier.secureInputPurposePrefixes.contains(where: purpose.hasPrefix)
+    }
+
+    /// Values redacted from every helper model's input: what password and one-time-code fields held or were given,
+    /// and what the user typed during a takeover.
+    public func knownSecrets() -> [String] {
+        Array(secrets)
+    }
+
+    /// Records the text of an action that types into a secret field.
+    private func noteSecretInput(_ action: ComputerAction) {
+        let typed: (String, ActionTarget?)? = switch action {
+        case .type(let text, let into, _): (text, into)
+        case .setValue(let at, let value): (value, at)
+        default: nil
+        }
+        guard let (text, target) = typed, !text.isEmpty, let target, let ref = target.elementRef,
+              let field = retained[target.observation]?.tree?.elements[ref], isSecretField(field)
+        else { return }
+        secrets.insert(text)
+    }
+
     private func noteSignals(_ signals: [ComputerUseSafetySignal]) {
         guard signals.contains(.sensitiveDomain), !isWatchModeOn else { return }
         isWatchModeOn = true
@@ -662,6 +693,7 @@ public actor ComputerUseSession {
             )
         )
         if let cited = action.citedObservations.last { lastCitedObservation = cited }
+        noteSecretInput(action)
         let gate = await gate(classification, action: action, statedIntent: statedIntent)
         var record = makeRecord(action, classification: classification, gate: gate)
         record.statedIntent = statedIntent
@@ -798,6 +830,8 @@ public actor ComputerUseSession {
             await report(on ? .takenOver : .acting)
         case .userTyping:
             userTypedAt = now()
+        case .typedDuringTakeover(let value):
+            secrets.insert(value)
         }
     }
 
@@ -877,7 +911,7 @@ public actor ComputerUseSession {
         }
         let canonical = ComputerUseCanonicalForm.describe(action)
         let binding = ComputerUseCanonicalForm.binding(canonical)
-        let request = Self.approvalRequest(
+        var request = Self.approvalRequest(
             id: "computer-use-\(binding.prefix(16))-\(UUID().uuidString.prefix(8))",
             canonical: canonical,
             classification: classification,
@@ -889,6 +923,7 @@ public actor ComputerUseSession {
             statedIntent: statedIntent,
             delegatePath: configuration.delegatePath
         )
+        await storeImages(in: &request)
         switch await requestApproval(request) ?? .denied("the session ended") {
         case .approved:
             // The approval covers this exact canonical action; anything that changed since invalidates it.
@@ -945,7 +980,7 @@ public actor ComputerUseSession {
         )
         if let action, let observation,
            let region = ComputerUseTargetCrop.region(for: action, in: observation),
-           let crop = ComputerUseTargetCrop.image(of: region, in: observation, alt: "Target region: \(element) in \(location)") {
+           let crop = ComputerUseTargetCrop.image(of: region, in: observation, alt: Self.approvalImageAlt(classification, target: target)) {
             presentation.blocks.insert(.image(crop), at: presentation.blocks.count - 1)
         }
         return ExecApprovalRequest(
@@ -956,6 +991,38 @@ public actor ComputerUseSession {
             allowsDurableBypass: false,
             presentation: presentation
         )
+    }
+
+    /// Moves the card's inline images into the blob store, so the card carries refs.
+    private func storeImages(in request: inout ExecApprovalRequest) async {
+        guard let store = configuration.storeApprovalImage else { return }
+        var presentation = request.presentation
+        var stored = false
+        for (index, block) in presentation.blocks.enumerated() {
+            guard case .image(var image) = block, let data = image.inlineData, let ref = await store(data) else { continue }
+            image.ref = ref
+            presentation.blocks[index] = .image(image)
+            stored = true
+        }
+        guard stored else { return }
+        request = ExecApprovalRequest(
+            id: request.id,
+            command: request.command,
+            title: request.title,
+            description: request.description,
+            allowsDurableBypass: request.allowsDurableBypass,
+            presentation: presentation
+        )
+    }
+
+    /// The action in words, for surfaces that show only the alt text: "Click "Pay now" in Safari, checkout.example.com".
+    static func approvalImageAlt(_ classification: ComputerUseClassification, target: DisplayTargetManifest) -> String {
+        var what = classification.kind.rawValue.prefix(1).uppercased() + classification.kind.rawValue.dropFirst()
+        if let element = classification.element {
+            what += element.label.map { " \"\($0)\"" } ?? " the \(element.role)"
+        }
+        let place = [classification.app?.bundleID ?? target.label, classification.domain].compactMap { $0 }.joined(separator: ", ")
+        return "\(what) in \(place)"
     }
 
     // MARK: - Budgets and lifecycle
@@ -1389,6 +1456,9 @@ public actor ComputerUseSession {
     // MARK: - Helpers
 
     private func retain(_ observation: DisplayObservation) {
+        for element in observation.tree?.elements.values ?? [:].values where isSecretField(element) {
+            if let value = element.value, !value.isEmpty { secrets.insert(value) }
+        }
         if retained.updateValue(observation, forKey: observation.id) == nil {
             retainedOrder.append(observation.id)
             keepReplayFrame(of: observation)

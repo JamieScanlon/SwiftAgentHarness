@@ -83,6 +83,10 @@ actor ComputerUseBlobLedger {
         sessionBlobs.removeValue(forKey: childConversationID) ?? []
     }
 
+    func holds(_ blobID: String, childConversationID: UUID) -> Bool {
+        sessionBlobs[childConversationID]?.contains(blobID) == true
+    }
+
     func expiry(of blobID: String) -> Date? {
         references[blobID]?.values.max()
     }

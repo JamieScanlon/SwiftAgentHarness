@@ -161,6 +161,8 @@ public actor TartVirtualMachineController: VirtualMachineController {
 /// releases it and stops the VM.
 public actor VirtualMachineDisplayTarget: DisplayTarget {
     public nonisolated let manifest: DisplayTargetManifest
+    private let eventHub = DisplayTargetEventHub()
+    private var guestEvents: Task<Void, Never>?
     private let controller: any VirtualMachineController
     private let guest: @Sendable (VirtualMachineInstance) async throws -> any DisplayTarget
     private let lock = DisplayTargetLeaseLock()
@@ -202,11 +204,17 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
             let guestLease = try await target.lease(guestRequest)
             current = (lease, target, guestLease, started)
             takeoverActive = false
+            // The guest's own news, such as its stop key, belongs to this lease.
+            let fromGuest = await target.events(guestLease)
+            guestEvents = Task { [eventHub, leaseID = lease.id] in
+                for await event in fromGuest { eventHub.post(event, to: leaseID) }
+            }
             if let liveViewServer {
                 liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
                     label: manifest.label,
                     viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
-                    input: { [weak self] input in await self?.relayInput(input) }
+                    input: { [weak self] input in await self?.relayInput(input) },
+                    typed: { [eventHub, leaseID = lease.id] value in eventHub.post(.typedDuringTakeover(value), to: leaseID) }
                 ))
             }
             return lease
@@ -217,9 +225,17 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
         }
     }
 
+    public func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> {
+        guard await lock.holds(leaseID: lease.id) else { return AsyncStream { $0.finish() } }
+        return eventHub.stream(for: lease.id)
+    }
+
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.holds(leaseID: lease.id), let current, current.lease.id == lease.id else { return }
         self.current = nil
+        guestEvents?.cancel()
+        guestEvents = nil
+        eventHub.finish(lease.id)
         frames?.cancel()
         frames = nil
         takeoverActive = false

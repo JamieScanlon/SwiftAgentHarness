@@ -57,7 +57,10 @@ struct MacHostDisplayTargetTests {
         #expect(manifest.perception == [.pixels, .accessibility])
         #expect(manifest.delivery == [.background, .foreground])
         #expect(manifest.requires == [.screenCapture, .accessibility, .postEvents])
-        #expect(manifest.label.contains("dev mode"))
+        #expect(manifest.label == "This Mac (in-process development mode)", "the escape hatch says what it is")
+        var signed = MacHostDisplayTarget.Configuration(stopKey: nil)
+        signed.embeddedInSignedApp = true
+        #expect(MacHostDisplayTarget(configuration: signed).manifest.label == "This Mac")
     }
 
     @Test("One controller at a time; a second lease is target-busy until release")

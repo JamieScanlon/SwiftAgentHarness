@@ -17,19 +17,17 @@
             "enum": ["text", "context", "image", "buttons"]
           },
           "text": { "type": "string" },
-          "image": {
-            "type": "object",
-            "description": "An image shown inline, such as the screen region a computer-use action lands on. Surfaces that can't show images render `alt`.",
-            "required": ["data", "mediaType", "width", "height", "alt"],
-            "properties": {
-              "data": { "type": "string", "contentEncoding": "base64" },
-              "mediaType": { "type": "string" },
-              "width": { "type": "integer" },
-              "height": { "type": "integer" },
-              "alt": { "type": "string" }
-            },
-            "additionalProperties": false
+          "ref": {
+            "type": "string",
+            "description": "For an image block: a blob:// reference (fetched from GET /api/conversations/{id}/computer-use/images/{blobID}) or a data: URL."
           },
+          "alt": {
+            "type": "string",
+            "description": "For an image block, required: the decision-relevant facts in words. Surfaces that can't show images render only this."
+          },
+          "mime": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
           "buttons": {
             "type": "array",
             "items": {

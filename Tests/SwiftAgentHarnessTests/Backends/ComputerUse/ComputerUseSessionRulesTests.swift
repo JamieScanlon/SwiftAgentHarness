@@ -293,3 +293,33 @@ struct ComputerUseSessionTargetEventTests {
         #expect(await target.actCalls.count == 1)
     }
 }
+
+@Suite("Computer use session: secrets kept from helper models")
+struct ComputerUseSessionSecretTests {
+    @Test("Values typed during takeover, held by one-time-code fields, or typed into password fields are known secrets")
+    func knownSecrets() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        await session.announceStart()
+        await target.setTrees([ObservationTree(
+            text: "window",
+            elements: [
+                "e1": ElementRef(id: "e1", role: "textbox", label: "Code", inputPurpose: "one-time-code", value: "482913"),
+                "e2": ElementRef(id: "e2", role: "textbox", label: "Password", isSecureInput: true),
+                "e3": ElementRef(id: "e3", role: "textbox", label: "Name", value: "Ada Lovelace"),
+            ],
+            capturedAt: ComputerUseFixtures.epoch
+        )])
+        _ = await session.perform([.observe(ObserveRequest(modes: [.accessibility], scope: .display(nil)))])
+        #expect(await session.knownSecrets() == ["482913"])
+
+        _ = await session.perform([.type(text: "correct horse", into: .ref("e2", observation: "o_1"))])
+        target.eventHub.post(.typedDuringTakeover("p@ssw0rd!"))
+        for _ in 0..<100 where await session.knownSecrets().count < 3 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(Set(await session.knownSecrets()) == ["482913", "correct horse", "p@ssw0rd!"])
+
+        let redacted = ComputerUseSecrets.redacting("Is the code 482913 or p@ssw0rd! visible? Ada Lovelace", known: await session.knownSecrets())
+        #expect(redacted == "Is the code [redacted] or [redacted] visible? Ada Lovelace")
+        #expect(ComputerUseSecrets.redacting("pin 12", known: ["12"]) == "pin 12", "values too short to redact safely are left")
+        #expect(ComputerUseSecrets.probeInput("code 482913", source: .screen, known: ["482913"]) == "code [redacted]")
+    }
+}

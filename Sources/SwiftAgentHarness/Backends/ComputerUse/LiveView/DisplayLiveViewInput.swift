@@ -83,14 +83,47 @@ public struct DisplayLiveViewFeed: Sendable {
     /// Called with the new count whenever a viewer joins or leaves.
     public var viewersChanged: @Sendable (Int) async -> Void
     public var input: @Sendable (DisplayLiveViewInput) async -> Void
+    /// Called with each value the user typed during a takeover, split at Return and Tab and at the end of the
+    /// takeover, so it can be kept out of helper models' inputs.
+    public var typed: @Sendable (String) async -> Void
 
     public init(
         label: String,
         viewersChanged: @escaping @Sendable (Int) async -> Void = { _ in },
-        input: @escaping @Sendable (DisplayLiveViewInput) async -> Void = { _ in }
+        input: @escaping @Sendable (DisplayLiveViewInput) async -> Void = { _ in },
+        typed: @escaping @Sendable (String) async -> Void = { _ in }
     ) {
         self.label = label
         self.viewersChanged = viewersChanged
         self.input = input
+        self.typed = typed
+    }
+}
+
+/// Gathers a takeover's typing into whole values.
+struct DisplayLiveViewTypingBuffer: Sendable {
+    private var current = ""
+
+    /// The value `input` finishes, if any.
+    mutating func record(_ input: DisplayLiveViewInput) -> String? {
+        switch input {
+        case .text(let text):
+            current += text
+        case .key(true, let key, _, _, let text, let modifiers):
+            switch key {
+            case "Enter", "Tab": return flush()
+            case "Backspace": if !current.isEmpty { current.removeLast() }
+            default:
+                if let text, !text.isEmpty, modifiers.isDisjoint(with: [.cmd, .ctrl]) { current += text }
+            }
+        default:
+            break
+        }
+        return nil
+    }
+
+    mutating func flush() -> String? {
+        defer { current = "" }
+        return current.isEmpty ? nil : current
     }
 }

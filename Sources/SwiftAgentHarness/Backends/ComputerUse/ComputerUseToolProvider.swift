@@ -705,7 +705,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         case .failed(let result): return result
         }
         do {
-            let answer = try await describer.describe(question, in: observation)
+            let answer = try await describer.describe(ComputerUseSecrets.redacting(question, known: await session.knownSecrets()), in: observation)
             return await perceptionResult(
                 ["Observation \(observation.id), described by a vision model from the screenshot:"],
                 screen: [answer],
@@ -729,7 +729,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         }
         let point: DisplayPoint
         do {
-            point = try await grounder.locate(description, in: observation)
+            point = try await grounder.locate(ComputerUseSecrets.redacting(description, known: await session.knownSecrets()), in: observation)
         } catch ComputerUsePerceptionError.noPoint {
             return failure(toolCall, "the grounder found no point for that description; describe it differently or use a ref")
         } catch {

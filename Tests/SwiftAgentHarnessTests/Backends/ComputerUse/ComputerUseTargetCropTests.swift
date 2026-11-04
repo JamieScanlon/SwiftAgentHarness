@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import SwiftAgentHarness
@@ -34,9 +35,9 @@ struct ComputerUseTargetCropTests {
         #expect(region.contains(DisplayPoint(x: 1340, y: 872)))
 
         let image = try #require(ComputerUseTargetCrop.image(of: region, in: observation, alt: "Save button"))
-        #expect(image.mediaType == "image/png")
+        #expect(image.mime == "image/png")
         #expect(image.alt == "Save button")
-        let (width, height) = try Self.size(of: image.data)
+        let (width, height) = try Self.size(of: try #require(image.inlineData))
         #expect((width, height) == (image.width, image.height))
         #expect(max(width, height) <= ComputerUseTargetCrop.maximumEdgePx)
         // 1280 px across 1440 pt: the crop keeps the screenshot's scale.
@@ -81,7 +82,28 @@ struct ComputerUseTargetCropTests {
         }
         #expect(imageIndex < buttonsIndex)
         if case .image(let image) = blocks[imageIndex] {
-            #expect(image.alt.contains("AXButton \"Save\""))
+            #expect(image.alt == "Click \"Save\" in com.apple.TextEdit", "the alt restates the action in words")
+            #expect(image.inlineData != nil, "without a store the crop travels inline")
         }
+    }
+
+    @Test("With a store, the card cites its crop by blob ref")
+    func storedCrop() async throws {
+        let approvals = RecordingComputerUseApprovals(.denied("no"))
+        let stored = Mutex<[Data]>([])
+        let (target, session) = try await ComputerUseSessionFixtures.make(approvals: approvals, storeApprovalImage: { data in
+            stored.withLock { $0.append(data) }
+            return "blob://" + String(repeating: "c", count: 64)
+        })
+        await target.setScreenshot(try Self.screenshot())
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        _ = await session.perform([.click(at: .ref("e6", observation: "o_1"))])
+        let request = try #require(await approvals.requests.first)
+        let image = try #require(request.presentation.blocks.lazy.compactMap { block -> PresentationImage? in
+            if case .image(let image) = block { image } else { nil }
+        }.first)
+        #expect(image.ref == "blob://" + String(repeating: "c", count: 64))
+        #expect(image.mime == "image/png")
+        #expect(stored.withLock { $0.count } == 1)
     }
 }

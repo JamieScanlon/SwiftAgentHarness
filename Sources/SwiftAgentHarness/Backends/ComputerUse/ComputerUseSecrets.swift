@@ -65,9 +65,22 @@ enum ComputerUseSecrets {
         return result
     }
 
+    /// Shorter values are left alone: they'd redact ordinary text.
+    static let minimumKnownSecretLength = 4
+
+    /// `text` redacted as ``redacting(_:)`` does, and with every value in `known` replaced: values from password
+    /// and one-time-code fields, and what the user typed during a takeover.
+    static func redacting(_ text: String, known: [String]) -> String {
+        var result = redacting(text)
+        for value in known.filter({ $0.count >= minimumKnownSecretLength }).sorted(by: { $0.count > $1.count }) {
+            result = result.replacingOccurrences(of: value, with: marker)
+        }
+        return result
+    }
+
     /// What the injection probe sees of a tool result: screen content redacted, anything else unchanged.
-    static func probeInput(_ content: String, source: ExternalContentSourceLabel) -> String {
-        source == .screen ? redacting(content) : content
+    static func probeInput(_ content: String, source: ExternalContentSourceLabel, known: [String] = []) -> String {
+        source == .screen ? redacting(content, known: known) : content
     }
 
     private static func containsToken(_ text: String) -> Bool {

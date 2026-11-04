@@ -2080,6 +2080,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use/images/{blobID}:
+    get:
+      operationId: getConversationComputerUseImage
+      tags: [ComputerUse]
+      summary: An image a live computer-use run's approval card cites by blob ref
+      description: Only images the conversation's own live runs stored are served. Sent with `Cache-Control: no-store`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: blobID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The image bytes
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No such image for this conversation's live runs, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /conversations/{id}/computer-use/replays:
     get:
       operationId: listConversationComputerUseReplays

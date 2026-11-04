@@ -219,6 +219,17 @@ struct NoVNCAuthTests {
         let token = NoVNCAuth.issue(expirySeconds: 60)
         #expect(NoVNCAuth.isValid(token))
     }
+
+    @Test("Observer tokens for sandboxes and display targets come from one issuer: 32 random bytes, URL-safe")
+    func sharedIssuer() {
+        let token = ObserverTokenIssuer.token()
+        #expect(token.count == 43)
+        #expect(token.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+        #expect(ObserverTokenIssuer.token() != token)
+        #expect(NoVNCAuth.issue().token.count == 43)
+        #expect(NoVNCAuth.issue().password.count == 12)
+        #expect(DisplayLiveViewServer.token().count == 43)
+    }
 }
 
 @Suite("Sandbox config hash")

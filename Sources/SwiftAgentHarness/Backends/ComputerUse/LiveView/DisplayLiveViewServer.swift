@@ -79,6 +79,7 @@ public actor DisplayLiveViewServer {
     private struct Feed {
         var feed: DisplayLiveViewFeed
         var control = false
+        var typing = DisplayLiveViewTypingBuffer()
         var lastFrame: DisplayLiveViewFrame?
         var viewers: [UUID: Viewer] = [:]
 
@@ -289,7 +290,12 @@ public actor DisplayLiveViewServer {
     public func setControl(_ on: Bool, for id: UUID) {
         guard var feed = feeds[id], feed.control != on else { return }
         feed.control = on
+        let finished = on ? nil : feed.typing.flush()
         feeds[id] = feed
+        if let finished {
+            let typed = feed.feed.typed
+            Task { await typed(finished) }
+        }
         for viewer in feed.viewers.values {
             viewer.messages.yield(.status(feed.status(for: viewer.role)))
             if viewer.role == .observer, let frame = feed.lastFrame, let message = feed.outgoing(frame, for: .observer) {
@@ -331,7 +337,10 @@ public actor DisplayLiveViewServer {
     }
 
     private func receive(_ input: DisplayLiveViewInput, from feedID: UUID, viewer: UUID) async {
-        guard let feed = feeds[feedID], feed.control, feed.viewers[viewer]?.role == .user else { return }
+        guard var feed = feeds[feedID], feed.control, feed.viewers[viewer]?.role == .user else { return }
+        let finished = feed.typing.record(input)
+        feeds[feedID] = feed
+        if let finished { await feed.feed.typed(finished) }
         await feed.feed.input(input)
     }
 
@@ -481,12 +490,7 @@ public actor DisplayLiveViewServer {
     }
 
     static func token() -> String {
-        var generator = SystemRandomNumberGenerator()
-        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        ObserverTokenIssuer.token()
     }
 
     static func base(_ url: URL) -> URL {

@@ -393,7 +393,7 @@ struct TUIComputerUseTests {
     @Test("Approval cards show an image block as its placeholder")
     func approvalImagePlaceholder() async {
         let (app, _) = await makeApp()
-        let image = PresentationImage(data: Data([1, 2, 3]), mediaType: "image/png", width: 240, height: 140, alt: "Target region: AXButton \"Send\"")
+        let image = PresentationImage(data: Data([1, 2, 3]), mime: "image/png", width: 240, height: 140, alt: "Target region: AXButton \"Send\"")
         await app.ingest(.surfaceIntent(ClientSurfaceIntent(
             kind: .execApprovalRequired,
             approvalID: "a1",

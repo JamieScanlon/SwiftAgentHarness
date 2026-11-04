@@ -41,25 +41,64 @@ public struct ApprovalButton: Codable, Sendable, Equatable {
     }
 }
 
-/// An image a surface can show inline, such as the region an action lands on. `data` travels base64-encoded;
-/// surfaces that can't show images use `alt`.
+/// An image a surface can show inline, such as the region an action lands on. `ref` names the bytes: a
+/// `blob://` reference a surface fetches, or a `data:` URL where there is no blob store. `alt` is required and must
+/// carry the decision-relevant facts on its own, since surfaces that can't show images render only it.
 public struct PresentationImage: Codable, Sendable, Equatable {
-    public var data: Data
-    public var mediaType: String
-    public var width: Int
-    public var height: Int
+    public var ref: String
     public var alt: String
+    public var mime: String?
+    public var width: Int?
+    public var height: Int?
 
-    public init(data: Data, mediaType: String, width: Int, height: Int, alt: String) {
-        self.data = data
-        self.mediaType = mediaType
+    public init(ref: String, alt: String, mime: String? = nil, width: Int? = nil, height: Int? = nil) {
+        self.ref = ref
+        self.alt = alt
+        self.mime = mime
         self.width = width
         self.height = height
-        self.alt = alt
+    }
+
+    /// An image carried inline as a `data:` URL.
+    public init(data: Data, mime: String, width: Int? = nil, height: Int? = nil, alt: String) {
+        self.init(ref: "data:\(mime);base64,\(data.base64EncodedString())", alt: alt, mime: mime, width: width, height: height)
+    }
+
+    /// The bytes of a `data:` URL ref; `nil` for a blob ref, which a surface fetches.
+    public var inlineData: Data? {
+        guard ref.hasPrefix("data:"), let comma = ref.firstIndex(of: ","),
+              ref[ref.startIndex..<comma].hasSuffix(";base64")
+        else { return nil }
+        return Data(base64Encoded: String(ref[ref.index(after: comma)...]))
     }
 
     /// The line surfaces show in its place.
     public var textFallback: String { "[Image: \(alt)]" }
+
+    enum CodingKeys: String, CodingKey {
+        case ref, alt, mime, width, height
+    }
+
+    /// Reads the image's fields from the block that carries them, which keeps them beside its `type`.
+    init(fieldsOf decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            ref: try container.decode(String.self, forKey: .ref),
+            alt: try container.decode(String.self, forKey: .alt),
+            mime: try container.decodeIfPresent(String.self, forKey: .mime),
+            width: try container.decodeIfPresent(Int.self, forKey: .width),
+            height: try container.decodeIfPresent(Int.self, forKey: .height)
+        )
+    }
+
+    func encodeFields(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ref, forKey: .ref)
+        try container.encode(alt, forKey: .alt)
+        try container.encodeIfPresent(mime, forKey: .mime)
+        try container.encodeIfPresent(width, forKey: .width)
+        try container.encodeIfPresent(height, forKey: .height)
+    }
 }
 
 /// A portable presentation block. An approval request is just a sequence of these
@@ -94,7 +133,7 @@ public enum ApprovalBlock: Codable, Sendable, Equatable {
         case .context:
             self = .context(try container.decode(String.self, forKey: .text))
         case .image:
-            self = .image(try container.decode(PresentationImage.self, forKey: .image))
+            self = .image(try PresentationImage(fieldsOf: decoder))
         case .buttons:
             self = .buttons(try container.decode([ApprovalButton].self, forKey: .buttons))
         }
@@ -111,7 +150,7 @@ public enum ApprovalBlock: Codable, Sendable, Equatable {
             try container.encode(value, forKey: .text)
         case .image(let image):
             try container.encode(BlockType.image, forKey: .type)
-            try container.encode(image, forKey: .image)
+            try image.encodeFields(to: encoder)
         case .buttons(let buttons):
             try container.encode(BlockType.buttons, forKey: .type)
             try container.encode(buttons, forKey: .buttons)

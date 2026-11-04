@@ -57,7 +57,7 @@ public enum MessageBlock: Codable, Sendable, Equatable {
         case .divider:
             self = .divider
         case .image:
-            self = .image(try container.decode(PresentationImage.self, forKey: .image))
+            self = .image(try PresentationImage(fieldsOf: decoder))
         case .buttons:
             self = .buttons(try container.decode([ApprovalButton].self, forKey: .buttons))
         case .select:
@@ -81,7 +81,7 @@ public enum MessageBlock: Codable, Sendable, Equatable {
             try container.encode(BlockType.divider, forKey: .type)
         case .image(let image):
             try container.encode(BlockType.image, forKey: .type)
-            try container.encode(image, forKey: .image)
+            try image.encodeFields(to: encoder)
         case .buttons(let buttons):
             try container.encode(BlockType.buttons, forKey: .type)
             try container.encode(buttons, forKey: .buttons)

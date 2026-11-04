@@ -292,6 +292,27 @@ struct DesktopContainerTests {
         #expect(await host.commands.last == ["docker", "rm", "--force", name])
     }
 
+    @Test("A network other than none has no egress filter, so it needs the operator's explicit acknowledgment")
+    func unfilteredNetwork() async throws {
+        let request = LeaseRequest(
+            target: "desktop-container", agentID: "a", grants: [], budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
+            initiator: .trigger, userPresent: false
+        )
+        let refusedHost = HostRunner()
+        let refused = X11DisplayTarget.desktopContainer(configuration: DesktopContainerConfiguration(network: "bridge"), host: refusedHost)
+        await #expect(throws: DisplayTargetError.self) { try await refused.lease(request) }
+        #expect(await refusedHost.commands.allSatisfy { $0.dropFirst().first != "run" }, "no container started")
+
+        let host = HostRunner()
+        let acknowledged = X11DisplayTarget.desktopContainer(
+            configuration: DesktopContainerConfiguration(network: "bridge", allowsUnfilteredNetwork: true), host: host
+        )
+        let lease = try await acknowledged.lease(request)
+        let run = try #require(await host.commands.first { $0.dropFirst().first == "run" })
+        #expect(run.firstIndex(of: "--network").map { run[$0 + 1] } == "bridge")
+        await acknowledged.release(lease, reason: .completed)
+    }
+
     @Test("A display that never comes up removes the container and fails the lease")
     func neverReady() async throws {
         let host = HostRunner()

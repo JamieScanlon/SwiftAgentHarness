@@ -141,6 +141,22 @@ extension SubAgentSpawnService {
             layout: try? await grant.target.describe(grant.lease),
             manifest: grant.target.manifest
         )
+        let cardHarness = await deps.persistenceDomain.harnessSessionPersistence
+        let cardInstallation = deps.computerUse
+        cardInstallation.readBlob = { try cardHarness.getBlob(blobId: $0) }
+        let cardEndsAt = grant.lease.endsAt
+        // Approval cards cite their crops by ref; the session's reference holds them like its screenshots.
+        sessionConfiguration.storeApprovalImage = { data in
+            guard let stored = try? cardHarness.putBlob(
+                data: data, durability: .ephemeral, originalName: "computer-use-approval.png", mimeType: "image/png",
+                trust: "unknown-party", ttlSeconds: 3_600, lane: .outbound
+            ) else { return nil }
+            let until = await cardInstallation.toolImageExpiry(conversationID: childID) ?? cardInstallation.sessionImageExpiry(endsAt: cardEndsAt)
+            for expiry in await cardInstallation.blobs.hold([stored.id], childConversationID: childID, until: until) {
+                _ = try? cardHarness.setBlobExpiry(blobId: expiry.blobID, expiresAt: expiry.expiresAt)
+            }
+            return SessionBlobImageRef.path(for: stored.id)
+        }
         // Gemini's functions take the 0–999 grid whatever the catalog says; the mode is frozen with the session.
         if sessionConfiguration.nativeDialect?.toolset.vendor == .gemini {
             sessionConfiguration.coordinateMode = .normalized1000

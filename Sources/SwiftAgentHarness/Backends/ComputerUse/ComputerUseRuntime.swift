@@ -116,6 +116,11 @@ actor ComputerUseSessionDirectory {
     func entries(parent conversationID: UUID) -> [ComputerUseSessionEntry] {
         entries.values.filter { $0.parentConversationID == conversationID }.sorted { $0.lifecycleID < $1.lifecycleID }
     }
+
+    /// The child conversations of the live sessions reporting to `conversationID`.
+    func children(parent conversationID: UUID) -> [UUID] {
+        entries.filter { $0.value.parentConversationID == conversationID }.map(\.key)
+    }
 }
 
 /// The host's computer-use configuration, shared by tool building, delegate dispatch, and the control plane.
@@ -123,6 +128,7 @@ final class ComputerUseInstallation: Sendable {
     private let state = Mutex<ComputerUseConfiguration?>(nil)
     private let coordinatorState = Mutex<ComputerUseOversightCoordinator?>(nil)
     private let publishState = Mutex<ComputerUseOversightCoordinator.Publish?>(nil)
+    private let blobReaderState = Mutex<(@Sendable (String) throws -> Data)?>(nil)
     let sessions = ComputerUseSessionDirectory()
     let replays = ComputerUseReplayIndex()
     let blobs = ComputerUseBlobLedger()
@@ -142,6 +148,12 @@ final class ComputerUseInstallation: Sendable {
     /// Publishes a surface intent to a conversation's events topic.
     var publish: ComputerUseOversightCoordinator.Publish? {
         publishState.withLock { $0 }
+    }
+
+    /// Reads a stored blob, for serving the images live runs cite; set once a run stores one.
+    var readBlob: (@Sendable (String) throws -> Data)? {
+        get { blobReaderState.withLock { $0 } }
+        set { blobReaderState.withLock { $0 = newValue } }
     }
 
     var retention: ComputerUseRetention {

@@ -4,9 +4,10 @@ import CoreGraphics
 import Foundation
 import SwiftAgentHarness
 
-/// The user's own Mac as a display target, in the in-process dev mode: the drivers run inside the harness
-/// process and borrow its TCC grants (the terminal's, when run from one). The signed host app that owns its own
-/// grants and serves this contract over XPC is the production shape.
+/// The user's own Mac as a display target, with the drivers inside this process. Run from a CLI or anything
+/// launched from another app it is the development escape hatch, borrowing that app's TCC grants (the terminal's),
+/// and its label says so; the production shapes are the signed host app serving this contract over XPC, or a
+/// notarized GUI app that embeds the harness and owns its grants (`embeddedInSignedApp`).
 public actor MacHostDisplayTarget: DisplayTarget {
     public static let defaultID: DisplayTargetID = "macos-host"
 
@@ -24,6 +25,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         public var servesLiveFrames: Bool
         /// The long edge of a live-view frame.
         public var liveFrameLongEdge: Int
+        /// This process is a signed GUI app that owns its own grants, so in-process drivers aren't the development
+        /// escape hatch and the label doesn't call them that.
+        public var embeddedInSignedApp: Bool
         /// Watched during a lease with a listen-only event tap (it needs Input Monitoring): pressing it sends the
         /// holder `stopRequested`, and any other key the user presses sends `userTyping`. `nil` watches nothing.
         public var stopKey: KeyCombo?
@@ -39,12 +43,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
             excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs,
             servesLiveFrames: Bool = false,
             liveFrameLongEdge: Int = 1_600,
-            stopKey: KeyCombo? = .defaultStopKey
+            stopKey: KeyCombo? = .defaultStopKey,
+            embeddedInSignedApp: Bool = false
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
             self.servesLiveFrames = servesLiveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
             self.stopKey = stopKey
+            self.embeddedInSignedApp = embeddedInSignedApp
         }
 
         init(
@@ -66,6 +72,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.servesLiveFrames = false
             self.liveFrameLongEdge = 1_600
             self.stopKey = nil
+            self.embeddedInSignedApp = false
         }
 
         public static var defaultExcludedBundleIDs: Set<String> {
@@ -122,7 +129,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         self.input = MacInputInjector(poster: configuration.eventPoster)
         self.manifest = DisplayTargetManifest(
             id: configuration.id,
-            label: "This Mac (in-process dev mode)",
+            label: configuration.embeddedInSignedApp ? "This Mac" : "This Mac (in-process development mode)",
             platform: "macos",
             isolation: .host,
             perception: [.pixels, .accessibility],

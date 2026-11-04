@@ -183,6 +183,19 @@ struct VirtualMachineDisplayTargetTests {
         #expect(await controller.started == 2, "every lease starts clean")
     }
 
+    @Test("The guest's own events, such as its stop key, reach the VM lease's holder and end at release")
+    func guestEvents() async throws {
+        let guest = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let target = VirtualMachineDisplayTarget(manifest: Self.manifest, controller: Controller()) { _ in guest }
+        let lease = try await target.lease(Self.request())
+        var events = await target.events(lease).makeAsyncIterator()
+        try await Task.sleep(for: .milliseconds(20))
+        guest.eventHub.post(.stopRequested)
+        #expect(await events.next() == .stopRequested)
+        await target.release(lease, reason: .completed)
+        #expect(await events.next() == nil)
+    }
+
     @Test("When the guest can't be reached, the VM is stopped and the lease fails")
     func guestFails() async throws {
         let controller = Controller()

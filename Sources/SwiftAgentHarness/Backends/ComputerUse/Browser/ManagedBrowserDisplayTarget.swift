@@ -81,6 +81,7 @@ public struct ManagedBrowserSession: Sendable {
 /// input reaches the page only during takeover.
 public actor ManagedBrowserDisplayTarget: DisplayTarget {
     public nonisolated let manifest: DisplayTargetManifest
+    private let eventHub = DisplayTargetEventHub()
     public nonisolated let configuration: ManagedBrowserConfiguration
     public nonisolated let profile: ManagedBrowserProfile
     private let launcher: @Sendable () async throws -> ManagedBrowserSession
@@ -252,14 +253,21 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
                 label: configuration.label,
                 viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
-                input: { [weak self] input in await self?.liveInput(input) }
+                input: { [weak self] input in await self?.liveInput(input) },
+                typed: { [eventHub, leaseID = lease.id] value in eventHub.post(.typedDuringTakeover(value), to: leaseID) }
             ))
         }
         return lease
     }
 
+    public func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> {
+        guard await lock.holds(leaseID: lease.id) else { return AsyncStream { $0.finish() } }
+        return eventHub.stream(for: lease.id)
+    }
+
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.holds(leaseID: lease.id) else { return }
+        eventHub.finish(lease.id)
         if let page {
             events?.cancel()
             let connection = page.session.connection

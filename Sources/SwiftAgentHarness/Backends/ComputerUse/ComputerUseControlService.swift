@@ -18,6 +18,21 @@ public struct ComputerUseControlStatus: Sendable, Codable, Equatable {
 }
 
 /// A run's audit mark and when its images expire.
+/// An image's bytes, for a route that serves them.
+public struct ComputerUseImage: Sendable, Equatable {
+    public var data: Data
+    public var mediaType: String
+    public var width: Int?
+    public var height: Int?
+
+    public init(data: Data, mediaType: String, width: Int? = nil, height: Int? = nil) {
+        self.data = data
+        self.mediaType = mediaType
+        self.width = width
+        self.height = height
+    }
+}
+
 public struct ComputerUseAuditStatus: Sendable, Codable, Equatable {
     public var lifecycleID: String
     public var auditMarked: Bool
@@ -89,18 +104,25 @@ public struct ComputerUseControlService: Sendable {
     }
 
     /// One thumbnail the replay lists; anything else in the blob store stays out of reach.
-    public func replayThumbnail(conversationID: UUID, lifecycleID: String, observationID: ObservationID) async -> PresentationImage? {
+    public func replayThumbnail(conversationID: UUID, lifecycleID: String, observationID: ObservationID) async -> ComputerUseImage? {
         guard let entry = await installation.replays.entry(parent: conversationID, lifecycleID: lifecycleID),
               let thumbnail = entry.replay.thumbnails.first(where: { $0.observationID == observationID }),
               let data = try? entry.access.load(thumbnail.blobID)
         else { return nil }
-        return PresentationImage(
-            data: data,
-            mediaType: thumbnail.mediaType,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            alt: "Observation \(observationID)"
-        )
+        return ComputerUseImage(data: data, mediaType: thumbnail.mediaType, width: thumbnail.width, height: thumbnail.height)
+    }
+
+    /// An image a live run's approval card cites by `blob://` ref. Only images the conversation's own live runs
+    /// stored are served.
+    public func runImage(conversationID: UUID, blobID: String) async -> ComputerUseImage? {
+        let blobID = SessionBlobImageRef.parsePath(blobID) ?? SessionBlobStore.normalizeBlobId(blobID)
+        for child in await installation.sessions.children(parent: conversationID) {
+            guard await installation.blobs.holds(blobID, childConversationID: child),
+                  let data = try? installation.readBlob?(blobID)
+            else { continue }
+            return ComputerUseImage(data: data, mediaType: "image/png")
+        }
+        return nil
     }
 
     /// Marks a run for audit, or removes the mark. A live run takes the mark at release; a released run's images

@@ -42,7 +42,7 @@ enum ComputerUseImageEncoding {
 
     static func png(_ image: CGImage, alt: String) -> PresentationImage? {
         guard let encoded = encode(image, as: .png) else { return nil }
-        return PresentationImage(data: encoded, mediaType: "image/png", width: image.width, height: image.height, alt: alt)
+        return PresentationImage(data: encoded, mime: "image/png", width: image.width, height: image.height, alt: alt)
     }
 
     static func encode(_ image: CGImage, as type: UTType) -> Data? {

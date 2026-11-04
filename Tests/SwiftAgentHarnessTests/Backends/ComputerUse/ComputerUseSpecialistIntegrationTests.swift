@@ -345,7 +345,7 @@ struct ComputerUseSpecialistIntegrationTests {
         let first = try #require(replay.thumbnails.first)
         let thumbnail = try #require(await control.replayThumbnail(conversationID: parent.id, lifecycleID: "call-cu-1", observationID: first.observationID))
         #expect(thumbnail.width == first.width)
-        #expect(max(thumbnail.width, thumbnail.height) <= ComputerUseSessionConfiguration.defaultReplayThumbnailEdgePx)
+        #expect(max(thumbnail.width ?? 0, thumbnail.height ?? 0) <= ComputerUseSessionConfiguration.defaultReplayThumbnailEdgePx)
         // The ref in the parent's result is the stored replay document.
         let ref = try #require((result["actionsLog"] as? String)?.components(separatedBy: "full log: ").last?.dropLast())
         let blobID = try #require(SessionBlobImageRef.parsePath(String(ref)))

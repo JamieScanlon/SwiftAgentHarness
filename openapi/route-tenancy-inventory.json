@@ -232,6 +232,13 @@
       "handler_anchor": "conversationsPath.get(\":id\", \"computer-use\", \"replays\", \":lifecycleID\", \"thumbnails\", \":observationID\")"
     },
     {
+      "method": "GET",
+      "path": "/api/conversations/{id}/computer-use/images/{blobID}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"computer-use\", \"images\", \":blobID\")"
+    },
+    {
       "method": "POST",
       "path": "/api/conversations/{id}/completion-announcements",
       "tenancy_guard": "conversationAccess",

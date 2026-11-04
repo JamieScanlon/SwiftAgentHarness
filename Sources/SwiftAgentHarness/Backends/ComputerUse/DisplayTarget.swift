@@ -304,6 +304,8 @@ public enum DisplayTargetEvent: Sendable, Codable, Hashable {
     case takeoverChanged(on: Bool)
     /// The user is typing on a shared desktop.
     case userTyping
+    /// A value the user typed during a takeover, which helper models must never be shown.
+    case typedDuringTakeover(String)
 }
 
 /// Fans a target's events out to the streams of the leases they concern.

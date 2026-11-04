@@ -58,7 +58,7 @@ struct ComputerUseReplayTests {
         let frames = await session.replayFrames
         #expect(frames.map(\.observationID) == ["o_1", "o_3"])
         let first = try #require(frames.first)
-        #expect(max(first.image.width, first.image.height) <= ComputerUseSessionConfiguration.defaultReplayThumbnailEdgePx)
+        #expect(max(first.image.width ?? 0, first.image.height ?? 0) <= ComputerUseSessionConfiguration.defaultReplayThumbnailEdgePx)
         #expect(first.app == ComputerUseFixtures.textEdit.bundleID)
     }
 

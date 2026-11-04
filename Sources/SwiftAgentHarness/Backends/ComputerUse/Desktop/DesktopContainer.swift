@@ -13,8 +13,11 @@ public struct DesktopContainerConfiguration: Sendable {
     /// ImageMagick, `xprop` and `procps`. `docker/desktop` in this repository builds one.
     public var image: String
     public var display: String
-    /// The Docker network the container joins. `none` by default: the desktop reaches nothing.
+    /// The Docker network the container joins. `none` by default: the desktop reaches nothing. The harness puts no
+    /// egress filter on any other network, so joining one needs `allowsUnfilteredNetwork`.
     public var network: String
+    /// The operator's acknowledgment that `network` is unfiltered: the desktop can reach whatever it routes to.
+    public var allowsUnfilteredNetwork: Bool
     public var docker: String
     /// More `docker run` arguments, such as resource limits.
     public var runArguments: [String]
@@ -28,6 +31,7 @@ public struct DesktopContainerConfiguration: Sendable {
         image: String = "swiftagentharness/desktop:latest",
         display: String = ":99",
         network: String = "none",
+        allowsUnfilteredNetwork: Bool = false,
         docker: String = "docker",
         runArguments: [String] = ["--memory", "2g", "--pids-limit", "512", "--shm-size", "256m"],
         startTimeout: Duration = .seconds(30),
@@ -39,6 +43,7 @@ public struct DesktopContainerConfiguration: Sendable {
         self.image = image
         self.display = display
         self.network = network
+        self.allowsUnfilteredNetwork = allowsUnfilteredNetwork
         self.docker = docker
         self.runArguments = runArguments
         self.startTimeout = startTimeout
@@ -53,6 +58,12 @@ enum DesktopContainer {
     static let ownerLabel = "swiftagentharness.owner"
 
     static func start(_ configuration: DesktopContainerConfiguration, host: any DisplayCommandRunner) async throws -> X11DesktopSession {
+        guard configuration.network == "none" || configuration.allowsUnfilteredNetwork else {
+            throw DisplayTargetError.unsupported(
+                "the desktop container's network '\(configuration.network)' has no egress filter; "
+                    + "use 'none' or set allowsUnfilteredNetwork to accept that"
+            )
+        }
         let docker = configuration.docker
         await removeStale(docker: docker, host: host)
         let name = "sah-desktop-\(UUID().uuidString.prefix(12).lowercased())"
