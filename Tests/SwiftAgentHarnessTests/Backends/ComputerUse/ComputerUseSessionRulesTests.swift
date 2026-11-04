@@ -225,3 +225,71 @@ struct ComputerUseWaitForTests {
         #expect(settles.content.hasPrefix("wait-for: confirmed"), "\(settles.content.prefix(300))")
     }
 }
+
+@Suite("Computer use session: the target's own events")
+struct ComputerUseSessionTargetEventTests {
+    private static func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return false
+    }
+
+    @Test("The target's stop key ends the session as the kill switch")
+    func stopKey() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        await session.announceStart()
+        target.eventHub.post(.stopRequested)
+        #expect(await Self.eventually { await session.terminalReason == .killSwitch })
+        #expect(await target.releases == [.killSwitch])
+    }
+
+    @Test("A permission the target lost ends the session; one it still has doesn't")
+    func permissionChange() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        await session.announceStart()
+        let required = FakeDisplayTarget.vmManifest.requires
+        target.eventHub.post(.permissionsChanged(PermissionSnapshot(states: Dictionary(uniqueKeysWithValues: required.map { ($0, .granted) }))))
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await session.terminalReason == nil)
+        guard let first = required.first else { return }
+        target.eventHub.post(.permissionsChanged(PermissionSnapshot(states: [first: .denied])))
+        #expect(await Self.eventually { await session.terminalReason == .permissionRevoked })
+    }
+
+    @Test("A takeover the user starts at the target pauses the agent until they end it there")
+    func targetTakeover() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest)
+        await session.announceStart()
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        target.eventHub.post(.takeoverChanged(on: true))
+        #expect(await Self.eventually { await session.isTakeoverActive })
+        let paused = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(paused.outcomes.first?.effect == .refused)
+        target.eventHub.post(.takeoverChanged(on: false))
+        #expect(await Self.eventually { await !session.isTakeoverActive })
+        #expect(await target.takeoverStates.isEmpty, "the target already knows")
+    }
+
+    @Test("While the user types on a shared desktop, the agent's input waits and observing still works")
+    func userTyping() async throws {
+        let clock = ComputerUseTestClock()
+        let (target, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest, clock: clock)
+        await session.announceStart()
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        let steps = await session.stepCount
+        target.eventHub.post(.userTyping)
+        try await Task.sleep(for: .milliseconds(30))
+        let waited = await session.perform([.click(at: .ref("e2", observation: "o_1")), .key(combo: KeyCombo(modifiers: [], key: "tab"))])
+        #expect(waited.outcomes.map(\.effect) == [.notExecuted, .notExecuted])
+        #expect(waited.outcomes.first?.escalation == .observe)
+        #expect(waited.outcomes.first?.evidence?.contains("typing") == true)
+        #expect(await session.stepCount == steps, "input that waited took no step")
+        #expect(await session.perform([ComputerUseSessionFixtures.observe]).outcomes.first?.effect == .confirmed)
+        clock.advance(seconds: ComputerUseSession.userTypingQuiet + 0.5)
+        let resumed = await session.perform([.click(at: .ref("e2", observation: "o_2"))])
+        #expect(resumed.outcomes.first?.effect == .confirmed, "\(resumed.outcomes)")
+        #expect(await target.actCalls.count == 1)
+    }
+}

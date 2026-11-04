@@ -165,7 +165,7 @@ struct ComputerUseSpecialistIntegrationTests {
             harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
         )
         let configuration = ComputerUseConfiguration(
-            registry: DisplayTargetRegistry(targets: [target]),
+            registry: try DisplayTargetRegistry(targets: [target]),
             defaults: ComputerUseSpecialistDefaults(
                 target: target.manifest.id,
                 budgets: ComputerUseBudgetPolicy(defaultSteps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800))

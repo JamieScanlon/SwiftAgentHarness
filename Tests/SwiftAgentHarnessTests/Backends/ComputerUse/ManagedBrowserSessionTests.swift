@@ -19,7 +19,7 @@ struct ManagedBrowserSessionTests {
         let target = ManagedBrowserDisplayTarget(configuration: ManagedBrowserConfiguration(settleDelay: .zero), isolation: .container) {
             ManagedBrowserSession(connection: browser)
         }
-        let registry = DisplayTargetRegistry(targets: [target])
+        let registry = try DisplayTargetRegistry(targets: [target])
         let grant = try await registry.lease(
             LeaseRequest(
                 target: target.manifest.id,

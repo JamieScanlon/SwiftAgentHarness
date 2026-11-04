@@ -128,17 +128,18 @@ struct ManagedBrowserLiveViewTests {
         await #expect(throws: DisplayTargetError.leaseNotHeld) { try await target.endObservers(lease) }
     }
 
-    @Test("Release ends the viewers and revokes the link")
+    @Test("Release ends the viewers and revokes the unused links")
     func release() async throws {
         let server = DisplayLiveViewServer()
         defer { Task { await server.stop() } }
         let (_, target, lease) = try await Self.leased(liveView: server)
         let link = try #require(try await target.liveView(lease))
+        let unused = try #require(try await target.liveView(lease))
         let viewer = try Viewer(link)
         _ = try await viewer.status()
         await target.release(lease, reason: .completed)
         #expect(try await viewer.status().reason == .sessionEnded)
-        #expect(await (try Viewer(link)).next(within: .seconds(1)) == nil)
+        #expect(await (try Viewer(unused)).next(within: .seconds(1)) == nil)
         await #expect(throws: DisplayTargetError.leaseNotHeld) { try await target.liveView(lease) }
     }
 

@@ -190,6 +190,27 @@
       "handler_anchor": "conversationsPath.post(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"live-view\")"
     },
     {
+      "method": "DELETE",
+      "path": "/api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view/observers",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.delete(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"live-view\", \"observers\")"
+    },
+    {
+      "method": "GET",
+      "path": "/api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.get(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"live-view\", \"connections\")"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections/{linkID}",
+      "tenancy_guard": "conversationAccess",
+      "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
+      "handler_anchor": "conversationsPath.delete(\":id\", \"computer-use\", \"runs\", \":lifecycleID\", \"live-view\", \"connections\", \":linkID\")"
+    },
+    {
       "method": "GET",
       "path": "/api/conversations/{id}/computer-use/replays",
       "tenancy_guard": "conversationAccess",

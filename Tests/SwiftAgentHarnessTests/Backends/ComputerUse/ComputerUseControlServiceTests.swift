@@ -58,6 +58,21 @@ struct ComputerUseControlServiceTests {
         #expect(try await control.setTakeover(true, conversationID: parent, lifecycleID: "call-missing").isEmpty)
     }
 
+    @Test("The user lists a live run's viewers and revokes one connection")
+    func revokeConnection() async throws {
+        let installation = installation()
+        let control = ComputerUseControlService(installation: installation)
+        let (_, target) = try await ComputerUseFixtures.registerLiveSession(in: installation, parent: parent, lifecycleID: "call-1")
+        let watcher = DisplayLiveViewConnection(id: UUID(), role: .observer, connectedAt: ComputerUseFixtures.epoch)
+        let user = DisplayLiveViewConnection(id: UUID(), role: .user, connectedAt: ComputerUseFixtures.epoch)
+        await target.setConnections([user, watcher])
+        #expect(try await control.liveConnections(conversationID: parent, lifecycleID: "call-1") == [user, watcher])
+        #expect(try await control.revokeLiveView(conversationID: parent, lifecycleID: "call-1", linkID: watcher.id))
+        #expect(try await control.liveConnections(conversationID: parent, lifecycleID: "call-1") == [user])
+        #expect(try await control.revokeLiveView(conversationID: parent, lifecycleID: "call-1", linkID: watcher.id) == false)
+        #expect(try await control.liveConnections(conversationID: parent, lifecycleID: "call-missing") == nil)
+    }
+
     @Test("A live view link comes from the run's target, and none from an unknown or ended run")
     func liveView() async throws {
         let installation = installation()

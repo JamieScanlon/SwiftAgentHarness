@@ -36,7 +36,7 @@ public enum DisplayHostSocket {
                     try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: channel)
                 }
             }
-        let connection = try await DisplayHostSocketConnection.open(channel)
+        let connection = try await DisplayHostSocketConnection.open(channel, sharesFilesystem: true)
         guard await peers.accepts(connection.peer) else {
             await connection.close()
             throw DisplayHostError.peerRejected
@@ -75,7 +75,7 @@ public final class DisplayHostSocketListener: DisplayHostListener {
             do {
                 try await server.executeThenClose { inbound in
                     for try await child in inbound {
-                        guard let connection = try? await DisplayHostSocketConnection.open(child) else { continue }
+                        guard let connection = try? await DisplayHostSocketConnection.open(child, sharesFilesystem: true) else { continue }
                         guard await peers.accepts(connection.peer) else {
                             await connection.close()
                             continue
@@ -99,20 +99,23 @@ public final class DisplayHostSocketListener: DisplayHostListener {
 
 public final class DisplayHostSocketConnection: DisplayHostConnection {
     public let peer: DisplayHostPeer
+    /// True for a Unix socket; a TCP connection may cross machines.
+    public let sharesFilesystem: Bool
     public let inbound: AsyncThrowingStream<Data, any Error>
     private let writer: NIOAsyncChannelOutboundWriter<ByteBuffer>
     private let channel: any Channel
     private let pump: Task<Void, Never>
 
-    private init(peer: DisplayHostPeer, inbound: AsyncThrowingStream<Data, any Error>, writer: NIOAsyncChannelOutboundWriter<ByteBuffer>, channel: any Channel, pump: Task<Void, Never>) {
+    private init(peer: DisplayHostPeer, sharesFilesystem: Bool, inbound: AsyncThrowingStream<Data, any Error>, writer: NIOAsyncChannelOutboundWriter<ByteBuffer>, channel: any Channel, pump: Task<Void, Never>) {
         self.peer = peer
+        self.sharesFilesystem = sharesFilesystem
         self.inbound = inbound
         self.writer = writer
         self.channel = channel
         self.pump = pump
     }
 
-    static func open(_ asyncChannel: NIOAsyncChannel<ByteBuffer, ByteBuffer>) async throws -> DisplayHostSocketConnection {
+    static func open(_ asyncChannel: NIOAsyncChannel<ByteBuffer, ByteBuffer>, sharesFilesystem: Bool) async throws -> DisplayHostSocketConnection {
         let peer = await DisplayHostSocket.peer(of: asyncChannel.channel)
         let (inbound, continuation) = AsyncThrowingStream.makeStream(of: Data.self, throwing: (any Error).self)
         let (ready, readyContinuation) = AsyncStream.makeStream(of: NIOAsyncChannelOutboundWriter<ByteBuffer>.self)
@@ -137,7 +140,7 @@ public final class DisplayHostSocketConnection: DisplayHostConnection {
         }
         var readiness = ready.makeAsyncIterator()
         guard let writer = await readiness.next() else { throw DisplayHostError.connectionClosed }
-        return DisplayHostSocketConnection(peer: peer, inbound: inbound, writer: writer, channel: asyncChannel.channel, pump: pump)
+        return DisplayHostSocketConnection(peer: peer, sharesFilesystem: sharesFilesystem, inbound: inbound, writer: writer, channel: asyncChannel.channel, pump: pump)
     }
 
     public func send(_ message: Data) async throws {

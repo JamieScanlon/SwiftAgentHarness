@@ -185,6 +185,18 @@ public actor X11DisplayTarget: DisplayTarget {
         return await liveViewServer.viewerCount(liveFeed)
     }
 
+    public func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
+        try await requireLease(lease)
+        guard let liveViewServer, let liveFeed else { return [] }
+        return await liveViewServer.connections(liveFeed)
+    }
+
+    public func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
+        try await requireLease(lease)
+        guard let liveViewServer, let liveFeed else { return false }
+        return await liveViewServer.revoke(id, in: liveFeed)
+    }
+
     // MARK: - Perception
 
     private var screenRect: DisplayRect {

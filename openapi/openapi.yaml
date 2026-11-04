@@ -1936,9 +1936,10 @@ paths:
       tags: [ComputerUse]
       summary: Mint a live-view link for a live computer-use run
       description: |
-        Each call mints a new link whose token is in the URL fragment. The link can be used to connect until
-        `expiresAt`; a connected viewer watches until the run's lease ends. Viewers are view-only, and their
-        input reaches the target only while the run is taken over. Sent with `Cache-Control: no-store`.
+        Each call mints a new link whose token is in the URL fragment. The link connects once, before
+        `expiresAt`; the connected viewer watches until the connection is revoked or the run's lease ends.
+        Viewers are view-only, and a user link's input reaches the target only while the run is taken over.
+        Sent with `Cache-Control: no-store`.
       parameters:
         - $ref: "#/components/parameters/ConversationId"
         - name: lifecycleID
@@ -1967,6 +1968,113 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "409":
           description: The target failed to make a link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/observers:
+    delete:
+      operationId: endConversationComputerUseLiveViewObservers
+      tags: [ComputerUse]
+      summary: End a live run's observer connections and revoke its unused observer links
+      description: The user's own links and connections are kept.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Observers ended
+        "404":
+          description: No such live run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to end them
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections:
+    get:
+      operationId: listConversationComputerUseLiveViewConnections
+      tags: [ComputerUse]
+      summary: The viewers connected to a live run's live view
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connected viewers, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections]
+                properties:
+                  connections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DisplayLiveViewConnection"
+        "404":
+          description: No such live run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to list them
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections/{linkID}:
+    delete:
+      operationId: revokeConversationComputerUseLiveViewConnection
+      tags: [ComputerUse]
+      summary: End one live-view connection, or revoke its link if it hasn't connected
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: linkID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Revoked
+        "400":
+          description: Invalid link id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live run or link, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to revoke it
           content:
             application/json:
               schema:
@@ -3777,8 +3885,15 @@ components:
 
     DisplayLiveView:
       type: object
-      required: [url, viewOnly, expiresAt]
+      required: [id, url, viewOnly, expiresAt, role]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: The link's id; the connection it makes is listed and revoked under it.
+        role:
+          type: string
+          enum: [user, observer]
         url:
           type: string
           description: The viewer page, with the link's token in the URL fragment.
@@ -3789,6 +3904,21 @@ components:
           type: string
           format: date-time
           description: After this the link no longer connects.
+
+    DisplayLiveViewConnection:
+      type: object
+      required: [id, role, connectedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The id of the link the viewer connected with.
+        role:
+          type: string
+          enum: [user, observer]
+        connectedAt:
+          type: string
+          format: date-time
 
     ComputerUseAuditStatus:
       type: object

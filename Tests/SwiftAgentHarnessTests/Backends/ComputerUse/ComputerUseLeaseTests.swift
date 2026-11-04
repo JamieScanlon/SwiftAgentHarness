@@ -133,7 +133,7 @@ struct DisplayTargetRegistryTests {
     @Test("The host desktop requires an operator-initiated session with the user present")
     func hostRequiresPresentOperator() async throws {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
-        let registry = DisplayTargetRegistry(targets: [host])
+        let registry = try DisplayTargetRegistry(targets: [host])
         let refused: [(ComputerUseInitiator, Bool)] = [(.nonOwner, true), (.trigger, true), (.operator, false), (.trigger, false)]
         for (initiator, userPresent) in refused {
             await #expect(throws: ComputerUseLeaseDenial.hostTargetRequiresPresentOperator) {
@@ -153,7 +153,7 @@ struct DisplayTargetRegistryTests {
         manifest.isolation = .remoteDevice
         manifest.humanPresence = .shared
         let phone = FakeDisplayTarget(manifest: manifest)
-        let registry = DisplayTargetRegistry(targets: [phone])
+        let registry = try DisplayTargetRegistry(targets: [phone])
         await #expect(throws: ComputerUseLeaseDenial.hostTargetRequiresPresentOperator) {
             _ = try await registry.lease(self.request(target: phone.manifest.id, initiator: .trigger, userPresent: false), approve: { $0.review.grantable.map(\.grant) })
         }
@@ -164,7 +164,7 @@ struct DisplayTargetRegistryTests {
     func headlessIsolatedTarget() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { now })
-        let registry = DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
+        let registry = try DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
         let granted = try await registry.lease(
             request(target: vm.manifest.id, initiator: .trigger, userPresent: false),
             approve: { $0.review.grantable.map(\.grant) }
@@ -176,7 +176,7 @@ struct DisplayTargetRegistryTests {
     @Test("The grant dialog learns which conversation asked, for which target and task")
     func approverContext() async throws {
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
-        let registry = DisplayTargetRegistry(targets: [vm])
+        let registry = try DisplayTargetRegistry(targets: [vm])
         let conversationID = UUID()
         var leaseRequest = request(target: vm.manifest.id)
         leaseRequest.conversationID = conversationID
@@ -196,7 +196,7 @@ struct DisplayTargetRegistryTests {
     @Test("An approver cannot raise a grant above its cap or add grants that were not requested")
     func approverClamped() async throws {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
-        let registry = DisplayTargetRegistry(targets: [host])
+        let registry = try DisplayTargetRegistry(targets: [host])
         let granted = try await registry.lease(
             request(target: host.manifest.id, grants: [.app(bundleID: "com.apple.Terminal", tier: .full)]),
             approve: { _ in [.app(bundleID: "com.apple.Terminal", tier: .full), .app(bundleID: "com.apple.finder", tier: .full)] }
@@ -207,7 +207,7 @@ struct DisplayTargetRegistryTests {
     @Test("Declining every grant, missing permissions, and unknown targets are typed denials")
     func denials() async throws {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, permissions: [.screenCapture: .granted, .accessibility: .denied])
-        let registry = DisplayTargetRegistry(targets: [host])
+        let registry = try DisplayTargetRegistry(targets: [host])
         await #expect(throws: ComputerUseLeaseDenial.permissionsMissing([.accessibility, .postEvents])) {
             _ = try await registry.lease(self.request(target: host.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         }
@@ -216,7 +216,7 @@ struct DisplayTargetRegistryTests {
         }
 
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
-        let vmRegistry = DisplayTargetRegistry(targets: [vm])
+        let vmRegistry = try DisplayTargetRegistry(targets: [vm])
         await #expect(throws: ComputerUseLeaseDenial.grantsDeclined) {
             _ = try await vmRegistry.lease(self.request(target: vm.manifest.id), approve: { _ in nil })
         }
@@ -228,10 +228,38 @@ struct DisplayTargetRegistryTests {
     @Test("A second lease on a held target is target-busy")
     func busyTarget() async throws {
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
-        let registry = DisplayTargetRegistry(targets: [vm])
+        let registry = try DisplayTargetRegistry(targets: [vm])
         _ = try await registry.lease(request(target: vm.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         await #expect(throws: ComputerUseLeaseDenial.targetBusy(holder: "agent")) {
             _ = try await registry.lease(self.request(target: vm.manifest.id), approve: { $0.review.grantable.map(\.grant) })
         }
+    }
+}
+
+@Suite("Display target registry: one id namespace with sandbox backends")
+struct DisplayTargetRegistryNamespaceTests {
+    private static func target(_ id: DisplayTargetID) -> FakeDisplayTarget {
+        var manifest = FakeDisplayTarget.vmManifest
+        manifest.id = id
+        return FakeDisplayTarget(manifest: manifest)
+    }
+
+    @Test("A target can't take a sandbox backend's id or another target's")
+    func namespace() async throws {
+        #expect(throws: DisplayTargetRegistrationError.idTakenBySandboxBackend("docker")) {
+            _ = try DisplayTargetRegistry(targets: [Self.target("docker")], sandboxBackendIDs: { ["docker", "local"] })
+        }
+        #expect(throws: DisplayTargetRegistrationError.idTakenByTarget("vm")) {
+            _ = try DisplayTargetRegistry(targets: [Self.target("vm"), Self.target("vm")], sandboxBackendIDs: { [] })
+        }
+        let registry = try DisplayTargetRegistry(targets: [Self.target("vm")], sandboxBackendIDs: { ["local"] })
+        await #expect(throws: DisplayTargetRegistrationError.idTakenBySandboxBackend("local")) {
+            try await registry.register(Self.target("local"))
+        }
+        await #expect(throws: DisplayTargetRegistrationError.idTakenByTarget("vm")) {
+            try await registry.register(Self.target("vm"))
+        }
+        try await registry.register(Self.target("browser"))
+        #expect(await registry.manifests.map(\.id) == ["browser", "vm"])
     }
 }

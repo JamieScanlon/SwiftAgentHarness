@@ -335,6 +335,9 @@ public actor ComputerUseSession {
     /// The time-ceiling decision in flight, so an action and the child run's timer reaching it together ask once.
     private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
+    private var targetEvents: Task<Void, Never>?
+    /// The user's latest keystroke on a shared desktop, as the target reported it.
+    private var userTypedAt: Date?
     /// Set by a sensitive-domain signal for the rest of the session: every action then waits until the user
     /// watches the live view.
     public private(set) var isWatchModeOn = false
@@ -462,6 +465,15 @@ public actor ComputerUseSession {
         if isTakeoverActive {
             result.outcomes = actions.indices.map {
                 ActionOutcome(action: $0, effect: .refused, evidence: "the user has taken over")
+            }
+            return result
+        }
+        if let typed = userTypedAt, now().timeIntervalSince(typed) < Self.userTypingQuiet,
+           actions.contains(where: { !Self.isObservation($0) }) {
+            result.outcomes = actions.indices.map {
+                $0 == 0
+                    ? ActionOutcome(action: 0, effect: .notExecuted, evidence: "the user is typing on this desktop; wait until they stop, then observe", escalation: .observe)
+                    : ActionOutcome(action: $0, effect: .notExecuted)
             }
             return result
         }
@@ -744,9 +756,43 @@ public actor ComputerUseSession {
         ))
     }
 
-    /// Announces the session to the user's surfaces.
+    /// Announces the session to the user's surfaces and starts listening to the target's events.
     public func announceStart() async {
+        await listenToTarget()
         await report(.started)
+    }
+
+    /// How long after the user's last keystroke on a shared desktop the agent's input waits.
+    public static let userTypingQuiet: TimeInterval = 2
+
+    private func listenToTarget() async {
+        guard targetEvents == nil, terminalReason == nil else { return }
+        // Subscribed before returning, so no event sent after the announcement is missed.
+        let stream = await target.events(lease)
+        guard targetEvents == nil else { return }
+        targetEvents = Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                await self.handle(event)
+            }
+        }
+    }
+
+    private func handle(_ event: DisplayTargetEvent) async {
+        guard terminalReason == nil else { return }
+        switch event {
+        case .stopRequested:
+            await end(.killSwitch)
+        case .permissionsChanged(let snapshot):
+            if !snapshot.missing(manifest.requires).isEmpty { await end(.permissionRevoked) }
+        case .takeoverChanged(let on):
+            guard on != isTakeoverActive else { return }
+            isTakeoverActive = on
+            if on { pendingActing = nil }
+            await report(on ? .takenOver : .acting)
+        case .userTyping:
+            userTypedAt = now()
+        }
     }
 
     // MARK: - Gating
@@ -1097,6 +1143,7 @@ public actor ComputerUseSession {
             reason: reason
         ))
         for waiter in endWaiters.values { waiter.finish() }
+        targetEvents?.cancel()
         switch awaitingUser {
         case .question(let question)?: unresolvedQuestion = question
         case .handoff(let request)?: unresolvedHandoff = request
@@ -1183,6 +1230,18 @@ public actor ComputerUseSession {
     public func endObservers() async throws {
         if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
         try await target.endObservers(lease)
+    }
+
+    /// Who is connected to the live view, under their links' ids.
+    public func liveConnections() async throws -> [DisplayLiveViewConnection] {
+        if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
+        return try await target.liveConnections(lease)
+    }
+
+    /// Ends one live-view connection, or revokes its link if it hasn't connected. `false` when there is none.
+    public func revokeLiveView(_ id: UUID) async throws -> Bool {
+        if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
+        return try await target.revokeLiveView(lease, id: id)
     }
 
     public func setTakeover(_ on: Bool) async throws {

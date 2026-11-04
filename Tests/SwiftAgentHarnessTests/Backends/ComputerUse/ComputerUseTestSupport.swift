@@ -106,6 +106,7 @@ actor FakeDisplayTarget: DisplayTarget {
         if failsWhenCancelled, Task.isCancelled { return }
         if await lock.release(leaseID: lease.id) {
             releases.append(reason)
+            eventHub.finish(lease.id)
         }
     }
 
@@ -158,10 +159,24 @@ actor FakeDisplayTarget: DisplayTarget {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
         try await requireLease(lease)
         liveViewRoles.append(role)
-        return liveViewLink.map { DisplayLiveView(url: $0.url, viewOnly: $0.viewOnly || role == .observer, expiresAt: $0.expiresAt, role: role) }
+        return liveViewLink.map { DisplayLiveView(id: $0.id, url: $0.url, viewOnly: $0.viewOnly || role == .observer, expiresAt: $0.expiresAt, role: role) }
     }
 
     func setViewers(_ count: Int) { viewers = count }
+    var connections: [DisplayLiveViewConnection] = []
+    func setConnections(_ connections: [DisplayLiveViewConnection]) { self.connections = connections }
+    func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
+        try await requireLease(lease)
+        return connections
+    }
+    func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
+        try await requireLease(lease)
+        let before = connections.count
+        connections.removeAll { $0.id == id }
+        return connections.count < before
+    }
+    nonisolated let eventHub = DisplayTargetEventHub()
+    func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> { eventHub.stream(for: lease.id) }
     var leaseDownloads: [DisplayDownload] = []
     func setDownloads(_ downloads: [DisplayDownload]) { leaseDownloads = downloads }
     func downloads(_ lease: Lease) async -> [DisplayDownload] { leaseDownloads }
@@ -261,7 +276,7 @@ extension ComputerUseFixtures {
         let installation = ComputerUseInstallation()
         installation.install(
             ComputerUseConfiguration(
-                registry: DisplayTargetRegistry(targets: []),
+                registry: try! DisplayTargetRegistry(targets: []),
                 defaults: ComputerUseSpecialistDefaults(
                     target: FakeDisplayTarget.hostManifest.id,
                     budgets: ComputerUseBudgetPolicy(defaultSteps: 12, ceilingSteps: 12, maxDuration: .seconds(600))

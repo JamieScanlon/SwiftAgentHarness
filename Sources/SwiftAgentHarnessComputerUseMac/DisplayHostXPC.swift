@@ -86,6 +86,8 @@ public final class DisplayHostXPCListener: DisplayHostListener {
 public final class DisplayHostXPCConnection: DisplayHostConnection {
     /// XPC checks the peer itself, so there are no credentials to report.
     public let peer = DisplayHostPeer()
+    /// XPC connects processes on one machine.
+    public let sharesFilesystem = true
     public let inbound: AsyncThrowingStream<Data, any Error>
     private let inboundContinuation: AsyncThrowingStream<Data, any Error>.Continuation
     private let session: XPCSession

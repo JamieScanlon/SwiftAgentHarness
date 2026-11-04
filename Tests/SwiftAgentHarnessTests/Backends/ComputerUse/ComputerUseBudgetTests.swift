@@ -66,7 +66,7 @@ struct ComputerUseBudgetPolicyTests {
     func unattendedExpiry() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { now })
-        let registry = DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
+        let registry = try DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
         func request(userPresent: Bool) -> LeaseRequest {
             LeaseRequest(
                 target: vm.manifest.id,

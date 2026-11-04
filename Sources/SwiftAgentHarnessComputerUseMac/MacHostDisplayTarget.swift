@@ -24,6 +24,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         public var servesLiveFrames: Bool
         /// The long edge of a live-view frame.
         public var liveFrameLongEdge: Int
+        /// Watched during a lease with a listen-only event tap (it needs Input Monitoring): pressing it sends the
+        /// holder `stopRequested`, and any other key the user presses sends `userTyping`. `nil` watches nothing.
+        public var stopKey: KeyCombo?
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
@@ -33,11 +36,13 @@ public actor MacHostDisplayTarget: DisplayTarget {
             id: DisplayTargetID = MacHostDisplayTarget.defaultID,
             excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs,
             servesLiveFrames: Bool = false,
-            liveFrameLongEdge: Int = 1_600
+            liveFrameLongEdge: Int = 1_600,
+            stopKey: KeyCombo? = .defaultStopKey
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
             self.servesLiveFrames = servesLiveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
+            self.stopKey = stopKey
         }
 
         init(
@@ -56,6 +61,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.axBudget = axBudget
             self.servesLiveFrames = false
             self.liveFrameLongEdge = 1_600
+            self.stopKey = nil
         }
 
         public static var defaultExcludedBundleIDs: Set<String> {
@@ -90,6 +96,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var foregroundAllowed = false
     /// The app that was frontmost before a foreground action, restored on release unless the user moved on.
     private var restoreFrontmost: (previous: pid_t, activated: pid_t)?
+    private let eventHub = DisplayTargetEventHub()
+    private var stopKeyMonitor: MacStopKeyMonitor?
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -129,11 +137,29 @@ public actor MacHostDisplayTarget: DisplayTarget {
         foregroundAllowed = lease.delivery == .foregroundAllowed
         takeoverActive = false
         cited = nil
+        if let stopKey = configuration.stopKey {
+            let hub = eventHub
+            let leaseID = lease.id
+            let monitor = MacStopKeyMonitor(
+                stopKey: stopKey,
+                onStop: { hub.post(.stopRequested, to: leaseID) },
+                onUserKey: { hub.post(.userTyping, to: leaseID) }
+            )
+            if monitor.start() { stopKeyMonitor = monitor }
+        }
         return lease
+    }
+
+    public func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> {
+        guard await lock.holds(leaseID: lease.id) else { return AsyncStream { $0.finish() } }
+        return eventHub.stream(for: lease.id)
     }
 
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.release(leaseID: lease.id) else { return }
+        stopKeyMonitor?.stop()
+        stopKeyMonitor = nil
+        eventHub.finish(lease.id)
         await input.releaseAll()
         if let restore = restoreFrontmost {
             let frontmost = await workspace.frontmostApp()?.pid

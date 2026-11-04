@@ -8,7 +8,7 @@ import Testing
 struct ComputerUseIntegrationTests {
     private func leasedProvider(approvals: (any ExecApprovalDelivering)? = nil) async throws -> (FakeDisplayTarget, ComputerUseSession, ComputerUseToolProvider) {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
-        let registry = DisplayTargetRegistry(targets: [target])
+        let registry = try DisplayTargetRegistry(targets: [target])
         let grant = try await registry.lease(
             LeaseRequest(
                 target: target.manifest.id,

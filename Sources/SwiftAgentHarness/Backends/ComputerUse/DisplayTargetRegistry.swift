@@ -42,29 +42,49 @@ public struct ComputerUseLeaseGrant: Sendable {
     public let review: ComputerUseGrantReview
 }
 
+public enum DisplayTargetRegistrationError: Error, Sendable, Equatable {
+    /// Display targets and sandbox backends share one id namespace.
+    case idTakenBySandboxBackend(DisplayTargetID)
+    case idTakenByTarget(DisplayTargetID)
+}
+
 /// The display targets available to a harness, and the policy that applies before any target is leased.
 public actor DisplayTargetRegistry {
     private var targets: [DisplayTargetID: any DisplayTarget] = [:]
     public nonisolated let reviewer: ComputerUseGrantReviewer
     public nonisolated let unattendedMaxDuration: Duration
+    private let sandboxBackendIDs: @Sendable () -> Set<String>
     private let now: @Sendable () -> Date
 
+    /// Throws when a target's id is already a sandbox backend's or another target's.
     public init(
         targets: [any DisplayTarget] = [],
         reviewer: ComputerUseGrantReviewer = ComputerUseGrantReviewer(),
         unattendedMaxDuration: Duration = .seconds(20 * 60),
+        sandboxBackendIDs: @escaping @Sendable () -> Set<String> = { Set(SandboxBackendRegistry.allManifests().map(\.id)) },
         now: @escaping @Sendable () -> Date = { Date() }
-    ) {
-        for target in targets {
-            self.targets[target.manifest.id] = target
-        }
+    ) throws(DisplayTargetRegistrationError) {
         self.reviewer = reviewer
         self.unattendedMaxDuration = unattendedMaxDuration
+        self.sandboxBackendIDs = sandboxBackendIDs
         self.now = now
+        let reserved = sandboxBackendIDs()
+        var registered: [DisplayTargetID: any DisplayTarget] = [:]
+        for target in targets {
+            let id = target.manifest.id
+            if reserved.contains(id) { throw .idTakenBySandboxBackend(id) }
+            if registered[id] != nil { throw .idTakenByTarget(id) }
+            registered[id] = target
+        }
+        self.targets = registered
     }
 
-    public func register(_ target: any DisplayTarget) {
-        targets[target.manifest.id] = target
+    /// Throws when the target's id is already a sandbox backend's or another target's.
+    public func register(_ target: any DisplayTarget) throws(DisplayTargetRegistrationError) {
+        let id = target.manifest.id
+        if sandboxBackendIDs().contains(id) { throw .idTakenBySandboxBackend(id) }
+        if targets[id] != nil { throw .idTakenByTarget(id) }
+        targets[id] = target
     }
 
     public func target(for id: DisplayTargetID) -> (any DisplayTarget)? {

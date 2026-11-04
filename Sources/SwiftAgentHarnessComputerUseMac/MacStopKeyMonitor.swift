@@ -4,7 +4,8 @@ import Foundation
 import Synchronization
 import SwiftAgentHarness
 
-/// Watches for the user's stop key from any app and calls `onStop`.
+/// Watches for the user's stop key from any app and calls `onStop`, and calls `onUserKey` for every other key the
+/// user presses, so a shared desktop can tell when the user is typing. Keys this process synthesized are ignored.
 ///
 /// A listen-only event tap: it needs only Input Monitoring and cannot swallow or alter events, which is the
 /// lower-risk option (a modifying tap installed while Accessibility is revoked has been reported to hang input).
@@ -12,12 +13,14 @@ import SwiftAgentHarness
 public final class MacStopKeyMonitor: Sendable {
     private let stopKey: KeyCombo
     private let onStop: @Sendable () -> Void
+    private let onUserKey: (@Sendable () -> Void)?
     private let stopRequested = Atomic<Bool>(false)
     private let started = Atomic<Bool>(false)
 
-    public init(stopKey: KeyCombo = .defaultStopKey, onStop: @escaping @Sendable () -> Void) {
+    public init(stopKey: KeyCombo = .defaultStopKey, onStop: @escaping @Sendable () -> Void, onUserKey: (@Sendable () -> Void)? = nil) {
         self.stopKey = stopKey
         self.onStop = onStop
+        self.onUserKey = onUserKey
     }
 
     /// Installs the tap on its own run-loop thread. Returns `false` when it cannot be created, usually because
@@ -73,6 +76,11 @@ public final class MacStopKeyMonitor: Sendable {
         stopRequested.store(true, ordering: .releasing)
     }
 
+    /// A key from the hardware or another process, not one this process posted.
+    static func isUserKey(sourcePID: Int64, ownPID: Int64 = Int64(getpid())) -> Bool {
+        sourcePID != ownPID
+    }
+
     static func matches(keyCode: Int64, flags: CGEventFlags, stopKey: KeyCombo) -> Bool {
         guard let mapped = MacKeyMapping.event(for: stopKey), Int64(mapped.keyCode) == keyCode else { return false }
         let relevant: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl, .maskSecondaryFn]
@@ -100,6 +108,8 @@ public final class MacStopKeyMonitor: Sendable {
             let monitor = holder.monitor
             if matches(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags, stopKey: monitor.stopKey) {
                 monitor.onStop()
+            } else if isUserKey(sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID)) {
+                monitor.onUserKey?()
             }
         default:
             break

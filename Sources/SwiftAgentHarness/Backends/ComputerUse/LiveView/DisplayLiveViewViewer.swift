@@ -74,7 +74,8 @@ enum DisplayLiveViewViewer {
           }
           if (message.type === "ended") {
             ended = true;
-            state.textContent = message.reason === "sharingStopped" ? "The user stopped sharing this view." : "The session ended.";
+            state.textContent = message.reason === "sharingStopped" ? "The user stopped sharing this view."
+              : message.reason === "revoked" ? "This view was revoked." : "The session ended.";
           }
           return;
         }

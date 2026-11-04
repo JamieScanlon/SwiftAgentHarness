@@ -56,7 +56,7 @@ public enum DisplayHostTCP {
                     try NIOAsyncChannel<ByteBuffer, ByteBuffer>(wrappingChannelSynchronously: channel)
                 }
             }
-        let connection = try await DisplayHostSocketConnection.open(channel)
+        let connection = try await DisplayHostSocketConnection.open(channel, sharesFilesystem: false)
         return try await authenticate(connection) { connection, messages in
             guard let serverNonce = try await messages.next(), serverNonce.count == nonceBytes else { throw DisplayHostError.peerRejected }
             let clientNonce = randomNonce()
@@ -179,7 +179,7 @@ public final class DisplayHostTCPListener: DisplayHostListener {
                         for try await child in inbound {
                             // Each handshake runs on its own, so a peer that never answers holds up no one else.
                             group.addTask {
-                                guard let opened = try? await DisplayHostSocketConnection.open(child),
+                                guard let opened = try? await DisplayHostSocketConnection.open(child, sharesFilesystem: false),
                                       let connection = try? await DisplayHostTCP.accept(opened, secret: secret) else { return }
                                 continuation.yield(connection)
                             }

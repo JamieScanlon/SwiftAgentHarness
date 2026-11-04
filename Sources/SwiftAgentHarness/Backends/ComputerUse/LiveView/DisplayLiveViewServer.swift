@@ -14,7 +14,8 @@ public struct DisplayLiveViewConfiguration: Sendable {
     /// Where viewers reach the server, when that isn't `http://host:port/`. The proxy must pass `/view`,
     /// `/viewer.js`, and `/stream` through unchanged, including the WebSocket upgrade.
     public var publicBaseURL: URL?
-    /// How long a link can be used to connect. A viewer that connected stays until the lease ends.
+    /// How long a link can be used to connect. A link connects once; the viewer stays until it is revoked or the
+    /// lease ends.
     public var linkLifetime: Duration
     /// How many of the user's viewers can watch one feed.
     public var maxViewersPerFeed: Int
@@ -43,8 +44,8 @@ public struct DisplayLiveViewConfiguration: Sendable {
     }
 }
 
-/// Serves live views of display targets: a viewer page and a WebSocket stream of frames. Links carry a short-lived
-/// token in the URL fragment, so it never appears in a request line or a log. A viewer is view-only, and the user's
+/// Serves live views of display targets: a viewer page and a WebSocket stream of frames. Links carry a short-lived,
+/// single-use token in the URL fragment, so it never appears in a request line or a log. A viewer is view-only, and the user's
 /// input reaches the target only while the feed has control, which a target gives it during takeover. An observer's
 /// input never does, and observers see no frames while the feed has control.
 ///
@@ -71,6 +72,7 @@ public actor DisplayLiveViewServer {
 
     private struct Viewer {
         var role: DisplayLiveViewRole
+        var connectedAt: Date
         var messages: AsyncStream<Outgoing>.Continuation
     }
 
@@ -101,6 +103,7 @@ public actor DisplayLiveViewServer {
     }
 
     private struct Link {
+        var id: UUID
         var feedID: UUID
         var role: DisplayLiveViewRole
         var expiresAt: Date
@@ -224,15 +227,43 @@ public actor DisplayLiveViewServer {
         let token = Self.token()
         let expiresAt = now().addingTimeInterval(configuration.linkLifetime.timeInterval)
         links = links.filter { $0.value.expiresAt > now() }
-        links[token] = Link(feedID: id, role: role, expiresAt: expiresAt)
+        let link = Link(id: UUID(), feedID: id, role: role, expiresAt: expiresAt)
+        links[token] = link
         var components = URLComponents(url: base.appendingPathComponent("view"), resolvingAgainstBaseURL: false)!
         components.fragment = token
         return DisplayLiveView(
+            id: link.id,
             url: components.url!.absoluteString,
             viewOnly: role == .observer || !feed.control,
             expiresAt: expiresAt,
             role: role
         )
+    }
+
+    /// The feed's connected viewers, each under the id of the link it connected with.
+    public func connections(_ id: UUID) -> [DisplayLiveViewConnection] {
+        guard let feed = feeds[id] else { return [] }
+        return feed.viewers
+            .map { DisplayLiveViewConnection(id: $0.key, role: $0.value.role, connectedAt: $0.value.connectedAt) }
+            .sorted { $0.connectedAt < $1.connectedAt }
+    }
+
+    /// Ends the viewer connected with link `linkID`, or revokes that link if it hasn't connected yet. `false` when
+    /// the feed has neither.
+    @discardableResult
+    public func revoke(_ linkID: UUID, in id: UUID) -> Bool {
+        guard var feed = feeds[id] else { return false }
+        if let viewer = feed.viewers.removeValue(forKey: linkID) {
+            feeds[id] = feed
+            viewer.messages.yield(.ended(.revoked))
+            viewer.messages.finish()
+            let count = feed.viewers.count
+            Task { await feed.feed.viewersChanged(count) }
+            return true
+        }
+        let before = links.count
+        links = links.filter { $0.value.id != linkID || $0.value.feedID != id }
+        return links.count < before
     }
 
     /// Ends the feed's observers and revokes its observer links. The user's viewers and links are kept.
@@ -280,11 +311,13 @@ public actor DisplayLiveViewServer {
         guard let link = links[token], link.expiresAt > now(), var feed = feeds[link.feedID] else { return nil }
         let limit = link.role == .user ? configuration.maxViewersPerFeed : configuration.maxObserversPerFeed
         guard feed.count(link.role) < limit else { return nil }
-        let viewer = UUID()
+        // A token establishes one connection; staying connected doesn't depend on it.
+        links[token] = nil
+        let viewer = link.id
         let (messages, continuation) = AsyncStream<Outgoing>.makeStream(bufferingPolicy: .bufferingNewest(4))
         continuation.yield(.status(feed.status(for: link.role)))
         if let frame = feed.lastFrame, let message = feed.outgoing(frame, for: link.role) { continuation.yield(message) }
-        feed.viewers[viewer] = Viewer(role: link.role, messages: continuation)
+        feed.viewers[viewer] = Viewer(role: link.role, connectedAt: now(), messages: continuation)
         feeds[link.feedID] = feed
         await feed.feed.viewersChanged(feed.viewers.count)
         return (link.feedID, viewer, messages)
@@ -419,6 +452,8 @@ public actor DisplayLiveViewServer {
             case sessionEnded
             /// The user stopped sharing with observers; the session goes on.
             case sharingStopped
+            /// The user revoked this one connection.
+            case revoked
         }
     }
 

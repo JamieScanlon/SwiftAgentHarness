@@ -1,26 +1,63 @@
 import Foundation
 
+public struct DisplayHostServerConfiguration: Sendable {
+    /// How long a lease outlives its dropped connection, waiting for the client to reattach, before it is released
+    /// as `holder-lost`. Only for connections that agreed on reattaching.
+    public var reattachGrace: Duration
+    /// How often the host checks the target's permissions while it has leases, to tell holders of a change.
+    public var permissionPollInterval: Duration
+    /// Where images are written for connections that take them as files. A private temporary folder by default.
+    public var imageDirectory: URL
+
+    public init(
+        reattachGrace: Duration = .seconds(5),
+        permissionPollInterval: Duration = .seconds(2),
+        imageDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("display-host-\(UUID().uuidString)", isDirectory: true)
+    ) {
+        self.reattachGrace = reattachGrace
+        self.permissionPollInterval = permissionPollInterval
+        self.imageDirectory = imageDirectory
+    }
+}
+
 /// Serves one ``DisplayTarget`` to harnesses over display-host connections.
 ///
 /// The process that runs this owns the target's platform permissions; how it is packaged (a menu-bar app, a
 /// login item, a daemon, an existing app, an agent inside a VM) is up to the integrator. Each connection may use
-/// only the leases it was issued, a lease's holder counts as alive while its connection is open, and a closed
-/// connection's leases are released as aborted.
+/// only the leases it was issued or reattached. A lease's holder is alive while its connection is open; when the
+/// connection drops, the lease waits out the reattach grace and is then released as `holder-lost`.
 public actor DisplayHostServer {
     public nonisolated let name: String
+    public nonisolated let configuration: DisplayHostServerConfiguration
     private let target: any DisplayTarget
     private var connections: [UUID: ConnectionState] = [:]
+    private var leases: [UUID: HeldLease] = [:]
+    /// Holder keys whose lease is still held, connected or within its grace.
+    private var liveHolders: Set<UUID> = []
+    private var permissionWatch: Task<Void, Never>?
+    private var lastPermissions: PermissionSnapshot?
 
     private struct ConnectionState {
         var connection: any DisplayHostConnection
         var greeted = false
         var open = true
-        var leases: [UUID: Lease] = [:]
+        var capabilities: Set<DisplayHostCapability> = []
     }
 
-    public init(target: any DisplayTarget, name: String = ProcessInfo.processInfo.processName) {
+    private struct HeldLease {
+        var lease: Lease
+        var holderKey: UUID
+        /// `nil` while orphaned, waiting for a reattach.
+        var connection: UUID?
+        var reattachToken: String
+        var forwarder: Task<Void, Never>?
+        var expiry: Task<Void, Never>?
+    }
+
+    public init(target: any DisplayTarget, name: String = ProcessInfo.processInfo.processName, configuration: DisplayHostServerConfiguration = DisplayHostServerConfiguration()) {
         self.target = target
         self.name = name
+        self.configuration = configuration
     }
 
     /// Serves every connection `listener` accepts until it finishes.
@@ -32,7 +69,7 @@ public actor DisplayHostServer {
         }
     }
 
-    /// Serves `connection` until it closes, then releases its leases.
+    /// Serves `connection` until it closes, then orphans or releases its leases.
     public func serve(_ connection: any DisplayHostConnection) async {
         let id = UUID()
         connections[id] = ConnectionState(connection: connection)
@@ -55,45 +92,75 @@ public actor DisplayHostServer {
 
     /// Asks the holder of `leaseID`, or of every lease when `nil`, to stop.
     public func requestStop(leaseID: UUID? = nil) async {
-        let message: Data
-        do {
-            message = try DisplayHostCodec.encode(.event(.stopRequested(leaseID: leaseID)))
-        } catch {
-            return
-        }
-        for state in connections.values where state.open {
-            guard leaseID.map({ state.leases[$0] != nil }) ?? !state.leases.isEmpty else { continue }
-            try? await state.connection.send(message)
+        for held in leases.values where leaseID.map({ $0 == held.lease.id }) ?? true {
+            await send(.stopRequested, about: held.lease.id)
         }
     }
 
+    // MARK: - Requests
+
     private func handle(_ request: DisplayHostRequest, connection id: UUID) async -> DisplayHostResponse {
-        if case .hello(let version, _) = request {
-            guard version == DisplayHostProtocol.version else {
+        if case .hello(let version, _, let offered) = request {
+            guard version.major == DisplayHostProtocol.version.major else {
                 return .failure(.versionMismatch(host: DisplayHostProtocol.version, client: version))
             }
+            var agreed = DisplayHostProtocol.capabilities.intersection(offered)
+            if connections[id]?.connection.sharesFilesystem != true { agreed.remove(.imageFiles) }
             connections[id]?.greeted = true
-            return .welcome(version: DisplayHostProtocol.version, host: name, manifest: target.manifest)
+            connections[id]?.capabilities = agreed
+            return .welcome(
+                version: DisplayHostProtocol.version,
+                host: name,
+                manifest: target.manifest,
+                capabilities: agreed.sorted { $0.rawValue < $1.rawValue },
+                imageDirectory: agreed.contains(.imageFiles) ? configuration.imageDirectory.path : nil
+            )
         }
-        guard connections[id]?.greeted == true else { return .failure(.protocolError("hello must come first")) }
+        guard let state = connections[id], state.greeted else { return .failure(.protocolError("hello must come first")) }
+        if let needed = Self.capability(for: request), !state.capabilities.contains(needed) {
+            return .failure(.unsupported(needed))
+        }
 
         do {
             switch request {
             case .hello:
                 return .failure(.protocolError("hello was already sent"))
             case .lease(let wire):
-                let lease = try await target.lease(wire.leaseRequest { [weak self] in
-                    await self?.isOpen(id) ?? false
-                })
+                let key = UUID()
+                liveHolders.insert(key)
+                let lease: Lease
+                do {
+                    lease = try await target.lease(wire.leaseRequest { [weak self] in
+                        await self?.isHolderAlive(key) ?? false
+                    })
+                } catch {
+                    liveHolders.remove(key)
+                    throw error
+                }
                 guard connections[id]?.open == true else {
+                    liveHolders.remove(key)
                     await target.release(lease, reason: .holderLost)
                     return .failure(.target(.driverFailure("connection closed")))
                 }
-                connections[id]?.leases[lease.id] = lease
-                return .lease(lease)
+                let token = DisplayLiveViewServer.token()
+                leases[lease.id] = HeldLease(lease: lease, holderKey: key, connection: id, reattachToken: token)
+                await startForwarding(lease, to: id)
+                await watchPermissions()
+                return .lease(lease, reattachToken: state.capabilities.contains(.reattach) ? token : nil)
+            case .reattach(let leaseID, let token):
+                guard var held = leases[leaseID], held.connection == nil, held.reattachToken == token else {
+                    throw DisplayTargetError.leaseNotHeld
+                }
+                held.expiry?.cancel()
+                held.expiry = nil
+                held.connection = id
+                held.reattachToken = DisplayLiveViewServer.token()
+                leases[leaseID] = held
+                await startForwarding(held.lease, to: id)
+                return .lease(held.lease, reattachToken: held.reattachToken)
             case .release(let leaseID, let reason):
-                if let lease = connections[id]?.leases.removeValue(forKey: leaseID) {
-                    await target.release(lease, reason: reason)
+                if let held = leases[leaseID], held.connection == id {
+                    await release(leaseID, reason: reason)
                 }
                 return .done
             case .permissions:
@@ -101,13 +168,23 @@ public actor DisplayHostServer {
             case .describe(let leaseID):
                 return .layout(try await target.describe(try lease(leaseID, connection: id)))
             case .observe(let leaseID, let observe):
-                return .observation(try await target.observe(try lease(leaseID, connection: id), observe))
+                let observation = try await target.observe(try lease(leaseID, connection: id), observe)
+                guard state.capabilities.contains(.imageFiles), let data = observation.image?.data else {
+                    return .observation(observation, imageFile: nil)
+                }
+                var stripped = observation
+                stripped.image?.data = nil
+                return .observation(stripped, imageFile: try writeImage(data))
             case .act(let leaseID, let batch):
                 return .outcomes(try await target.act(try lease(leaseID, connection: id), batch))
             case .liveView(let leaseID, let role):
                 return .liveView(try await target.liveView(try lease(leaseID, connection: id), role: role))
             case .liveViewers(let leaseID):
                 return .liveViewers(try await target.liveViewers(try lease(leaseID, connection: id)))
+            case .liveConnections(let leaseID):
+                return .liveConnections(try await target.liveConnections(try lease(leaseID, connection: id)))
+            case .revokeLiveView(let leaseID, let linkID):
+                return .revoked(try await target.revokeLiveView(try lease(leaseID, connection: id), id: linkID))
             case .endObservers(let leaseID):
                 try await target.endObservers(try lease(leaseID, connection: id))
                 return .done
@@ -115,10 +192,16 @@ public actor DisplayHostServer {
                 try await target.takeover(try lease(leaseID, connection: id), on: on)
                 return .done
             case .liveFrame(let leaseID):
-                return .liveFrame(try await target.liveFrame(try lease(leaseID, connection: id)))
+                let frame = try await target.liveFrame(try lease(leaseID, connection: id))
+                guard state.capabilities.contains(.imageFiles), var frame else { return .liveFrame(frame, imageFile: nil) }
+                let file = try writeImage(frame.jpeg)
+                frame.jpeg = Data()
+                return .liveFrame(frame, imageFile: file)
             case .liveInput(let leaseID, let input):
                 try await target.liveInput(try lease(leaseID, connection: id), input)
                 return .done
+            case .downloads(let leaseID):
+                return .downloads(await target.downloads(try lease(leaseID, connection: id)))
             }
         } catch let error as DisplayTargetError {
             return .failure(.target(error))
@@ -127,13 +210,34 @@ public actor DisplayHostServer {
         }
     }
 
-    private func lease(_ leaseID: UUID, connection id: UUID) throws(DisplayTargetError) -> Lease {
-        guard let lease = connections[id]?.leases[leaseID] else { throw .leaseNotHeld }
-        return lease
+    private static func capability(for request: DisplayHostRequest) -> DisplayHostCapability? {
+        switch request {
+        case .liveView, .liveViewers, .liveConnections, .revokeLiveView, .endObservers, .liveFrame, .liveInput: .liveView
+        case .downloads: .downloads
+        case .reattach: .reattach
+        case .hello, .lease, .release, .permissions, .describe, .observe, .act, .takeover: nil
+        }
     }
 
-    private func isOpen(_ id: UUID) -> Bool {
-        connections[id]?.open ?? false
+    private func lease(_ leaseID: UUID, connection id: UUID) throws(DisplayTargetError) -> Lease {
+        guard let held = leases[leaseID], held.connection == id else { throw .leaseNotHeld }
+        return held.lease
+    }
+
+    private func writeImage(_ data: Data) throws -> String {
+        let directory = configuration.imageDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = directory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: file.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw DisplayTargetError.driverFailure("couldn't write an image file")
+        }
+        return file.path
+    }
+
+    // MARK: - Holders
+
+    private func isHolderAlive(_ key: UUID) -> Bool {
+        liveHolders.contains(key)
     }
 
     private func markClosed(_ id: UUID) {
@@ -142,8 +246,83 @@ public actor DisplayHostServer {
 
     private func disconnect(_ id: UUID) async {
         guard let state = connections.removeValue(forKey: id) else { return }
-        for lease in state.leases.values {
-            await target.release(lease, reason: .holderLost)
+        for (leaseID, var held) in leases where held.connection == id {
+            held.forwarder?.cancel()
+            held.forwarder = nil
+            guard state.capabilities.contains(.reattach) else {
+                await release(leaseID, reason: .holderLost)
+                continue
+            }
+            held.connection = nil
+            let grace = configuration.reattachGrace
+            held.expiry = Task { [weak self] in
+                guard (try? await Task.sleep(for: grace)) != nil else { return }
+                await self?.expire(leaseID)
+            }
+            leases[leaseID] = held
+        }
+    }
+
+    private func expire(_ leaseID: UUID) async {
+        guard let held = leases[leaseID], held.connection == nil else { return }
+        await release(leaseID, reason: .holderLost)
+    }
+
+    private func release(_ leaseID: UUID, reason: ReleaseReason) async {
+        guard let held = leases.removeValue(forKey: leaseID) else { return }
+        held.forwarder?.cancel()
+        held.expiry?.cancel()
+        liveHolders.remove(held.holderKey)
+        await target.release(held.lease, reason: reason)
+        if leases.isEmpty {
+            permissionWatch?.cancel()
+            permissionWatch = nil
+            lastPermissions = nil
+        }
+    }
+
+    // MARK: - Events
+
+    private func startForwarding(_ lease: Lease, to connection: UUID) async {
+        guard connections[connection]?.capabilities.contains(.events) == true else { return }
+        let stream = await target.events(lease)
+        leases[lease.id]?.forwarder?.cancel()
+        leases[lease.id]?.forwarder = Task { [weak self] in
+            for await event in stream {
+                await self?.send(event, about: lease.id)
+            }
+        }
+    }
+
+    /// Sends `event` to the connection holding the lease. An orphaned lease's events are dropped.
+    private func send(_ event: DisplayTargetEvent, about leaseID: UUID) async {
+        guard let id = leases[leaseID]?.connection, let state = connections[id], state.open,
+              state.capabilities.contains(.events),
+              let message = try? DisplayHostCodec.encode(.event(.target(leaseID: leaseID, event: event)))
+        else { return }
+        try? await state.connection.send(message)
+    }
+
+    private func watchPermissions() async {
+        guard permissionWatch == nil else { return }
+        let baseline = await target.permissions()
+        guard permissionWatch == nil, !leases.isEmpty else { return }
+        lastPermissions = baseline
+        let interval = configuration.permissionPollInterval
+        permissionWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                guard (try? await Task.sleep(for: interval)) != nil else { return }
+                await self?.checkPermissions()
+            }
+        }
+    }
+
+    private func checkPermissions() async {
+        let current = await target.permissions()
+        guard let last = lastPermissions, current != last else { return }
+        lastPermissions = current
+        for leaseID in leases.keys {
+            await send(.permissionsChanged(current), about: leaseID)
         }
     }
 }

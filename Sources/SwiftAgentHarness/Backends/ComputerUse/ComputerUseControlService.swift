@@ -137,6 +137,19 @@ public struct ComputerUseControlService: Sendable {
         return true
     }
 
+    /// The viewers connected to a live run's live view. `nil` when the conversation has no such live run.
+    public func liveConnections(conversationID: UUID, lifecycleID: String) async throws -> [DisplayLiveViewConnection]? {
+        guard let session = await liveSession(conversationID: conversationID, lifecycleID: lifecycleID) else { return nil }
+        return try await session.liveConnections()
+    }
+
+    /// Ends one viewer's connection to a live run's live view, or revokes that link if unused. `false` when the
+    /// conversation has no such live run or link.
+    public func revokeLiveView(conversationID: UUID, lifecycleID: String, linkID: UUID) async throws -> Bool {
+        guard let session = await liveSession(conversationID: conversationID, lifecycleID: lifecycleID) else { return false }
+        return try await session.revokeLiveView(linkID)
+    }
+
     private func liveSession(conversationID: UUID, lifecycleID: String) async -> ComputerUseSession? {
         guard let entry = await installation.sessions.entries(parent: conversationID).first(where: { $0.lifecycleID == lifecycleID }),
               await entry.session.terminalReason == nil

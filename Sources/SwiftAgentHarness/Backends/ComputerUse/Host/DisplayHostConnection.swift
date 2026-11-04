@@ -53,6 +53,12 @@ public protocol DisplayHostConnection: Sendable {
     func send(_ message: Data) async throws
     /// Idempotent. Ends `inbound` on both sides.
     func close() async
+    /// Whether both ends see the same filesystem, so images can travel as files.
+    var sharesFilesystem: Bool { get }
+}
+
+extension DisplayHostConnection {
+    public var sharesFilesystem: Bool { false }
 }
 
 /// Accepted connections, already past the transport's peer requirement.
@@ -65,6 +71,7 @@ public protocol DisplayHostListener: Sendable {
 /// tests.
 public final class InMemoryDisplayHostConnection: DisplayHostConnection {
     public let peer: DisplayHostPeer
+    public let sharesFilesystem: Bool
     public let inbound: AsyncThrowingStream<Data, any Error>
     private let own: AsyncThrowingStream<Data, any Error>.Continuation
     private let remote: AsyncThrowingStream<Data, any Error>.Continuation
@@ -72,8 +79,10 @@ public final class InMemoryDisplayHostConnection: DisplayHostConnection {
     private init(
         inbound: AsyncThrowingStream<Data, any Error>,
         own: AsyncThrowingStream<Data, any Error>.Continuation,
-        remote: AsyncThrowingStream<Data, any Error>.Continuation
+        remote: AsyncThrowingStream<Data, any Error>.Continuation,
+        sharesFilesystem: Bool
     ) {
+        self.sharesFilesystem = sharesFilesystem
         self.peer = DisplayHostPeer(
             processID: ProcessInfo.processInfo.processIdentifier,
             userID: getuid()
@@ -84,12 +93,12 @@ public final class InMemoryDisplayHostConnection: DisplayHostConnection {
     }
 
     /// A connected pair: what one sends, the other receives.
-    public static func pair() -> (InMemoryDisplayHostConnection, InMemoryDisplayHostConnection) {
+    public static func pair(sharesFilesystem: Bool = true) -> (InMemoryDisplayHostConnection, InMemoryDisplayHostConnection) {
         let (first, firstContinuation) = AsyncThrowingStream.makeStream(of: Data.self, throwing: (any Error).self)
         let (second, secondContinuation) = AsyncThrowingStream.makeStream(of: Data.self, throwing: (any Error).self)
         return (
-            InMemoryDisplayHostConnection(inbound: first, own: firstContinuation, remote: secondContinuation),
-            InMemoryDisplayHostConnection(inbound: second, own: secondContinuation, remote: firstContinuation)
+            InMemoryDisplayHostConnection(inbound: first, own: firstContinuation, remote: secondContinuation, sharesFilesystem: sharesFilesystem),
+            InMemoryDisplayHostConnection(inbound: second, own: secondContinuation, remote: firstContinuation, sharesFilesystem: sharesFilesystem)
         )
     }
 

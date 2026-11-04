@@ -155,7 +155,7 @@ struct ComputerUseReplayTests {
     func auditReleased() async throws {
         let installation = ComputerUseInstallation()
         installation.install(ComputerUseConfiguration(
-            registry: DisplayTargetRegistry(targets: []),
+            registry: try DisplayTargetRegistry(targets: []),
             defaults: ComputerUseSpecialistDefaults(
                 target: "t",
                 budgets: ComputerUseBudgetPolicy(defaultSteps: 1, maxDuration: .seconds(60))

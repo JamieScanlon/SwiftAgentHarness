@@ -249,11 +249,12 @@ struct DisplayLiveViewServerTests {
         let link = try await server.link(for: feed)
         let viewer = try Viewer(link)
         _ = try await viewer.status()
+        let unused = try await server.link(for: feed)
         await server.close(feed)
         let ended = try await viewer.status()
         #expect(ended.type == "ended")
         #expect(ended.reason?.rawValue == "sessionEnded")
-        let late = try Viewer(link)
+        let late = try Viewer(unused)
         #expect(await late.next() == nil)
     }
 
@@ -262,10 +263,9 @@ struct DisplayLiveViewServerTests {
         let server = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(maxViewersPerFeed: 1))
         defer { Task { await server.stop() } }
         let feed = await server.open(FeedLog().feed)
-        let link = try await server.link(for: feed)
-        let first = try Viewer(link)
+        let first = try Viewer(try await server.link(for: feed))
         _ = try await first.status()
-        let second = try Viewer(link)
+        let second = try Viewer(try await server.link(for: feed))
         #expect(await second.next() == nil)
     }
 
@@ -327,10 +327,9 @@ struct DisplayLiveViewServerTests {
         let server = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(maxViewersPerFeed: 1, maxObserversPerFeed: 1))
         defer { Task { await server.stop() } }
         let feed = await server.open(FeedLog().feed)
-        let observerLink = try await server.link(for: feed, role: .observer)
-        let first = try Viewer(observerLink)
+        let first = try Viewer(try await server.link(for: feed, role: .observer))
         _ = try await first.status()
-        let second = try Viewer(observerLink)
+        let second = try Viewer(try await server.link(for: feed, role: .observer))
         #expect(await second.next() == nil)
         let user = try Viewer(try await server.link(for: feed))
         #expect(try await user.status().observer == nil)
@@ -348,7 +347,9 @@ struct DisplayLiveViewServerTests {
         defer { Task { await server.stop() } }
         let feed = await server.open(FeedLog().feed)
         let observerLink = try await server.link(for: feed, role: .observer)
+        let unusedObserverLink = try await server.link(for: feed, role: .observer)
         let userLink = try await server.link(for: feed)
+        let unusedUserLink = try await server.link(for: feed)
         let observer = try Viewer(observerLink)
         _ = try await observer.status()
         let user = try Viewer(userLink)
@@ -360,12 +361,57 @@ struct DisplayLiveViewServerTests {
         let ended = try await observer.status()
         #expect(ended.type == "ended")
         #expect(ended.reason?.rawValue == "sharingStopped")
-        #expect(await (try Viewer(observerLink)).next(within: .seconds(1)) == nil)
+        #expect(await (try Viewer(unusedObserverLink)).next(within: .seconds(1)) == nil)
         #expect(await Self.eventually { await server.viewerCount(feed) == 1 })
-        #expect(try await (try Viewer(userLink)).status().type == "status")
+        #expect(try await (try Viewer(unusedUserLink)).status().type == "status")
         await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 50, height: 50), to: feed)
         #expect(try await user.frame().width == 50)
         #expect(try await server.link(for: feed, role: .observer).role == .observer, "new observer links can still be made")
+    }
+
+    @Test("A link connects once; the connection stays after its token is spent")
+    func singleUse() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let feed = await server.open(FeedLog().feed)
+        let link = try await server.link(for: feed)
+        let viewer = try Viewer(link)
+        _ = try await viewer.status()
+        let replay = try Viewer(link)
+        #expect(await replay.next(within: .seconds(1)) == nil, "the token was spent connecting")
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 20, height: 20), to: feed)
+        #expect(try await viewer.frame().width == 20)
+    }
+
+    @Test("Connections are listed under their links' ids, and one can be revoked without the others")
+    func revokeOne() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let log = FeedLog()
+        let feed = await server.open(log.feed)
+        let first = try await server.link(for: feed, role: .observer)
+        let second = try await server.link(for: feed, role: .observer)
+        let unused = try await server.link(for: feed, role: .observer)
+        let a = try Viewer(first)
+        _ = try await a.status()
+        let b = try Viewer(second)
+        _ = try await b.status()
+        #expect(await Self.eventually { await server.connections(feed).count == 2 })
+        #expect(Set(await server.connections(feed).map(\.id)) == [first.id, second.id])
+        #expect(await server.connections(feed).allSatisfy { $0.role == .observer })
+
+        #expect(await server.revoke(first.id, in: feed))
+        let ended = try await a.status()
+        #expect(ended.type == "ended")
+        #expect(ended.reason?.rawValue == "revoked")
+        #expect(await server.connections(feed).map(\.id) == [second.id])
+        #expect(await Self.eventually { await log.counts.last == 1 })
+        await server.publish(DisplayLiveViewFrame(jpeg: Self.jpeg, width: 30, height: 30), to: feed)
+        #expect(try await b.frame().width == 30)
+
+        #expect(await server.revoke(unused.id, in: feed), "an unused link is revoked before it connects")
+        #expect(await (try Viewer(unused)).next(within: .seconds(1)) == nil)
+        #expect(await server.revoke(UUID(), in: feed) == false)
     }
 
     @Test("Viewer messages parse into input, and malformed ones are dropped")

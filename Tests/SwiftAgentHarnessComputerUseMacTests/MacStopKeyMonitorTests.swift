@@ -23,5 +23,12 @@ struct MacStopKeyMonitorTests {
         #expect(!MacStopKeyMonitor.matches(keyCode: 53, flags: [.maskControl, .maskCommand], stopKey: stop))
         #expect(!MacStopKeyMonitor.matches(keyCode: 53, flags: [.maskControl, .maskAlternate, .maskCommand, .maskShift], stopKey: stop))
     }
+
+    @Test("Keys from the hardware or another process are the user's; keys this process posted are not")
+    func userKeys() {
+        #expect(MacStopKeyMonitor.isUserKey(sourcePID: 0, ownPID: 4_242))
+        #expect(MacStopKeyMonitor.isUserKey(sourcePID: 77, ownPID: 4_242))
+        #expect(!MacStopKeyMonitor.isUserKey(sourcePID: 4_242, ownPID: 4_242))
+    }
 }
 #endif

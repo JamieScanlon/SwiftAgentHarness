@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public enum ComputerUseDeliveryPolicy: String, Sendable, Codable, Hashable {
     case backgroundOnly = "background-only"
@@ -128,17 +129,34 @@ public enum DisplayLiveViewRole: String, Sendable, Codable, Hashable, CaseIterab
     case observer
 }
 
+/// A link to a live view. It connects once, before `expiresAt`; the connection it makes is listed and revoked
+/// under the link's `id`.
 public struct DisplayLiveView: Sendable, Codable, Hashable {
+    public var id: UUID
     public var url: String
     public var viewOnly: Bool
     public var expiresAt: Date
     public var role: DisplayLiveViewRole
 
-    public init(url: String, viewOnly: Bool, expiresAt: Date, role: DisplayLiveViewRole = .user) {
+    public init(id: UUID = UUID(), url: String, viewOnly: Bool, expiresAt: Date, role: DisplayLiveViewRole = .user) {
+        self.id = id
         self.url = url
         self.viewOnly = viewOnly
         self.expiresAt = expiresAt
         self.role = role
+    }
+}
+
+/// A viewer connected to a live view, under the id of the link it connected with.
+public struct DisplayLiveViewConnection: Sendable, Codable, Hashable {
+    public var id: UUID
+    public var role: DisplayLiveViewRole
+    public var connectedAt: Date
+
+    public init(id: UUID, role: DisplayLiveViewRole, connectedAt: Date) {
+        self.id = id
+        self.role = role
+        self.connectedAt = connectedAt
     }
 }
 
@@ -175,6 +193,10 @@ public protocol DisplayTarget: Sendable {
     func endObservers(_ lease: Lease) async throws
     /// How many viewers are connected to the lease's live view now, the user's and observers' alike.
     func liveViewers(_ lease: Lease) async throws -> Int
+    /// The viewers connected to the lease's live view.
+    func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection]
+    /// Ends one viewer's connection, or revokes its link if unused. `false` when there is no such link.
+    func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool
 
     /// The whole screen as a live-view frame, for a target whose live view something else serves, such as the
     /// harness serving a VM guest's. Unlike an observation it works during takeover. `nil` when the target gives
@@ -186,6 +208,9 @@ public protocol DisplayTarget: Sendable {
     /// Files the lease downloaded, into a folder of its own. Read before release.
     func downloads(_ lease: Lease) async -> [DisplayDownload]
 
+    /// News about the lease the holder didn't ask for, finishing at release.
+    func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent>
+
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
 }
@@ -194,9 +219,12 @@ public extension DisplayTarget {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? { nil }
     func endObservers(_ lease: Lease) async throws {}
     func liveViewers(_ lease: Lease) async throws -> Int { 0 }
+    func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] { [] }
+    func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool { false }
     func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? { nil }
     func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {}
     func downloads(_ lease: Lease) async -> [DisplayDownload] { [] }
+    func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> { AsyncStream { $0.finish() } }
 
     func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
         try await liveView(lease, role: .user)
@@ -266,3 +294,46 @@ public struct DisplayDownload: Sendable, Codable, Hashable {
         self.disposable = disposable
     }
 }
+
+/// What a target tells its lease holder unprompted.
+public enum DisplayTargetEvent: Sendable, Codable, Hashable {
+    /// The user pressed the target's stop key.
+    case stopRequested
+    case permissionsChanged(PermissionSnapshot)
+    /// The user started or ended a takeover from the target's own controls.
+    case takeoverChanged(on: Bool)
+    /// The user is typing on a shared desktop.
+    case userTyping
+}
+
+/// Fans a target's events out to the streams of the leases they concern.
+public final class DisplayTargetEventHub: Sendable {
+    private let streams = Mutex<[UUID: [UUID: AsyncStream<DisplayTargetEvent>.Continuation]]>([:])
+
+    public init() {}
+
+    /// A stream of the lease's events, finishing when ``finish(_:)`` is called for it.
+    public func stream(for leaseID: UUID) -> AsyncStream<DisplayTargetEvent> {
+        let (stream, continuation) = AsyncStream.makeStream(of: DisplayTargetEvent.self, bufferingPolicy: .bufferingNewest(32))
+        let id = UUID()
+        streams.withLock { $0[leaseID, default: [:]][id] = continuation }
+        continuation.onTermination = { [weak self] _ in
+            self?.streams.withLock { _ = $0[leaseID]?.removeValue(forKey: id) }
+        }
+        return stream
+    }
+
+    /// Sends `event` to the lease's streams, or to every lease's when `leaseID` is `nil`.
+    public func post(_ event: DisplayTargetEvent, to leaseID: UUID? = nil) {
+        let targets = streams.withLock { all in
+            leaseID.map { Array((all[$0] ?? [:]).values) } ?? all.values.flatMap(\.values)
+        }
+        for continuation in targets { continuation.yield(event) }
+    }
+
+    public func finish(_ leaseID: UUID) {
+        let ended = streams.withLock { $0.removeValue(forKey: leaseID) } ?? [:]
+        for continuation in ended.values { continuation.finish() }
+    }
+}
+

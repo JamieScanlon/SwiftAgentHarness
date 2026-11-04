@@ -277,6 +277,24 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
         return try await guest.liveViewers(guestLease)
     }
 
+    public func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
+        let (guest, guestLease) = try await leased(lease)
+        if let liveViewServer {
+            guard let liveFeed else { return [] }
+            return await liveViewServer.connections(liveFeed)
+        }
+        return try await guest.liveConnections(guestLease)
+    }
+
+    public func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
+        let (guest, guestLease) = try await leased(lease)
+        if let liveViewServer {
+            guard let liveFeed else { return false }
+            return await liveViewServer.revoke(id, in: liveFeed)
+        }
+        return try await guest.revokeLiveView(guestLease, id: id)
+    }
+
     public func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
         let (guest, guestLease) = try await leased(lease)
         return try await guest.liveFrame(guestLease)
@@ -447,8 +465,9 @@ extension VirtualMachineDisplayTarget {
             let deadline = ContinuousClock.now.advanced(by: configuration.connectTimeout)
             while true {
                 do {
-                    let connection = try await DisplayHostTCP.connect(host: instance.address, port: configuration.port, secret: configuration.secret)
-                    return try await RemoteDisplayTarget.connect(over: connection)
+                    return try await RemoteDisplayTarget.connect(using: {
+                        try await DisplayHostTCP.connect(host: instance.address, port: configuration.port, secret: configuration.secret)
+                    })
                 } catch DisplayHostError.peerRejected {
                     throw DisplayHostError.peerRejected
                 } catch {

@@ -2746,6 +2746,10 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
         var role: DisplayLiveViewRole?
     }
 
+    private struct LiveViewConnectionsResponse: Encodable {
+        var connections: [DisplayLiveViewConnection]
+    }
+
     private struct ReplaysResponse: Content {
         var replays: [ComputerUseReplaySummary]
     }
@@ -2941,6 +2945,47 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
                 }
             } catch {
                 return APILayerRESTErrorResponse.error(status: .conflict, message: "Ending observers failed: \(error)")
+            }
+            return Response(status: .noContent)
+        }
+
+        conversationsPath.get(":id", "computer-use", "runs", ":lifecycleID", "live-view", "connections") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            let connections: [DisplayLiveViewConnection]?
+            do {
+                connections = try await control.liveConnections(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "")
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Listing live-view connections failed: \(error)")
+            }
+            guard let connections else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use run")
+            }
+            return Self.json(LiveViewConnectionsResponse(connections: connections))
+        }
+
+        conversationsPath.delete(":id", "computer-use", "runs", ":lifecycleID", "live-view", "connections", ":linkID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let linkID = req.parameters.get("linkID").flatMap(UUID.init(uuidString:)) else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid link id")
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            do {
+                guard try await control.revokeLiveView(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "", linkID: linkID) else {
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "No such live-view connection")
+                }
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Revoking the connection failed: \(error)")
             }
             return Response(status: .noContent)
         }
