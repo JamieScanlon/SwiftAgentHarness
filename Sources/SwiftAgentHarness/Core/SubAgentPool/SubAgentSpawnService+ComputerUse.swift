@@ -172,6 +172,12 @@ extension SubAgentSpawnService {
             let path = await subAgentPathSegments(for: childID)
             sessionConfiguration.delegatePath = path.isEmpty ? ComputerUseDelegateToolProvider.toolName : path.joined(separator: "/")
         }
+        // A mode can only tighten computer use, so the caller's mode and the user's both apply: delegating through
+        // another delegate never escapes the stricter one.
+        let callerMode = await resolvedModeProfile(for: parentConversation)
+        let userMode = userConversationID == conversationID ? callerMode : await resolvedModeProfile(for: userConversation)
+        sessionConfiguration.confirmsInteract = callerMode.subAgents.computerUse.confirmsInteract
+            || userMode.subAgents.computerUse.confirmsInteract
         let targetLabel = grant.target.manifest.label
         let servesLiveView = grant.target.manifest.observerAccess != .none
         let liveness = DelegateLiveness()

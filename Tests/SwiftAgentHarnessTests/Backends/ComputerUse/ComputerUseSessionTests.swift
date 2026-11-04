@@ -104,7 +104,8 @@ enum ComputerUseSessionFixtures {
         overrides: ComputerUseOperatorOverrides = .none,
         clock: ComputerUseTestClock = ComputerUseTestClock(),
         successCriteria: [String] = [],
-        storeApprovalImage: (@Sendable (Data) async -> String?)? = nil
+        storeApprovalImage: (@Sendable (Data) async -> String?)? = nil,
+        confirmsInteract: Bool = false
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         let target = FakeDisplayTarget(manifest: manifest, now: { clock.now() })
         let lease = try await target.lease(LeaseRequest(
@@ -123,6 +124,7 @@ enum ComputerUseSessionFixtures {
             classifier: ComputerUseActionClassifier(reviewer: ComputerUseGrantReviewer(overrides: overrides))
         )
         configuration.storeApprovalImage = storeApprovalImage
+        configuration.confirmsInteract = confirmsInteract
         let session = ComputerUseSession(
             target: target,
             lease: lease,
@@ -240,6 +242,67 @@ struct ComputerUseSessionGatingTests {
         _ = await session.perform([ComputerUseSessionFixtures.observe])
         _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
         #expect(await approvals.requests.isEmpty)
+    }
+
+    @Test("A mode that requires confirming Interact confirms it on a target that otherwise wouldn't")
+    func modeConfirmsInteract() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (target, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            approvals: approvals,
+            confirmsInteract: true
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        let result = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(result.outcomes.map(\.effect) == [.confirmed])
+        #expect(result.records.first?.decision == .confirmed)
+        let request = try #require(await approvals.requests.first)
+        #expect(request.description.contains("Why confirm: this conversation's mode requires confirming every interact action"))
+        #expect(await target.actCalls.count == 1)
+    }
+
+    @Test("A mode's Interact confirmation holds even when the intent check agrees, and leaves observing alone")
+    func modeConfirmsOverConsistentIntent() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (_, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            approvals: approvals,
+            intentChecker: ComputerUseSessionFixtures.checker(ComputerUseSessionFixtures.intentDispatcher(verdict: .act)),
+            confirmsInteract: true
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        #expect(await approvals.requests.isEmpty, "observing is not interacting")
+        _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(await approvals.requests.count == 1)
+    }
+
+    @Test("A mode's Interact confirmation can't be skipped by the operator's opt-out")
+    func modeConfirmsOverOperatorOptOut() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (_, session) = try await ComputerUseSessionFixtures.make(
+            approvals: approvals,
+            overrides: ComputerUseOperatorOverrides(skipInteractConfirmationWithoutIntentCheck: true),
+            confirmsInteract: true
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(await approvals.requests.count == 1)
+    }
+
+    @Test("With nobody present, a mode's Interact confirmation refuses the action as headless")
+    func modeConfirmsHeadless() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (target, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            userPresent: false,
+            approvals: approvals,
+            confirmsInteract: true
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        let result = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(result.records.first?.decision == .headlessDenied)
+        #expect(await approvals.requests.isEmpty)
+        #expect(await target.actCalls.isEmpty)
     }
 
     @Test("A consistent intent verdict allows interact actions; the check never sees screen text")

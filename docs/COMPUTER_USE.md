@@ -443,7 +443,7 @@ The flags are `clipboard-read`, `clipboard-write` (needed for `paste` typing) an
 |---|---|---|
 | observe | observe, zoom, wait, wait-for | allow |
 | navigate | scroll, move, launch of a granted app, `open-url` on an http(s) granted domain | allow |
-| interact | click, press, type, set-value, key, menu at a sufficient tier; a script at full tier | Allowed when the intent check says consistent. With no checker bound, confirmed on `humanPresence: shared` targets and allowed otherwise. An operator can opt out of that confirmation with `ComputerUseOperatorOverrides.skipInteractConfirmationWithoutIntentCheck`. |
+| interact | click, press, type, set-value, key, menu at a sufficient tier; a script at full tier | Allowed when the intent check says consistent. With no checker bound, confirmed on `humanPresence: shared` targets and allowed otherwise. An operator can opt out of that confirmation with `ComputerUseOperatorOverrides.skipInteractConfirmationWithoutIntentCheck`. A mode that requires it confirms every interact action whatever the check says; see [Stricter modes](#stricter-modes). |
 | consequential | Typing into secure or payment fields; targets labeled submit, send, buy, delete…; a Return that triggers such a control; destructive shortcuts; System Settings; installers; vendor safety signals; a script on a `humanPresence: shared` target | Always confirmed |
 | out of grant | Non-granted app or domain, tier violation, missing flag, non-web `open-url` scheme, an `open-url` whose URL carries a credential, the stop key | Denied, with the reason returned to the model. When a task grant would have allowed it (the page's domain in a browser, otherwise the app at the needed tier and flags), the reason adds that grants can't change during the run and names the grant to delegate again with, and the session records it in `missingGrants` |
 | unresolvable | Citing an observation that is no longer retained, an unknown ref, a point outside the observation | Refused with `escalation: observe` |
@@ -459,6 +459,7 @@ Confirmation:
 - **Per action.** Confirmation happens per action, even inside a batch. A refusal stops the batch, and the remaining actions are reported `not-executed`.
 - **Routing.** Cards go through `ExecApprovalDelivering` with `allowsDurableBypass: false` and only "Allow this action" and "Deny" buttons.
 - **Binding.** The approval is bound to the action's canonical form, with typed text replaced by its SHA-256.
+- **Stricter modes.** <a id="stricter-modes"></a>A mode profile can require confirming every interact action with `"subAgents": { "computerUse": { "confirmInteract": true } }`. Neither a consistent intent check, an unshared target, nor the operator's opt-out skips it, and the card gives the mode as the reason. The setting comes from the mode of the conversation that delegates and of the user's conversation at the root of the delegation tree, read when the session starts; either one requiring it is enough. A profile that extends one requiring it can't turn it off. Modes can't loosen computer use: consequential actions are always confirmed, and to deny computer use a mode leaves `delegate_computer_use` out of its tool allow-list.
 - **Headless runs.** When no user is present, consequential actions get `headlessDenied` without anyone being asked. They are collected in `session.headlessDenials` so the next interactive attach can show them.
 
 Possibly-delivered actions are never retried automatically:
@@ -697,7 +698,7 @@ These are behavior calls made where the revised spec is silent or ambiguous, dep
 |---|---|
 | Category rules | At grant time only bundle ids are known, so category rules (finance) are also applied at action time from the app identity the target reports. |
 | Browser controls and pages | The spec gates a browser's own controls on the app grant and its pages on domain grants, but doesn't say how to tell them apart. An element is on the page when it carries a URL, and a point when it lies in the observation's `pageBounds`; anything else is the browser's controls. A page whose domain isn't granted is refused as `domain … is not granted`, with a `missingGrants` entry. Typing with no cited element in a browser is refused with a request to cite a page element. Targets with no app (a managed browser) are all page. |
-| A mode that makes computer use stricter | The spec lets a mode deny computer use or require confirmation on Interact. Denying it works through the mode's tool allow-list, which can leave `delegate_computer_use` out. Requiring confirmation on Interact isn't built: modes have no computer-use setting yet, and `ComputerUseOperatorOverrides` is host-wide. |
+| A mode that makes computer use stricter | The spec lets a mode deny computer use or require confirmation on Interact, without naming the setting. Denying it works through the mode's tool allow-list, which can leave `delegate_computer_use` out. Confirmation is `subAgents.computerUse.confirmInteract`: under the Sub-Agent Pool's slice, since the pool is the layer that starts sessions, rather than a new top-level slice the spec's five don't include. Both the delegating conversation's mode and the user's apply, so a nested delegate in an ordinary mode doesn't escape a strict one. The mode is read once, when the session starts; a mode change mid-session applies to the next delegation. Like `deny`, the setting only accumulates through `extends`. |
 
 **Session**
 
@@ -771,7 +772,6 @@ These are behavior calls made where the revised spec is silent or ambiguous, dep
 |---|---|
 | Egress filtering for desktop containers and VMs | The spec puts these targets' network boundary in their network namespace and its egress filter, with the same allow and block lists and private-network rules as browsers. Desktop containers have no network by default, and any other network needs `allowsUnfilteredNetwork`, an explicit acknowledgment that it is unfiltered. VMs get whatever network their controller gives them. A filter would need a proxy in the namespace (for a container, a sidecar on an internal Docker network) and couldn't be verified without a Docker daemon here. |
 | Stateless vendor mode | See Stateless mode above. |
-| Mode-level Interact confirmation | See "A mode that makes computer use stricter" above. |
 
 **Not verified yet**
 

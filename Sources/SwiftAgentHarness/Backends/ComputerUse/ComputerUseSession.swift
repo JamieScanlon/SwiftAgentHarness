@@ -55,6 +55,9 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// inline as a `data:` URL.
     public var storeApprovalImage: (@Sendable (Data) async -> String?)?
     public var watchModeWait: Duration = .seconds(120)
+    /// Confirm every Interact action with the user, as a stricter mode requires. Neither a consistent intent check,
+    /// an unshared target, nor the operator's opt-out skips it.
+    public var confirmsInteract = false
     public var watchModePollInterval: Duration = .seconds(1)
 
     public static let defaultReplayThumbnailEdgePx = 320
@@ -859,6 +862,11 @@ public actor ComputerUseSession {
             return GateResult(decision: .allowed, reason: "\(classification.actionClass.label) within grant")
         case .interact:
             let intent = await checkIntent(classification)
+            if configuration.confirmsInteract {
+                var reasons = ["this conversation's mode requires confirming every interact action"]
+                if case .confirm(let reason, _)? = intent { reasons.append(reason) }
+                return await confirm(classification, action: action, reasons: reasons, intent: intent, statedIntent: statedIntent)
+            }
             switch intent {
             case .consistent?:
                 return GateResult(decision: .allowed, reason: "interact within grant; intent consistent", intent: intent)

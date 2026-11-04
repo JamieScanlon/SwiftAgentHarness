@@ -136,7 +136,10 @@ struct ComputerUseSpecialistIntegrationTests {
         idleChild: Bool = false,
         otherModels: [ModelRegistryEntry] = [],
         llmFactory: (any ModelLLMFactoring)? = nil,
-        requiresZeroRetention: Bool = false
+        requiresZeroRetention: Bool = false,
+        approvals: (any ExecApprovalDelivering)? = nil,
+        parentModeProfiles: ModeProfileConfiguration? = nil,
+        parentModeProfileID: String? = nil
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -163,7 +166,8 @@ struct ComputerUseSpecialistIntegrationTests {
                 case .query(let query): return entries.filter { query.mustIncludeCapabilities.isSubset(of: $0.capabilities) }
                 }
             },
-            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container)
+            harnessSessionPersistenceOverride: HarnessConversationTestFixtures.sharedInMemoryHarness(for: container),
+            modeRegistry: parentModeProfiles.map { ModeRegistryTestSupport.makePort(modeProfileConfiguration: $0) }
         )
         let configuration = ComputerUseConfiguration(
             registry: try DisplayTargetRegistry(targets: [target]),
@@ -172,6 +176,7 @@ struct ComputerUseSpecialistIntegrationTests {
                 budgets: ComputerUseBudgetPolicy(defaultSteps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800))
             ),
             approveGrants: approve,
+            approvals: approvals,
             activityObserver: activityObserver,
             specialist: specialist,
             requiresZeroRetention: requiresZeroRetention
@@ -181,7 +186,13 @@ struct ComputerUseSpecialistIntegrationTests {
         } else {
             session.installComputerUse(configuration)
         }
-        try await session.createConversation(with: model, userSystemPrompt: "parent")
+        if let parentModeProfileID {
+            try await session.createConversation(
+                with: model, userSystemPrompt: "parent", interactionMode: .agent, modeProfileID: parentModeProfileID
+            )
+        } else {
+            try await session.createConversation(with: model, userSystemPrompt: "parent")
+        }
         let parent = try #require(await session.currentConversation())
 
         let box = Box<HarnessRuntimeSession>()
@@ -292,6 +303,40 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(await session.runtimeDependencies.computerUse.sessions.session(for: childID) == nil)
         #expect(await recorder.prompts.first?.contains("Make the title bold in TextEdit.") == true)
         #expect(await recorder.prompts.first?.contains("1. title is bold") == true)
+    }
+
+    @Test("A parent in a mode that requires confirming Interact gets a card for each click its specialist makes")
+    func parentModeConfirmsInteract() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let strict = ModeProfileConfiguration(
+            profiles: [ModeProfileConfiguration.RawProfile(
+                id: "careful-agent",
+                extends: "agent",
+                subAgents: .object(["computerUse": .object(["confirmInteract": .boolean(true)])])
+            )],
+            diagnostics: []
+        )
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+            approvals: approvals, parentModeProfiles: strict, parentModeProfileID: "careful-agent"
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "done")
+        #expect(await approvals.requests.count == 1, "one card, for the click; observing and verifying need none")
+        #expect(await target.actCalls.count == 1)
+    }
+
+    @Test("A parent in an ordinary mode leaves Interact on an unshared target unconfirmed")
+    func ordinaryModeLeavesInteract() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+            approvals: approvals
+        )
+        _ = try await invoke(session, parent: parent)
+        #expect(await approvals.requests.isEmpty)
     }
 
     @Test("A report that doesn't match the return schema gets one resubmission, then is left out with the reason")

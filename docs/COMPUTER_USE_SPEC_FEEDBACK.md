@@ -55,8 +55,7 @@ The spec team revised the computer-use pages, and the pages they lean on, in res
 **Still open.** The revision leaves these to the implementation, or the implementation hasn't built them yet:
 - Egress filtering for desktop containers and VMs: containers stay without a network unless the operator acknowledges an unfiltered one.
 - OpenAI's stateless mode: it needs each turn's encrypted reasoning items, which the conversation doesn't carry.
-- A mode requiring confirmation on Interact.
-- How a surface fetches an approval image's blob, how a reattaching client proves it holds the lease, and how window conditions in `wait-for` are evaluated without window titles. The implementation's answers are in the notes.
+- How a surface fetches an approval image's blob, how a reattaching client proves it holds the lease, how window conditions in `wait-for` are evaluated without window titles, and where in a mode profile the Interact confirmation lives. The implementation's answers are in the notes.
 
 ## Verdicts
 

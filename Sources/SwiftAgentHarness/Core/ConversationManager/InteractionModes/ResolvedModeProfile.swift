@@ -272,6 +272,20 @@ public struct ModeProfileModelSlice: Sendable, Equatable {
     public static let neutral = ModeProfileModelSlice()
 }
 
+/// How a mode tightens computer use beyond its own gating. Settings only ever make it stricter: a mode can't
+/// loosen confirmation of consequential actions, and a profile can't turn off what the profile it extends requires.
+public struct ModeProfileComputerUseSlice: Sendable, Equatable {
+    /// Confirm every Interact action (`click`, `press`, `drag`, `pointer`) with the user, whatever the intent check
+    /// says and whoever shares the screen. JSON: `subAgents.computerUse.confirmInteract`.
+    public var confirmsInteract: Bool
+
+    public init(confirmsInteract: Bool = false) {
+        self.confirmsInteract = confirmsInteract
+    }
+
+    public static let neutral = ModeProfileComputerUseSlice()
+}
+
 /// Sub-agent pool slice.
 public struct ModeProfileSubAgentsSlice: Sendable, Equatable {
     /// Delegate-tool allow-list (`"*"` allows all; empty list denies all). Nil means no extra mode restriction.
@@ -279,15 +293,19 @@ public struct ModeProfileSubAgentsSlice: Sendable, Equatable {
     public var maxDepth: Int?
     /// Registry profile id whose resolved ``interactionMode`` seeds isolated spawns when the request omits `interactionMode`.
     public var childModeOnSpawnProfileId: String?
+    /// Applied to computer-use sessions this mode's conversations delegate.
+    public var computerUse: ModeProfileComputerUseSlice
 
     public init(
         allow: [String]? = nil,
         maxDepth: Int? = nil,
-        childModeOnSpawnProfileId: String? = nil
+        childModeOnSpawnProfileId: String? = nil,
+        computerUse: ModeProfileComputerUseSlice = .neutral
     ) {
         self.allow = allow
         self.maxDepth = maxDepth
         self.childModeOnSpawnProfileId = childModeOnSpawnProfileId
+        self.computerUse = computerUse
     }
 
     /// Harness default: prefer **agent** child mode rather than silently inheriting the parent conversation mode.

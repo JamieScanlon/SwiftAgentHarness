@@ -611,6 +611,16 @@ public actor ModeRegistryService {
         if let raw = o.optionalString(for: "childModeOnSpawn"), let trimmed = raw.nilIfEmpty {
             copy.childModeOnSpawnProfileId = trimmed
         }
+        if let computerUse = o["computerUse"]?.objectFields, let confirms = computerUse.optionalBool(for: "confirmInteract") {
+            if confirms {
+                copy.computerUse.confirmsInteract = true
+            } else if parent.computerUse.confirmsInteract {
+                diagnostics.append(
+                    "modeProfiles[\(profileID)] subAgents.computerUse.confirmInteract=false ignored: a profile can't loosen "
+                        + "the computer-use confirmation of the profile it extends"
+                )
+            }
+        }
         return copy
     }
 
