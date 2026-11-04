@@ -83,17 +83,32 @@ struct ComputerUseTreeDiffTests {
     @Test("A diff lists what was added, changed, and removed, and counts the unchanged")
     func diff() throws {
         var stabilizer = ComputerUseRefStabilizer()
+        let steady: [(String, String?, Double, String?)] = (0..<4).map { ("link", "Item \($0)", 500 + Double($0) * 40, nil) }
+        let base = stabilizer.stabilize(Self.observation("o_1", Self.first + steady))
+        let current = stabilizer.stabilize(Self.observation("o_2", [
+            ("button", "Bold", 10, nil), ("textarea", nil, 100, "Hello world"), ("button", "Export", 300, nil),
+        ] + steady))
+        let text = ComputerUseTreeDiff.render(base: try #require(base.tree), baseID: "o_1", current: try #require(current.tree))
+        #expect(text.hasPrefix("window app=com.apple.TextEdit obs=o_2"))
+        #expect(text.contains("1 added, 1 changed, 1 removed, 5 unchanged"))
+        #expect(text.contains("+ [e8] button \"Export\""), "a new element gets a fresh ref")
+        #expect(text.contains("~ [e2] textarea value=\"Hello world\""))
+        #expect(text.contains("- [e3] button \"Save\""))
+        #expect(!text.contains("[e1]"))
+    }
+
+    @Test("When most lines changed, or the window or page did, the full tree is sent instead")
+    func fallsBackToFullTree() throws {
+        var stabilizer = ComputerUseRefStabilizer()
         let base = stabilizer.stabilize(Self.observation("o_1", Self.first))
         let current = stabilizer.stabilize(Self.observation("o_2", [
             ("button", "Bold", 10, nil), ("textarea", nil, 100, "Hello world"), ("button", "Export", 300, nil),
         ]))
-        let text = ComputerUseTreeDiff.render(base: try #require(base.tree), baseID: "o_1", current: try #require(current.tree))
-        #expect(text.hasPrefix("window app=com.apple.TextEdit obs=o_2"))
-        #expect(text.contains("1 added, 1 changed, 1 removed, 1 unchanged"))
-        #expect(text.contains("+ [e4] button \"Export\""))
-        #expect(text.contains("~ [e2] textarea value=\"Hello world\""))
-        #expect(text.contains("- [e3] button \"Save\""))
-        #expect(!text.contains("[e1]"))
+        let mostly = ComputerUseTreeDiff.render(base: try #require(base.tree), baseID: "o_1", current: try #require(current.tree))
+        #expect(mostly.hasPrefix("Most of the tree changed since o_1"))
+        #expect(mostly.contains("[e4] button \"Export\""))
+        let moved = ComputerUseTreeDiff.render(base: try #require(base.tree), baseID: "o_1", current: try #require(base.tree), sameDocument: false)
+        #expect(moved.hasPrefix("The window or page changed since o_1"))
     }
 
     @Test("No changes says so")

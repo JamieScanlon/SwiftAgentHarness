@@ -292,9 +292,25 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             ),
             ToolDefinition(
                 name: Self.waitForToolName,
-                description: "Wait until a condition holds on screen or the timeout passes.",
+                description: """
+                Wait until a condition holds on fresh observations of the screen, or the timeout passes. Returns the \
+                observation that showed it. Conditions are structured, not prose: pick a kind and fill in its fields.
+                """,
                 parameters: [
-                    .init(name: "condition", description: "What to wait for, such as \"the Save dialog closes\".", type: "string", required: true),
+                    .init(
+                        name: "kind",
+                        description: "element-appears, element-disappears (role, name, or ref), url-matches (pattern), window-appears, window-disappears (app, title_contains), value-equals, value-contains (ref, text), or screen-settles (quiet_ms).",
+                        type: "string",
+                        required: true
+                    ),
+                    .init(name: "role", description: "The element's role, such as button or dialog.", type: "string", required: false),
+                    .init(name: "name", description: "Text the element's name contains.", type: "string", required: false),
+                    .init(name: "ref", description: "An element ref from the latest observation.", type: "string", required: false),
+                    .init(name: "pattern", description: "The URL to match; * matches anything, and without * it matches as a substring.", type: "string", required: false),
+                    .init(name: "app", description: "The window's app.", type: "string", required: false),
+                    .init(name: "title_contains", description: "Text the window's title contains.", type: "string", required: false),
+                    .init(name: "text", description: "The value to compare against.", type: "string", required: false),
+                    .init(name: "quiet_ms", description: "How long the screen must stay unchanged. Default 1000.", type: "integer", required: false),
                     .init(name: "timeout_ms", description: "Maximum wait in milliseconds. Default 5000.", type: "integer", required: false),
                 ],
                 type: .function
@@ -454,7 +470,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             case Self.waitForToolName:
                 let timeout = arguments.int("timeout_ms") ?? 5_000
                 guard (0...120_000).contains(timeout) else { throw Error.invalidParameter("timeout_ms must be between 0 and 120000") }
-                return await run(.waitFor(condition: try arguments.requiredString("condition"), timeoutMilliseconds: timeout), toolCall)
+                return await run(.waitFor(condition: try Self.waitCondition(arguments), timeoutMilliseconds: timeout), toolCall)
             case Self.verifyToolName:
                 return try await verify(arguments, toolCall)
             case Self.askUserToolName:
@@ -503,7 +519,9 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         if ran, let evidence = outcome.evidence { screen.append("Driver evidence: \(evidence)") }
         switch outcome.effect {
         case .unverifiable, .partial, .suspectedNoop:
-            lines.append("Do not repeat this action: it may already have taken effect. Observe and check first.")
+            if action.kind != .waitFor {
+                lines.append("Do not repeat this action: it may already have taken effect. Observe and check first.")
+            }
         case .refused where outcome.escalation == .observe:
             lines.append("Observe again and plan against the new observation.")
         case .refused:
@@ -529,8 +547,8 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         var screenshot: ToolResultImage?
         if let observation = batch.observations.last {
             let shown = session.configuration.showsScreenshots
-            let labeled = shown && session.configuration.labelsScreenshots ? ComputerUseScreenshotLabels.labeled(observation) : nil
-            let rendered = Self.rendered(observation, mode: session.coordinateCodec.mode, shown: shown)
+            let labeled = shown && session.configuration.labelsScreenshots ? ComputerUseScreenshotLabels.labeled(observation, near: await session.lastPointer) : nil
+            let rendered = Self.rendered(observation, mode: session.coordinateCodec.mode, step: await session.stepCount, shown: shown)
             lines.append("")
             lines += rendered.harness
             if labeled != nil { lines.append(Self.screenshotTagsNote) }
@@ -786,6 +804,32 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         )
     }
 
+    private static func waitCondition(_ arguments: Arguments) throws -> WaitCondition {
+        let kind = try arguments.requiredString("kind")
+        func required(_ name: String) throws -> String {
+            guard let value = arguments.string(name), !value.isEmpty else { throw Error.invalidParameter("\(kind) needs \(name)") }
+            return value
+        }
+        switch kind {
+        case "element-appears", "element-disappears":
+            let role = arguments.string("role"), name = arguments.string("name"), ref = arguments.string("ref")
+            guard role != nil || name != nil || ref != nil else { throw Error.invalidParameter("\(kind) needs role, name, or ref") }
+            return .element(kind == "element-appears" ? .appears : .disappears, role: role, name: name, ref: ref)
+        case "url-matches":
+            return .url(pattern: try required("pattern"))
+        case "window-appears", "window-disappears":
+            return .window(kind == "window-appears" ? .appears : .disappears, app: arguments.string("app"), titleContains: arguments.string("title_contains"))
+        case "value-equals", "value-contains":
+            return .value(kind == "value-equals" ? .equals : .contains, ref: try required("ref"), text: try required("text"))
+        case "screen-settles":
+            let quiet = arguments.int("quiet_ms") ?? 1_000
+            guard (100...30_000).contains(quiet) else { throw Error.invalidParameter("quiet_ms must be between 100 and 30000") }
+            return .screenSettles(quietMs: quiet)
+        default:
+            throw Error.invalidParameter("\(kind) isn't a wait-for kind")
+        }
+    }
+
     // MARK: - Rendering
 
     static func render(_ observation: DisplayObservation, mode: ComputerUseCoordinateMode, shown: Bool = true) -> String {
@@ -805,12 +849,18 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         ))
     }
 
-    static func rendered(_ observation: DisplayObservation, mode: ComputerUseCoordinateMode, shown: Bool = true) -> (harness: [String], screen: [String]) {
+    static func rendered(
+        _ observation: DisplayObservation,
+        mode: ComputerUseCoordinateMode,
+        step: Int? = nil,
+        shown: Bool = true
+    ) -> (harness: [String], screen: [String]) {
         var lines: [String] = []
         var screen: [String] = []
         var header = "Observation \(observation.id)"
         if let app = observation.target.app { header += " — app \(app.bundleID)" }
         if let window = observation.target.windowID { header += ", window \(window)" }
+        if let step { header += ", step \(step)" }
         lines.append(header)
         if let image = observation.image {
             let size = image.geometry.imageSize

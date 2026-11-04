@@ -234,6 +234,7 @@ enum MacAXTreeRenderer {
                 app: app,
                 url: page,
                 isSecureInput: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField",
+                value: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField" ? nil : attributes.value,
                 isFocused: attributes.focused
             )
             var line = String(repeating: "  ", count: depth) + "[\(ref)] \(displayRole(attributes.role))"

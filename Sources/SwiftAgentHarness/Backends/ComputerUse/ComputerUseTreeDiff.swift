@@ -153,8 +153,13 @@ public struct ObservationTreeDiff: Sendable, Codable, Hashable {
 
 enum ComputerUseTreeDiff {
     /// The current tree's header, then added (`+`), changed (`~`), and removed (`-`) elements. Unchanged elements
-    /// are only counted: they keep their refs and can be cited with the new observation.
-    static func render(base: ObservationTree, baseID: ObservationID, current: ObservationTree) -> String {
+    /// are only counted: they keep their refs and can be cited with the new observation. Refs are session-stable,
+    /// so a line's ref is also the key that ties it to the base. When more than half the lines changed, or the
+    /// window or document did, the full tree is clearer than a diff and is sent instead.
+    static func render(base: ObservationTree, baseID: ObservationID, current: ObservationTree, sameDocument: Bool = true) -> String {
+        guard sameDocument else {
+            return "The window or page changed since \(baseID), so the full tree follows.\n" + current.text
+        }
         let baseLines = linesByRef(base)
         let currentLines = linesByRef(current)
         var added: [String] = []
@@ -172,6 +177,10 @@ enum ComputerUseTreeDiff {
             .filter { currentLines[$0] == nil }
             .compactMap { baseLines[$0].map { "- " + normalized($0) } }
 
+        let total = max(baseLines.count, currentLines.count)
+        if total > 0, Double(added.count + changed.count + removed.count) > Double(total) / 2 {
+            return "Most of the tree changed since \(baseID), so the full tree follows.\n" + current.text
+        }
         var lines: [String] = []
         if let header = current.text.split(separator: "\n", omittingEmptySubsequences: false).first,
            ComputerUseRefStabilizer.refTokens(in: String(header)).isEmpty {

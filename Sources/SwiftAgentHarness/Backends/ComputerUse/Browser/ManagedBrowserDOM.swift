@@ -382,6 +382,7 @@ enum ManagedBrowserDOM {
                 url: url,
                 isSecureInput: element.secure == true,
                 inputPurpose: element.autocomplete,
+                value: element.value,
                 isFocused: element.focused == true
             )
         }

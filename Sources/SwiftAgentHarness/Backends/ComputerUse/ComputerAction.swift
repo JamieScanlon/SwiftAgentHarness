@@ -82,7 +82,7 @@ public enum ComputerAction: Sendable, Codable, Hashable {
     case launch(app: String, background: Bool = true)
     case openURL(String)
     case wait(milliseconds: Int)
-    case waitFor(condition: String, timeoutMilliseconds: Int)
+    case waitFor(condition: WaitCondition, timeoutMilliseconds: Int)
     case observe(ObserveRequest)
     /// A full-resolution crop; coordinates stay in the parent observation's space.
     case zoom(region: DisplayRect, observation: ObservationID)

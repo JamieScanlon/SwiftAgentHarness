@@ -69,12 +69,21 @@ struct ContextScreenshotRetentionTests {
         let result = apply(loop(steps: 8))
         let firstTool = try #require(result.messages.first { $0.role == .tool })
         #expect(firstTool.images.isEmpty)
-        #expect(firstTool.content.contains(ContextScreenshotRetention.markerPrefix))
+        #expect(firstTool.content.hasPrefix("[screenshot o_1 pruned: com.apple.TextEdit \"w1\""))
         #expect(firstTool.content.contains("Observation o_1 — app com.apple.TextEdit, window w1"))
         #expect(firstTool.content.contains("[e2] button \"Bold\""))
         let lastTool = try #require(result.messages.last { $0.role == .tool })
         #expect(lastTool.images.count == 1)
         #expect(!lastTool.content.contains(ContextScreenshotRetention.markerPrefix))
+    }
+
+    @Test("The marker is written from the result's header: observation, app, window, and step")
+    func markerFormat() {
+        #expect(ContextScreenshotRetention.marker(header: "Observation o_7 — app com.apple.TextEdit, window w1, step 12", count: 1)
+            == "[screenshot o_7 pruned: com.apple.TextEdit \"w1\", step 12]")
+        #expect(ContextScreenshotRetention.marker(header: "Observation o_3 · com.apple.Safari · window 4 · step 2 · 1280×800 px", count: 2)
+            == "[screenshot o_3 pruned (2 images): com.apple.Safari \"4\", step 2]")
+        #expect(ContextScreenshotRetention.isMarked("[screenshot o_7 pruned: x]\nObservation o_7"))
     }
 
     @Test("Images from other tools and from the user are never counted or pruned")

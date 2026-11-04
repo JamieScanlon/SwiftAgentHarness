@@ -21,7 +21,8 @@ enum ComputerUseScreenshotLabels {
         var label: DisplayRect
     }
 
-    static let maxTags = 150
+    /// A few dozen: more tags crowd the screenshot past reading.
+    static let maxTags = 40
     /// Larger elements are containers: windows, scroll areas, text areas filling the view. Tagging them adds clutter
     /// without telling the model which control is which.
     static let maxElementAreaFraction = 0.25
@@ -32,26 +33,41 @@ enum ComputerUseScreenshotLabels {
         min(16, max(10, Double(height) / 64))
     }
 
-    /// Where the tags go. Smaller elements are placed first, and a tag that would cover one already placed is
-    /// dropped: its element is still in the tree.
-    static func tags(for observation: DisplayObservation) -> [Tag] {
+    /// Roles a model acts on. Everything else stays in the tree, untagged.
+    static func isActionable(_ role: String) -> Bool {
+        let role = role.lowercased()
+        return ["button", "link", "textfield", "textbox", "searchbox", "searchfield", "combobox", "checkbox", "radio",
+                "menuitem", "tab", "slider", "switch", "popup", "edittext", "option", "spinbutton", "textarea", "incrementor"]
+            .contains { role.contains($0) }
+    }
+
+    /// Where the tags go: actionable elements on the screenshot, the focused one first, then those nearest the last
+    /// action, then smaller ones. A tag that would cover one already placed is dropped; its element is still in the
+    /// tree.
+    static func tags(for observation: DisplayObservation, near lastAction: DisplayPoint? = nil) -> [Tag] {
         guard let image = observation.image, let elements = observation.tree?.elements, !elements.isEmpty else { return [] }
         let geometry = image.geometry
         let bounds = DisplayRect(x: 0, y: 0, width: Double(geometry.imageSize.width), height: Double(geometry.imageSize.height))
         let maxArea = bounds.width * bounds.height * maxElementAreaFraction
         let font = fontPx(forImageHeight: geometry.imageSize.height)
 
-        let candidates: [(ref: String, frame: DisplayRect)] = elements.compactMap { ref, element in
-            guard let frame = element.frame else { return nil }
+        let near = lastAction.map { geometry.toImage($0) }
+        let candidates: [(ref: String, frame: DisplayRect, focused: Bool)] = elements.compactMap { ref, element in
+            guard let frame = element.frame, isActionable(element.role) else { return nil }
             let origin = geometry.toImage(DisplayPoint(x: frame.minX, y: frame.minY))
             let corner = geometry.toImage(DisplayPoint(x: frame.maxX, y: frame.maxY))
             let pixels = DisplayRect(x: origin.x, y: origin.y, width: corner.x - origin.x, height: corner.y - origin.y)
             guard pixels.width >= minElementSidePx, pixels.height >= minElementSidePx, pixels.width * pixels.height <= maxArea,
                   pixels.maxX > 0, pixels.maxY > 0, pixels.minX < bounds.maxX, pixels.minY < bounds.maxY
             else { return nil }
-            return (ref, pixels)
+            return (ref, pixels, element.isFocused)
         }
         .sorted { lhs, rhs in
+            if lhs.focused != rhs.focused { return lhs.focused }
+            if let near {
+                let (left, right) = (distance(lhs.frame, near), distance(rhs.frame, near))
+                if left != right { return left < right }
+            }
             let (left, right) = (lhs.frame.width * lhs.frame.height, rhs.frame.width * rhs.frame.height)
             return left != right ? left < right : refOrder(lhs.ref, rhs.ref)
         }
@@ -65,14 +81,19 @@ enum ComputerUseScreenshotLabels {
         return placed
     }
 
+    private static func distance(_ frame: DisplayRect, _ point: DisplayPoint) -> Double {
+        let dx = frame.center.x - point.x, dy = frame.center.y - point.y
+        return (dx * dx + dy * dy).squareRoot()
+    }
+
     /// The screenshot with its tags drawn, the same size and format. `nil` when there is nothing to tag, the bitmap
     /// doesn't match the recorded geometry, or the platform can't draw.
-    static func labeled(_ observation: DisplayObservation) -> ToolResultImage? {
+    static func labeled(_ observation: DisplayObservation, near lastAction: DisplayPoint? = nil) -> ToolResultImage? {
         #if canImport(ImageIO) && canImport(CoreText)
         guard let image = observation.image, let data = image.data, let screenshot = ComputerUseImageEncoding.decode(data),
               screenshot.width == image.geometry.imageSize.width, screenshot.height == image.geometry.imageSize.height
         else { return nil }
-        let tags = tags(for: observation)
+        let tags = tags(for: observation, near: lastAction)
         guard !tags.isEmpty, let drawn = draw(tags, on: screenshot) else { return nil }
         let jpeg = image.mediaType == "image/jpeg"
         guard let encoded = ComputerUseImageEncoding.encode(drawn, as: jpeg ? .jpeg : .png) else { return nil }

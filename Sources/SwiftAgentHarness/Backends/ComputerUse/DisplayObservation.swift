@@ -147,6 +147,8 @@ public struct ElementRef: Sendable, Codable, Hashable {
     public var isSecureInput: Bool
     /// Declared input purpose such as an HTML `autocomplete` token (`cc-number`, `current-password`).
     public var inputPurpose: String?
+    /// The field's current value, as the tree shows it. Screen content; `wait-for` reads it, the gates never do.
+    public var value: String?
     public var isFocused: Bool
 
     public init(
@@ -159,6 +161,7 @@ public struct ElementRef: Sendable, Codable, Hashable {
         url: String? = nil,
         isSecureInput: Bool = false,
         inputPurpose: String? = nil,
+        value: String? = nil,
         isFocused: Bool = false
     ) {
         self.id = id
@@ -170,6 +173,7 @@ public struct ElementRef: Sendable, Codable, Hashable {
         self.url = url
         self.isSecureInput = isSecureInput
         self.inputPurpose = inputPurpose
+        self.value = value
         self.isFocused = isFocused
     }
 }

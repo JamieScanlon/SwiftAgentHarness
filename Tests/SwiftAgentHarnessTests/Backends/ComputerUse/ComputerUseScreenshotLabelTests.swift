@@ -55,6 +55,23 @@ struct ComputerUseScreenshotLabelTests {
         #expect(Labels.tags(for: try observation(elements: elements)).map(\.ref).sorted() == ["e2", "e5"])
     }
 
+    @Test("Only actionable elements are tagged, at most a few dozen: the focused first, then those nearest the last action")
+    func priorities() throws {
+        var elements: [String: ElementRef] = [
+            "e1": ElementRef(id: "e1", role: "AXStaticText", label: "Total", frame: DisplayRect(x: 50, y: 50, width: 60, height: 20)),
+            "e2": ElementRef(id: "e2", role: "AXTextField", frame: DisplayRect(x: 1300, y: 800, width: 80, height: 20), isFocused: true),
+        ]
+        for index in 0..<60 {
+            let x = Double(index % 10) * 120 + 20, y = Double(index / 10) * 100 + 150
+            elements["b\(index)"] = ElementRef(id: "b\(index)", role: "AXButton", frame: DisplayRect(x: x, y: y, width: 50, height: 20))
+        }
+        let tags = Labels.tags(for: try observation(elements: elements), near: DisplayPoint(x: 20, y: 150))
+        #expect(tags.count == Labels.maxTags)
+        #expect(!tags.contains { $0.ref == "e1" }, "static text isn't actionable")
+        #expect(tags.first?.ref == "e2", "the focused element comes first")
+        #expect(tags.dropFirst().first?.ref == "b0", "then the element nearest the last action")
+    }
+
     @Test("The labeled screenshot keeps the size the geometry records and draws only near tagged elements")
     func drawing() throws {
         let raw = try observation()

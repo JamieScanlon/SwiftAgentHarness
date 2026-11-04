@@ -503,6 +503,65 @@ public actor ComputerUseSession {
         return result
     }
 
+    /// Polls fresh observations until the condition holds; only the last is retained. A condition the target can't
+    /// show is a bounded wait followed by an observation, and the evidence says so.
+    private func waitFor(_ condition: WaitCondition, timeoutMilliseconds: Int, index: Int) async throws -> (ActionOutcome, DisplayObservation?) {
+        var request = ComputerUseWaitEvaluator.observeRequest(for: condition, manifest: manifest)
+        request.maxImage = configuration.imageLimit
+        var result = ComputerUseWaitEvaluator.modes(for: condition, manifest: manifest)
+        if result == nil {
+            var reference: ElementRef?
+            switch condition {
+            case .element(_, _, _, let ref?), .value(_, let ref, _):
+                reference = latestObservation?.element(ref)
+                guard reference != nil else {
+                    return (ActionOutcome(action: index, effect: .refused, evidence: "\(ref) is not in the latest observation; observe and cite a current ref", escalation: .observe), nil)
+                }
+            default:
+                break
+            }
+            result = try await ComputerUseWaitEvaluator.wait(for: condition, timeoutMilliseconds: timeoutMilliseconds, reference: reference) {
+                [target, lease, request] in try await target.observe(lease, request)
+            }
+        }
+        switch result {
+        case .met(let observation, let elapsed)?:
+            let kept = retainFresh(observation)
+            return (ActionOutcome(action: index, effect: .confirmed, evidence: "\(condition.summary) after \(elapsed) ms", observation: kept.id), kept)
+        case .timedOut(let observation)?:
+            let kept = observation.map(retainFresh)
+            return (ActionOutcome(action: index, effect: .partial, evidence: "\(condition.summary) did not happen within \(timeoutMilliseconds) ms", observation: kept?.id), kept)
+        case .unevaluable(let why)?:
+            try await Task.sleep(for: .milliseconds(min(timeoutMilliseconds, 10_000)))
+            let kept = retainFresh(try await target.observe(lease, ObserveRequest(modes: [.pixels], scope: .display(nil), maxImage: configuration.imageLimit)))
+            return (ActionOutcome(
+                action: index,
+                effect: .unverifiable,
+                evidence: "can't evaluate \(condition.summary) here (\(why)); waited \(min(timeoutMilliseconds, 10_000)) ms and observed",
+                observation: kept.id
+            ), kept)
+        case nil:
+            return (ActionOutcome(action: index, effect: .unverifiable, evidence: "nothing to wait for"), nil)
+        }
+    }
+
+    private static func sameDocument(_ base: DisplayObservation, _ current: DisplayObservation) -> Bool {
+        func page(_ url: String?) -> String? {
+            guard let url, var components = URLComponents(string: url) else { return url }
+            components.fragment = nil
+            components.query = nil
+            return components.string
+        }
+        return base.target.app == current.target.app && base.target.windowID == current.target.windowID
+            && page(base.target.url) == page(current.target.url)
+    }
+
+    private func retainFresh(_ observation: DisplayObservation) -> DisplayObservation {
+        let stable = refs.stabilize(observation)
+        retain(stable)
+        return stable
+    }
+
     private func noteSignals(_ signals: [ComputerUseSafetySignal]) {
         guard signals.contains(.sensitiveDomain), !isWatchModeOn else { return }
         isWatchModeOn = true
@@ -596,8 +655,10 @@ public actor ComputerUseSession {
                 request.diffAgainst = nil
                 var observation = refs.stabilize(try await target.observe(lease, request))
                 if let diffBase, let current = observation.tree {
-                    let text = retained[diffBase]?.tree.map {
-                        ComputerUseTreeDiff.render(base: $0, baseID: diffBase, current: current)
+                    let base = retained[diffBase]
+                    let sameDocument = base.map { Self.sameDocument($0, observation) } ?? true
+                    let text = base?.tree.map {
+                        ComputerUseTreeDiff.render(base: $0, baseID: diffBase, current: current, sameDocument: sameDocument)
                     } ?? ComputerUseTreeDiff.unavailable(baseID: diffBase, current: current)
                     observation.tree?.diff = ObservationTreeDiff(base: diffBase, text: text)
                 }
@@ -609,6 +670,8 @@ public actor ComputerUseSession {
                 retain(observation)
                 produced = observation
                 outcome = ActionOutcome(action: index, effect: .confirmed, observation: observation.id)
+            case .waitFor(let condition, let timeout):
+                (outcome, produced) = try await waitFor(condition, timeoutMilliseconds: timeout, index: index)
             default:
                 let driverAction = action.mappingElementRefs { ref, observation in
                     refs.driverRef(ref, observation: observation) ?? ref

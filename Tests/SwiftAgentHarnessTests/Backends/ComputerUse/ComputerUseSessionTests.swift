@@ -533,7 +533,7 @@ struct ComputerUseSessionLifecycleTests {
         let (_, session) = try await ComputerUseSessionFixtures.make(manifest: FakeDisplayTarget.vmManifest, clock: clock)
         _ = await session.perform([ComputerUseSessionFixtures.observe])
         clock.advance(seconds: 1)
-        _ = await session.perform([.wait(milliseconds: 500), .waitFor(condition: "dialog closes", timeoutMilliseconds: 1000)])
+        _ = await session.perform([.wait(milliseconds: 500), .waitFor(condition: .element(.disappears, role: "AXSheet"), timeoutMilliseconds: 1000)])
         try await session.verify(criterion: "dialog closed", met: true, evidence: "no sheet in tree", observation: "o_1")
     }
 }

@@ -110,11 +110,11 @@ struct MacHostDisplayTargetTests {
         #expect(poster.count == 0)
     }
 
-    @Test("A wait-for is bounded and reported as unverifiable: the driver does not judge conditions")
+    @Test("A wait-for sent to the driver directly is bounded and unverifiable; the session evaluates conditions")
     func waitFor() async throws {
         let target = target()
         let lease = try await target.lease(request())
-        let outcomes = try await target.act(lease, ActionBatch([.waitFor(condition: "dialog closes", timeoutMilliseconds: 5)]))
+        let outcomes = try await target.act(lease, ActionBatch([.waitFor(condition: .element(.disappears, role: "AXSheet"), timeoutMilliseconds: 5)]))
         #expect(outcomes.first?.effect == .unverifiable)
         #expect(outcomes.first?.escalation == .observe)
     }

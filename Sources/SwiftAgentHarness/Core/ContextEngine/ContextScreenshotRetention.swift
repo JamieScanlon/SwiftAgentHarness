@@ -35,7 +35,9 @@ public struct ScreenshotRetentionPolicy: Sendable, Equatable {
 /// long single-turn computer-use run. The oldest are replaced by a marker plus the observation's one-line summary
 /// in whole batches, so between batches the projected prefix is byte-stable and the prompt cache holds.
 enum ContextScreenshotRetention {
-    static let markerPrefix = "[earlier screenshot removed from context"
+    /// Pruned screenshots are marked `[screenshot o_7 pruned: com.apple.TextEdit "w1", step 12]`, written from the
+    /// observation's header line with no model call.
+    static let markerPrefix = "[screenshot "
 
     static func apply(
         messages: [Message],
@@ -69,13 +71,26 @@ enum ContextScreenshotRetention {
     }
 
     private static func marked(_ content: String, count: Int) -> String {
-        guard !content.contains(markerPrefix) else { return content }
-        let summary = content
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .first { $0.hasPrefix("Observation ") }
-            .map { ": \($0)" } ?? ""
-        let tally = count == 1 ? "" : " (\(count) images)"
-        let marker = "\(markerPrefix)\(tally)\(summary). Call \(ComputerUseToolProvider.observeToolName) for a current view.]"
+        guard !isMarked(content) else { return content }
+        let header = content.split(separator: "\n", omittingEmptySubsequences: true).first { $0.hasPrefix("Observation ") }.map(String.init)
+        let marker = Self.marker(header: header, count: count)
         return content.isEmpty ? marker : "\(marker)\n\(content)"
+    }
+
+    static func isMarked(_ content: String) -> Bool {
+        content.contains(/\[screenshot \S+ pruned/)
+    }
+
+    /// The marker for a screenshot whose result header is `header`: its observation id, app, window, and step.
+    static func marker(header: String?, count: Int) -> String {
+        let tally = count == 1 ? "" : " (\(count) images)"
+        guard let header else { return "\(markerPrefix)earlier pruned\(tally)]" }
+        let id = header.firstMatch(of: /^Observation (\S+?)(?::|\s|$)/).map { String($0.output.1) } ?? "earlier"
+        let app = header.firstMatch(of: /(?:— app | · )([A-Za-z0-9.\-_]+\.[A-Za-z0-9.\-_]+)/).map { String($0.output.1) }
+        let window = header.firstMatch(of: /window (\S+?)(?:,|\s|$)/).map { String($0.output.1) }
+        let step = header.firstMatch(of: /step (\d+)/).map { String($0.output.1) }
+        var where_ = [app, window.map { "\"\($0)\"" }].compactMap { $0 }.joined(separator: " ")
+        if let step { where_ += where_.isEmpty ? "step \(step)" : ", step \(step)" }
+        return "\(markerPrefix)\(id) pruned\(tally)\(where_.isEmpty ? "" : ": \(where_)")]"
     }
 }

@@ -290,6 +290,8 @@ struct ComputerUseNativeToolProvider: ToolProvider, ToolDescriptorHinting {
         }
         var lines = ["Observation \(observation.id)"]
         if let app = observation.target.app?.bundleID { lines[0] += " · \(app)" }
+        if let window = observation.target.windowID { lines[0] += " · window \(window)" }
+        lines[0] += " · step \(await session.stepCount)"
         lines[0] += " · \(image.geometry.imageSize.width)×\(image.geometry.imageSize.height) px"
         if let reminder = await ComputerUseToolProvider.reminder(for: session) { lines.append(reminder) }
         return ToolResult(

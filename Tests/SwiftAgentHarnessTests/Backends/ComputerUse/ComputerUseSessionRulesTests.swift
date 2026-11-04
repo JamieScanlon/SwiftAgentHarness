@@ -153,3 +153,75 @@ struct ComputerUseResultEnvelopeTests {
         #expect(await target.observeCalls.isEmpty)
     }
 }
+
+@Suite("Computer use: wait-for conditions")
+struct ComputerUseWaitForTests {
+    private typealias S = ComputerUseSessionFixtures
+
+    private func tree(_ elements: [ElementRef]) -> ObservationTree {
+        ObservationTree(text: "", elements: Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) }), capturedAt: ComputerUseFixtures.epoch)
+    }
+
+    @Test("URL patterns use * as a wildcard; without one they match as a substring")
+    func urlPatterns() {
+        #expect(ComputerUseWaitEvaluator.matches("https://shop.example/cart?id=3", pattern: "https://shop.example/cart*"))
+        #expect(ComputerUseWaitEvaluator.matches("https://shop.example/cart?id=3", pattern: "/cart"))
+        #expect(!ComputerUseWaitEvaluator.matches("https://shop.example/home", pattern: "https://shop.example/cart*"))
+        #expect(ComputerUseWaitEvaluator.matches("https://a.example/x/done", pattern: "*/done"))
+    }
+
+    @Test("An element condition is polled on fresh observations until it holds, and its observation is kept")
+    func elementAppears() async throws {
+        let (target, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        let plain = tree([ElementRef(id: "e1", role: "AXButton", label: "Save")])
+        let sheet = tree([ElementRef(id: "e1", role: "AXButton", label: "Save"), ElementRef(id: "e2", role: "AXSheet", label: "Saved")])
+        await target.setTrees([plain, plain, plain, sheet])
+        _ = await session.perform([S.observe])
+        let result = await session.perform([.waitFor(condition: .element(.appears, role: "AXSheet"), timeoutMilliseconds: 5_000)])
+        let outcome = try #require(result.outcomes.first)
+        #expect(outcome.effect == .confirmed, "\(outcome.evidence ?? "")")
+        #expect(outcome.evidence?.contains("element AXSheet appears") == true)
+        let kept = try #require(outcome.observation)
+        #expect(await session.observation(kept)?.tree?.elements.values.contains { $0.role == "AXSheet" } == true)
+        #expect(await target.actCalls.isEmpty, "the session evaluates, nothing is sent to the driver")
+    }
+
+    @Test("A value condition reads the cited element's value; a timeout is partial")
+    func valueAndTimeout() async throws {
+        let (target, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        let field = ElementRef(id: "e1", role: "AXTextField", label: "Status", value: "Pending")
+        await target.setTrees([tree([field]), tree([field])])
+        _ = await session.perform([S.observe])
+        let result = await session.perform([.waitFor(condition: .value(.equals, ref: "e1", text: "Paid"), timeoutMilliseconds: 300)])
+        #expect(result.outcomes.first?.effect == .partial)
+        #expect(result.outcomes.first?.evidence?.contains("did not happen within 300 ms") == true)
+    }
+
+    @Test("A condition the target can't show is a bounded wait and an observation, and says so")
+    func unevaluable() async throws {
+        let (_, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        _ = await session.perform([S.observe])
+        let started = ContinuousClock.now
+        let result = await session.perform([.waitFor(condition: .url(pattern: "/done"), timeoutMilliseconds: 50)])
+        let outcome = try #require(result.outcomes.first)
+        #expect(outcome.effect == .unverifiable)
+        #expect(outcome.evidence?.contains("can't evaluate url matches /done here") == true)
+        #expect(outcome.observation != nil)
+        #expect(ContinuousClock.now - started >= .milliseconds(50))
+    }
+
+    @Test("The tool takes a structured condition and refuses prose")
+    func toolArguments() async throws {
+        let (_, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        let provider = ComputerUseToolProvider(session: session)
+        let prose = try await provider.executeTool(ToolCall(name: "computer_wait_for", arguments: .object(["kind": .string("the dialog closes")]), id: "c1"))
+        #expect(!prose.success)
+        #expect(prose.content.contains("isn't a wait-for kind"))
+        let settles = try await provider.executeTool(ToolCall(
+            name: "computer_wait_for",
+            arguments: .object(["kind": .string("screen-settles"), "quiet_ms": .integer(100), "timeout_ms": .integer(2_000)]),
+            id: "c2"
+        ))
+        #expect(settles.content.hasPrefix("wait-for: confirmed"), "\(settles.content.prefix(300))")
+    }
+}
