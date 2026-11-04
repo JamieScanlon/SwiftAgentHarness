@@ -538,6 +538,7 @@ public actor SubAgentSpawnService {
 
     func applySubAgentDelegateEvent(_ event: SubAgentDelegateEvent) async {
         remoteDelegateLiveness[event.lifecycleID]?.touch()
+        remoteDelegateLiveness[event.lifecycleID]?.setAwaitingInput(event.awaitingInput)
         let existing = subAgentLifecycleState
             .entries(parentConversationID: event.parentConversationID)
             .first(where: { $0.lifecycleID == event.lifecycleID })

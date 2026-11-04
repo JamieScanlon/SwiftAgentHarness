@@ -11,6 +11,7 @@ final class DelegateLiveness: Sendable {
     private struct State {
         var lastActivity: Date
         var pauses = 0
+        var awaitingInput = false
         var waitingOnApproval: (@Sendable () async -> Bool)?
     }
 
@@ -50,14 +51,24 @@ final class DelegateLiveness: Sendable {
         }
     }
 
+    /// Whether the delegate last reported that it waits on input. Unlike ``pause()``, it is a state the delegate
+    /// sets with each event.
+    func setAwaitingInput(_ waiting: Bool) {
+        let current = now()
+        state.withLock {
+            if $0.awaitingInput, !waiting { $0.lastActivity = current }
+            $0.awaitingInput = waiting
+        }
+    }
+
     var isPaused: Bool {
-        state.withLock { $0.pauses > 0 }
+        state.withLock { $0.pauses > 0 || $0.awaitingInput }
     }
 
     /// How long the run has gone without an event, or `nil` while it isn't observed. Waiting on a person is never
     /// quiet: the clock restarts when the wait ends.
     func quietTime() async -> TimeInterval? {
-        let (probe, paused) = state.withLock { ($0.waitingOnApproval, $0.pauses > 0) }
+        let (probe, paused) = state.withLock { ($0.waitingOnApproval, $0.pauses > 0 || $0.awaitingInput) }
         guard let probe else { return nil }
         let current = now()
         if paused {

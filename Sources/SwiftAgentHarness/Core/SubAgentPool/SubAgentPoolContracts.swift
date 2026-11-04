@@ -199,6 +199,9 @@ struct SubAgentDelegateEvent: Sendable, Equatable {
     var completionUsage: SubAgentDelegateCompletionUsage?
     var error: String?
     var runtimeLifecycleEvent: RuntimeLifecycleEventPayload?
+    /// The remote delegate reported that it waits on input, such as an A2A task in `input-required`. Waiting on a
+    /// person isn't idle.
+    var awaitingInput = false
     var updatedAt: Date
 
     init(

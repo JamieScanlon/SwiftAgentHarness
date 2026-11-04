@@ -152,6 +152,33 @@ struct RemoteDelegateIdleTimeoutTests {
         #expect(ending.terminal?.phase == .done)
     }
 
+    @Test("A delegate waiting on input (A2A input-required) is paused, not idle, until it reports otherwise")
+    func awaitingInputPauses() async throws {
+        let (session, service) = try await makeService()
+        defer { withExtendedLifetime(session) {} }
+        let invocation = Invocation()
+        let (stream, continuation) = AsyncStream.makeStream(of: SubAgentDelegateEvent.self)
+        let clock = RemoteIdleTestClock()
+        let producer = Task {
+            let liveness = await liveness(service, invocation)
+            clock.advance(0.01)
+            var waiting = invocation.event(.running)
+            waiting.awaitingInput = true
+            continuation.yield(waiting)
+            await untilCounted(liveness)
+            clock.advance(0.6)
+            try? await Task.sleep(for: .milliseconds(300))
+            #expect(liveness.isPaused)
+            continuation.yield(invocation.event(.running))
+            continuation.yield(invocation.event(.done))
+            continuation.finish()
+        }
+        let ending = await follow(service, invocation, stream: stream, idleTimeoutSeconds: 0.2, clock: clock)
+        await producer.value
+        #expect(ending.idleTimedOut == nil)
+        #expect(ending.terminal?.phase == .done)
+    }
+
     @Test("Events applied outside the stream, such as permission requests, count as activity")
     func outOfBandEventsCount() async throws {
         let (session, service) = try await makeService()
