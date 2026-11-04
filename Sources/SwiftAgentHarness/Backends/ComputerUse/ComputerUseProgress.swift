@@ -14,9 +14,10 @@ public struct ComputerUseProgress: Sendable, Codable, Hashable {
     public init() {}
 }
 
-/// A coarse, structural digest of the screen state: the app, window, page, focused element's role, and the shape of
-/// the tree (roles and depth). Text and values are left out, so a ticking clock or a feed adding items mostly
-/// doesn't make a state look new. Digests are only compared, never shown to a model.
+/// A coarse, structural digest of the screen state: the observed app, window, page, focused element's role, and the
+/// shape of the tree, which is the sequence of roles in the compact tree with indentation as nesting. Text and values
+/// are left out, so a ticking clock or a feed adding items mostly doesn't make a state look new. Digests are only
+/// compared, never shown to a model.
 public enum ComputerUseStateDigest {
     public static func of(_ observation: DisplayObservation) -> String? {
         let target = observation.target
@@ -26,12 +27,24 @@ public enum ComputerUseStateDigest {
         if let url = target.url.map(page) { parts.append("url=\(url)") }
         guard !parts.isEmpty else { return nil }
         if let tree = observation.tree {
-            let elements = tree.elements.values
-            if let focused = elements.filter(\.isFocused).map(\.role).min() { parts.append("focus=\(focused)") }
-            parts.append("shape=" + elements.map { "\($0.depth ?? -1):\($0.role)" }.sorted().joined(separator: ","))
+            if let focused = tree.elements.values.filter(\.isFocused).map(\.role).min() { parts.append("focus=\(focused)") }
+            parts.append("shape=" + shape(tree.text).joined(separator: ","))
         }
         let digest = SHA256.hash(data: Data(parts.joined(separator: "\n").utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Each line's indentation and first word after its ref: `[e2] button "Bold"` indented once is `2:button`.
+    static func shape(_ text: String) -> [String] {
+        text.split(separator: "\n").compactMap { line in
+            let indent = line.prefix { $0 == " " }.count
+            var rest = line.drop { $0 == " " }
+            if rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
+                rest = rest[rest.index(after: close)...].drop { $0 == " " }
+            }
+            guard let role = rest.split(separator: " ", maxSplits: 1).first else { return nil }
+            return "\(indent):\(role)"
+        }
     }
 
     /// The URL without its fragment, which names a place on the page rather than a page.

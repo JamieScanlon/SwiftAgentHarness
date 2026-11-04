@@ -26,7 +26,7 @@ actor FakeDisplayTarget: DisplayTarget {
         perception: [.pixels, .accessibility],
         delivery: [.background],
         observerAccess: .vnc,
-        humanPresence: .none
+        humanPresence: .exclusive
     )
 
     nonisolated let manifest: DisplayTargetManifest
@@ -283,7 +283,7 @@ extension ComputerUseFixtures {
             agentID: "computer-use:\(lifecycleID)",
             grants: [.app(bundleID: textEdit.bundleID, tier: .full)],
             budgets: ComputerUseBudgets(steps: 12, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         let session = ComputerUseSession(

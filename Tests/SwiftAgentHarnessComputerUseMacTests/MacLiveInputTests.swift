@@ -49,7 +49,7 @@ struct MacLiveInputTests {
         #expect(target.manifest.observerAccess == .stream)
         let lease = try await target.lease(LeaseRequest(
             target: MacHostDisplayTarget.defaultID, agentID: "agent", grants: [],
-            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), operatorInitiated: true, userPresent: true
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), initiator: .operator, userPresent: true
         ))
         await target.noteLiveFrame(space)
         let click = DisplayLiveViewInput.mouse(.down, x: 10, y: 10, button: .left, clickCount: 1, modifiers: [])
@@ -69,7 +69,7 @@ struct MacLiveInputTests {
         ))
         let lease = try await target.lease(LeaseRequest(
             target: MacHostDisplayTarget.defaultID, agentID: "agent", grants: [],
-            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), operatorInitiated: true, userPresent: true
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), initiator: .operator, userPresent: true
         ))
         #expect(try await target.liveFrame(lease) == nil)
         await target.release(lease, reason: .completed)

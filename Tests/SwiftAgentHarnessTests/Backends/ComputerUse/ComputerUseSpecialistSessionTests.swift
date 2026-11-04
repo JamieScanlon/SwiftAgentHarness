@@ -16,7 +16,7 @@ struct ComputerUseSpecialistSessionTests {
             agentID: "specialist",
             grants: ComputerUseSessionFixtures.grants,
             budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: userPresent
         ))
         let session = ComputerUseSession(

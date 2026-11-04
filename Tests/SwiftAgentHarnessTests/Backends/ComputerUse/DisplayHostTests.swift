@@ -14,7 +14,7 @@ struct DisplayHostTests {
             agentID: agentID,
             grants: ComputerUseSessionFixtures.grants,
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true,
             isHolderAlive: isHolderAlive
         )
@@ -115,7 +115,7 @@ struct DisplayHostTests {
         _ = try await first.lease(Self.leaseRequest())
         await first.close()
         await serving.value
-        #expect(await target.releases == [.aborted])
+        #expect(await target.releases == [.holderLost])
 
         let (client, host) = InMemoryDisplayHostConnection.pair()
         let servingSecond = Task { await server.serve(host) }
@@ -296,7 +296,7 @@ struct DisplayHostSocketTests {
             agentID: "agent",
             grants: [],
             budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         let png = try ComputerUseFixtures.pngScreenshot()

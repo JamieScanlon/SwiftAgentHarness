@@ -130,7 +130,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             semanticActions: [.press, .setValue, .focus, .openURL],
             observerAccess: liveView == nil ? .none : .stream,
             scripting: [.javascript],
-            humanPresence: profile == .user ? .shared : .none
+            humanPresence: profile == .user ? .shared : .exclusive
         )
     }
 
@@ -176,7 +176,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         var chromium = chromium
         chromium.viewport = configuration.viewport
         let browserConfiguration = chromium
-        return ManagedBrowserDisplayTarget(configuration: configuration, isolation: .container, liveView: liveView) {
+        return ManagedBrowserDisplayTarget(configuration: configuration, isolation: .process, liveView: liveView) {
             let proxy = BrowserNetworkProxy(policy: configuration.network, resolver: resolver)
             let port = try await proxy.start()
             let browser: ManagedChromium

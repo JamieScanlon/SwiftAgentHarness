@@ -82,7 +82,7 @@ public actor DisplayTargetRegistry {
     ) async throws(ComputerUseLeaseDenial) -> ComputerUseLeaseGrant {
         guard let target = targets[request.target] else { throw .unknownTarget(request.target) }
         let manifest = target.manifest
-        if manifest.isolation == .host, !(request.operatorInitiated && request.userPresent) {
+        if manifest.isolation == .host || manifest.humanPresence == .shared, !(request.initiator == .operator && request.userPresent) {
             throw .hostTargetRequiresPresentOperator
         }
         if request.delivery == .foregroundAllowed, !manifest.delivery.contains(.foreground) {

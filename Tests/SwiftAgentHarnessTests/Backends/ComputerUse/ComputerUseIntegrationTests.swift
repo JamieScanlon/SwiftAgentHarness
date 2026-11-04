@@ -15,7 +15,7 @@ struct ComputerUseIntegrationTests {
                 agentID: "agent",
                 grants: [.app(bundleID: "com.apple.TextEdit", tier: .full), .app(bundleID: "com.1password.1password", tier: .full)],
                 budgets: ComputerUseBudgets(steps: 20, maxDuration: .seconds(600)),
-                operatorInitiated: true,
+                initiator: .operator,
                 userPresent: true
             ),
             approve: { request in request.review.grantable.map(\.grant) }

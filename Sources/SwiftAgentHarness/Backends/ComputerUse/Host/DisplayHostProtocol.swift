@@ -22,7 +22,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
     public var grants: [ComputerUseGrant]
     public var budgets: ComputerUseBudgets
     public var delivery: ComputerUseDeliveryPolicy
-    public var operatorInitiated: Bool
+    public var initiator: ComputerUseInitiator
     public var userPresent: Bool
 
     public init(_ request: LeaseRequest) {
@@ -32,7 +32,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         self.grants = request.grants
         self.budgets = request.budgets
         self.delivery = request.delivery
-        self.operatorInitiated = request.operatorInitiated
+        self.initiator = request.initiator
         self.userPresent = request.userPresent
     }
 
@@ -44,7 +44,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
             grants: grants,
             budgets: budgets,
             delivery: delivery,
-            operatorInitiated: operatorInitiated,
+            initiator: initiator,
             userPresent: userPresent,
             isHolderAlive: isHolderAlive
         )

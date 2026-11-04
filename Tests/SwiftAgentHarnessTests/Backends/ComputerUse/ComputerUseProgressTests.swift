@@ -10,16 +10,19 @@ struct ComputerUseStateDigestTests {
         app: AppIdentity? = F.textEdit,
         windowID: String? = "w1",
         url: String? = nil,
-        elements: [ElementRef]? = nil,
+        elements: [(Int, ElementRef)]? = nil,
         image: Bool = true
     ) -> DisplayObservation {
         var observation = F.observation(id: "o_1", app: app ?? F.textEdit, url: url, withImage: image)
         observation.target.app = app
         observation.target.windowID = windowID
         if let elements {
+            let text = elements.map { depth, element in
+                String(repeating: "  ", count: depth) + "[\(element.id)] \(element.role) \"\(element.label ?? "")\""
+            }.joined(separator: "\n")
             observation.tree = ObservationTree(
-                text: "",
-                elements: Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) }),
+                text: text,
+                elements: Dictionary(uniqueKeysWithValues: elements.map { ($0.1.id, $0.1) }),
                 capturedAt: F.epoch
             )
         } else {
@@ -28,18 +31,18 @@ struct ComputerUseStateDigestTests {
         return observation
     }
 
-    private let form: [ElementRef] = [
-        ElementRef(id: "e1", role: "AXWindow", depth: 0),
-        ElementRef(id: "e2", role: "AXTextField", label: "Name", depth: 1, isFocused: true),
-        ElementRef(id: "e3", role: "AXButton", label: "Save", depth: 1),
+    private let form: [(Int, ElementRef)] = [
+        (0, ElementRef(id: "e1", role: "AXWindow")),
+        (1, ElementRef(id: "e2", role: "AXTextField", label: "Name", isFocused: true)),
+        (1, ElementRef(id: "e3", role: "AXButton", label: "Save")),
     ]
 
     @Test("Labels, values, and ids don't change the digest; it is structural")
     func ignoresText() {
-        let relabeled = [
-            ElementRef(id: "e9", role: "AXWindow", label: "Untitled 2", depth: 0),
-            ElementRef(id: "e7", role: "AXTextField", label: "Full name", depth: 1, isFocused: true),
-            ElementRef(id: "e8", role: "AXButton", label: "Submit now", depth: 1),
+        let relabeled: [(Int, ElementRef)] = [
+            (0, ElementRef(id: "e9", role: "AXWindow", label: "Untitled 2")),
+            (1, ElementRef(id: "e7", role: "AXTextField", label: "Full name", isFocused: true)),
+            (1, ElementRef(id: "e8", role: "AXButton", label: "Submit now")),
         ]
         #expect(ComputerUseStateDigest.of(observation(elements: form)) == ComputerUseStateDigest.of(observation(elements: relabeled)))
     }
@@ -48,16 +51,22 @@ struct ComputerUseStateDigestTests {
     func structuralChanges() {
         let base = ComputerUseStateDigest.of(observation(elements: form))
         #expect(base != nil)
-        #expect(ComputerUseStateDigest.of(observation(elements: form + [ElementRef(id: "e4", role: "AXSheet", depth: 1)])) != base)
+        #expect(ComputerUseStateDigest.of(observation(elements: form + [(1, ElementRef(id: "e4", role: "AXSheet"))])) != base)
         var moved = form
-        moved[1].isFocused = false
-        moved[2].isFocused = true
+        moved[1].1.isFocused = false
+        moved[2].1.isFocused = true
         #expect(ComputerUseStateDigest.of(observation(elements: moved)) != base)
         var deeper = form
-        deeper[2].depth = 2
+        deeper[2].0 = 2
         #expect(ComputerUseStateDigest.of(observation(elements: deeper)) != base)
         #expect(ComputerUseStateDigest.of(observation(app: F.safari, elements: form)) != base)
         #expect(ComputerUseStateDigest.of(observation(windowID: "w2", elements: form)) != base)
+    }
+
+    @Test("The shape is each line's indentation and role, read from the compact tree the model sees")
+    func shapeFromText() {
+        #expect(ComputerUseStateDigest.shape("window \"Doc\" app=TextEdit\n  [e1] toolbar\n    [e2] button \"Bold\"") == ["0:window", "2:toolbar", "4:button"])
+        #expect(observation(elements: form).fingerprint == ComputerUseStateDigest.of(observation(elements: form)))
     }
 
     @Test("A URL's page counts, its fragment doesn't")

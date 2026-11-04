@@ -14,7 +14,7 @@ private actor StubDisplayTarget: DisplayTarget {
         isolation: .vm,
         perception: [.pixels],
         delivery: [.background],
-        humanPresence: .none
+        humanPresence: .exclusive
     )
     private let lock = DisplayTargetLeaseLock()
 
@@ -51,7 +51,7 @@ private func leaseRequest() -> LeaseRequest {
         agentID: "agent",
         grants: [],
         budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-        operatorInitiated: true,
+        initiator: .operator,
         userPresent: true
     )
 }

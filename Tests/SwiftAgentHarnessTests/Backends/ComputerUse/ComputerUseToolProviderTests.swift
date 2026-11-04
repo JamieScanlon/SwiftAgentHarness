@@ -18,7 +18,7 @@ struct ComputerUseToolProviderTests {
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants + [.domain("example.com", tier: .click)],
             budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         let session = ComputerUseSession(
@@ -240,7 +240,7 @@ struct ComputerUseToolProviderTests {
         perception: [.pixels, .accessibility],
         delivery: [.background],
         scripting: [.javascript],
-        humanPresence: .none
+        humanPresence: .exclusive
     )
 
     @Test("Run-script is offered only on targets that run scripts, and becomes one script action")

@@ -14,8 +14,8 @@ public struct LeaseRequest: Sendable {
     public var grants: [ComputerUseGrant]
     public var budgets: ComputerUseBudgets
     public var delivery: ComputerUseDeliveryPolicy
-    /// The work was started by the operator (not a trigger or a non-owner channel arrival).
-    public var operatorInitiated: Bool
+    /// Who started the work, by trust.
+    public var initiator: ComputerUseInitiator
     /// A person is present to watch, approve, and take over.
     public var userPresent: Bool
     /// Lets a target tell a crashed holder from a live one.
@@ -28,7 +28,7 @@ public struct LeaseRequest: Sendable {
         grants: [ComputerUseGrant],
         budgets: ComputerUseBudgets,
         delivery: ComputerUseDeliveryPolicy = .backgroundOnly,
-        operatorInitiated: Bool,
+        initiator: ComputerUseInitiator,
         userPresent: Bool,
         isHolderAlive: @escaping @Sendable () async -> Bool = { true }
     ) {
@@ -38,10 +38,20 @@ public struct LeaseRequest: Sendable {
         self.grants = grants
         self.budgets = budgets
         self.delivery = delivery
-        self.operatorInitiated = operatorInitiated
+        self.initiator = initiator
         self.userPresent = userPresent
         self.isHolderAlive = isHolderAlive
     }
+}
+
+/// Who started the work a lease serves, by trust. Host targets need the operator; nothing else gets one.
+public enum ComputerUseInitiator: String, Sendable, Codable, Hashable {
+    /// The owner, working with the harness.
+    case `operator`
+    /// A channel arrival from someone other than the owner.
+    case nonOwner = "non-owner"
+    /// A scheduled trigger or other automation.
+    case trigger
 }
 
 /// A single-controller hold on one display target.
@@ -53,7 +63,7 @@ public struct Lease: Sendable, Codable, Hashable {
     public var grants: [ComputerUseGrant]
     public var budgets: ComputerUseBudgets
     public var delivery: ComputerUseDeliveryPolicy
-    public var operatorInitiated: Bool
+    public var initiator: ComputerUseInitiator
     public var userPresent: Bool
     public var issuedAt: Date
     /// When the session must end; see ``ComputerUseBudgets/endsAt(start:)``.
@@ -67,21 +77,28 @@ public struct Lease: Sendable, Codable, Hashable {
         self.grants = request.grants
         self.budgets = request.budgets
         self.delivery = request.delivery
-        self.operatorInitiated = request.operatorInitiated
+        self.initiator = request.initiator
         self.userPresent = request.userPresent
         self.issuedAt = issuedAt
         self.endsAt = request.budgets.endsAt(start: issuedAt)
     }
 }
 
+/// Why a lease ended. A session's terminal reason releases with the same-named value; the step and cost ceilings
+/// release as `budgetExhausted`, and the time ceiling and grant expiry as `expired`.
 public enum ReleaseReason: String, Sendable, Codable, Hashable {
     case completed
-    case aborted
-    case killSwitch = "kill-switch"
+    case cancelled
     case budgetExhausted = "budget-exhausted"
+    case noProgress = "no-progress"
+    case deadline
+    /// The time ceiling or the absolute grant expiry.
     case expired
+    case idleTimeout = "idle-timeout"
+    case killSwitch = "kill-switch"
     case permissionRevoked = "permission-revoked"
-    case error
+    /// The lease holder's connection died.
+    case holderLost = "holder-lost"
 }
 
 public enum PermissionState: String, Sendable, Codable, Hashable {

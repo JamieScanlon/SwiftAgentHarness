@@ -115,7 +115,7 @@ struct MacHostDisplayTargetFocusTests {
             agentID: "agent",
             grants: grants,
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         )
     }

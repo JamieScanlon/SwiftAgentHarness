@@ -416,7 +416,8 @@ enum ComputerUseResultBuilder {
             result.status = .blocked
             result.reason = "a platform permission was revoked"
             return result
-        case .ended?, nil:
+        case .ended?, .idleTimeout?, .cancelled?, nil:
+            // How the child run ended decides these.
             break
         }
         switch child {

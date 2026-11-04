@@ -111,7 +111,7 @@ enum ComputerUseSessionFixtures {
             agentID: "agent",
             grants: grants,
             budgets: budgets,
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: userPresent
         ))
         let session = ComputerUseSession(
@@ -333,7 +333,7 @@ struct ComputerUseSessionGatingTests {
         let lease = Lease(
             request: LeaseRequest(
                 target: target.manifest.id, agentID: "agent", grants: ComputerUseSessionFixtures.grants,
-                budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)), operatorInitiated: true, userPresent: true
+                budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)), initiator: .operator, userPresent: true
             ),
             issuedAt: ComputerUseFixtures.epoch
         )

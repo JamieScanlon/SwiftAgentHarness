@@ -162,22 +162,26 @@ final class ComputerUseInstallation: Sendable {
 /// Who started the run that asked for computer use. Host targets need an operator-initiated run with the user
 /// present.
 struct ComputerUseRunOrigin: Sendable, Equatable {
-    var operatorInitiated: Bool
+    var initiator: ComputerUseInitiator
     var userPresent: Bool
 
-    static let interactiveOwner = ComputerUseRunOrigin(operatorInitiated: true, userPresent: true)
+    static let interactiveOwner = ComputerUseRunOrigin(initiator: .operator, userPresent: true)
 
-    init(operatorInitiated: Bool, userPresent: Bool) {
-        self.operatorInitiated = operatorInitiated
+    init(initiator: ComputerUseInitiator, userPresent: Bool) {
+        self.initiator = initiator
         self.userPresent = userPresent
     }
 
     init(laneOrigin: RunLaneOriginKind, senderIsOwner: Bool?) {
-        operatorInitiated = senderIsOwner != false
         switch laneOrigin {
         case .interactive, .pendingCompletionResume, .planExitDenialResume:
+            initiator = senderIsOwner == false ? .nonOwner : .operator
             userPresent = true
-        case .trigger, .subagentSpawn:
+        case .trigger:
+            initiator = .trigger
+            userPresent = false
+        case .subagentSpawn:
+            initiator = senderIsOwner == false ? .nonOwner : .operator
             userPresent = false
         }
     }

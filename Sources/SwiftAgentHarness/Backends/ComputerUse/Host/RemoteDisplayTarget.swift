@@ -136,7 +136,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
         var released = false
         for holder in holders.values {
             guard !(await holder.isAlive()) else { continue }
-            await release(holder.lease, reason: .aborted)
+            await release(holder.lease, reason: .holderLost)
             released = true
         }
         return released

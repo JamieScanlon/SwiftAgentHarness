@@ -108,7 +108,7 @@ struct ComputerUseExtensionTests {
         let result = await session.perform([.wait(milliseconds: 1)])
         #expect(result.outcomes.map(\.effect) == [.notExecuted])
         #expect(await session.terminalReason == .noProgress)
-        #expect(await target.releases == [.aborted])
+        #expect(await target.releases == [.noProgress])
     }
 
     @Test("A deadline ends the session as deadline and is never extended, even with a user present")
@@ -124,7 +124,7 @@ struct ComputerUseExtensionTests {
         _ = await session.perform([S.observe])
         #expect(await session.terminalReason == .deadline)
         #expect(await oversight.questions.isEmpty)
-        #expect(await target.releases == [.expired])
+        #expect(await target.releases == [.deadline])
     }
 
     @Test("At the time ceiling a present user's yes adds the share of the ceiling, never past the deadline")
@@ -169,7 +169,7 @@ struct ComputerUseExtensionTests {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
         let lease = try await target.lease(LeaseRequest(
             target: target.manifest.id, agentID: "a", grants: S.grants, budgets: Self.budgets(steps: 3, ceiling: 10),
-            operatorInitiated: true, userPresent: true
+            initiator: .operator, userPresent: true
         ))
         let session = ComputerUseSession(
             target: target,
@@ -202,7 +202,7 @@ struct ComputerUseChildRunDeadlineTests {
             agentID: "a",
             grants: S.grants,
             budgets: ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: userPresent
         ))
         return ComputerUseSession(

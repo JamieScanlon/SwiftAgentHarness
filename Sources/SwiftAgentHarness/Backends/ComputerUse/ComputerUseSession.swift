@@ -91,13 +91,20 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case deadline
     /// In watch mode, nobody watched the live view, or the target serves none.
     case liveViewRequired = "live-view-required"
+    /// The specialist produced nothing for its idle timeout.
+    case idleTimeout = "idle-timeout"
+    /// The run was stopped or failed before the session ended on its own.
+    case cancelled
     case ended
 
     var releaseReason: ReleaseReason {
         switch self {
         case .stepBudget, .costBudget: return .budgetExhausted
-        case .timeBudget, .deadline: return .expired
-        case .noProgress, .liveViewRequired: return .aborted
+        case .timeBudget: return .expired
+        case .deadline: return .deadline
+        case .noProgress: return .noProgress
+        case .liveViewRequired, .cancelled: return .cancelled
+        case .idleTimeout: return .idleTimeout
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
         case .ended: return .completed

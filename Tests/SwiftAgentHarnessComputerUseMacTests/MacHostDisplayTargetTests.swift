@@ -43,7 +43,7 @@ struct MacHostDisplayTargetTests {
             grants: grants,
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
             delivery: delivery,
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         )
     }

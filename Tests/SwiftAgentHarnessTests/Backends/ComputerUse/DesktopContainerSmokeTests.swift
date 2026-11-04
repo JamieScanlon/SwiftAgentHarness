@@ -27,7 +27,7 @@ struct DesktopContainerSmokeTests {
             agentID: "smoke",
             grants: [.app(bundleID: "XTerm", tier: .full)],
             budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         let name = try #require(try await containers().first)

@@ -147,8 +147,6 @@ public struct ElementRef: Sendable, Codable, Hashable {
     public var isSecureInput: Bool
     /// Declared input purpose such as an HTML `autocomplete` token (`cc-number`, `current-password`).
     public var inputPurpose: String?
-    /// Nesting depth in the tree as rendered, 0 for top-level elements.
-    public var depth: Int?
     public var isFocused: Bool
 
     public init(
@@ -161,7 +159,6 @@ public struct ElementRef: Sendable, Codable, Hashable {
         url: String? = nil,
         isSecureInput: Bool = false,
         inputPurpose: String? = nil,
-        depth: Int? = nil,
         isFocused: Bool = false
     ) {
         self.id = id
@@ -173,7 +170,6 @@ public struct ElementRef: Sendable, Codable, Hashable {
         self.url = url
         self.isSecureInput = isSecureInput
         self.inputPurpose = inputPurpose
-        self.depth = depth
         self.isFocused = isFocused
     }
 }
@@ -212,6 +208,10 @@ public struct DisplayObservation: Sendable, Codable, Hashable {
 
     /// Screen content is always external content.
     public var untrusted: Bool { true }
+
+    /// The coarse state digest progress is measured by; see ``ComputerUseStateDigest``. `nil` when nothing
+    /// identifies the state.
+    public var fingerprint: String? { ComputerUseStateDigest.of(self) }
 
     public init(
         id: ObservationID,

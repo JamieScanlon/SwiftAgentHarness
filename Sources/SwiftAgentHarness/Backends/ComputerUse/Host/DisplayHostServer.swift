@@ -86,7 +86,7 @@ public actor DisplayHostServer {
                     await self?.isOpen(id) ?? false
                 })
                 guard connections[id]?.open == true else {
-                    await target.release(lease, reason: .aborted)
+                    await target.release(lease, reason: .holderLost)
                     return .failure(.target(.driverFailure("connection closed")))
                 }
                 connections[id]?.leases[lease.id] = lease
@@ -143,7 +143,7 @@ public actor DisplayHostServer {
     private func disconnect(_ id: UUID) async {
         guard let state = connections.removeValue(forKey: id) else { return }
         for lease in state.leases.values {
-            await target.release(lease, reason: .aborted)
+            await target.release(lease, reason: .holderLost)
         }
     }
 }

@@ -14,7 +14,7 @@ struct ComputerUseWatchModeTests {
         delivery: [.background],
         semanticActions: [.press, .setValue, .openURL],
         observerAccess: .stream,
-        humanPresence: .none
+        humanPresence: .exclusive
     )
 
     actor ActivityLog {
@@ -36,7 +36,7 @@ struct ComputerUseWatchModeTests {
             agentID: "agent",
             grants: [.domain("bank.example", tier: .full), .app(bundleID: ComputerUseFixtures.textEdit.bundleID, tier: .full)],
             budgets: ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(3600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: userPresent
         ))
         var configuration = ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["Pay the bill."]))
@@ -109,7 +109,7 @@ struct ComputerUseWatchModeTests {
         #expect(result.terminal == .liveViewRequired)
         #expect(await session.terminalDetail?.contains("live view") == true)
         #expect(await target.actCalls.isEmpty)
-        #expect(await target.releases == [.aborted])
+        #expect(await target.releases == [.cancelled])
     }
 
     @Test("A target with no live view can't be watched, so the session ends without asking")

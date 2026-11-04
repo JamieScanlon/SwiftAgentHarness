@@ -170,7 +170,7 @@ struct ManagedBrowserDisplayTargetTests {
             agentID: "specialist",
             grants: [.domain("example.com", tier: .full)],
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)),
-            operatorInitiated: profile == .user,
+            initiator: .operator,
             userPresent: profile == .user
         ))
         return Fixture(browser: browser, target: target, lease: lease, denials: denials)
@@ -184,7 +184,8 @@ struct ManagedBrowserDisplayTargetTests {
     func manifest() {
         let target = ManagedBrowserDisplayTarget(isolation: .container) { throw CDPError.closed }
         #expect(target.manifest.isolation == .container)
-        #expect(target.manifest.humanPresence == .none)
+        #expect(ManagedBrowserDisplayTarget.localChromium().manifest.isolation == .process, "a launched browser shares the host's OS and network")
+        #expect(target.manifest.humanPresence == .exclusive)
         #expect(target.manifest.perception == [.dom, .pixels])
         #expect(target.manifest.delivery == [.background])
         #expect(target.manifest.requires.isEmpty)
@@ -202,7 +203,7 @@ struct ManagedBrowserDisplayTargetTests {
         await #expect(throws: DisplayTargetError.targetBusy(holder: "specialist")) {
             _ = try await fixture.target.lease(LeaseRequest(
                 target: "managed-browser", agentID: "other", grants: [], budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-                operatorInitiated: true, userPresent: true
+                initiator: .operator, userPresent: true
             ))
         }
         await fixture.target.release(fixture.lease, reason: .completed)

@@ -62,7 +62,7 @@ struct ManagedBrowserSmokeTests {
             agentID: "smoke",
             grants: [.domain("127.0.0.1", tier: .full)],
             budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
     }

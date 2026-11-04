@@ -18,7 +18,7 @@ enum ComputerUseVendorFixtures {
             agentID: "agent",
             grants: [.domain("shop.example", tier: .full), .app(bundleID: ComputerUseFixtures.textEdit.bundleID, tier: .full)],
             budgets: ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(3600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         var configuration = ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["Buy the blue mug."]))

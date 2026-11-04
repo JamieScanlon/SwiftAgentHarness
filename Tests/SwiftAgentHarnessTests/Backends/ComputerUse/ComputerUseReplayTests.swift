@@ -40,7 +40,7 @@ struct ComputerUseReplayTests {
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants,
             budgets: ComputerUseBudgets(steps: 50, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         var configuration = ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["Save the file."]))

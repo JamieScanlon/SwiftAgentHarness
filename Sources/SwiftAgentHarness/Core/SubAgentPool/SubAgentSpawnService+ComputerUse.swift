@@ -74,7 +74,7 @@ extension SubAgentSpawnService {
                     agentID: "computer-use:\(lifecycleID)",
                     grants: task.grants,
                     budgets: task.budgets,
-                    operatorInitiated: origin.operatorInitiated,
+                    initiator: origin.initiator,
                     userPresent: origin.userPresent
                 ),
                 purpose: task.goal,
@@ -99,7 +99,7 @@ extension SubAgentSpawnService {
                 modelOverride: definition.modelRef == nil ? nil : model
             )
         } catch {
-            await grant.target.release(grant.lease, reason: .error)
+            await grant.target.release(grant.lease, reason: .cancelled)
             await finishLocalAgentLifecycle(
                 lifecycleID: lifecycleID,
                 parentConversationID: conversationID,
@@ -187,7 +187,12 @@ extension SubAgentSpawnService {
             liveness: liveness
         )
         await deps.computerUse.sessions.remove(for: childID)
-        await session.end()
+        switch outcome {
+        case .completed: await session.end()
+        case .idleTimedOut: await session.end(.idleTimeout)
+        case .timedOut: await session.end(.timeBudget)
+        case .failed, .cancelled: await session.end(.cancelled)
+        }
 
         let result = await Self.specialistResult(
             task: task,

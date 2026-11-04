@@ -19,7 +19,7 @@ struct ManagedBrowserLiveViewTests {
             agentID: "specialist",
             grants: [.domain("example.com", tier: .full)],
             budgets: ComputerUseBudgets(steps: 20, maxDuration: .seconds(600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         return (browser, target, lease)

@@ -69,7 +69,7 @@ struct AndroidDisplayTargetTests {
         let target = AndroidDisplayTarget(configuration: AndroidDeviceConfiguration(serial: "emulator-5554", settleDelay: .zero), runner: adb)
         let lease = try await target.lease(LeaseRequest(
             target: "android-device", agentID: "a", grants: [.app(bundleID: "com.example.app", tier: .full)],
-            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), operatorInitiated: true, userPresent: true
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), initiator: .operator, userPresent: true
         ))
         return Fixture(adb: adb, target: target, lease: lease)
     }
@@ -105,7 +105,7 @@ struct AndroidDisplayTargetTests {
         await #expect(throws: DisplayTargetError.self) {
             try await target.lease(LeaseRequest(
                 target: "android-device", agentID: "a", grants: [], budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-                operatorInitiated: true, userPresent: true
+                initiator: .operator, userPresent: true
             ))
         }
         #expect(try AndroidDisplayTarget.screenSize("Physical size: 1080x2400\nOverride size: 720x1600") == ImagePixelSize(width: 720, height: 1600))

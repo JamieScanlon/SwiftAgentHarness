@@ -15,7 +15,7 @@ public struct X11DesktopConfiguration: Sendable {
         id: DisplayTargetID,
         label: String,
         isolation: DisplayTargetIsolation,
-        humanPresence: DisplayHumanPresence = .none,
+        humanPresence: DisplayHumanPresence = .exclusive,
         settleDelay: Duration = .milliseconds(150),
         liveViewFrameInterval: Duration = .milliseconds(500),
         retainedObservations: Int = 8

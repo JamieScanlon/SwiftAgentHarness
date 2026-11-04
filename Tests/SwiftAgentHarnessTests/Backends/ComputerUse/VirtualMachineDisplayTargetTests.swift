@@ -10,7 +10,7 @@ struct DisplayHostTCPTests {
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants,
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         )
     }
@@ -152,13 +152,13 @@ struct VirtualMachineDisplayTargetTests {
 
     static let manifest = DisplayTargetManifest(
         id: "test-vm", label: "Test VM", platform: "linux", isolation: .vm,
-        perception: [.pixels], delivery: [.background], humanPresence: .none
+        perception: [.pixels], delivery: [.background], humanPresence: .exclusive
     )
 
     private static func request(_ agent: String = "agent") -> LeaseRequest {
         LeaseRequest(
             target: "test-vm", agentID: agent, grants: ComputerUseSessionFixtures.grants,
-            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), operatorInitiated: false, userPresent: false
+            budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)), initiator: .trigger, userPresent: false
         )
     }
 
@@ -255,7 +255,7 @@ struct VirtualMachineDisplayTargetTests {
         }
         let target = VirtualMachineDisplayTarget.macOS(controller: Loopback(), configuration: MacGuestConfiguration(port: listener.port, secret: secret))
         #expect(target.manifest.isolation == .vm)
-        #expect(target.manifest.humanPresence == .none)
+        #expect(target.manifest.humanPresence == .exclusive)
         #expect(target.manifest.observerAccess == .none)
         #expect(VirtualMachineDisplayTarget.macOS(
             controller: Loopback(), configuration: MacGuestConfiguration(port: listener.port, secret: secret), liveView: DisplayLiveViewServer()

@@ -26,7 +26,7 @@ struct ManagedBrowserSessionTests {
                 agentID: "specialist",
                 grants: [.domain("example.com", tier: .full)],
                 budgets: ComputerUseBudgets(steps: 20, maxDuration: .seconds(600)),
-                operatorInitiated: false,
+                initiator: .trigger,
                 userPresent: userPresent
             ),
             approve: { request in request.review.grantable.map(\.grant) }

@@ -115,7 +115,7 @@ struct DisplayTargetRegistryTests {
     private func request(
         target: DisplayTargetID,
         grants: [ComputerUseGrant] = [.app(bundleID: "com.apple.TextEdit", tier: .full)],
-        operatorInitiated: Bool = true,
+        initiator: ComputerUseInitiator = .operator,
         userPresent: Bool = true,
         maxDuration: Duration = .seconds(3600)
     ) -> LeaseRequest {
@@ -125,7 +125,7 @@ struct DisplayTargetRegistryTests {
             grants: grants,
             budgets: ComputerUseBudgets(steps: 50, maxDuration: maxDuration),
             delivery: .backgroundOnly,
-            operatorInitiated: operatorInitiated,
+            initiator: initiator,
             userPresent: userPresent
         )
     }
@@ -134,10 +134,11 @@ struct DisplayTargetRegistryTests {
     func hostRequiresPresentOperator() async throws {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
         let registry = DisplayTargetRegistry(targets: [host])
-        for (operatorInitiated, userPresent) in [(false, true), (true, false), (false, false)] {
+        let refused: [(ComputerUseInitiator, Bool)] = [(.nonOwner, true), (.trigger, true), (.operator, false), (.trigger, false)]
+        for (initiator, userPresent) in refused {
             await #expect(throws: ComputerUseLeaseDenial.hostTargetRequiresPresentOperator) {
                 _ = try await registry.lease(
-                    self.request(target: host.manifest.id, operatorInitiated: operatorInitiated, userPresent: userPresent),
+                    self.request(target: host.manifest.id, initiator: initiator, userPresent: userPresent),
                     approve: { $0.review.grantable.map(\.grant) }
                 )
             }
@@ -146,13 +147,26 @@ struct DisplayTargetRegistryTests {
         #expect(granted.lease.target == host.manifest.id)
     }
 
+    @Test("A shared target follows the host-target rules whatever its isolation")
+    func sharedRemoteDevice() async throws {
+        var manifest = FakeDisplayTarget.vmManifest
+        manifest.isolation = .remoteDevice
+        manifest.humanPresence = .shared
+        let phone = FakeDisplayTarget(manifest: manifest)
+        let registry = DisplayTargetRegistry(targets: [phone])
+        await #expect(throws: ComputerUseLeaseDenial.hostTargetRequiresPresentOperator) {
+            _ = try await registry.lease(self.request(target: phone.manifest.id, initiator: .trigger, userPresent: false), approve: { $0.review.grantable.map(\.grant) })
+        }
+        _ = try await registry.lease(request(target: phone.manifest.id), approve: { $0.review.grantable.map(\.grant) })
+    }
+
     @Test("Headless sessions may lease isolated targets, with a short absolute expiry")
     func headlessIsolatedTarget() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { now })
         let registry = DisplayTargetRegistry(targets: [vm], unattendedMaxDuration: .seconds(20 * 60), now: { now })
         let granted = try await registry.lease(
-            request(target: vm.manifest.id, operatorInitiated: false, userPresent: false),
+            request(target: vm.manifest.id, initiator: .trigger, userPresent: false),
             approve: { $0.review.grantable.map(\.grant) }
         )
         #expect(granted.lease.budgets.grantExpiry == .seconds(20 * 60))

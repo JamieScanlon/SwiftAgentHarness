@@ -66,7 +66,7 @@ struct X11DisplayTargetTests {
             agentID: "specialist",
             grants: [.app(bundleID: "XTerm", tier: .full)],
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(600)),
-            operatorInitiated: false,
+            initiator: .trigger,
             userPresent: false
         ))
         return Fixture(runner: runner, target: target, lease: lease)
@@ -89,7 +89,7 @@ struct X11DisplayTargetTests {
         #expect(target.manifest.perception == [.pixels])
         #expect(target.manifest.delivery == [.background])
         #expect(target.manifest.semanticActions == [.launchApp, .openURL])
-        #expect(target.manifest.humanPresence == .none)
+        #expect(target.manifest.humanPresence == .exclusive)
         #expect(target.manifest.scripting.isEmpty)
         #expect(target.manifest.observerAccess == .none)
         #expect(X11DisplayTarget.desktopContainer(liveView: DisplayLiveViewServer(), host: FakeDesktopRunner()).manifest.observerAccess == .stream)
@@ -275,7 +275,7 @@ struct DesktopContainerTests {
         let target = X11DisplayTarget.desktopContainer(host: host)
         let lease = try await target.lease(LeaseRequest(
             target: "desktop-container", agentID: "a", grants: [], budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-            operatorInitiated: false, userPresent: false
+            initiator: .trigger, userPresent: false
         ))
         let commands = await host.commands
         let run = try #require(commands.first { $0.dropFirst().first == "run" })
@@ -300,7 +300,7 @@ struct DesktopContainerTests {
         await #expect(throws: DisplayTargetError.self) {
             try await target.lease(LeaseRequest(
                 target: "desktop-container", agentID: "a", grants: [], budgets: ComputerUseBudgets(steps: 1, maxDuration: .seconds(60)),
-                operatorInitiated: false, userPresent: false
+                initiator: .trigger, userPresent: false
             ))
         }
         #expect(await host.commands.last?.prefix(3) == ["docker", "rm", "--force"])

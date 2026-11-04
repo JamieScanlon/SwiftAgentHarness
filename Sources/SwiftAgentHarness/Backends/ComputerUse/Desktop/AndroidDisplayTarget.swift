@@ -165,7 +165,7 @@ public actor AndroidDisplayTarget: DisplayTarget {
                 elements: Dictionary(uniqueKeysWithValues: nodes.map { ref, node in
                     (ref, ElementRef(
                         id: ref, role: node.role, label: node.label.isEmpty ? nil : node.label, frame: node.bounds,
-                        app: AppIdentity(bundleID: node.package), isSecureInput: node.password, depth: node.depth, isFocused: node.focused
+                        app: AppIdentity(bundleID: node.package), isSecureInput: node.password, isFocused: node.focused
                     ))
                 }),
                 capturedAt: treeAt

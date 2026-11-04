@@ -436,7 +436,7 @@ extension VirtualMachineDisplayTarget {
             delivery: [.background, .foreground],
             semanticActions: [.press, .setValue, .focus, .menuPath, .launchApp, .openURL],
             observerAccess: liveView == nil ? .none : .stream,
-            humanPresence: .none
+            humanPresence: .exclusive
         )
         return VirtualMachineDisplayTarget(
             manifest: manifest,

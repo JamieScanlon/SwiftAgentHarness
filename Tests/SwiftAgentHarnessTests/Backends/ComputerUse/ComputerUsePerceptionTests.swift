@@ -46,7 +46,7 @@ struct ComputerUsePerceptionTests {
             agentID: "agent",
             grants: ComputerUseSessionFixtures.grants,
             budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         var configuration = ComputerUseSessionConfiguration(

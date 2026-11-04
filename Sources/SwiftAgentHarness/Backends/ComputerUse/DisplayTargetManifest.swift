@@ -2,8 +2,13 @@ import Foundation
 
 public typealias DisplayTargetID = String
 
+/// What separates a target from the user's data and machine.
 public enum DisplayTargetIsolation: String, Sendable, Codable, Hashable {
+    /// The user's own session.
     case host
+    /// A separate local process with a throwaway profile and no user data, on the host's OS and network, such as a
+    /// locally launched browser. Isolated for data, not for network.
+    case process
     case vm
     case container
     case remoteBrowser = "remote-browser"
@@ -49,10 +54,11 @@ public enum DisplayPlatformPermission: String, Sendable, Codable, Hashable {
 }
 
 public enum DisplayHumanPresence: String, Sendable, Codable, Hashable {
-    /// A person may be using this screen right now.
+    /// A person may be using this screen right now. A shared target follows the host-target rules whatever its
+    /// isolation.
     case shared
-    /// Nobody uses this screen but the agent (VMs, containers, managed browsers).
-    case none
+    /// Only the agent drives it. People may watch through a live view or act during takeover.
+    case exclusive
 }
 
 /// What a display-target plugin declares. Grants, delivery defaults, and confirmation requirements are derived from

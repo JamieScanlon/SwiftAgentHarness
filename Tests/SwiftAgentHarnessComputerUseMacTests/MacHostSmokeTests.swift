@@ -22,7 +22,7 @@ struct MacHostSmokeTests {
             agentID: "smoke",
             grants: [.app(bundleID: frontmost.identity.bundleID, tier: .view)],
             budgets: ComputerUseBudgets(steps: 5, maxDuration: .seconds(60)),
-            operatorInitiated: true,
+            initiator: .operator,
             userPresent: true
         ))
         defer { Task { await target.release(lease, reason: .completed) } }

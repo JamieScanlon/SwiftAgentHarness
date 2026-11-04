@@ -57,7 +57,7 @@ struct ComputerUseBudgetPolicyTests {
     @Test("A lease's end time is fixed when it is issued, so time spent in the grant dialog isn't charged")
     func leaseEndsAt() {
         let budgets = ComputerUseBudgets(steps: 10, maxDuration: .seconds(600))
-        let request = LeaseRequest(target: "t", agentID: "a", grants: [], budgets: budgets, operatorInitiated: true, userPresent: true)
+        let request = LeaseRequest(target: "t", agentID: "a", grants: [], budgets: budgets, initiator: .operator, userPresent: true)
         let lease = Lease(request: request, issuedAt: start)
         #expect(lease.endsAt == start.addingTimeInterval(600))
     }
@@ -73,7 +73,7 @@ struct ComputerUseBudgetPolicyTests {
                 agentID: "agent",
                 grants: [.app(bundleID: "com.apple.TextEdit", tier: .full)],
                 budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(3_600)),
-                operatorInitiated: true,
+                initiator: .operator,
                 userPresent: userPresent
             )
         }

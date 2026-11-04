@@ -672,6 +672,7 @@ struct ComputerUseSpecialistIntegrationTests {
         let (_, result) = try await invoke(session, parent: parent)
         #expect(result["status"] as? String == "failed")
         #expect(result["reason"] as? String == "idle-timeout")
+        #expect(await target.releases == [.idleTimeout])
         #expect(Date().timeIntervalSince(started) < 5)
     }
 
