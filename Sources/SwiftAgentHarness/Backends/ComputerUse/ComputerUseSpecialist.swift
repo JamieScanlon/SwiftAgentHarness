@@ -357,6 +357,24 @@ public enum ComputerUseChildOutcome: Sendable, Equatable {
 }
 
 enum ComputerUseResultBuilder {
+    /// `needs-user`, carrying the open handoff or question so the parent can relay it.
+    private static func awaitingUser(
+        _ result: ComputerUseResult,
+        handoff: ComputerUseHandoffRequest?,
+        question: String?,
+        reason: String
+    ) -> ComputerUseResult {
+        var result = result
+        result.status = .needsUser
+        result.reason = reason
+        if let handoff {
+            result.handoff = ComputerUseResult.Handoff(reason: handoff.reason.rawValue, prompt: handoff.prompt)
+        } else if let question {
+            result.handoff = ComputerUseResult.Handoff(reason: ComputerUseHandoffReason.ambiguous.rawValue, prompt: question)
+        }
+        return result
+    }
+
     static func build(
         task: ComputerUseTask,
         verifications: [ComputerUseVerification],
@@ -365,6 +383,7 @@ enum ComputerUseResultBuilder {
         budget: ComputerUseResult.Budget,
         child: ComputerUseChildOutcome,
         unresolvedHandoff: ComputerUseHandoffRequest?,
+        unresolvedQuestion: String? = nil,
         headlessDenials: [String],
         missingGrants: [ComputerUseGrant] = [],
         finalText: String?,
@@ -408,7 +427,13 @@ enum ComputerUseResultBuilder {
             result.status = .needsUser
             result.reason = terminalDetail ?? "the session needed the user to watch its live view"
             return result
+        case .needsUser?:
+            return Self.awaitingUser(result, handoff: unresolvedHandoff, question: unresolvedQuestion, reason: terminalDetail ?? "the user didn't answer")
         case .killSwitch?:
+            // A stop while the user was being asked hands the open question to the parent.
+            if unresolvedHandoff != nil || unresolvedQuestion != nil {
+                return Self.awaitingUser(result, handoff: unresolvedHandoff, question: unresolvedQuestion, reason: "stopped by the user while waiting on them")
+            }
             result.status = .blocked
             result.reason = "stopped by the user"
             return result

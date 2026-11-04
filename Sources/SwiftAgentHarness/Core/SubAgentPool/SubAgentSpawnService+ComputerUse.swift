@@ -295,6 +295,7 @@ extension SubAgentSpawnService {
             ),
             child: child,
             unresolvedHandoff: await session.unresolvedHandoff,
+            unresolvedQuestion: await session.unresolvedQuestion,
             headlessDenials: await session.headlessDenials.map(\.canonical),
             missingGrants: await session.missingGrants,
             finalText: finalText,

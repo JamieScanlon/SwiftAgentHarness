@@ -53,7 +53,7 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var liveViewRoles: [DisplayLiveViewRole] = []
     private(set) var observerEnds = 0
     /// The user's viewers ``liveViewers(_:)`` reports.
-    var userViewers = 0
+    var viewers = 0
     var servedFrame: DisplayLiveViewFrame?
     private(set) var liveFrameCalls = 0
     private(set) var liveInputs: [DisplayLiveViewInput] = []
@@ -161,7 +161,7 @@ actor FakeDisplayTarget: DisplayTarget {
         return liveViewLink.map { DisplayLiveView(url: $0.url, viewOnly: $0.viewOnly || role == .observer, expiresAt: $0.expiresAt, role: role) }
     }
 
-    func setUserViewers(_ count: Int) { userViewers = count }
+    func setViewers(_ count: Int) { viewers = count }
 
     func setServedFrame(_ frame: DisplayLiveViewFrame?) { servedFrame = frame }
 
@@ -178,7 +178,7 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func liveViewers(_ lease: Lease) async throws -> Int {
         try await requireLease(lease)
-        return userViewers
+        return viewers
     }
 
     func endObservers(_ lease: Lease) async throws {

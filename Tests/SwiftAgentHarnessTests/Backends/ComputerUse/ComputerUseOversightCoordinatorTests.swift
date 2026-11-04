@@ -78,11 +78,11 @@ struct ComputerUseOversightCoordinatorTests {
         #expect(await reply == .answered("ok"))
     }
 
-    @Test("An unanswered question times out as unavailable")
+    @Test("An unanswered question times out, so the session can hand it to the parent")
     func questionTimesOut() async {
         let publisher = RecordingIntentPublisher()
         let reply = await oversight(coordinator(publisher, questionTimeout: .milliseconds(20))).askUser("Anyone there?")
-        #expect(reply == .unavailable)
+        #expect(reply == .timedOut)
         #expect(await publisher.kinds == [.computerUseRequest, .computerUseRequestCleared])
     }
 

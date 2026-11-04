@@ -593,6 +593,8 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             )
         case .unavailable:
             return failure(toolCall, "no user is available to answer; stop and report what you need")
+        case .timedOut:
+            return failure(toolCall, "the user didn't answer in time; the session ended so the question can be passed on. Stop and report")
         }
     }
 
@@ -609,6 +611,8 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             return failure(toolCall, "the user declined the handoff")
         case .unavailable:
             return failure(toolCall, "no user is available for a handoff; stop and report what you need")
+        case .timedOut:
+            return failure(toolCall, "the user didn't hand back in time; the session ended so the handoff can be passed on. Stop and report")
         }
     }
 

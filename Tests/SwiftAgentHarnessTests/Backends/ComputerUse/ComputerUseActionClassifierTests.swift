@@ -157,11 +157,17 @@ struct ComputerUseActionClassifierTests {
         #expect(classify(.openURL("x-apple.systempreferences:com.apple.preference.security"), grants: grants).actionClass.isOutOfGrant)
     }
 
-    @Test("The stop key is never synthesized, in any spelling")
+    @Test("The stop key is never synthesized, in any spelling; Escape stays usable for dialogs")
     func stopKey() throws {
-        #expect(classify(.key(combo: try KeyCombo(parsing: "Esc"))).actionClass.isOutOfGrant)
-        #expect(classify(.hold(combo: try KeyCombo(parsing: "escape"), milliseconds: 100)).actionClass.isOutOfGrant)
-        #expect(classify(.type(text: "a\u{1b}b", into: .ref("e5", observation: "o_1"))).actionClass.isOutOfGrant)
+        func reserved(_ action: ComputerAction) -> Bool {
+            if case .outOfGrant(let reason) = classify(action).actionClass { return reason.contains("stop key") }
+            return false
+        }
+        #expect(reserved(.key(combo: try KeyCombo(parsing: "ctrl+alt+cmd+."))))
+        #expect(reserved(.key(combo: try KeyCombo(parsing: "Command+Option+Control+."))))
+        #expect(reserved(.hold(combo: .defaultStopKey, milliseconds: 100)))
+        #expect(classify(.key(combo: try KeyCombo(parsing: "Esc"))).actionClass == .interact)
+        #expect(classify(.type(text: "a\u{1b}b", into: .ref("e5", observation: "o_1"))).actionClass == .interact)
     }
 
     @Test("Global shortcuts need the system-keys flag")

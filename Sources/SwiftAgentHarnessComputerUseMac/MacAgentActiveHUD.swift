@@ -13,7 +13,7 @@ public struct MacAgentActiveHUDState: Sendable, Equatable {
     public var stopHint: String
     private var lifecycleID: String?
 
-    public init(stopHint: String = "Press Esc or click Stop to stop the agent") {
+    public init(stopHint: String = "Press ⌃⌥⌘. or click Stop to stop the agent") {
         self.stopHint = stopHint
     }
 

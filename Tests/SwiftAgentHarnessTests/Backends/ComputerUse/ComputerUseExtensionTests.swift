@@ -19,14 +19,14 @@ struct ComputerUseExtensionTests {
     private static func make(
         _ budgets: ComputerUseBudgets,
         userPresent: Bool = true,
-        oversight: ScriptedComputerUseOversight? = ScriptedComputerUseOversight(reply: "yes"),
+        approvals: RecordingComputerUseApprovals = RecordingComputerUseApprovals(.approved),
         clock: ComputerUseTestClock = ComputerUseTestClock()
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         try await S.make(
             manifest: FakeDisplayTarget.vmManifest,
             userPresent: userPresent,
             budgets: budgets,
-            oversight: oversight,
+            approvals: approvals,
             clock: clock
         )
     }
@@ -66,19 +66,25 @@ struct ComputerUseExtensionTests {
         #expect(await target.releases == [.budgetExhausted])
     }
 
-    @Test("Extensions stop at the ceiling, where a present user's yes grants one more")
+    @Test("Extensions stop at the ceiling, where a present user's continue on a card grants one more")
     func ceilingAsksUser() async throws {
-        let oversight = ScriptedComputerUseOversight(reply: "Yes, keep going")
-        let (target, session) = try await Self.make(Self.budgets(steps: 3, ceiling: 4), oversight: oversight)
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (target, session) = try await Self.make(Self.budgets(steps: 3, ceiling: 4), approvals: approvals)
         _ = await session.perform([S.observe])
         await Self.advance(target, session, to: 1)
         _ = await session.perform([.wait(milliseconds: 1)])
         #expect(await session.budgets.steps == 4)
-        #expect(await oversight.questions.isEmpty)
+        #expect(await approvals.requests.isEmpty)
 
         let result = await session.perform([.wait(milliseconds: 1)])
         #expect(result.outcomes.map(\.effect) == [.confirmed])
-        #expect(await oversight.questions.count == 1)
+        let card = try #require(await approvals.requests.first)
+        #expect(await approvals.requests.count == 1)
+        #expect(card.title.contains("steps ceiling"))
+        #expect(card.presentation.blocks.contains { block in
+            if case .buttons(let buttons) = block { return buttons.map(\.label) == ["Continue", "Stop"] }
+            return false
+        })
         let budgets = await session.budgets
         #expect(budgets.steps == 6)
         #expect(budgets.ceilingSteps == 6)
@@ -86,15 +92,16 @@ struct ComputerUseExtensionTests {
         #expect(await session.events.contains { $0.kind == .ceilingQuestion && $0.answer == .continue })
     }
 
-    @Test("At the ceiling, a no or no user present ends the session as budget-exhausted")
+    @Test("At the ceiling, a stop, a card that times out, or no user present ends the session as budget-exhausted")
     func ceilingStops() async throws {
-        for (reply, present) in [("no", true), (nil, true), ("yes", false)] as [(String?, Bool)] {
-            let oversight = ScriptedComputerUseOversight(reply: reply)
-            let (target, session) = try await Self.make(Self.budgets(steps: 2, ceiling: 2), userPresent: present, oversight: oversight)
-            _ = await session.perform([S.observe])
-            await Self.advance(target, session, to: 1)
-            #expect(await session.terminalReason == .stepBudget, "\(String(describing: reply)) \(present)")
-            #expect(await oversight.questions.count == (present ? 1 : 0))
+        let answers: [(ExecApprovalDeliveryResult, Bool)] = [(.denied("stop"), true), (.deferred("timed out"), true), (.approved, false)]
+        for (answer, present) in answers {
+            let approvals = RecordingComputerUseApprovals(answer)
+            let (_, session) = try await Self.make(Self.budgets(steps: 2, ceiling: 2), userPresent: present, approvals: approvals)
+            _ = await session.perform([S.observe, .wait(milliseconds: 1)])
+            _ = await session.perform([.wait(milliseconds: 1)])
+            #expect(await session.terminalReason == .stepBudget, "\(answer) \(present)")
+            #expect(await approvals.requests.count == (present ? 1 : 0))
         }
     }
 
@@ -114,20 +121,20 @@ struct ComputerUseExtensionTests {
     @Test("A deadline ends the session as deadline and is never extended, even with a user present")
     func deadline() async throws {
         let clock = ComputerUseTestClock()
-        let oversight = ScriptedComputerUseOversight(reply: "yes")
+        let approvals = RecordingComputerUseApprovals(.approved)
         let (target, session) = try await Self.make(
             Self.budgets(deadline: clock.now().addingTimeInterval(60)),
-            oversight: oversight,
+            approvals: approvals,
             clock: clock
         )
         clock.advance(seconds: 61)
         _ = await session.perform([S.observe])
         #expect(await session.terminalReason == .deadline)
-        #expect(await oversight.questions.isEmpty)
+        #expect(await approvals.requests.isEmpty)
         #expect(await target.releases == [.deadline])
     }
 
-    @Test("At the time ceiling a present user's yes adds the share of the ceiling, never past the deadline")
+    @Test("At the time ceiling a present user's continue moves the ceiling out by its share, never past the deadline")
     func timeCeiling() async throws {
         let clock = ComputerUseTestClock()
         let start = clock.now()
@@ -146,12 +153,12 @@ struct ComputerUseExtensionTests {
     @Test("Without a user present the time ceiling ends the session as time-budget")
     func timeCeilingUnattended() async throws {
         let clock = ComputerUseTestClock()
-        let oversight = ScriptedComputerUseOversight(reply: "yes")
-        let (_, session) = try await Self.make(Self.budgets(maxDuration: .seconds(60)), userPresent: false, oversight: oversight, clock: clock)
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (_, session) = try await Self.make(Self.budgets(maxDuration: .seconds(60)), userPresent: false, approvals: approvals, clock: clock)
         clock.advance(seconds: 61)
         _ = await session.perform([S.observe])
         #expect(await session.terminalReason == .timeBudget)
-        #expect(await oversight.questions.isEmpty)
+        #expect(await approvals.requests.isEmpty)
     }
 
     @Test("The end of a session is logged as an event with the progress behind it")
@@ -193,7 +200,7 @@ struct ComputerUseChildRunDeadlineTests {
 
     private static func make(
         userPresent: Bool = true,
-        oversight: (any ComputerUseOversight)? = ScriptedComputerUseOversight(reply: "yes"),
+        approvals: any ExecApprovalDelivering = RecordingComputerUseApprovals(.approved),
         clock: ComputerUseTestClock
     ) async throws -> ComputerUseSession {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { clock.now() })
@@ -209,7 +216,7 @@ struct ComputerUseChildRunDeadlineTests {
             target: target,
             lease: lease,
             configuration: ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["x"])),
-            oversight: oversight,
+            approvals: approvals,
             now: { clock.now() }
         )
     }
@@ -221,7 +228,7 @@ struct ComputerUseChildRunDeadlineTests {
         #expect(await session.childRunDeadline(grace: 30) == clock.now().addingTimeInterval(60))
     }
 
-    @Test("At the time ceiling a present user's yes moves the child's deadline with the lease")
+    @Test("At the time ceiling a present user's continue moves the child's deadline with the lease")
     func extended() async throws {
         let clock = ComputerUseTestClock()
         let session = try await Self.make(clock: clock)
@@ -246,27 +253,27 @@ struct ComputerUseChildRunDeadlineTests {
     @Test("The child's timer and an action reaching the time ceiling together ask the user once")
     func asksOnce() async throws {
         let clock = ComputerUseTestClock()
-        let oversight = SlowYesOversight()
-        let session = try await Self.make(oversight: oversight, clock: clock)
+        let approvals = SlowApprovals()
+        let session = try await Self.make(approvals: approvals, clock: clock)
         clock.advance(seconds: 60)
         async let deadline = session.childRunDeadline(grace: 30)
         async let batch = session.perform([S.observe])
         _ = await (deadline, batch)
-        #expect(await oversight.asked == 1)
+        #expect(await approvals.asked == 1)
         #expect(await session.terminalReason == nil)
     }
 }
 
-private actor SlowYesOversight: ComputerUseOversight {
+private actor SlowApprovals: ExecApprovalDelivering {
     private(set) var asked = 0
 
-    func askUser(_ question: String) async -> ComputerUseUserReply {
+    func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
         asked += 1
         try? await Task.sleep(for: .milliseconds(50))
-        return .answered("yes")
+        return .approved
     }
 
-    func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult { .declined }
+    func sendFollowup(approvalID: String, approved: Bool) async {}
 }
 
 @Suite("Computer use: waiting on a person pauses the delegate's idle clock")
@@ -289,14 +296,13 @@ struct ComputerUseLivenessOversightTests {
         }
     }
 
-    @Test("Questions, handoffs, and ceiling questions pause the clock and resume it after")
+    @Test("Questions and handoffs pause the clock and resume it after")
     func pauses() async {
         let liveness = DelegateLiveness()
         let base = Observing(liveness)
         let oversight = ComputerUseLivenessOversight(base: base, liveness: liveness)
         _ = await oversight.askUser("which file?")
         _ = await oversight.handoff(ComputerUseHandoffRequest(reason: .login, prompt: "log in", target: "t"))
-        _ = await oversight.continuePastCeiling(ComputerUseCeilingQuestion(limit: .steps, stepsUsed: 1, extensions: 0, prompt: "more?"))
         #expect(await base.pausedDuringAsk == true)
         #expect(await base.pausedDuringHandoff == true)
         #expect(!liveness.isPaused)

@@ -173,7 +173,7 @@ public protocol DisplayTarget: Sendable {
     func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView?
     /// Ends every observer's stream and revokes the observer links; the user's are kept.
     func endObservers(_ lease: Lease) async throws
-    /// How many of the user's viewers watch the lease's live view now. Observers don't count.
+    /// How many viewers are connected to the lease's live view now, the user's and observers' alike.
     func liveViewers(_ lease: Lease) async throws -> Int
 
     /// The whole screen as a live-view frame, for a target whose live view something else serves, such as the

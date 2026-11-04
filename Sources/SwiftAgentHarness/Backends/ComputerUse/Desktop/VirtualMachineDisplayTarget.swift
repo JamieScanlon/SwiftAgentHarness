@@ -272,7 +272,7 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
         let (guest, guestLease) = try await leased(lease)
         if let liveViewServer {
             guard let liveFeed else { return 0 }
-            return await liveViewServer.viewerCount(liveFeed, role: .user)
+            return await liveViewServer.viewerCount(liveFeed)
         }
         return try await guest.liveViewers(guestLease)
     }

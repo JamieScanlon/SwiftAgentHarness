@@ -27,7 +27,7 @@ struct MacAgentActiveHUDStateTests {
         #expect(state.isVisible)
         #expect(state.title == "Agent is using This Mac")
         #expect(state.detail == "Step 0 of 40")
-        #expect(state.stopHint.contains("Esc"))
+        #expect(state.stopHint.contains("⌃⌥⌘."))
     }
 
     @Test("Acting shows the step, app, and action; takeover says the user has control")

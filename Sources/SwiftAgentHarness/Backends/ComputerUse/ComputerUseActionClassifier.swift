@@ -111,7 +111,7 @@ public struct ComputerUseActionClassifier: Sendable {
 
     public init(
         reviewer: ComputerUseGrantReviewer = ComputerUseGrantReviewer(),
-        stopKey: KeyCombo = KeyCombo(modifiers: [], key: "escape"),
+        stopKey: KeyCombo = .defaultStopKey,
         systemShortcuts: Set<KeyCombo> = Self.defaultSystemShortcuts,
         destructiveShortcuts: Set<KeyCombo> = Self.defaultDestructiveShortcuts,
         consequentialLabelWords: Set<String> = Self.defaultConsequentialLabelWords,

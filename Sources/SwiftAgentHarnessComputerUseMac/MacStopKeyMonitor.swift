@@ -15,7 +15,7 @@ public final class MacStopKeyMonitor: Sendable {
     private let stopRequested = Atomic<Bool>(false)
     private let started = Atomic<Bool>(false)
 
-    public init(stopKey: KeyCombo = KeyCombo(modifiers: [], key: "escape"), onStop: @escaping @Sendable () -> Void) {
+    public init(stopKey: KeyCombo = .defaultStopKey, onStop: @escaping @Sendable () -> Void) {
         self.stopKey = stopKey
         self.onStop = onStop
     }

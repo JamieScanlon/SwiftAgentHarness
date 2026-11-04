@@ -93,6 +93,8 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case liveViewRequired = "live-view-required"
     /// The specialist produced nothing for its idle timeout.
     case idleTimeout = "idle-timeout"
+    /// A question or handoff went unanswered for its timeout.
+    case needsUser = "needs-user"
     /// The run was stopped or failed before the session ended on its own.
     case cancelled
     case ended
@@ -103,7 +105,7 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
         case .timeBudget: return .expired
         case .deadline: return .deadline
         case .noProgress: return .noProgress
-        case .liveViewRequired, .cancelled: return .cancelled
+        case .liveViewRequired, .needsUser, .cancelled: return .cancelled
         case .idleTimeout: return .idleTimeout
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
@@ -140,6 +142,8 @@ public struct ComputerUseActionRecord: Sendable, Codable, Hashable {
     public var evidence: String?
     /// The step led to a state not seen before, as observed next.
     public var madeProgress = false
+    /// The vendor's per-action intent: the model's own claim, logged and shown on cards, never used to gate.
+    public var statedIntent: String?
 }
 
 public struct ComputerUseBatchResult: Sendable {
@@ -150,6 +154,8 @@ public struct ComputerUseBatchResult: Sendable {
     public var terminal: ComputerUseTerminalReason?
     /// Set to `askUser` after repeated failures.
     public var escalation: ActionEscalation?
+    /// The user confirmed the call's vendor safety signals, so the vendor may be told they were acknowledged.
+    public var signalsAcknowledged = false
 }
 
 public struct ComputerUseVerification: Sendable, Codable, Hashable {
@@ -189,11 +195,15 @@ public enum ComputerUseHandoffResult: Sendable, Hashable {
     case handedBack(note: String?)
     case declined
     case unavailable
+    /// The user didn't hand back within the handoff's timeout; the session ends with `needs-user`.
+    case timedOut
 }
 
 public enum ComputerUseUserReply: Sendable, Hashable {
     case answered(String)
     case unavailable
+    /// The user didn't answer within the question's timeout; the session ends with `needs-user`.
+    case timedOut
 }
 
 /// What a session is doing, for the "agent is using <target>" indicator.
@@ -209,22 +219,10 @@ public struct ComputerUseActivity: Sendable, Equatable {
     public var extensions = 0
 }
 
-/// Asked of a present user when a session reaches its step or time ceiling.
-public struct ComputerUseCeilingQuestion: Sendable, Hashable {
-    public enum Limit: String, Sendable, Codable, Hashable {
-        case steps
-        case time
-    }
-
-    public var limit: Limit
-    public var stepsUsed: Int
-    public var extensions: Int
-    public var prompt: String
-
-    static func isAffirmative(_ answer: String) -> Bool {
-        let first = answer.lowercased().split { !$0.isLetter }.first.map(String.init) ?? ""
-        return ["yes", "y", "yeah", "yep", "sure", "ok", "okay", "continue", "go"].contains(first)
-    }
+/// The ceiling a session reached, which a present user decides on with a continue-or-stop card.
+public enum ComputerUseCeilingLimit: String, Sendable, Codable, Hashable {
+    case steps
+    case time
 }
 
 /// The surfaces a session reaches a person through for questions and human-only steps.
@@ -232,16 +230,6 @@ public protocol ComputerUseOversight: Sendable {
     func askUser(_ question: String) async -> ComputerUseUserReply
     /// Returns once the user hands control back.
     func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult
-    /// Whether to go past a ceiling. `true` grants one more extension.
-    func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool
-}
-
-extension ComputerUseOversight {
-    /// Asks through ``askUser(_:)`` and reads a yes from the reply.
-    public func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool {
-        guard case .answered(let answer) = await askUser(question.prompt) else { return false }
-        return ComputerUseCeilingQuestion.isAffirmative(answer)
-    }
 }
 
 /// A session-level entry in the action log: budget extensions, ceiling questions, and how the session ended, with
@@ -271,7 +259,7 @@ public struct ComputerUseSessionEvent: Sendable, Codable, Hashable {
     /// For an extension, progress since the previous one; for the end, the session's totals.
     public var criteriaVerified: Int?
     public var statesReached: Int?
-    public var limit: ComputerUseCeilingQuestion.Limit?
+    public var limit: ComputerUseCeilingLimit?
     public var answer: Answer?
     public var reason: ComputerUseTerminalReason?
 
@@ -283,7 +271,7 @@ public struct ComputerUseSessionEvent: Sendable, Codable, Hashable {
         endsAt: Date? = nil,
         criteriaVerified: Int? = nil,
         statesReached: Int? = nil,
-        limit: ComputerUseCeilingQuestion.Limit? = nil,
+        limit: ComputerUseCeilingLimit? = nil,
         answer: Answer? = nil,
         reason: ComputerUseTerminalReason? = nil
     ) {
@@ -324,6 +312,8 @@ public actor ComputerUseSession {
     private var steps = 0
     private var spentUSD: Double = 0
     private var consecutiveFailures = 0
+    /// The model was told to ask the user after repeated failures; failing again before progress ends the session.
+    private var askedAfterFailures = false
     /// Actions refused since the last progress. They aren't steps, but they fill the no-progress window.
     private var refusedSinceProgress = 0
     private var lastActionAt: Date?
@@ -336,6 +326,8 @@ public actor ComputerUseSession {
     public private(set) var extensions = 0
     public private(set) var events: [ComputerUseSessionEvent] = []
     private var timeCeiling: Date
+    /// Cards waiting on the user, signalled when the session ends.
+    private var endWaiters: [String: AsyncStream<Void>.Continuation] = [:]
     private var progressAtLastGrant = ComputerUseProgress()
     private var endedAt: Date?
     /// The time-ceiling decision in flight, so an action and the child run's timer reaching it together ask once.
@@ -344,6 +336,8 @@ public actor ComputerUseSession {
     /// Set by a sensitive-domain signal for the rest of the session: every action then waits until the user
     /// watches the live view.
     public private(set) var isWatchModeOn = false
+    /// On a target with no live view, the user confirmed continuing in watch mode.
+    private var watchModeConfirmed = false
     public private(set) var auditLog: [ComputerUseActionRecord] = []
     /// Records ever appended, so a record can be found after older ones were trimmed.
     private var auditCount = 0
@@ -356,6 +350,11 @@ public actor ComputerUseSession {
     public private(set) var headlessDenials: [ComputerUseActionRecord] = []
     /// The latest handoff nobody took, cleared when a later one is handed back.
     public private(set) var unresolvedHandoff: ComputerUseHandoffRequest?
+    /// A question the user didn't answer before it timed out or the session was stopped.
+    public private(set) var unresolvedQuestion: String?
+    private enum AwaitedUser { case question(String), handoff(ComputerUseHandoffRequest) }
+    /// What the session is waiting on the user for, so a stop can hand it back to the parent.
+    private var awaitingUser: AwaitedUser?
     /// Grants the session's refused actions needed, one per subject at the highest tier asked. Grants can't change
     /// during a run, so the parent has to delegate again with them.
     public private(set) var missingGrants: [ComputerUseGrant] = []
@@ -412,9 +411,17 @@ public actor ComputerUseSession {
 
     /// Gates and runs a batch, one action at a time. Stops at the first refusal or failure; every action after it is
     /// reported `not-executed`.
+    ///
+    /// - Parameters:
+    ///   - safetySignals: Vendor signals on single actions, by index.
+    ///   - callSignals: Vendor signals on the whole call. The user confirms the call once, on a card listing its
+    ///     actions, before the first one runs.
+    ///   - intents: The vendor's per-action intent, by index: logged and shown on cards as the model's claim.
     public func perform(
         _ actions: [ComputerAction],
-        safetySignals: [Int: [ComputerUseSafetySignal]] = [:]
+        safetySignals: [Int: [ComputerUseSafetySignal]] = [:],
+        callSignals: [ComputerUseSafetySignal] = [],
+        intents: [Int: String] = [:]
     ) async -> ComputerUseBatchResult {
         var result = ComputerUseBatchResult(outcomes: [], records: [], observations: [], terminal: nil, escalation: nil)
         if terminalReason == nil, let reason = await budgetOrPermissionViolation() {
@@ -431,6 +438,25 @@ public actor ComputerUseSession {
             }
             return result
         }
+        if !callSignals.isEmpty {
+            noteSignals(callSignals)
+            if isWatchModeOn, !(await waitForWatcher()) {
+                let reason = terminalReason?.rawValue ?? ComputerUseTerminalReason.liveViewRequired.rawValue
+                result.outcomes = notExecuted(actions.indices, evidence: "session ended: \(reason)")
+                result.terminal = terminalReason
+                return result
+            }
+            if let refusal = await confirmCall(actions, signals: callSignals, intents: intents) {
+                result.outcomes = actions.indices.map {
+                    $0 == 0 ? ActionOutcome(action: 0, effect: .refused, evidence: refusal, escalation: .askUser) : ActionOutcome(action: $0, effect: .notExecuted)
+                }
+                refusedSinceProgress += 1
+                await endIfNotProgressing()
+                result.terminal = terminalReason
+                return result
+            }
+            result.signalsAcknowledged = true
+        }
 
         var stopped = false
         for (index, action) in actions.enumerated() {
@@ -445,17 +471,14 @@ public actor ComputerUseSession {
                 continue
             }
             let signals = safetySignals[index] ?? []
-            if signals.contains(.sensitiveDomain), !isWatchModeOn {
-                isWatchModeOn = true
-                events.append(ComputerUseSessionEvent(kind: .watchMode, at: now(), step: steps))
-            }
+            noteSignals(signals)
             if isWatchModeOn, !(await waitForWatcher()) {
                 let reason = terminalReason?.rawValue ?? ComputerUseTerminalReason.liveViewRequired.rawValue
                 result.outcomes.append(ActionOutcome(action: index, effect: .notExecuted, evidence: "session ended: \(reason)"))
                 stopped = true
                 continue
             }
-            let (outcome, record, observation) = await performOne(action, index: index, signals: signals)
+            let (outcome, record, observation) = await performOne(action, index: index, signals: signals, statedIntent: intents[index])
             result.outcomes.append(outcome)
             result.records.append(record)
             if let observation { result.observations.append(observation) }
@@ -464,17 +487,62 @@ public actor ComputerUseSession {
 
         let failed = result.outcomes.contains { $0.effect == .refused || $0.effect == .suspectedNoop || $0.effect == .partial }
         consecutiveFailures = failed ? consecutiveFailures + 1 : 0
-        if consecutiveFailures >= configuration.maxConsecutiveFailures {
-            result.escalation = .askUser
+        if consecutiveFailures >= configuration.maxConsecutiveFailures, terminalReason == nil {
+            if askedAfterFailures {
+                await end(.noProgress, detail: "\(consecutiveFailures) failing batches in a row again after the user was asked")
+            } else {
+                result.escalation = .askUser
+                askedAfterFailures = true
+            }
         }
         result.terminal = terminalReason
         return result
     }
 
+    private func noteSignals(_ signals: [ComputerUseSafetySignal]) {
+        guard signals.contains(.sensitiveDomain), !isWatchModeOn else { return }
+        isWatchModeOn = true
+        events.append(ComputerUseSessionEvent(kind: .watchMode, at: now(), step: steps))
+    }
+
+    /// One card for a call a vendor flagged as a whole, listing its actions. `nil` when the user confirmed; otherwise
+    /// why the call doesn't run.
+    private func confirmCall(_ actions: [ComputerAction], signals: [ComputerUseSafetySignal], intents: [Int: String]) async -> String? {
+        let why = signals.map { "vendor safety signal: \($0.rawValue)" }.joined(separator: "; ")
+        guard lease.userPresent else { return "headlessDenied: \(why)" }
+        guard approvals != nil else { return "no approval surface for: \(why)" }
+        let canonical = actions.map(ComputerUseCanonicalForm.describe)
+        var context = ["Why confirm: \(why)", "Actions:"]
+        for (index, form) in canonical.enumerated() {
+            context.append("\(index + 1). \(form)")
+            if let intent = intents[index] { context.append("   Model's stated intent (unverified): \(intent)") }
+        }
+        let title = "Computer use: confirm a flagged call on \(manifest.label)"
+        let request = ExecApprovalRequest(
+            id: "computer-use-call-\(UUID().uuidString.prefix(8))",
+            command: canonical.joined(separator: "; "),
+            title: title,
+            description: context.joined(separator: "\n"),
+            allowsDurableBypass: false,
+            presentation: .standard(title: title, context: context, buttons: [
+                ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Allow these actions", style: .primary),
+                ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Deny", style: .danger),
+            ])
+        )
+        switch await requestApproval(request) ?? .denied("the session ended") {
+        case .approved:
+            return terminalReason == nil && !isTakeoverActive ? nil : "the session changed while awaiting approval"
+        case .denied(let message): return "denied by the user: \(message)"
+        case .headlessDenied(let message): return "headlessDenied: \(message)"
+        case .deferred(let message): return "approval deferred: \(message)"
+        }
+    }
+
     private func performOne(
         _ action: ComputerAction,
         index: Int,
-        signals: [ComputerUseSafetySignal]
+        signals: [ComputerUseSafetySignal],
+        statedIntent: String?
     ) async -> (ActionOutcome, ComputerUseActionRecord, DisplayObservation?) {
         let layout = action.citedTargets.isEmpty && Self.needsFocusedApp(action) ? try? await target.describe(lease) : nil
         let classification = configuration.classifier.classify(
@@ -488,8 +556,9 @@ public actor ComputerUseSession {
                 sharedTarget: manifest.humanPresence == .shared
             )
         )
-        let gate = await gate(classification, action: action)
+        let gate = await gate(classification, action: action, statedIntent: statedIntent)
         var record = makeRecord(action, classification: classification, gate: gate)
+        record.statedIntent = statedIntent
 
         guard gate.decision == .allowed || gate.decision == .confirmed else {
             let outcome = ActionOutcome(action: index, effect: .refused, evidence: gate.reason, escalation: gate.escalation)
@@ -592,7 +661,7 @@ public actor ComputerUseSession {
         var intent: ComputerUseIntentVerdict?
     }
 
-    private func gate(_ classification: ComputerUseClassification, action: ComputerAction) async -> GateResult {
+    private func gate(_ classification: ComputerUseClassification, action: ComputerAction, statedIntent: String?) async -> GateResult {
         switch classification.actionClass {
         case .outOfGrant(let reason):
             guard let missing = classification.missingGrant else { return GateResult(decision: .denied, reason: reason) }
@@ -611,7 +680,7 @@ public actor ComputerUseSession {
             case .consistent?:
                 return GateResult(decision: .allowed, reason: "interact within grant; intent consistent", intent: intent)
             case .confirm(let reason, _)?:
-                return await confirm(classification, action: action, reasons: [reason], intent: intent)
+                return await confirm(classification, action: action, reasons: [reason], intent: intent, statedIntent: statedIntent)
             case .unbound?, nil:
                 let skip = configuration.classifier.reviewer.overrides.skipInteractConfirmationWithoutIntentCheck
                 if manifest.humanPresence == .shared && !skip {
@@ -619,14 +688,15 @@ public actor ComputerUseSession {
                         classification,
                         action: action,
                         reasons: ["no intent checker is bound and a person may be using this screen"],
-                        intent: intent
+                        intent: intent,
+                        statedIntent: statedIntent
                     )
                 }
                 return GateResult(decision: .allowed, reason: "interact within grant", intent: intent)
             }
         case .consequential(let reasons):
             let intent = await checkIntent(classification)
-            return await confirm(classification, action: action, reasons: reasons, intent: intent)
+            return await confirm(classification, action: action, reasons: reasons, intent: intent, statedIntent: statedIntent)
         }
     }
 
@@ -646,7 +716,8 @@ public actor ComputerUseSession {
         _ classification: ComputerUseClassification,
         action: ComputerAction,
         reasons: [String],
-        intent: ComputerUseIntentVerdict?
+        intent: ComputerUseIntentVerdict?,
+        statedIntent: String?
     ) async -> GateResult {
         let why = reasons.joined(separator: "; ")
         guard lease.userPresent else {
@@ -665,9 +736,10 @@ public actor ComputerUseSession {
             reasons: reasons,
             intent: intent,
             action: action,
-            observation: action.citedObservations.first.flatMap(observation)
+            observation: action.citedObservations.first.flatMap(observation),
+            statedIntent: statedIntent
         )
-        switch await approvals.requestApproval(request, headless: false) {
+        switch await requestApproval(request) ?? .denied("the session ended") {
         case .approved:
             // The approval covers this exact canonical action; anything that changed since invalidates it.
             guard terminalReason == nil, !isTakeoverActive,
@@ -692,7 +764,8 @@ public actor ComputerUseSession {
         reasons: [String],
         intent: ComputerUseIntentVerdict?,
         action: ComputerAction? = nil,
-        observation: DisplayObservation? = nil
+        observation: DisplayObservation? = nil,
+        statedIntent: String? = nil
     ) -> ExecApprovalRequest {
         var location = classification.domain ?? classification.app?.bundleID ?? target.label
         if classification.domain != nil, let app = classification.app?.bundleID { location += " (\(app))" }
@@ -705,6 +778,7 @@ public actor ComputerUseSession {
             "Why confirm: \(reasons.joined(separator: "; "))",
             "Intent check: \(intent?.summary ?? "not run")",
         ]
+        if let statedIntent { context.append("Model's stated intent (unverified): \(statedIntent)") }
         // The command keeps only the script's hash, so the card shows the whole script to review.
         if case .script(let language, let source, _)? = action {
             context.append("Script (\(language.rawValue)):\n\(source)")
@@ -823,7 +897,7 @@ public actor ComputerUseSession {
         guard await askToContinue(.time, prompt: prompt) else {
             return await end(.timeBudget, detail: "time ceiling reached")
         }
-        timeCeiling = now().addingTimeInterval(added)
+        timeCeiling = timeCeiling.addingTimeInterval(added)
         endsAt = [timeCeiling, budgets.deadline, grantExpiresAt].compactMap { $0 }.min() ?? timeCeiling
         events.append(ComputerUseSessionEvent(kind: .timeExtended, at: now(), step: steps, endsAt: endsAt))
     }
@@ -866,13 +940,46 @@ public actor ComputerUseSession {
     }
 
     /// Asked one by one only at a ceiling; extensions below it aren't, since asking per extension tires the user
-    /// as much as asking per click.
-    private func askToContinue(_ limit: ComputerUseCeilingQuestion.Limit, prompt: String) async -> Bool {
-        guard lease.userPresent, let oversight else { return false }
-        let question = ComputerUseCeilingQuestion(limit: limit, stepsUsed: steps, extensions: extensions, prompt: prompt)
-        let yes = await oversight.continuePastCeiling(question)
+    /// as much as asking per click. A continue-or-stop card, so the answer needs no parsing; a card that times out
+    /// is a stop.
+    private func askToContinue(_ limit: ComputerUseCeilingLimit, prompt: String) async -> Bool {
+        guard lease.userPresent, approvals != nil else { return false }
+        let title = "Computer use: continue past the \(limit.rawValue) ceiling on \(manifest.label)?"
+        let request = ExecApprovalRequest(
+            id: "computer-use-ceiling-\(UUID().uuidString.prefix(8))",
+            command: "continue past the \(limit.rawValue) ceiling",
+            title: title,
+            description: prompt,
+            allowsDurableBypass: false,
+            presentation: .standard(title: title, context: [prompt], buttons: [
+                ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Continue", style: .primary),
+                ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Stop", style: .danger),
+            ])
+        )
+        let yes = await requestApproval(request) == .approved
         events.append(ComputerUseSessionEvent(kind: .ceilingQuestion, at: now(), step: steps, limit: limit, answer: yes ? .continue : .stop))
         return yes && terminalReason == nil
+    }
+
+    /// A card for the user, withdrawn when the session ends first: ``end(_:detail:)`` answers every card still
+    /// waiting, so a stopped session's cards don't outlive it.
+    private func requestApproval(_ request: ExecApprovalRequest) async -> ExecApprovalDeliveryResult? {
+        guard let approvals, terminalReason == nil else { return nil }
+        let id = request.id
+        let (ended, endSignal) = AsyncStream.makeStream(of: Void.self)
+        endWaiters[id] = endSignal
+        defer { endWaiters[id] = nil }
+        return await withTaskGroup(of: ExecApprovalDeliveryResult?.self) { group in
+            group.addTask { await approvals.requestApproval(request, headless: false) }
+            group.addTask {
+                for await _ in ended { return nil }
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            if first == nil { await approvals.sendFollowup(approvalID: id, approved: false) }
+            return first
+        }
     }
 
     /// Ends the session and releases the lease. Idempotent.
@@ -889,6 +996,12 @@ public actor ComputerUseSession {
             statesReached: progress.statesReached,
             reason: reason
         ))
+        for waiter in endWaiters.values { waiter.finish() }
+        switch awaitingUser {
+        case .question(let question)?: unresolvedQuestion = question
+        case .handoff(let request)?: unresolvedHandoff = request
+        case nil: break
+        }
         let handBack = isTakeoverActive
         isTakeoverActive = false
         // A task of its own: a cancelled caller's requests never reach a remote target, and cleanup must.
@@ -901,16 +1014,22 @@ public actor ComputerUseSession {
 
     // MARK: - Watch mode
 
-    /// Whether the user watches the live view, waiting up to ``ComputerUseSessionConfiguration/watchModeWait`` for
-    /// them to open it. Ends the session when nobody can or does.
+    /// Whether someone watches the live view, waiting up to ``ComputerUseSessionConfiguration/watchModeWait`` for a
+    /// viewer to connect. On a target with no live view, such as the user's own screen, a present user confirms on a
+    /// card instead. Ends the session when nobody can or does.
     private func waitForWatcher() async -> Bool {
-        let rule = "after a sensitive-domain signal the session continues only while the user watches its live view"
+        let rule = "after a sensitive-domain signal the session continues only while someone watches its live view"
         guard lease.userPresent else {
             await end(.liveViewRequired, detail: "\(rule), and nobody is present")
             return false
         }
         guard manifest.observerAccess != .none else {
-            await end(.liveViewRequired, detail: "\(rule), and \(manifest.label) serves none")
+            if watchModeConfirmed { return true }
+            if await confirmWatchMode() {
+                watchModeConfirmed = true
+                return true
+            }
+            await end(.liveViewRequired, detail: "a sensitive-domain signal needs the user's confirmation on \(manifest.label), which serves no live view, and the user didn't give it")
             return false
         }
         if await isWatched() { return true }
@@ -926,6 +1045,23 @@ public actor ComputerUseSession {
         }
         await end(.liveViewRequired, detail: "\(rule), and nobody opened it")
         return false
+    }
+
+    private func confirmWatchMode() async -> Bool {
+        let title = "Computer use: continue on a sensitive page on \(manifest.label)?"
+        let detail = "The vendor flagged this page as sensitive. \(manifest.label) has no live view to watch, so the agent continues only if you confirm."
+        let request = ExecApprovalRequest(
+            id: "computer-use-watch-\(UUID().uuidString.prefix(8))",
+            command: "continue in watch mode",
+            title: title,
+            description: detail,
+            allowsDurableBypass: false,
+            presentation: .standard(title: title, context: [detail], buttons: [
+                ApprovalButton(id: ApprovalDecision.allowOnce.rawValue, label: "Continue", style: .primary),
+                ApprovalButton(id: ApprovalDecision.deny.rawValue, label: "Stop", style: .danger),
+            ])
+        )
+        return await requestApproval(request) == .approved
     }
 
     private func isWatched() async -> Bool {
@@ -968,7 +1104,20 @@ public actor ComputerUseSession {
 
     public func askUser(_ question: String) async -> ComputerUseUserReply {
         guard lease.userPresent, terminalReason == nil, let oversight else { return .unavailable }
-        return await oversight.askUser(question)
+        awaitingUser = .question(question)
+        let reply = await oversight.askUser(question)
+        awaitingUser = nil
+        switch reply {
+        case .answered:
+            // The user's answer is the response to the failure escalation.
+            consecutiveFailures = 0
+        case .timedOut:
+            unresolvedQuestion = question
+            await end(.needsUser, detail: "the user didn't answer: \(question)")
+        case .unavailable:
+            break
+        }
+        return reply
     }
 
     /// Human-only steps (logins, 2FA, CAPTCHAs, payment entry). Capture and agent input are suspended until the
@@ -985,12 +1134,17 @@ public actor ComputerUseSession {
             unresolvedHandoff = request
             return .unavailable
         }
+        awaitingUser = .handoff(request)
         let result = await oversight.handoff(request)
+        awaitingUser = nil
         await endTakeover()
         if case .handedBack = result {
             unresolvedHandoff = nil
         } else {
             unresolvedHandoff = request
+        }
+        if case .timedOut = result {
+            await end(.needsUser, detail: "the user didn't hand back: \(request.prompt)")
         }
         return result
     }
@@ -1033,6 +1187,7 @@ public actor ComputerUseSession {
         if met, !metBefore {
             progress.criteriaVerified += 1
             progress.lastProgressStep = max(progress.lastProgressStep ?? 0, steps)
+            askedAfterFailures = false
             refusedSinceProgress = 0
         }
     }
@@ -1052,6 +1207,7 @@ public actor ComputerUseSession {
                   let acting = pendingActing, Self.creditableEffects.contains(acting.effect) else { return }
             progress.statesReached += 1
             progress.lastProgressStep = max(progress.lastProgressStep ?? 0, acting.step)
+            askedAfterFailures = false
             refusedSinceProgress = 0
             let position = acting.record - (auditCount - auditLog.count)
             if auditLog.indices.contains(position) { auditLog[position].madeProgress = true }

@@ -70,6 +70,9 @@ public struct KeyCombo: Sendable, Hashable, Codable, CustomStringConvertible {
         self.init(modifiers: modifiers, key: key)
     }
 
+    /// The default stop key: a chord no common app uses. Not Escape, which the agent needs for dialogs and menus.
+    public static let defaultStopKey = KeyCombo(modifiers: [.ctrl, .option, .cmd], key: ".")
+
     public var description: String {
         (modifiers.sorted().map(\.rawValue) + [key]).joined(separator: "+")
     }

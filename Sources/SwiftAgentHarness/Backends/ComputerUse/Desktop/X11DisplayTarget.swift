@@ -182,7 +182,7 @@ public actor X11DisplayTarget: DisplayTarget {
     public func liveViewers(_ lease: Lease) async throws -> Int {
         try await requireLease(lease)
         guard let liveViewServer, let liveFeed else { return 0 }
-        return await liveViewServer.viewerCount(liveFeed, role: .user)
+        return await liveViewServer.viewerCount(liveFeed)
     }
 
     // MARK: - Perception

@@ -5,7 +5,8 @@ import SwiftAgentKit
 /// Gemini's predefined computer-use functions, executed against a leased session. Each call is one action on the
 /// 0–999 grid; it becomes canonical actions the session gates like any other, and its result is the page URL as JSON
 /// plus the screenshot after it. A `safety_decision` asking for confirmation is a question for the user before the
-/// action, and `safety_acknowledgement` is reported only when the user said yes.
+/// action, and `safety_acknowledgement` is reported only when the user said yes. The function's `intent` is the
+/// model's own claim: logged and shown on cards, never used to gate.
 ///
 /// The tool definitions register the names with the tool system. The Gemini codec replaces them on the wire with
 /// the vendor's `computer_use` declaration.
@@ -81,7 +82,8 @@ struct ComputerUseGeminiToolProvider: ToolProvider, ToolDescriptorHinting {
             return await support.failure(toolCall, failure.message)
         }
 
-        let report = await support.run(actions, signals: signals, toolCallID: toolCall.id)
+        let intent = ComputerUseVendorToolSupport.string(arguments["intent"])
+        let report = await support.run(actions, signals: signals, intent: intent, toolCallID: toolCall.id)
         var response: [String: JSON] = [:]
         if let url = report.screenshot?.target.url { response["url"] = .string(url) }
         if report.acknowledged { response["safety_acknowledgement"] = .boolean(true) }

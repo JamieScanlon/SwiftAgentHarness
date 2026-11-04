@@ -3,7 +3,7 @@ import Foundation
 import SwiftAgentKit
 
 /// What OpenAI's and Gemini's computer tools share: every call ends with a fresh screenshot, the vendor's safety
-/// signal rides on the call's first action, and a failure halts the rest of the model's batch.
+/// signals apply to the whole call, and a failure halts the rest of the model's batch.
 struct ComputerUseVendorToolSupport: Sendable {
     let session: ComputerUseSession
     let failures: ComputerUseNativeFailures
@@ -15,7 +15,7 @@ struct ComputerUseVendorToolSupport: Sendable {
 
     /// How a call's actions went.
     struct Report: Sendable {
-        /// Whether the action carrying the vendor's signals ran, which only happens once the user confirmed it.
+        /// The user confirmed the call's vendor signals.
         var acknowledged: Bool
         var failed: Bool
         /// One line per action that didn't simply succeed.
@@ -38,21 +38,20 @@ struct ComputerUseVendorToolSupport: Sendable {
         })
     }
 
-    /// Runs `actions`, asking the user about `signals` before the first one, then takes the screenshot the vendor
-    /// expects back. A call with signals but no actions still asks: a wait carries the question.
-    func run(_ actions: [ComputerAction], signals: [ComputerUseSafetySignal], toolCallID: String?) async -> Report {
+    /// Runs `actions`, asking the user once about the call's `signals` before the first one, then takes the
+    /// screenshot the vendor expects back. A call with signals but no actions is still asked about.
+    func run(_ actions: [ComputerAction], signals: [ComputerUseSafetySignal], intent: String? = nil, toolCallID: String?) async -> Report {
         var actions = actions
         if actions.isEmpty, !signals.isEmpty { actions = [.wait(milliseconds: 0)] }
         var report = Report(acknowledged: false, failed: false, notes: [])
         if !actions.isEmpty {
-            let batch = await session.perform(actions, safetySignals: signals.isEmpty ? [:] : [0: signals])
+            let intents = intent.map { intent in Dictionary(uniqueKeysWithValues: actions.indices.map { ($0, intent) }) } ?? [:]
+            let batch = await session.perform(actions, callSignals: signals, intents: intents)
             for outcome in batch.outcomes where outcome.effect != .confirmed && outcome.effect != .unverifiable {
                 report.notes.append("Action \(outcome.action + 1) \(outcome.effect.rawValue)" + (outcome.evidence.map { ": \($0)" } ?? ""))
             }
             report.failed = batch.outcomes.contains { $0.effect == .refused || $0.effect == .notExecuted }
-            if let first = batch.outcomes.first, !signals.isEmpty {
-                report.acknowledged = first.effect.mayHaveBeenDelivered
-            }
+            report.acknowledged = batch.signalsAcknowledged
         }
         if report.failed, let toolCallID { await failures.recordFailure(toolCallID: toolCallID) }
         let observed = await session.perform([.observe(ObserveRequest(modes: [.pixels], scope: .display(nil)))])

@@ -34,7 +34,7 @@ actor ComputerUseOversightCoordinator {
     /// being published.
     private var early: [String: ComputerUseRequestResolution] = [:]
 
-    init(publish: @escaping Publish, questionTimeout: Duration = .seconds(600), handoffTimeout: Duration = .seconds(1_800)) {
+    init(publish: @escaping Publish, questionTimeout: Duration = .seconds(600), handoffTimeout: Duration = .seconds(900)) {
         self.publish = publish
         self.questionTimeout = questionTimeout
         self.handoffTimeout = handoffTimeout
@@ -133,14 +133,16 @@ struct ComputerUseConversationOversight: ComputerUseOversight {
     func askUser(_ question: String) async -> ComputerUseUserReply {
         switch await coordinator.ask(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, question: question) {
         case .answered(let answer): return .answered(answer)
-        case .handedBack, .declined, .timedOut: return .unavailable
+        case .timedOut: return .timedOut
+        case .handedBack, .declined: return .unavailable
         }
     }
 
     func handoff(_ request: ComputerUseHandoffRequest) async -> ComputerUseHandoffResult {
         switch await coordinator.handoff(conversationID: conversationID, lifecycleID: lifecycleID, target: targetLabel, request: request) {
         case .handedBack(let note): return .handedBack(note: note)
-        case .declined, .timedOut, .answered: return .declined
+        case .timedOut: return .timedOut
+        case .declined, .answered: return .declined
         }
     }
 }
@@ -160,12 +162,6 @@ struct ComputerUseLivenessOversight: ComputerUseOversight {
         liveness.pause()
         defer { liveness.resume() }
         return await base.handoff(request)
-    }
-
-    func continuePastCeiling(_ question: ComputerUseCeilingQuestion) async -> Bool {
-        liveness.pause()
-        defer { liveness.resume() }
-        return await base.continuePastCeiling(question)
     }
 }
 

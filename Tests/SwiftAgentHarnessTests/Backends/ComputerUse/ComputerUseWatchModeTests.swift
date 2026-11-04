@@ -71,7 +71,7 @@ struct ComputerUseWatchModeTests {
     func watchedRuns() async throws {
         let approvals = RecordingComputerUseApprovals(.approved)
         let (target, session) = try await make(approvals: approvals)
-        await target.setUserViewers(1)
+        await target.setViewers(1)
         let result = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
         #expect(result.outcomes.map(\.effect) == [.confirmed])
         #expect(await approvals.requests.count == 1, "every vendor signal is a question for the user")
@@ -84,9 +84,9 @@ struct ComputerUseWatchModeTests {
     func waitsForViewer() async throws {
         let log = ActivityLog()
         let (target, session) = try await make(log: log)
-        await target.setUserViewers(1)
+        await target.setViewers(1)
         _ = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
-        await target.setUserViewers(0)
+        await target.setViewers(0)
 
         let next = Task { await session.perform([.wait(milliseconds: 1)]) }
         for _ in 0..<500 where await !log.statuses.contains(.waitingForLiveView) {
@@ -94,7 +94,7 @@ struct ComputerUseWatchModeTests {
         }
         #expect(await log.statuses.contains(.waitingForLiveView))
         #expect(await target.actCalls.count == 1, "nothing runs while nobody watches")
-        await target.setUserViewers(1)
+        await target.setViewers(1)
         let result = await next.value
         #expect(result.outcomes.map(\.effect) == [.confirmed])
         #expect(await target.actCalls.count == 2)
@@ -112,20 +112,36 @@ struct ComputerUseWatchModeTests {
         #expect(await target.releases == [.cancelled])
     }
 
-    @Test("A target with no live view can't be watched, so the session ends without asking")
+    @Test("On a target with no live view, a present user confirms watch mode once on a card")
     func noLiveView() async throws {
         let approvals = RecordingComputerUseApprovals(.approved)
         let (target, session) = try await make(manifest: FakeDisplayTarget.hostManifest, approvals: approvals)
         let result = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
-        #expect(result.terminal == .liveViewRequired)
-        #expect(await approvals.requests.isEmpty)
-        #expect(await target.actCalls.isEmpty)
+        #expect(result.outcomes.map(\.effect) == [.confirmed])
+        #expect(await approvals.requests.first?.title.contains("sensitive page") == true)
+        _ = await session.perform([.wait(milliseconds: 1)])
+        #expect(await approvals.requests.count == 2, "the watch-mode card is asked once; the signal's own card once")
+        #expect(await target.actCalls.count == 2)
+
+        let declining = RecordingComputerUseApprovals(.denied("no"))
+        let (other, declined) = try await make(manifest: FakeDisplayTarget.hostManifest, approvals: declining)
+        let stopped = await declined.perform([click], safetySignals: [0: [.sensitiveDomain]])
+        #expect(stopped.terminal == .liveViewRequired)
+        #expect(await other.actCalls.isEmpty)
+    }
+
+    @Test("Any viewer counts as watching, the user's or an observer's")
+    func observerWatches() async throws {
+        let (target, session) = try await make(wait: .milliseconds(50))
+        await target.setViewers(1)
+        let result = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
+        #expect(result.outcomes.map(\.effect) == [.confirmed])
     }
 
     @Test("Without a present user nobody can watch, so the session ends")
     func headless() async throws {
         let (target, session) = try await make(userPresent: false)
-        await target.setUserViewers(1)
+        await target.setViewers(1)
         let result = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
         #expect(result.terminal == .liveViewRequired)
         #expect(await target.actCalls.isEmpty)
