@@ -47,14 +47,14 @@ struct ComputerUseGrantTests {
         #expect(review.grantable.allSatisfy { $0.warning != nil && $0.capReason == nil })
     }
 
-    @Test("Browsers are capped at view; their pages are reached through domain grants")
-    func browsersCappedAtView() {
+    @Test("Browsers are capped at click for their own controls; their pages are reached through domain grants")
+    func browsersCappedAtClick() {
         let review = ComputerUseGrantReviewer().review([
             .app(bundleID: "com.google.Chrome", tier: .full),
             .domain("https://Docs.Example.com/", tier: .full),
         ])
         #expect(review.grantable.map(\.grant) == [
-            .app(bundleID: "com.google.Chrome", tier: .view),
+            .app(bundleID: "com.google.Chrome", tier: .click),
             .domain("docs.example.com", tier: .full),
         ])
     }

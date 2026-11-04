@@ -16,7 +16,7 @@ struct ComputerUseToolProviderTests {
         let lease = try await target.lease(LeaseRequest(
             target: manifest.id,
             agentID: "agent",
-            grants: ComputerUseSessionFixtures.grants + [.domain("example.com", tier: .click)],
+            grants: ComputerUseSessionFixtures.grants + [.domain("example.com", tier: .click), .app(bundleID: "com.apple.Safari", tier: .click)],
             budgets: ComputerUseBudgets(steps: 100, maxDuration: .seconds(3600)),
             initiator: .operator,
             userPresent: true

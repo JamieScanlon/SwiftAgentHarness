@@ -150,6 +150,18 @@ public struct ComputerUseGrantSet: Sendable, Hashable {
         return matching.max { $0.domain.count < $1.domain.count }?.tier
     }
 
+    /// Whether any app is granted: a desktop target, where pages open in a granted browser app.
+    public var hasAppGrants: Bool {
+        grants.contains { if case .app = $0 { return true } else { return false } }
+    }
+
+    public func appTiers() -> [(bundleID: String, tier: ComputerUseGrantTier)] {
+        grants.compactMap { grant in
+            if case .app(let id, let tier, _) = grant { return (id, tier) }
+            return nil
+        }
+    }
+
     public var hasDomainGrants: Bool {
         grants.contains { if case .domain = $0 { return true } else { return false } }
     }
@@ -163,7 +175,8 @@ public struct ComputerUseAppRuling: Sendable, Hashable {
     public var capReason: String?
     /// The app's real blast radius, stated in the grant dialog.
     public var blastRadiusWarning: String?
-    /// Browser pages are reached through domain grants; the app itself is capped at view.
+    /// Browser pages are reached through domain grants; the app's own controls (launching, opening URLs, switching
+    /// tabs) are capped at click.
     public var isBrowser: Bool
 
     public init(
@@ -227,7 +240,7 @@ public struct ComputerUseAppPolicy: Sendable, Hashable {
         }
         if let rule = browsers.first(where: { $0.matches(app) }) {
             ruling.isBrowser = true
-            ruling.tierCap = .view
+            ruling.tierCap = .click
             ruling.capReason = rule.reason
             ruling.blastRadiusWarning = Self.browserVisibilityWarning
         }
@@ -276,7 +289,7 @@ public struct ComputerUseAppPolicy: Sendable, Hashable {
                     "com.microsoft.edgemac*", "company.thebrowser.Browser", "com.brave.Browser*",
                     "com.operasoftware.Opera*", "com.vivaldi.Vivaldi", "app.zen-browser.zen", "com.kagi.kagimacOS",
                 ],
-                reason: "Browser: pages are granted per domain."
+                reason: "Browser: its own controls go up to click; pages are granted per domain."
             ),
         ],
         broadBlastRadius: [

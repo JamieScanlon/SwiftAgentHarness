@@ -362,6 +362,8 @@ public actor ComputerUseSession {
     public private(set) var scratchpad: String?
     public static let scratchpadLimit = 2_000
     public private(set) var replayFrames: [ComputerUseReplayFrame] = []
+    /// The observation the latest targeted action cited; its app is where untargeted input goes.
+    private var lastCitedObservation: ObservationID?
     /// Where the last pointer action left the pointer, in the target's global space.
     public private(set) var lastPointer: DisplayPoint?
 
@@ -544,18 +546,24 @@ public actor ComputerUseSession {
         signals: [ComputerUseSafetySignal],
         statedIntent: String?
     ) async -> (ActionOutcome, ComputerUseActionRecord, DisplayObservation?) {
-        let layout = action.citedTargets.isEmpty && Self.needsFocusedApp(action) ? try? await target.describe(lease) : nil
+        let untargeted = action.citedTargets.isEmpty && Self.needsFocusedApp(action)
+        let layout = untargeted ? try? await target.describe(lease) : nil
+        // Untargeted input goes to the working app: the app of the most recently cited observation, never the
+        // frontmost app just because it is frontmost.
+        let workingApp = lastCitedObservation.flatMap { retained[$0]?.target.app } ?? layout?.focusedApp
         let classification = configuration.classifier.classify(
             action,
             context: ComputerUseClassificationContext(
                 grants: grants,
                 observation: { [retained] in retained[$0] },
-                focusedApp: layout?.focusedApp,
+                focusedApp: workingApp,
                 focusedURL: layout?.tabs.first(where: \.isActive)?.url,
                 safetySignals: signals,
-                sharedTarget: manifest.humanPresence == .shared
+                sharedTarget: manifest.humanPresence == .shared,
+                latestObservation: latestObservation
             )
         )
+        if let cited = action.citedObservations.last { lastCitedObservation = cited }
         let gate = await gate(classification, action: action, statedIntent: statedIntent)
         var record = makeRecord(action, classification: classification, gate: gate)
         record.statedIntent = statedIntent

@@ -76,6 +76,8 @@ public struct ComputerUseClassificationContext: Sendable {
     public var safetySignals: [ComputerUseSafetySignal]
     /// Whether a person may be using the target (`humanPresence: shared`).
     public var sharedTarget: Bool
+    /// The latest observation, which says what Return would trigger from the focused field.
+    public var latestObservation: DisplayObservation?
 
     public init(
         grants: ComputerUseGrantSet,
@@ -83,9 +85,11 @@ public struct ComputerUseClassificationContext: Sendable {
         focusedApp: AppIdentity?,
         focusedURL: String? = nil,
         safetySignals: [ComputerUseSafetySignal] = [],
-        sharedTarget: Bool = false
+        sharedTarget: Bool = false,
+        latestObservation: DisplayObservation? = nil
     ) {
         self.sharedTarget = sharedTarget
+        self.latestObservation = latestObservation
         self.grants = grants
         self.observation = observation
         self.focusedApp = focusedApp
@@ -292,6 +296,12 @@ public struct ComputerUseActionClassifier: Sendable {
             result.missingGrant = .domain(host, tier: .click)
             return result
         }
+        // On a desktop target the page opens in a browser app, which the run must grant at click or above.
+        if context.grants.hasAppGrants,
+           !context.grants.appTiers().contains(where: { $0.tier >= .click && reviewer.ruling(for: AppIdentity(bundleID: $0.bundleID)).isBrowser }) {
+            result.actionClass = .outOfGrant(reason: "open-url needs a browser granted at click or above to open \(host) in")
+            return result
+        }
         result.actionClass = .navigate
         return result
     }
@@ -312,18 +322,14 @@ public struct ComputerUseActionClassifier: Sendable {
             return result
         }
 
-        if ruling.isBrowser, let app, required > .view {
-            if action.kind == .launch {
-                result.actionClass = .outOfGrant(reason: "\(app.bundleID) is a browser, which stays at view; open a page on a granted domain with open-url instead")
-                return result
-            }
-            if url == nil {
-                let controls = "\(app.bundleID)'s own controls stay at view, whatever the grant; navigate with open-url"
-                result.actionClass = .outOfGrant(
-                    reason: action.citedTargets.isEmpty ? "cite an element on the page; \(controls)" : controls
-                )
-                return result
-            }
+        // The browser's own controls follow its app grant up to click; typing, keys, and menus there would reach
+        // any page, so they go through a page element or open-url instead.
+        if ruling.isBrowser, let app, url == nil, let cap = ruling.tierCap, required > cap {
+            let controls = "\(app.bundleID)'s own controls go up to \(cap.rawValue); \(action.kind.rawValue) needs \(required.rawValue)"
+            result.actionClass = .outOfGrant(
+                reason: action.citedTargets.isEmpty ? "cite an element on the page; \(controls)" : "\(controls); act on the page or navigate with open-url"
+            )
+            return result
         }
 
         var tier: ComputerUseGrantTier?
@@ -393,7 +399,7 @@ public struct ComputerUseActionClassifier: Sendable {
         if let domain, ruling.isBrowser || app == nil {
             return .domain(domain, tier: tier)
         }
-        guard let app, !ruling.isBrowser else { return nil }
+        guard let app else { return nil }
         if let cap = ruling.tierCap, tier > cap { return nil }
         return .app(bundleID: app.bundleID, tier: tier, flags: flags)
     }
@@ -423,6 +429,9 @@ public struct ComputerUseActionClassifier: Sendable {
         default:
             break
         }
+        if let control = returnTarget(action, context: context), let word = consequentialWord(in: control.label) {
+            reasons.append("Return submits \(control.role) labeled as a \(word) action")
+        }
         switch action {
         case .click, .press, .key, .menu:
             if let word = consequentialWord(in: element?.label) {
@@ -443,6 +452,26 @@ public struct ComputerUseActionClassifier: Sendable {
             }
         }
         return reasons
+    }
+
+    /// The control a Return key, or typed text ending in a newline, triggers: classified as a press of it. `nil`
+    /// when focus isn't in a single-line field or the tree names no such control, which leaves the action Interact.
+    private func returnTarget(_ action: ComputerAction, context: ComputerUseClassificationContext) -> ElementRef? {
+        switch action {
+        case .key(let combo, _) where combo.key == "return" && combo.modifiers.isDisjoint(with: [.cmd, .ctrl, .option]):
+            break
+        case .type(let text, _, _) where text.hasSuffix("\n") || text.hasSuffix("\r"):
+            break
+        default:
+            return nil
+        }
+        guard let tree = context.latestObservation?.tree, let ref = tree.returnTarget, let control = tree.elements[ref],
+              let focused = tree.elements.values.first(where: \.isFocused), Self.isSingleLineField(focused.role) else { return nil }
+        return control
+    }
+
+    private static func isSingleLineField(_ role: String) -> Bool {
+        ["AXTextField", "AXSecureTextField", "AXSearchField", "AXComboBox", "textbox", "searchbox", "combobox"].contains(role)
     }
 
     private func consequentialWord(in label: String?) -> String? {

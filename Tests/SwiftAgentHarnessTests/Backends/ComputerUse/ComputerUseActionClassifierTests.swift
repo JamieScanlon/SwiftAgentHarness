@@ -92,14 +92,20 @@ struct ComputerUseActionClassifierTests {
         }
     }
 
-    @Test("Launching a browser is refused with a pointer to open-url, since browsers stay at view")
+    @Test("A browser granted at click can be launched; at view it can't")
     func browserLaunch() {
-        let result = classify(.launch(app: "com.apple.Safari"), grants: [.app(bundleID: "com.apple.Safari", tier: .full)])
-        guard case .outOfGrant(let reason) = result.actionClass else {
-            Issue.record("expected out of grant, got \(result.actionClass)")
-            return
-        }
-        #expect(reason.contains("open-url"), "\(reason)")
+        #expect(classify(.launch(app: "com.apple.Safari"), grants: [.app(bundleID: "com.apple.Safari", tier: .full)]).actionClass == .navigate)
+        #expect(classify(.launch(app: "com.apple.Safari"), grants: [.app(bundleID: "com.apple.Safari", tier: .view)]).actionClass.isOutOfGrant)
+    }
+
+    @Test("On a desktop target, open-url needs a browser granted at click to open the page in")
+    func openURLNeedsBrowser() {
+        let page = ComputerAction.openURL("https://example.com/")
+        let domain: ComputerUseGrant = .domain("example.com", tier: .click)
+        #expect(classify(page, grants: [domain, .app(bundleID: "com.apple.TextEdit", tier: .full)]).actionClass.isOutOfGrant)
+        #expect(classify(page, grants: [domain, .app(bundleID: "com.apple.Safari", tier: .view)]).actionClass.isOutOfGrant)
+        #expect(classify(page, grants: [domain, .app(bundleID: "com.apple.Safari", tier: .click)]).actionClass == .navigate)
+        #expect(classify(page, grants: [domain]).actionClass == .navigate, "a managed browser grants domains only")
     }
 
     @Test("Tier violations are out of grant: view allows no pointer actions, click allows no typing")
@@ -233,4 +239,47 @@ extension ComputerUseActionClass {
     var isOutOfGrant: Bool { if case .outOfGrant = self { return true } else { return false } }
     var isConsequential: Bool { if case .consequential = self { return true } else { return false } }
     var isUnresolvable: Bool { if case .unresolvable = self { return true } else { return false } }
+}
+
+@Suite("Computer use: Return is classified as the control it triggers")
+struct ComputerUseReturnClassificationTests {
+    private let classifier = ComputerUseActionClassifier()
+    private let app = ComputerUseFixtures.textEdit
+
+    private func observation(control label: String?, focused role: String = "AXTextField") -> DisplayObservation {
+        var observation = ComputerUseFixtures.observation(id: "o_1")
+        var elements = [
+            "e1": ElementRef(id: "e1", role: role, label: "Amount", app: app, isFocused: true),
+            "e2": ElementRef(id: "e2", role: "AXButton", label: label, app: app),
+        ]
+        if label == nil { elements["e2"] = nil }
+        observation.tree = ObservationTree(text: "", elements: elements, capturedAt: ComputerUseFixtures.epoch, returnTarget: label == nil ? nil : "e2")
+        return observation
+    }
+
+    private func classify(_ action: ComputerAction, _ observation: DisplayObservation) -> ComputerUseActionClass {
+        classifier.classify(action, context: ComputerUseClassificationContext(
+            grants: ComputerUseGrantSet([.app(bundleID: app.bundleID, tier: .full)]),
+            observation: { $0 == observation.id ? observation : nil },
+            focusedApp: app,
+            latestObservation: observation
+        )).actionClass
+    }
+
+    @Test("Return from a field whose form submits through a consequential control is consequential")
+    func submits() throws {
+        let enter = ComputerAction.key(combo: KeyCombo(modifiers: [], key: "return"))
+        #expect(classify(enter, observation(control: "Pay now")).isConsequential)
+        #expect(classify(.type(text: "42\n", into: .ref("e1", observation: "o_1")), observation(control: "Send")).isConsequential)
+        #expect(classify(.key(combo: try KeyCombo(parsing: "shift+return")), observation(control: "Pay now")).isConsequential)
+    }
+
+    @Test("A harmless control, no control, a multi-line field, or another key stays Interact")
+    func staysInteract() throws {
+        let enter = ComputerAction.key(combo: KeyCombo(modifiers: [], key: "return"))
+        #expect(classify(enter, observation(control: "Search")) == .interact)
+        #expect(classify(enter, observation(control: nil)) == .interact)
+        #expect(classify(enter, observation(control: "Pay now", focused: "AXTextArea")) == .interact)
+        #expect(classify(.key(combo: KeyCombo(modifiers: [], key: "tab")), observation(control: "Pay now")) == .interact)
+    }
 }

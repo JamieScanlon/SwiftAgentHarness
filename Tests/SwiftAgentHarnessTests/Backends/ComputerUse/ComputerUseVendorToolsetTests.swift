@@ -16,7 +16,7 @@ enum ComputerUseVendorFixtures {
         let lease = try await target.lease(LeaseRequest(
             target: manifest.id,
             agentID: "agent",
-            grants: [.domain("shop.example", tier: .full), .app(bundleID: ComputerUseFixtures.textEdit.bundleID, tier: .full)],
+            grants: [.domain("shop.example", tier: .full), .app(bundleID: ComputerUseFixtures.textEdit.bundleID, tier: .full), .app(bundleID: "com.apple.Safari", tier: .click)],
             budgets: ComputerUseBudgets(steps: 100, noProgressSteps: 100, maxDuration: .seconds(3600)),
             initiator: .operator,
             userPresent: true

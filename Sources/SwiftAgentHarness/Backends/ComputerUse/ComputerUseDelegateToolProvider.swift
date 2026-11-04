@@ -117,9 +117,9 @@ struct ComputerUseDelegateToolProvider: ToolProvider, ToolDescriptorHinting {
     private var domainsDescription: String {
         let example = " Example: docs.example.com:click"
         guard let web = defaults.webTarget else {
-            return "Web domains to grant, comma-separated as domain:tier. A web task needs a domain here and a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser." + example
+            return "Web domains to grant, comma-separated as domain:tier. A web task needs a domain here and a browser in apps at click: the browser's own controls (launching it, opening URLs, switching tabs) go up to click, and its pages follow these domains." + example
         }
-        return "Web domains to grant, comma-separated as domain:tier. A task with domains and no apps runs in \(web), a separate browser with none of the user's data or sign-ins; it needs no browser in apps. To work in the user's own browser instead, also name a browser in apps: browsers stay at view and aren't launched, and the specialist opens pages in the granted browser." + example
+        return "Web domains to grant, comma-separated as domain:tier. A task with domains and no apps runs in \(web), a separate browser with none of the user's data or sign-ins; it needs no browser in apps. To work in the user's own browser instead, also name a browser in apps at click: its own controls go up to click, and its pages follow these domains." + example
     }
 
     private func targetDescription(_ targetList: String) -> String {

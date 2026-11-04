@@ -34,6 +34,8 @@ struct ManagedBrowserPageSnapshot: Codable, Sendable, Hashable {
     /// DOM mutations seen since the script was installed in this document.
     var mutations: Int
     var focused: String?
+    /// The submit element of the focused field's form: what Return would trigger.
+    var submit: String?
     var readyState: String?
     /// Identifies the document; element ids mean nothing in another one.
     var doc: String?
@@ -260,6 +262,14 @@ enum ManagedBrowserDOM {
       if (document.body) visit(document.body, 0, 0, 0);
       const result = page();
       result.elements = out;
+      if (active && active.tagName === 'INPUT' && active.form) {
+        const t = (active.type || 'text').toLowerCase();
+        if (!['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'color', 'range', 'hidden'].includes(t)) {
+          const b = active.form.querySelector('button[type=submit], input[type=submit], input[type=image], button:not([type])');
+          const id = b && S.ids.get(b);
+          if (id && out.some(e => e.id === id)) result.submit = id;
+        }
+      }
       if (omitted) result.omitted = omitted;
       return result;
     };

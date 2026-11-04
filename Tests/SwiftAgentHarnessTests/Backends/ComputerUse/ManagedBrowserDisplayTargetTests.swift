@@ -19,6 +19,7 @@ struct ManagedBrowserDisplayTargetTests {
         var redirects: [String: String] = [:]
         var lostContexts = 0
         var mutatesOnInput = false
+        var submit: String?
         /// What a script's wrapper resolves to.
         var scriptReply = #"{"ok":true,"json":"null"}"#
         private(set) var calls: [(method: String, params: JSON)] = []
@@ -32,6 +33,7 @@ struct ManagedBrowserDisplayTargetTests {
         }
 
         func setScroll(_ x: Double, _ y: Double) { scroll = (x, y) }
+        func setSubmit(_ id: String?) { submit = id }
         func setRedirect(_ from: String, to: String) { redirects[from] = to }
         func loseContext() { lostContexts += 1 }
         func setMutatesOnInput() { mutatesOnInput = true }
@@ -104,6 +106,7 @@ struct ManagedBrowserDisplayTargetTests {
             let encoder = JSONEncoder()
             if called("snapshot") {
                 page.elements = elements
+                page.submit = submit
                 return String(decoding: try encoder.encode(page), as: UTF8.self)
             }
             if called("page") { return String(decoding: try encoder.encode(page), as: UTF8.self) }
@@ -178,6 +181,14 @@ struct ManagedBrowserDisplayTargetTests {
 
     private static func observe(_ fixture: Fixture, modes: [ObservationMode] = [.accessibility, .pixels], scope: ObservationScope = .display(nil), limit: ObservationImageLimit? = nil) async throws -> DisplayObservation {
         try await fixture.target.observe(fixture.lease, ObserveRequest(modes: modes, scope: scope, maxImage: limit))
+    }
+
+    @Test("The tree names the control Return would trigger: the focused field's form submit element")
+    func returnTarget() async throws {
+        let fixture = try await Self.fixture()
+        await fixture.browser.setSubmit("e1")
+        let observation = try await fixture.target.observe(fixture.lease, ObserveRequest(modes: [.dom], scope: .display(nil)))
+        #expect(observation.tree?.returnTarget == "e1")
     }
 
     @Test("It declares an isolated, unshared, DOM-and-pixels target with no platform permissions")

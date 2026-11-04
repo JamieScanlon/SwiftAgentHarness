@@ -185,13 +185,24 @@ public struct ObservationTree: Sendable, Codable, Hashable {
     /// Set when the observation asked to diff against an earlier one: what the model sees instead of `text`.
     /// `text` stays the full tree, as the base for later diffs.
     public var diff: ObservationTreeDiff?
+    /// The control Return would trigger from the focused field: the window's default button, or the submit element
+    /// of the focused field's form. Return is classified as a press of it.
+    public var returnTarget: String?
 
-    public init(text: String, elements: [String: ElementRef], capturedAt: Date, truncated: String? = nil, diff: ObservationTreeDiff? = nil) {
+    public init(
+        text: String,
+        elements: [String: ElementRef],
+        capturedAt: Date,
+        truncated: String? = nil,
+        diff: ObservationTreeDiff? = nil,
+        returnTarget: String? = nil
+    ) {
         self.text = text
         self.elements = elements
         self.capturedAt = capturedAt
         self.truncated = truncated
         self.diff = diff
+        self.returnTarget = returnTarget
     }
 }
 

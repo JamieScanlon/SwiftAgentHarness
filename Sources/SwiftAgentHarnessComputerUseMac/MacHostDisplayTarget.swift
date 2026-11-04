@@ -82,6 +82,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var observationOrder: [ObservationID] = []
     private var observationCounter = 0
     private var takeoverActive = false
+    /// The process the latest cited action landed in, with its start time.
+    private var cited: (pid: pid_t, start: Date?)?
     private var liveFrameSpace: MacLiveFrameSpace?
     private var liveHeldButton: MouseButton?
     private var grants = ComputerUseGrantSet([])
@@ -126,6 +128,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         grants = ComputerUseGrantSet(lease.grants)
         foregroundAllowed = lease.delivery == .foregroundAllowed
         takeoverActive = false
+        cited = nil
         return lease
     }
 
@@ -236,7 +239,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
                     text: snapshot.rendering.text,
                     elements: snapshot.rendering.elements,
                     capturedAt: Date(),
-                    truncated: snapshot.truncated
+                    truncated: snapshot.truncated,
+                    returnTarget: snapshot.defaultButtonRef
                 )
                 page = snapshot.rendering.page
             } else {
@@ -505,6 +509,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         guard MacAppFocus.point(point, landsOn: pid, windows: await workspace.windows(), ignoring: getpid()) else {
             return .failure(Refusal(message: "(\(Int(point.x)), \(Int(point.y))) is not over a window of \(running.identity.bundleID)"))
         }
+        cited = (pid, meta.processStart)
         return .success(ResolvedPoint(point: point, delivery: await delivery(for: pid)))
     }
 
@@ -527,10 +532,15 @@ public actor MacHostDisplayTarget: DisplayTarget {
         return await delivery(for: app.pid)
     }
 
-    /// The app target-less input and full-screen observations belong to: the frontmost app when it is granted,
-    /// else the granted app with the frontmost window, since the harness's own app is usually in front.
+    /// The app target-less input and full-screen observations belong to: the app of the most recently cited
+    /// observation. Before anything is cited, the frontmost app when it is granted, else the granted app with the
+    /// frontmost window, since the harness's own app is usually in front.
     private func workingApp() async -> MacRunningApp? {
         let granted = grantedBundleIDs
+        if let cited, let app = await workspace.runningApp(pid: cited.pid), app.launchDate == cited.start,
+           granted.contains(app.identity.bundleID) {
+            return app
+        }
         if let frontmost = await workspace.frontmostApp(), granted.contains(frontmost.identity.bundleID) { return frontmost }
         for pid in MacAppFocus.appsByWindowOrder(await workspace.windows()) {
             if let app = await workspace.runningApp(pid: pid), granted.contains(app.identity.bundleID) { return app }

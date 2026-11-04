@@ -70,15 +70,18 @@ struct ComputerUseBrowserPageTests {
         #expect(result.missingGrant == .domain("www.twitch.tv", tier: .click))
     }
 
-    @Test("A browser control is refused with open-url as the way to navigate, whatever the domain grants")
+    @Test("The browser's own controls follow its app grant up to click; typing there is refused with open-url as the way")
     func browserControls() throws {
         let observation = Self.browser(id: "o_1", page: "https://www.apple.com/")
-        for action in [ComputerAction.click(at: .ref("e1", observation: "o_1")), .type(text: "apple.com", into: .ref("e1", observation: "o_1"))] {
-            let result = classify(action, observation, grants: Self.grants + [.app(bundleID: "com.apple.Safari", tier: .full)])
-            let reason = try #require(reason(result), "\(action)")
-            #expect(reason == "com.apple.Safari's own controls stay at view, whatever the grant; navigate with open-url")
-            #expect(result.missingGrant == nil)
-        }
+        let safari: [ComputerUseGrant] = Self.grants + [.app(bundleID: "com.apple.Safari", tier: .full)]
+        let click = classify(.click(at: .ref("e1", observation: "o_1")), observation, grants: safari)
+        #expect(click.actionClass == .interact, "Safari's grant is capped at click, which covers its controls")
+        let typing = classify(.type(text: "apple.com", into: .ref("e1", observation: "o_1")), observation, grants: safari)
+        let refusal = try #require(reason(typing))
+        #expect(refusal == "com.apple.Safari's own controls go up to click; type needs full; act on the page or navigate with open-url")
+        #expect(typing.missingGrant == nil)
+        let viewOnly = classify(.click(at: .ref("e1", observation: "o_1")), observation)
+        #expect(try #require(reason(viewOnly)).contains("granted at view"))
     }
 
     @Test("A point inside the page takes the page's domain; a point outside it lands on the browser's controls")
@@ -89,10 +92,11 @@ struct ComputerUseBrowserPageTests {
         #expect(inPage.domain == "www.apple.com")
 
         let toolbar = classify(.click(at: .point(DisplayPoint(x: 600, y: 30), observation: "o_1")), observation)
-        #expect(try #require(reason(toolbar)).contains("own controls stay at view"))
+        #expect(toolbar.domain == nil)
+        #expect(try #require(reason(toolbar)).contains("com.apple.Safari is granted at view"))
 
         let unknownPage = classify(.click(at: .point(DisplayPoint(x: 700, y: 500), observation: "o_2")), Self.browser(id: "o_2", page: "https://www.apple.com/", pageBounds: nil))
-        #expect(try #require(reason(unknownPage)).contains("own controls stay at view"))
+        #expect(try #require(reason(unknownPage)).contains("com.apple.Safari is granted at view"))
     }
 
     @Test("Targets that are only a page, with no app, still take the target's URL for every element and point")
@@ -102,15 +106,16 @@ struct ComputerUseBrowserPageTests {
         #expect(classify(.click(at: .point(DisplayPoint(x: 600, y: 30), observation: "o_1")), observation, grants: [.domain("apple.com", tier: .click)]).actionClass == .interact)
     }
 
-    @Test("Asking for a browser above view, or a browser with no domains, comes back as a grant note")
+    @Test("Asking for a browser above click, or a browser with no domains, comes back as a grant note")
     func grantNotes() throws {
         let reviewer = ComputerUseGrantReviewer()
         func notes(_ arguments: [String: String]) throws -> [String] {
             try Self.task(arguments).grantNotes(reviewedBy: reviewer)
         }
-        #expect(try notes(["apps": "com.apple.Safari:click", "domains": "apple.com:click"]) == [
-            "com.apple.Safari is a browser, which stays at view whatever the grant; grant domains for its pages instead",
+        #expect(try notes(["apps": "com.apple.Safari:full", "domains": "apple.com:click"]) == [
+            "com.apple.Safari is a browser: its own controls stay at click whatever the grant; grant domains for its pages instead",
         ])
+        #expect(try notes(["apps": "com.apple.Safari:click", "domains": "apple.com:click"]).isEmpty)
         #expect(try notes(["apps": "com.apple.Safari:view"]) == [
             "com.apple.Safari is a browser and no domains are granted, so its pages can only be viewed",
         ])

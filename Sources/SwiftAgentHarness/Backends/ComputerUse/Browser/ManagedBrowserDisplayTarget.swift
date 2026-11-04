@@ -515,7 +515,8 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
                 text: text,
                 elements: ManagedBrowserDOM.elements(state, url: state.url),
                 capturedAt: treeAt,
-                truncated: state.omitted.map { "\($0) elements past the cap of \(configuration.maxElements)" }
+                truncated: state.omitted.map { "\($0) elements past the cap of \(configuration.maxElements)" },
+                returnTarget: state.submit
             )
         }
         retain(

@@ -149,7 +149,7 @@ public struct ComputerUseTask: Sendable {
             guard case .app(let bundleID, let tier, _) = reviewed.grant else { return nil }
             let capped = reviewed.requestedTier > tier
             if reviewer.ruling(for: AppIdentity(bundleID: bundleID)).isBrowser {
-                if capped { return "\(bundleID) is a browser, which stays at view whatever the grant; grant domains for its pages instead" }
+                if capped { return "\(bundleID) is a browser: its own controls stay at \(tier.rawValue) whatever the grant; grant domains for its pages instead" }
                 return grantsDomains ? nil : "\(bundleID) is a browser and no domains are granted, so its pages can only be viewed"
             }
             guard capped, let reason = reviewed.capReason else { return nil }

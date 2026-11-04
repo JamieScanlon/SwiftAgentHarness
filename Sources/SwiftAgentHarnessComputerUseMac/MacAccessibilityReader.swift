@@ -33,6 +33,8 @@ actor MacAccessibilityReader {
         var rendering: MacAXRendering
         var truncated: String?
         var windowFrame: CGRect?
+        /// The window's default button, which Return triggers.
+        var defaultButtonRef: String?
     }
 
     /// The page the app's focused window shows, read without rendering the window's tree.
@@ -69,7 +71,9 @@ actor MacAccessibilityReader {
             if let node = nodes[nodeID] { attributes[ref] = node.attributes }
         }
         retain(Retained(elements: elements, attributes: attributes), for: observationID)
-        return WindowSnapshot(rendering: rendering, truncated: snapshot.truncated, windowFrame: root.attributes.frame)
+        let defaultButton = Self.copyElement(window, kAXDefaultButtonAttribute)
+        let defaultButtonRef = defaultButton.flatMap { button in elements.first { CFEqual($0.value, button) }?.key }
+        return WindowSnapshot(rendering: rendering, truncated: snapshot.truncated, windowFrame: root.attributes.frame, defaultButtonRef: defaultButtonRef)
     }
 
     enum Resolution: Sendable, Equatable {
