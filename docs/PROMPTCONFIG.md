@@ -301,7 +301,7 @@ When `policy` is `"terminal-tool"` and no recovery is configured, a default reco
 | `allow` | [String] or `"*"` | Sub-agent (delegate) allow list. `[]` = none. |
 | `maxDepth` | Int | Max spawn depth (min 0). |
 | `childModeOnSpawn` | String | Mode profile ID assigned to spawned children. |
-| `computerUse.confirmInteract` | Bool | Confirm every interact action of computer-use sessions this mode delegates. Only accumulates through `extends`: `false` can't undo a parent's `true`. |
+| `computerUse.confirmInteract` | Bool | Confirm every interact action of computer-use sessions this mode delegates, and those of every delegate below it. Only accumulates through `extends`: `false` can't undo a parent's `true`. Turning it on reaches running sessions at their next action; turning it off waits for the next session. |
 
 ### `hooks` slice
 
