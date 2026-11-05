@@ -262,6 +262,8 @@ struct ManagedBrowserDisplayTargetTests {
         #expect(tree.elements["e2"]?.isSecureInput == true)
         #expect(tree.elements["e2"]?.inputPurpose == "current-password")
         #expect(tree.elements["e1"]?.url == "https://app.example.com/")
+        #expect(tree.elements.values.allSatisfy { $0.isWebContent }, "every DOM node is on the page")
+        #expect(observation.target.pageBounds == observation.target.bounds, "the viewport is all page")
         #expect(tree.elements["e1"]?.frame == DisplayRect(x: 100, y: 100, width: 80, height: 30))
         #expect(observation.image?.geometry == ScreenshotGeometry(
             capturedRect: DisplayRect(x: 0, y: 0, width: 1280, height: 800),

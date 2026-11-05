@@ -683,7 +683,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         return DisplayObservation(
             id: id,
             at: now,
-            target: ObservationTarget(tabID: page.targetID, url: state.url, bounds: captured),
+            target: ObservationTarget(tabID: page.targetID, url: state.url, pageBounds: captured, bounds: captured),
             image: image,
             tree: tree
         )
@@ -708,7 +708,7 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
         return DisplayObservation(
             id: id,
             at: now,
-            target: ObservationTarget(tabID: page.targetID, url: state.url, bounds: viewportRect(state)),
+            target: ObservationTarget(tabID: page.targetID, url: state.url, pageBounds: viewportRect(state), bounds: viewportRect(state)),
             tree: ObservationTree(text: text, elements: [:], capturedAt: now)
         )
     }

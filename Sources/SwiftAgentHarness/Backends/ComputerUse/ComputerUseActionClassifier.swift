@@ -203,7 +203,16 @@ public struct ComputerUseActionClassifier: Sendable {
                     return result
                 }
                 resolvedApp = resolvedApp ?? app
-                resolvedURL = resolvedURL ?? element.url ?? (surroundsPage(app) ? nil : observation.target.url)
+                if !surroundsPage(app) {
+                    resolvedURL = resolvedURL ?? element.url ?? observation.target.url
+                } else if element.isWebContent || element.url != nil {
+                    // Page content falls under domain grants; without the page's address there is no domain to check.
+                    guard let url = element.url ?? observation.target.url else {
+                        result.actionClass = .unresolvable(reason: "\(ref) is on a page whose address the browser doesn't report")
+                        return result
+                    }
+                    resolvedURL = resolvedURL ?? url
+                }
             case .point(let point, _):
                 guard observation.target.bounds.contains(point) else {
                     result.actionClass = .unresolvable(reason: "point lies outside observation \(observation.id)")

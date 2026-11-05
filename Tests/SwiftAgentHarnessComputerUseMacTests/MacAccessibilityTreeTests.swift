@@ -90,6 +90,8 @@ struct MacAccessibilityTreeTests {
         // A link's own AXURL is where it leads; the action lands on the page it is on.
         #expect(link.url == "https://www.apple.com/")
         #expect(play.url == "https://video.example.com/embed")
+        #expect(link.isWebContent && play.isWebContent, "under a web area, so on the page")
+        #expect(!address.isWebContent, "the browser's own control")
     }
 
     @Test("The page is the outermost web area, bounded by its scroll area so the toolbar stays outside it")

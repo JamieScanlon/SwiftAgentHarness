@@ -380,6 +380,7 @@ enum ManagedBrowserDOM {
                 label: element.name.flatMap { $0.isEmpty ? nil : $0 },
                 frame: element.frame,
                 url: url,
+                isWebContent: true,
                 isSecureInput: element.secure == true,
                 inputPurpose: element.autocomplete,
                 value: element.value,

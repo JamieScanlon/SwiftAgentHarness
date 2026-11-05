@@ -142,7 +142,11 @@ public struct ElementRef: Sendable, Codable, Hashable {
     public var label: String?
     public var frame: DisplayRect?
     public var app: AppIdentity?
+    /// The page the element is on, or where a link leads.
     public var url: String?
+    /// Part of a browser's web content: under the web area of an accessibility tree, or any node of a DOM. Such an
+    /// element is on the page, which domain grants cover, whether or not it carries a URL.
+    public var isWebContent: Bool
     /// Password or other secure-entry field, as reported by the platform.
     public var isSecureInput: Bool
     /// Declared input purpose such as an HTML `autocomplete` token (`cc-number`, `current-password`).
@@ -159,6 +163,7 @@ public struct ElementRef: Sendable, Codable, Hashable {
         frame: DisplayRect? = nil,
         app: AppIdentity? = nil,
         url: String? = nil,
+        isWebContent: Bool = false,
         isSecureInput: Bool = false,
         inputPurpose: String? = nil,
         value: String? = nil,
@@ -171,10 +176,27 @@ public struct ElementRef: Sendable, Codable, Hashable {
         self.frame = frame
         self.app = app
         self.url = url
+        self.isWebContent = isWebContent
         self.isSecureInput = isSecureInput
         self.inputPurpose = inputPurpose
         self.value = value
         self.isFocused = isFocused
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        role = try container.decode(String.self, forKey: .role)
+        subrole = try container.decodeIfPresent(String.self, forKey: .subrole)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        frame = try container.decodeIfPresent(DisplayRect.self, forKey: .frame)
+        app = try container.decodeIfPresent(AppIdentity.self, forKey: .app)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        isWebContent = try container.decodeIfPresent(Bool.self, forKey: .isWebContent) ?? false
+        isSecureInput = try container.decode(Bool.self, forKey: .isSecureInput)
+        inputPurpose = try container.decodeIfPresent(String.self, forKey: .inputPurpose)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
+        isFocused = try container.decode(Bool.self, forKey: .isFocused)
     }
 }
 

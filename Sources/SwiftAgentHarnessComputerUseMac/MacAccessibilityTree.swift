@@ -207,20 +207,22 @@ enum MacAXTreeRenderer {
             attributes.label != nil || !(attributes.value ?? "").isEmpty
         }
 
-        func renderChildren(of node: MacAXNode, depth: Int, page: String?) -> [String] {
-            node.children.flatMap { render($0, depth: depth, page: page) }
+        func renderChildren(of node: MacAXNode, depth: Int, page: String?, inWebArea: Bool) -> [String] {
+            node.children.flatMap { render($0, depth: depth, page: page, inWebArea: inWebArea) }
         }
 
-        func render(_ node: MacAXNode, depth: Int, page: String?) -> [String] {
+        func render(_ node: MacAXNode, depth: Int, page: String?, inWebArea: Bool) -> [String] {
             let attributes = node.attributes
             if let frame = attributes.frame, frame.width <= 0 || frame.height <= 0 { return [] }
+            let isWebArea = attributes.role == MacAXPage.webAreaRole
             // Only a web area's AXURL names the page; a link's names where it leads.
-            let page = attributes.role == MacAXPage.webAreaRole ? attributes.url ?? page : page
+            let page = isWebArea ? attributes.url ?? page : page
+            let inWebArea = inWebArea || isWebArea
             if layoutRoles.contains(attributes.role), !hasText(attributes) {
-                return renderChildren(of: node, depth: depth, page: page)
+                return renderChildren(of: node, depth: depth, page: page, inWebArea: inWebArea)
             }
             let keep = actionableRoles.contains(attributes.role) || hasText(attributes)
-            let childLines = renderChildren(of: node, depth: depth + 1, page: page)
+            let childLines = renderChildren(of: node, depth: depth + 1, page: page, inWebArea: inWebArea)
             guard keep || !childLines.isEmpty else { return [] }
             counter += 1
             let ref = "e\(counter)"
@@ -233,6 +235,7 @@ enum MacAXTreeRenderer {
                 frame: attributes.frame.map(DisplayRect.init),
                 app: app,
                 url: page,
+                isWebContent: inWebArea,
                 isSecureInput: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField",
                 value: attributes.role == "AXSecureTextField" || attributes.subrole == "AXSecureTextField" ? nil : attributes.value,
                 isFocused: attributes.focused
@@ -247,7 +250,7 @@ enum MacAXTreeRenderer {
             return [line] + childLines
         }
 
-        lines.append(contentsOf: renderChildren(of: root, depth: 0, page: nil))
+        lines.append(contentsOf: renderChildren(of: root, depth: 0, page: nil, inWebArea: false))
         return MacAXRendering(
             text: lines.joined(separator: "\n"),
             elements: elements,

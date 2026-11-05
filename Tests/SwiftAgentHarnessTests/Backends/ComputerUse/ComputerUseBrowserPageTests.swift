@@ -99,6 +99,28 @@ struct ComputerUseBrowserPageTests {
         #expect(try #require(reason(unknownPage)).contains("com.apple.Safari is granted at view"))
     }
 
+    @Test("An element under the web area is page content even without a URL of its own, and takes the page's domain")
+    func webContentWithoutURL() throws {
+        var observation = Self.browser(id: "o_1", page: "https://www.twitch.tv/somebody")
+        observation.tree?.elements["e4"] = ElementRef(id: "e4", role: "AXButton", label: "Follow", app: Self.safari, isWebContent: true)
+        let safari: [ComputerUseGrant] = Self.grants + [.app(bundleID: "com.apple.Safari", tier: .click)]
+        let result = classify(.click(at: .ref("e4", observation: "o_1")), observation, grants: safari)
+        #expect(reason(result) == "domain www.twitch.tv is not granted", "the app grant doesn't reach into the page")
+    }
+
+    @Test("Page content on a page whose address the browser doesn't report can't be classified, so it isn't allowed")
+    func webContentUnknownPage() {
+        var observation = Self.browser(id: "o_1", page: nil)
+        observation.tree?.elements["e4"] = ElementRef(id: "e4", role: "AXButton", label: "Follow", app: Self.safari, isWebContent: true)
+        let safari: [ComputerUseGrant] = Self.grants + [.app(bundleID: "com.apple.Safari", tier: .click)]
+        let result = classify(.click(at: .ref("e4", observation: "o_1")), observation, grants: safari)
+        guard case .unresolvable(let why) = result.actionClass else {
+            Issue.record("expected unresolvable, got \(result.actionClass)")
+            return
+        }
+        #expect(why.contains("doesn't report"))
+    }
+
     @Test("Targets that are only a page, with no app, still take the target's URL for every element and point")
     func pageOnlyTargets() {
         let observation = Self.browser(id: "o_1", page: "https://www.apple.com/", pageBounds: nil, app: nil)
