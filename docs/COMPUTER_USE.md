@@ -23,7 +23,7 @@ Computer use is a **display target** (the user's desktop, a VM, a desktop contai
 - [Model descriptors and the screenshot budget](#model-descriptors-and-the-screenshot-budget)
 - [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps)
 
-The spec is the harness-template pages `backends/computer-use/README.md` and `backends/computer-use/macos.md`, revised in November 2026 after [feedback from this implementation](COMPUTER_USE_SPEC_FEEDBACK.md). This document describes the implementation as aligned with the revised spec. Where it still interprets or departs from the spec, see [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps).
+The spec is the harness-template pages `backends/computer-use/README.md` and `backends/computer-use/macos.md`, revised in November 2026 after feedback from this implementation. This document describes the implementation as aligned with the revised spec. Where it still interprets or departs from the spec, see [Implementation notes and spec gaps](#implementation-notes-and-spec-gaps).
 
 ---
 
@@ -680,7 +680,7 @@ That fixes the coordinate dialect from the feature, and sets the image limit to 
 
 ## Implementation notes and spec gaps
 
-These are behavior calls made where the revised spec is silent or ambiguous, departures from it, and gaps worth revisiting. Rows the November 2026 revisions settled were removed. Open questions for the spec team are in [the feedback document](COMPUTER_USE_SPEC_FEEDBACK.md).
+These are behavior calls made where the revised spec is silent or ambiguous, departures from it, and gaps worth revisiting. Rows the November 2026 revisions settled were removed.
 
 **Contract**
 
