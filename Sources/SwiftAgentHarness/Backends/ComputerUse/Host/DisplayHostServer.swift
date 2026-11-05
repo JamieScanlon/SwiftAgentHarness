@@ -32,6 +32,9 @@ public actor DisplayHostServer {
     private let target: any DisplayTarget
     private var connections: [UUID: ConnectionState] = [:]
     private var leases: [UUID: HeldLease] = [:]
+    private var endedWhileDetached: [UUID: EndedLease] = [:]
+    /// Compared against when a reattach names no lease, so a refusal takes the same work either way.
+    private let decoyToken = DisplayLiveViewServer.token()
     /// Holder keys whose lease is still held, connected or within its grace.
     private var liveHolders: Set<UUID> = []
     private var permissionWatch: Task<Void, Never>?
@@ -50,8 +53,18 @@ public actor DisplayHostServer {
         /// `nil` while orphaned, waiting for a reattach.
         var connection: UUID?
         var reattachToken: String
+        /// Watches the target's events for the lease's whole life, attached or not.
         var forwarder: Task<Void, Never>?
         var expiry: Task<Void, Never>?
+        var takeover = false
+    }
+
+    /// A lease the host ended while it was detached, kept for the grace period so its holder learns why.
+    private struct EndedLease {
+        var lease: Lease
+        var reattachToken: String
+        var reason: ReleaseReason
+        var expiry: Task<Void, Never>
     }
 
     public init(target: any DisplayTarget, name: String = ProcessInfo.processInfo.processName, configuration: DisplayHostServerConfiguration = DisplayHostServerConfiguration()) {
@@ -144,11 +157,19 @@ public actor DisplayHostServer {
                 }
                 let token = DisplayLiveViewServer.token()
                 leases[lease.id] = HeldLease(lease: lease, holderKey: key, connection: id, reattachToken: token)
-                await startForwarding(lease, to: id)
+                await startForwarding(lease)
                 await watchPermissions()
                 return .lease(lease, reattachToken: state.capabilities.contains(.reattach) ? token : nil)
             case .reattach(let leaseID, let token):
-                guard var held = leases[leaseID], held.connection == nil, held.reattachToken == token else {
+                if let ended = endedWhileDetached[leaseID], ObserverTokenIssuer.matches(ended.reattachToken, token) {
+                    ended.expiry.cancel()
+                    endedWhileDetached[leaseID] = nil
+                    return .reattached(ended.lease, reattachToken: nil, snapshot: DisplayHostLeaseSnapshot(
+                        permissions: await target.permissions(), takeover: false, releasedReason: ended.reason
+                    ))
+                }
+                let expected = leases[leaseID]?.reattachToken ?? decoyToken
+                guard ObserverTokenIssuer.matches(expected, token), var held = leases[leaseID], held.connection == nil else {
                     throw DisplayTargetError.leaseNotHeld
                 }
                 held.expiry?.cancel()
@@ -156,8 +177,9 @@ public actor DisplayHostServer {
                 held.connection = id
                 held.reattachToken = DisplayLiveViewServer.token()
                 leases[leaseID] = held
-                await startForwarding(held.lease, to: id)
-                return .lease(held.lease, reattachToken: held.reattachToken)
+                return .reattached(held.lease, reattachToken: held.reattachToken, snapshot: DisplayHostLeaseSnapshot(
+                    permissions: await target.permissions(), takeover: held.takeover
+                ))
             case .release(let leaseID, let reason):
                 if let held = leases[leaseID], held.connection == id {
                     await release(leaseID, reason: reason)
@@ -190,6 +212,7 @@ public actor DisplayHostServer {
                 return .done
             case .takeover(let leaseID, let on):
                 try await target.takeover(try lease(leaseID, connection: id), on: on)
+                leases[leaseID]?.takeover = on
                 return .done
             case .liveFrame(let leaseID):
                 let frame = try await target.liveFrame(try lease(leaseID, connection: id))
@@ -247,8 +270,6 @@ public actor DisplayHostServer {
     private func disconnect(_ id: UUID) async {
         guard let state = connections.removeValue(forKey: id) else { return }
         for (leaseID, var held) in leases where held.connection == id {
-            held.forwarder?.cancel()
-            held.forwarder = nil
             guard state.capabilities.contains(.reattach) else {
                 await release(leaseID, reason: .holderLost)
                 continue
@@ -283,15 +304,46 @@ public actor DisplayHostServer {
 
     // MARK: - Events
 
-    private func startForwarding(_ lease: Lease, to connection: UUID) async {
-        guard connections[connection]?.capabilities.contains(.events) == true else { return }
+    private func startForwarding(_ lease: Lease) async {
         let stream = await target.events(lease)
         leases[lease.id]?.forwarder?.cancel()
         leases[lease.id]?.forwarder = Task { [weak self] in
             for await event in stream {
-                await self?.send(event, about: lease.id)
+                await self?.handle(event, about: lease.id)
             }
         }
+    }
+
+    /// The host keeps the lease's state for a returning holder, and acts on a stop press itself while nobody holds
+    /// the connection: the event would otherwise go nowhere.
+    private func handle(_ event: DisplayTargetEvent, about leaseID: UUID) async {
+        guard let held = leases[leaseID] else { return }
+        switch event {
+        case .takeoverChanged(let on):
+            leases[leaseID]?.takeover = on
+        case .stopRequested where held.connection == nil:
+            let grace = configuration.reattachGrace
+            endedWhileDetached[leaseID] = EndedLease(
+                lease: held.lease,
+                reattachToken: held.reattachToken,
+                reason: .killSwitch,
+                expiry: Task { [weak self] in
+                    guard (try? await Task.sleep(for: grace)) != nil else { return }
+                    await self?.forgetEnded(leaseID)
+                }
+            )
+            // Releasing cancels the forwarder, which is the task running this.
+            leases[leaseID]?.forwarder = nil
+            await release(leaseID, reason: .killSwitch)
+            return
+        default:
+            break
+        }
+        await send(event, about: leaseID)
+    }
+
+    private func forgetEnded(_ leaseID: UUID) {
+        endedWhileDetached[leaseID] = nil
     }
 
     /// Sends `event` to the connection holding the lease. An orphaned lease's events are dropped.

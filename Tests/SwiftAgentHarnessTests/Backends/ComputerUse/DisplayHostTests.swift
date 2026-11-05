@@ -272,6 +272,134 @@ struct DisplayHostTests {
         _ = try await target.lease(Self.leaseRequest(agentID: "other"))
     }
 
+    /// A raw protocol client over its own connection, for requests the remote target never sends.
+    private struct RawClient {
+        let connection: InMemoryDisplayHostConnection
+        var replies: AsyncThrowingStream<Data, any Error>.AsyncIterator
+        var nextID: UInt64 = 1
+
+        init(_ server: DisplayHostServer, serving: inout [Task<Void, Never>]) async throws {
+            let (client, host) = InMemoryDisplayHostConnection.pair()
+            serving.append(Task { await server.serve(host) })
+            connection = client
+            replies = client.inbound.makeAsyncIterator()
+            _ = try await send(.hello(version: DisplayHostProtocol.version, client: "raw", capabilities: [.reattach, .events]))
+        }
+
+        mutating func send(_ body: DisplayHostRequest) async throws -> DisplayHostResponse {
+            let id = nextID
+            nextID += 1
+            try await connection.send(DisplayHostCodec.encode(.request(id: id, body: body)))
+            while let data = try await replies.next() {
+                if case .response(id, let response) = try DisplayHostCodec.decode(data) { return response }
+            }
+            throw DisplayTargetError.driverFailure("connection closed")
+        }
+    }
+
+    @Test("Reattach takes a single-use token: a wrong or reused one is refused exactly as an unknown lease is")
+    func reattachToken() async throws {
+        let server = DisplayHostServer(target: FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest), configuration: DisplayHostServerConfiguration(reattachGrace: .seconds(5)))
+        var serving: [Task<Void, Never>] = []
+        var first = try await RawClient(server, serving: &serving)
+        guard case .lease(let lease, let token?) = try await first.send(.lease(request: DisplayHostLeaseRequest(Self.leaseRequest()))) else {
+            Issue.record("expected a lease with a reattach token")
+            return
+        }
+        #expect(Data(base64Encoded: token.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + "=")?.count ?? 0 >= 16,
+                "at least 128 random bits")
+        await first.connection.close()
+        await serving[0].value
+
+        var second = try await RawClient(server, serving: &serving)
+        let unknown = try await second.send(.reattach(leaseID: UUID(), token: token))
+        let wrong = try await second.send(.reattach(leaseID: lease.id, token: String(token.reversed())))
+        #expect(wrong == unknown, "a refusal doesn't tell a wrong token from a lease that doesn't exist")
+        guard case .reattached(let back, let next?, let snapshot) = try await second.send(.reattach(leaseID: lease.id, token: token)) else {
+            Issue.record("expected the lease back")
+            return
+        }
+        #expect(back.id == lease.id)
+        #expect(next != token, "each reattach issues a new token")
+        #expect(snapshot.releasedReason == nil)
+        await second.connection.close()
+        await serving[1].value
+
+        var third = try await RawClient(server, serving: &serving)
+        #expect(try await third.send(.reattach(leaseID: lease.id, token: token)) == unknown, "the old token is spent")
+        await third.connection.close()
+        await serving[2].value
+    }
+
+    @Test("Reattach brings a snapshot of the lease's state, not a backlog of what happened while detached")
+    func reattachSnapshot() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let server = DisplayHostServer(target: target, configuration: DisplayHostServerConfiguration(reattachGrace: .seconds(5)))
+        var serving: [Task<Void, Never>] = []
+        var first = try await RawClient(server, serving: &serving)
+        guard case .lease(let lease, let token?) = try await first.send(.lease(request: DisplayHostLeaseRequest(Self.leaseRequest()))) else {
+            Issue.record("expected a lease")
+            return
+        }
+        await first.connection.close()
+        await serving[0].value
+        target.eventHub.post(.takeoverChanged(on: true))
+        target.eventHub.post(.userTyping)
+        try await Task.sleep(for: .milliseconds(50))
+
+        var second = try await RawClient(server, serving: &serving)
+        guard case .reattached(_, _, let snapshot) = try await second.send(.reattach(leaseID: lease.id, token: token)) else {
+            Issue.record("expected the lease back")
+            return
+        }
+        #expect(snapshot.takeover, "the takeover that started while detached")
+        #expect(snapshot.permissions == (await target.permissions()))
+        await second.connection.close()
+        await serving[1].value
+    }
+
+    @Test("A stop pressed while the lease is detached runs cleanup on the host, and the returning holder hears it")
+    func stopWhileDetached() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let server = DisplayHostServer(target: target, configuration: DisplayHostServerConfiguration(reattachGrace: .seconds(5)))
+        let current = Connections()
+        let gate = Gate()
+        let remote = try await RemoteDisplayTarget.connect(using: {
+            if await current.count > 0 { await gate.wait() }
+            let (client, host) = InMemoryDisplayHostConnection.pair()
+            await current.set(host, serving: Task { await server.serve(host) })
+            return client
+        })
+        let lease = try await remote.lease(Self.leaseRequest())
+        let events = await remote.events(lease)
+        await current.dropHost()
+        target.eventHub.post(.stopRequested)
+        for _ in 0..<100 where await target.releases.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await target.releases == [.killSwitch], "the host released the lease itself")
+        await gate.open()
+        var heard: [DisplayTargetEvent] = []
+        for await event in events { heard.append(event) }
+        #expect(heard == [.stopRequested])
+        await remote.close()
+        await current.waitAll()
+    }
+
+    actor Gate {
+        private var isOpen = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            guard !isOpen else { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+
+        func open() {
+            isOpen = true
+            for waiter in waiters { waiter.resume() }
+            waiters = []
+        }
+    }
+
     /// The connections a reconnecting client made, so a test can drop one.
     actor Connections {
         private var hosts: [InMemoryDisplayHostConnection] = []

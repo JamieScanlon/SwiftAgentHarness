@@ -230,6 +230,16 @@ struct NoVNCAuthTests {
         #expect(NoVNCAuth.issue().password.count == 12)
         #expect(DisplayLiveViewServer.token().count == 43)
     }
+
+    @Test("Tokens match only when equal, whatever their lengths")
+    func tokenMatching() {
+        let token = ObserverTokenIssuer.token()
+        #expect(ObserverTokenIssuer.matches(token, token))
+        #expect(!ObserverTokenIssuer.matches(token, String(token.dropLast())))
+        #expect(!ObserverTokenIssuer.matches(token, token + "x"))
+        #expect(!ObserverTokenIssuer.matches(token, ""))
+        #expect(!ObserverTokenIssuer.matches("ab", "ba"))
+    }
 }
 
 @Suite("Sandbox config hash")

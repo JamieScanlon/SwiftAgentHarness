@@ -163,12 +163,19 @@ public actor RemoteDisplayTarget: DisplayTarget {
         listen(to: channel)
         for (leaseID, holder) in holders {
             guard let token = holder.reattachToken, handshake.capabilities.contains(.reattach),
-                  case .lease(_, let next)? = try? await channel.call(.reattach(leaseID: leaseID, token: token))
+                  case .reattached(_, let next, let snapshot)? = try? await channel.call(.reattach(leaseID: leaseID, token: token))
             else {
                 lose(leaseID)
                 continue
             }
+            if let reason = snapshot.releasedReason {
+                if reason == .killSwitch { hub.post(.stopRequested, to: leaseID) }
+                lose(leaseID)
+                continue
+            }
             holders[leaseID]?.reattachToken = next
+            hub.post(.permissionsChanged(snapshot.permissions), to: leaseID)
+            hub.post(.takeoverChanged(on: snapshot.takeover), to: leaseID)
         }
         reconnecting = nil
     }

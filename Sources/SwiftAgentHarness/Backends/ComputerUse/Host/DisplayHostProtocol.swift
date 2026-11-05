@@ -13,7 +13,7 @@ import Foundation
 /// a host honours only the leases it issued on the same connection, or that the connection reattached. The host
 /// also sends events unprompted.
 public enum DisplayHostProtocol {
-    public static let version = DisplayHostVersion(major: 6, minor: 0)
+    public static let version = DisplayHostVersion(major: 7, minor: 0)
     /// What this build of the protocol supports.
     public static let capabilities: Set<DisplayHostCapability> = [.liveView, .downloads, .events, .reattach, .imageFiles]
     /// The largest message either side accepts.
@@ -100,6 +100,20 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
     }
 }
 
+/// A lease's state as a reattaching holder finds it.
+public struct DisplayHostLeaseSnapshot: Sendable, Codable, Hashable {
+    public var permissions: PermissionSnapshot
+    public var takeover: Bool
+    /// Set when the host ended the lease while it was detached, such as for a stop press.
+    public var releasedReason: ReleaseReason?
+
+    public init(permissions: PermissionSnapshot, takeover: Bool, releasedReason: ReleaseReason? = nil) {
+        self.permissions = permissions
+        self.takeover = takeover
+        self.releasedReason = releasedReason
+    }
+}
+
 public enum DisplayHostRequest: Sendable, Codable, Hashable {
     case hello(version: DisplayHostVersion, client: String, capabilities: [DisplayHostCapability])
     case lease(request: DisplayHostLeaseRequest)
@@ -132,6 +146,9 @@ public enum DisplayHostResponse: Sendable, Codable, Hashable {
     )
     /// `reattachToken` takes the lease back from a new connection after this one drops.
     case lease(Lease, reattachToken: String?)
+    /// A reattached lease, with a new token and its state now, instead of the events it missed. A lease that ended
+    /// while detached comes back once, with no token and why it ended.
+    case reattached(Lease, reattachToken: String?, snapshot: DisplayHostLeaseSnapshot)
     case downloads([DisplayDownload])
     case done
     case permissions(PermissionSnapshot)
