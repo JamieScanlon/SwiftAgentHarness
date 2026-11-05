@@ -105,7 +105,8 @@ enum ComputerUseSessionFixtures {
         clock: ComputerUseTestClock = ComputerUseTestClock(),
         successCriteria: [String] = [],
         storeApprovalImage: (@Sendable (Data) async -> String?)? = nil,
-        confirmsInteract: Bool = false
+        confirmsInteract: Bool = false,
+        modePolicy: (@Sendable () async -> ComputerUseModePolicy)? = nil
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         let target = FakeDisplayTarget(manifest: manifest, now: { clock.now() })
         let lease = try await target.lease(LeaseRequest(
@@ -125,6 +126,7 @@ enum ComputerUseSessionFixtures {
         )
         configuration.storeApprovalImage = storeApprovalImage
         configuration.confirmsInteract = confirmsInteract
+        configuration.modePolicy = modePolicy
         let session = ComputerUseSession(
             target: target,
             lease: lease,
@@ -303,6 +305,42 @@ struct ComputerUseSessionGatingTests {
         #expect(result.records.first?.decision == .headlessDenied)
         #expect(await approvals.requests.isEmpty)
         #expect(await target.actCalls.isEmpty)
+    }
+
+    @Test("A mode that starts requiring Interact confirmation mid-session reaches the next action, and loosening it later doesn't")
+    func modeTightensMidSession() async throws {
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let policy = Mutex(ComputerUseModePolicy())
+        let (_, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            approvals: approvals,
+            modePolicy: { policy.withLock { $0 } }
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(await approvals.requests.isEmpty, "the modes start out ordinary")
+        policy.withLock { $0.confirmsInteract = true }
+        _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(await approvals.requests.count == 1)
+        policy.withLock { $0.confirmsInteract = false }
+        _ = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(await approvals.requests.count == 2, "a looser mode waits for the next session")
+    }
+
+    @Test("A mode that starts denying computer use ends the session before its next action")
+    func modeDeniesMidSession() async throws {
+        let policy = Mutex(ComputerUseModePolicy())
+        let (target, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            modePolicy: { policy.withLock { $0 } }
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        policy.withLock { $0.denied = true }
+        let result = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
+        #expect(result.outcomes.first?.effect == .notExecuted)
+        #expect(result.terminal == .permissionRevoked)
+        #expect(await target.actCalls.isEmpty)
+        #expect(await target.releases == [.permissionRevoked])
     }
 
     @Test("A consistent intent verdict allows interact actions; the check never sees screen text")

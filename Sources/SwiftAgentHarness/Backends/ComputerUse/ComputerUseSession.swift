@@ -55,6 +55,9 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// a `data:` URL.
     public var storeApprovalImage: (@Sendable (Data) async -> String?)?
     public var watchModeWait: Duration = .seconds(120)
+    /// The current computer-use policy of the modes that apply, read before every action. Only a stricter policy
+    /// takes effect mid-session; a looser one waits for the next session.
+    public var modePolicy: (@Sendable () async -> ComputerUseModePolicy)?
     /// Confirm every Interact action with the user, as a stricter mode requires. Neither a consistent intent check,
     /// an unshared target, nor the operator's opt-out skips it.
     public var confirmsInteract = false
@@ -84,6 +87,19 @@ public struct ComputerUseSessionConfiguration: Sendable {
         self.runID = runID
         self.accountID = accountID
         self.auditCapacity = max(1, auditCapacity)
+    }
+}
+
+/// What the modes over a computer-use session require of it: the strictest of the delegating conversation's mode and
+/// every mode above it.
+public struct ComputerUseModePolicy: Sendable, Equatable {
+    /// A mode denies the computer-use delegate tool.
+    public var denied: Bool
+    public var confirmsInteract: Bool
+
+    public init(denied: Bool = false, confirmsInteract: Bool = false) {
+        self.denied = denied
+        self.confirmsInteract = confirmsInteract
     }
 }
 
@@ -324,6 +340,8 @@ public actor ComputerUseSession {
     private var askedAfterFailures = false
     /// Actions refused since the last progress. They aren't steps, but they fill the no-progress window.
     private var refusedSinceProgress = 0
+    /// Set when a mode over the session started requiring confirmation after the session started.
+    private var modeTightenedConfirmsInteract = false
     private var lastActionAt: Date?
     public private(set) var terminalReason: ComputerUseTerminalReason?
     /// What ran out, in words, when a budget ended the session.
@@ -893,7 +911,7 @@ public actor ComputerUseSession {
             return GateResult(decision: .allowed, reason: "\(classification.actionClass.label) within grant")
         case .interact:
             let intent = await checkIntent(classification)
-            if configuration.confirmsInteract {
+            if configuration.confirmsInteract || modeTightenedConfirmsInteract {
                 var reasons = ["this conversation's mode requires confirming every interact action"]
                 if case .confirm(let reason, _)? = intent { reasons.append(reason) }
                 return await confirm(classification, action: action, reasons: reasons, intent: intent, statedIntent: statedIntent)
@@ -1089,6 +1107,8 @@ public actor ComputerUseSession {
     /// allotment is extended when there was progress since the last grant, and at a ceiling a present user decides.
     private func enforceBudgets() async {
         guard terminalReason == nil else { return }
+        await applyStricterModePolicy()
+        guard terminalReason == nil else { return }
         await endIfNotProgressing()
         guard terminalReason == nil else { return }
         if now() >= endsAt {
@@ -1097,6 +1117,15 @@ public actor ComputerUseSession {
         }
         if steps >= budgets.steps {
             await ranOutOfSteps()
+        }
+    }
+
+    /// A mode change that tightens computer use reaches the session at its next action and stays for the rest of it.
+    private func applyStricterModePolicy() async {
+        guard let policy = await configuration.modePolicy?() else { return }
+        if policy.confirmsInteract { modeTightenedConfirmsInteract = true }
+        if policy.denied {
+            await end(.permissionRevoked, detail: "a conversation's mode now denies computer use")
         }
     }
 

@@ -327,6 +327,66 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(await target.actCalls.count == 1)
     }
 
+    /// Delegates nested under `root`, each in the mode named, outermost first. The last one delegates.
+    private func nest(_ session: HarnessRuntimeSession, under root: ModelConversation, modes: [String]) async throws -> ModelConversation {
+        var parent = root
+        for mode in modes {
+            try await session.createConversation(with: root.model, userSystemPrompt: "delegate", interactionMode: .agent, modeProfileID: mode)
+            var child = try #require(await session.currentConversation())
+            child.parentConversationID = parent.id
+            child.metadata = .object(["subAgentRootConversationID": .string(root.id.uuidString)])
+            await session.persistenceDomain.replaceConversationInRegistry(child, transcript: .authoritativeTip)
+            parent = try #require(await session.persistenceDomain.modelConversation(id: child.id))
+        }
+        return parent
+    }
+
+    private static let strictAndDenying = ModeProfileConfiguration(
+        profiles: [
+            ModeProfileConfiguration.RawProfile(
+                id: "careful-agent",
+                extends: "agent",
+                subAgents: .object(["computerUse": .object(["confirmInteract": .boolean(true)])])
+            ),
+            ModeProfileConfiguration.RawProfile(
+                id: "no-computer-agent",
+                extends: "agent",
+                tools: .object(["deny": .array([.string(ComputerUseDelegateToolProvider.toolName)])])
+            ),
+        ],
+        diagnostics: []
+    )
+
+    @Test("A strict mode anywhere above a nested delegate applies, not just at the root or the delegating conversation")
+    func middleAncestorModeApplies() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let (session, root) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+            approvals: approvals, parentModeProfiles: Self.strictAndDenying
+        )
+        let delegating = try await nest(session, under: root, modes: ["careful-agent", "agent"])
+        let (_, result) = try await invoke(session, parent: delegating)
+        #expect(result["status"] as? String == "done")
+        #expect(await approvals.requests.count == 1, "the middle delegate's mode confirms the click")
+    }
+
+    @Test("A mode above a nested delegate that denies computer use blocks it before any lease")
+    func ancestorDenialBlocks() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let recorder = ChildRecorder()
+        let (session, root) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: recorder,
+            parentModeProfiles: Self.strictAndDenying
+        )
+        let delegating = try await nest(session, under: root, modes: ["no-computer-agent", "agent"])
+        let (_, result) = try await invoke(session, parent: delegating)
+        #expect(result["status"] as? String == "blocked")
+        #expect((result["reason"] as? String)?.contains("denies computer use") == true, "\(result)")
+        #expect(await recorder.childIDs.isEmpty)
+        #expect(await target.releases.isEmpty, "nothing was leased")
+    }
+
     @Test("A parent in an ordinary mode leaves Interact on an unshared target unconfirmed")
     func ordinaryModeLeavesInteract() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })

@@ -12,6 +12,7 @@ extension SubAgentSpawnService {
         conversationID: UUID,
         parentConversation: ModelConversation,
         toolEntry: ToolRegistryEntry,
+        groupIndex: ToolPolicyGroupIndex = .empty,
         origin: ComputerUseRunOrigin
     ) async -> ToolDispatchOutcome {
         guard let configuration = deps.computerUse.configuration else {
@@ -34,6 +35,16 @@ extension SubAgentSpawnService {
             var result = result
             if !grantNotes.isEmpty { result.grantNotes = grantNotes }
             return .completed(AgentLoopToolDispatch.toolResultMessage(toolCallId: call.id, content: result.parentContent))
+        }
+
+        let userConversationID = await subAgentRootConversationID(for: conversationID)
+        let modePolicy: @Sendable () async -> ComputerUseModePolicy = { [weak self] in
+            await self?.computerUseModePolicy(from: conversationID, root: userConversationID, toolEntry: toolEntry, groupIndex: groupIndex)
+                ?? ComputerUseModePolicy()
+        }
+        let startPolicy = await modePolicy()
+        if startPolicy.denied {
+            return reply(.notStarted(.blocked, reason: "the mode of a conversation this task was delegated from denies computer use", task: task))
         }
 
         let definition = ComputerUseDelegateToolProvider.specialistDefinition(configuration.specialist)
@@ -164,7 +175,6 @@ extension SubAgentSpawnService {
         // Approvals, questions, and activity go to the user's conversation: the root of the delegation tree, which
         // is the parent unless the parent is itself a delegate. A nested specialist's requests name its path. Waiting
         // on the user pauses the child's idle clock, and every action the session reports is a sign of life.
-        let userConversationID = await subAgentRootConversationID(for: conversationID)
         let userConversation = userConversationID == conversationID
             ? parentConversation
             : await deps.persistenceDomain.modelConversation(id: userConversationID) ?? parentConversation
@@ -172,12 +182,8 @@ extension SubAgentSpawnService {
             let path = await subAgentPathSegments(for: childID)
             sessionConfiguration.delegatePath = path.isEmpty ? ComputerUseDelegateToolProvider.toolName : path.joined(separator: "/")
         }
-        // A mode can only tighten computer use, so the caller's mode and the user's both apply: delegating through
-        // another delegate never escapes the stricter one.
-        let callerMode = await resolvedModeProfile(for: parentConversation)
-        let userMode = userConversationID == conversationID ? callerMode : await resolvedModeProfile(for: userConversation)
-        sessionConfiguration.confirmsInteract = callerMode.subAgents.computerUse.confirmsInteract
-            || userMode.subAgents.computerUse.confirmsInteract
+        sessionConfiguration.confirmsInteract = startPolicy.confirmsInteract
+        sessionConfiguration.modePolicy = modePolicy
         let targetLabel = grant.target.manifest.label
         let servesLiveView = grant.target.manifest.observerAccess != .none
         let liveness = DelegateLiveness()
@@ -494,5 +500,36 @@ extension SubAgentSpawnService {
             access: access
         ))
         return SessionBlobImageRef.path(for: documentBlobID)
+    }
+
+    /// The computer-use policy of every mode over a session: the delegating conversation's and each one above it, up
+    /// to the user's root. Modes restrict computer use down the whole delegation chain, so the strictest applies.
+    /// Conversations are read fresh, so a mode changed since the session started is what counts.
+    func computerUseModePolicy(
+        from conversationID: UUID,
+        root: UUID,
+        toolEntry: ToolRegistryEntry,
+        groupIndex: ToolPolicyGroupIndex
+    ) async -> ComputerUseModePolicy {
+        var chain: [ModelConversation] = []
+        var visited: Set<UUID> = []
+        var cursor: UUID? = conversationID
+        while let id = cursor, visited.insert(id).inserted, let conversation = await deps.persistenceDomain.modelConversation(id: id) {
+            chain.append(conversation)
+            cursor = conversation.parentConversationID
+        }
+        if !visited.contains(root), let conversation = await deps.persistenceDomain.modelConversation(id: root) {
+            chain.append(conversation)
+        }
+        var policy = ComputerUseModePolicy()
+        for conversation in chain {
+            let profile = await resolvedModeProfile(for: conversation)
+            policy.confirmsInteract = policy.confirmsInteract || profile.subAgents.computerUse.confirmsInteract
+            let denyRules = ToolPolicyRulesCache.parseList(profile.tools.deny)
+            if ToolPolicyNameMatcher.denylistBlocks(rules: denyRules, toolName: toolEntry.name, entry: toolEntry, groupIndex: groupIndex) {
+                policy.denied = true
+            }
+        }
+        return policy
     }
 }

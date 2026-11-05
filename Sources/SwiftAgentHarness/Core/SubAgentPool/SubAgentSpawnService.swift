@@ -1231,6 +1231,7 @@ public actor SubAgentSpawnService {
                 conversationID: conversationID,
                 parentConversation: parentConversation,
                 toolEntry: toolEntry,
+                groupIndex: snapshot.groupIndex,
                 origin: origin
             )
         }
