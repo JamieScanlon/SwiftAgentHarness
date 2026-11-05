@@ -679,7 +679,7 @@ That fixes the coordinate dialect from the feature, and sets the image limit to 
 
 ## Implementation notes and spec gaps
 
-These are behavior calls made where the revised spec is silent or ambiguous, departures from it, and gaps worth revisiting. Rows the November 2026 revision settled were removed; [the feedback document](COMPUTER_USE_SPEC_FEEDBACK.md) records which, and where the revision went another way than suggested.
+These are behavior calls made where the revised spec is silent or ambiguous, departures from it, and gaps worth revisiting. Rows the November 2026 revision settled were removed. Open questions for the spec team are in [the feedback document](COMPUTER_USE_SPEC_FEEDBACK.md).
 
 **Contract**
 
