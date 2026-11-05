@@ -451,6 +451,50 @@ paths:
         "400":
           description: Invalid conversation id or backfill request.
 
+  /conversations/{id}/blobs/{blobID}:
+    get:
+      operationId: getConversationBlob
+      tags: [Conversations]
+      summary: A blob this conversation references
+      description: >-
+        Serves an attachment, a message image, or an image block's `ref` on a message or approval card of this
+        conversation. Needs the same access as reading the conversation. A blob the conversation doesn't reference is
+        `404` even when it exists, so blob ids can't be probed across conversations. The `ETag` is the blob id, which
+        is the SHA-256 of the bytes; blobs never change, so responses are cacheable as immutable.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: blobID
+          in: path
+          required: true
+          description: A 64-character hex blob id.
+          schema:
+            type: string
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The blob's bytes, with its media type
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "304":
+          description: The client's copy is current
+        "404":
+          description: The conversation doesn't reference this blob, or the blob is gone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /conversations/{id}/plan:
     get:
       operationId: getConversationPlan
@@ -2075,34 +2119,6 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "409":
           description: The target failed to revoke it
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorEnvelope"
-
-  /conversations/{id}/computer-use/images/{blobID}:
-    get:
-      operationId: getConversationComputerUseImage
-      tags: [ComputerUse]
-      summary: An image a live computer-use run's approval card cites by blob ref
-      description: Only images the conversation's own live runs stored are served. Sent with `Cache-Control: no-store`.
-      parameters:
-        - $ref: "#/components/parameters/ConversationId"
-        - name: blobID
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: The image bytes
-          content:
-            image/png:
-              schema:
-                type: string
-                format: binary
-        "404":
-          description: No such image for this conversation's live runs, or the host has no computer use
           content:
             application/json:
               schema:

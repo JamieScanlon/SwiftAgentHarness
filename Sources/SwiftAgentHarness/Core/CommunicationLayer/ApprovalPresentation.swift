@@ -41,8 +41,9 @@ public struct ApprovalButton: Codable, Sendable, Equatable {
     }
 }
 
-/// An image a surface can show inline, such as the region an action lands on. `ref` names the bytes: a
-/// `blob://` reference a surface fetches, or a `data:` URL where there is no blob store. `alt` is required and must
+/// An image a surface can show inline, such as the region an action lands on. `ref` names the bytes: a blob id of
+/// the card's conversation, fetched from `GET /api/conversations/{id}/blobs/{blobId}`, or a `data:` URL where there
+/// is no blob store. `alt` is required and must
 /// carry the decision-relevant facts on its own, since surfaces that can't show images render only it.
 public struct PresentationImage: Codable, Sendable, Equatable {
     public var ref: String

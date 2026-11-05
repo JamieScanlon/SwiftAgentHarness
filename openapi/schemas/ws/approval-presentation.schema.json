@@ -19,7 +19,7 @@
           "text": { "type": "string" },
           "ref": {
             "type": "string",
-            "description": "For an image block: a blob:// reference (fetched from GET /api/conversations/{id}/computer-use/images/{blobID}) or a data: URL."
+            "description": "For an image block: a blob id of the card's conversation (fetched from GET /api/conversations/{id}/blobs/{blobID}) or a data: URL."
           },
           "alt": {
             "type": "string",

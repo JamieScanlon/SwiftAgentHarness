@@ -155,7 +155,7 @@ extension SubAgentSpawnService {
             for expiry in await cardInstallation.blobs.hold([stored.id], childConversationID: childID, until: until) {
                 _ = try? cardHarness.setBlobExpiry(blobId: expiry.blobID, expiresAt: expiry.expiresAt)
             }
-            return SessionBlobImageRef.path(for: stored.id)
+            return stored.id
         }
         // Gemini's functions take the 0–999 grid whatever the catalog says; the mode is frozen with the session.
         if sessionConfiguration.nativeDialect?.toolset.vendor == .gemini {

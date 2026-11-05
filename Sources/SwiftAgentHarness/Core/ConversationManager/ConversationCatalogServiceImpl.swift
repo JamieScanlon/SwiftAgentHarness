@@ -162,6 +162,18 @@ struct ConversationCatalogServiceImpl: ConversationCatalogServicing {
         APISessionContext.authenticatedOwnerAccountID ?? registryOwnerAccountScope()
     }
 
+    func conversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        guard let id = ConversationBlobAccess.normalizedID(blobID),
+              let conversation = await deps.persistenceDomain.modelConversation(id: conversationID),
+              conversation.lifecycle != .deleted else { return nil }
+        var referenced = ConversationBlobAccess.references(id, attachments: conversation.attachmentsCatalog, messages: conversation.messages)
+        if !referenced {
+            referenced = ConversationBlobAccess.references(id, attachments: [], messages: await projectedMessages(for: conversation))
+        }
+        guard referenced else { return nil }
+        return ConversationBlobAccess.load(id, from: await deps.persistenceDomain.harnessSessionPersistence)
+    }
+
     private func projectedMessages(for conversation: ModelConversation) async -> [Message] {
         await selection.projectedMessages(for: conversation)
     }

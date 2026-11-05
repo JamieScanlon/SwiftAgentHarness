@@ -94,6 +94,8 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws
     /// Controls for the computer-use specialists working for a conversation; nil when the host has no computer use.
     func apiComputerUseControl() async -> ComputerUseControlService?
+    /// A blob this conversation references: an attachment, a message image, or an image on a pending approval card.
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob?
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,
@@ -504,6 +506,10 @@ extension APILayerConversationManaging {
 
     func apiComputerUseControl() async -> ComputerUseControlService? {
         nil
+    }
+
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        await apiComputerUseControl()?.runBlob(conversationID: conversationID, blobID: blobID)
     }
 
     func apiPushCompletionAnnouncement(

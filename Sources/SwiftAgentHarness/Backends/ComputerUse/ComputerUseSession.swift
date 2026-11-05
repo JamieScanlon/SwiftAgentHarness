@@ -51,8 +51,8 @@ public struct ComputerUseSessionConfiguration: Sendable {
     /// For a specialist delegated by another delegate, its path in the delegation tree, shown on its cards.
     public var delegatePath: String?
     /// In watch mode, how long an action waits for the user to open the live view before the session ends.
-    /// Stores an approval card's image (PNG bytes) and returns its `blob://` ref; without it the image travels
-    /// inline as a `data:` URL.
+    /// Stores an approval card's image (PNG bytes) and returns its blob id; without it the image travels inline as
+    /// a `data:` URL.
     public var storeApprovalImage: (@Sendable (Data) async -> String?)?
     public var watchModeWait: Duration = .seconds(120)
     /// Confirm every Interact action with the user, as a stricter mode requires. Neither a consistent intent check,

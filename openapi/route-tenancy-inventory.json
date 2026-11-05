@@ -233,10 +233,10 @@
     },
     {
       "method": "GET",
-      "path": "/api/conversations/{id}/computer-use/images/{blobID}",
+      "path": "/api/conversations/{id}/blobs/{blobID}",
       "tenancy_guard": "conversationAccess",
       "source_file": "Sources/SwiftAgentHarness/Core/CommunicationLayer/API/APILayerRESTModules.swift",
-      "handler_anchor": "conversationsPath.get(\":id\", \"computer-use\", \"images\", \":blobID\")"
+      "handler_anchor": "conversationsPath.get(\":id\", \"blobs\", \":blobID\")"
     },
     {
       "method": "POST",

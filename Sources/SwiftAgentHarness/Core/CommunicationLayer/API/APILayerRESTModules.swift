@@ -833,6 +833,29 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             }
         }
 
+        conversationsPath.get(":id", "blobs", ":blobID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let blobID = req.parameters.get("blobID"),
+                  let blob = await dependencies.conversation.apiConversationBlob(conversationID: uuid, blobID: blobID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Blob not found")
+            }
+            let etag = "\"\(blob.contentHash)\""
+            if APILayer.ifNoneMatchSatisfied(currentETag: etag, headerValue: APILayer.ifNoneMatchHeader(from: req.headers)) {
+                return APILayer.notModifiedResponse(etag: etag)
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: .contentType, value: blob.mediaType)
+            headers.add(name: .cacheControl, value: "private, max-age=31536000, immutable")
+            APILayer.addETag(etag, to: &headers)
+            return Response(status: .ok, headers: headers, body: .init(data: blob.data))
+        }
+
         conversationsPath.get(":id", "plan") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
                 return APILayerRESTErrorResponse.invalidConversationID()
@@ -2879,25 +2902,6 @@ struct APILayerComputerUseModule: APILayerRESTEndpointModule {
             }
             var headers = HTTPHeaders()
             headers.add(name: .contentType, value: image.mediaType)
-            return Response(status: .ok, headers: headers, body: .init(data: image.data))
-        }
-
-        conversationsPath.get(":id", "computer-use", "images", ":blobID") { req async -> Response in
-            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
-                return APILayerRESTErrorResponse.invalidConversationID()
-            }
-            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
-                return forbidden
-            }
-            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
-            guard let blobID = req.parameters.get("blobID"),
-                  let image = await control.runImage(conversationID: uuid, blobID: blobID)
-            else {
-                return APILayerRESTErrorResponse.error(status: .notFound, message: "Image not found")
-            }
-            var headers = HTTPHeaders()
-            headers.add(name: .contentType, value: image.mediaType)
-            headers.add(name: .cacheControl, value: "no-store")
             return Response(status: .ok, headers: headers, body: .init(data: image.data))
         }
 

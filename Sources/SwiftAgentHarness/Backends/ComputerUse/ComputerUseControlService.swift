@@ -114,13 +114,13 @@ public struct ComputerUseControlService: Sendable {
 
     /// An image a live run's approval card cites by `blob://` ref. Only images the conversation's own live runs
     /// stored are served.
-    public func runImage(conversationID: UUID, blobID: String) async -> ComputerUseImage? {
-        let blobID = SessionBlobImageRef.parsePath(blobID) ?? SessionBlobStore.normalizeBlobId(blobID)
+    public func runBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        guard let blobID = ConversationBlobAccess.normalizedID(blobID) else { return nil }
         for child in await installation.sessions.children(parent: conversationID) {
             guard await installation.blobs.holds(blobID, childConversationID: child),
                   let data = try? installation.readBlob?(blobID)
             else { continue }
-            return ComputerUseImage(data: data, mediaType: "image/png")
+            return ConversationBlob(data: data, mediaType: SessionBlobMIME.sniff(data: data, hint: nil), contentHash: blobID)
         }
         return nil
     }

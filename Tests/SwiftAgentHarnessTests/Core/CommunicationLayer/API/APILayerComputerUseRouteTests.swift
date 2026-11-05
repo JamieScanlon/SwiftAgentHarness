@@ -32,7 +32,7 @@ struct APILayerComputerUseRouteTests {
 
     private var base: String { "/api/conversations/\(conversationID.uuidString)/computer-use" }
 
-    @Test("GET …/images/{blobID} serves an image a live run of this conversation stored, and nothing else")
+    @Test("GET …/blobs/{blobID} serves an image a live run of this conversation stored, and nothing else")
     func runImages() async throws {
         let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())
         let child = UUID()
@@ -42,18 +42,23 @@ struct APILayerComputerUseRouteTests {
         _ = await installation.blobs.hold([held], childConversationID: child, until: Date().addingTimeInterval(600))
         let png = Data([0x89, 0x50, 0x4E, 0x47])
         installation.readBlob = { _ in png }
+        let blobs = "/api/conversations/\(conversationID.uuidString)/blobs"
 
         try await withRoutes(installation) { app in
-            try await app.testing().test(.GET, "\(base)/images/\(held)") { res async throws in
+            try await app.testing().test(.GET, "\(blobs)/\(held)") { res async throws in
                 #expect(res.status == .ok)
                 #expect(res.headers.contentType?.serialize() == "image/png")
-                #expect(res.headers.first(name: .cacheControl) == "no-store")
+                #expect(res.headers.first(name: .eTag) == "\"\(held)\"")
+                #expect(res.headers.first(name: .cacheControl)?.contains("immutable") == true)
                 #expect(Data(res.body.readableBytesView) == png)
             }
-            try await app.testing().test(.GET, "\(base)/images/\(other)") { res async throws in
+            try await app.testing().test(.GET, "\(blobs)/\(held)", headers: ["If-None-Match": "\"\(held)\""]) { res async throws in
+                #expect(res.status == .notModified)
+            }
+            try await app.testing().test(.GET, "\(blobs)/\(other)") { res async throws in
                 #expect(res.status == .notFound, "a blob no live run of this conversation stored")
             }
-            try await app.testing().test(.GET, "/api/conversations/\(UUID().uuidString)/computer-use/images/\(held)") { res async throws in
+            try await app.testing().test(.GET, "/api/conversations/\(UUID().uuidString)/blobs/\(held)") { res async throws in
                 #expect(res.status == .notFound, "another conversation's run")
             }
         }

@@ -93,7 +93,7 @@ struct ComputerUseTargetCropTests {
         let stored = Mutex<[Data]>([])
         let (target, session) = try await ComputerUseSessionFixtures.make(approvals: approvals, storeApprovalImage: { data in
             stored.withLock { $0.append(data) }
-            return "blob://" + String(repeating: "c", count: 64)
+            return String(repeating: "c", count: 64)
         })
         await target.setScreenshot(try Self.screenshot())
         _ = await session.perform([ComputerUseSessionFixtures.observe])
@@ -102,7 +102,7 @@ struct ComputerUseTargetCropTests {
         let image = try #require(request.presentation.blocks.lazy.compactMap { block -> PresentationImage? in
             if case .image(let image) = block { image } else { nil }
         }.first)
-        #expect(image.ref == "blob://" + String(repeating: "c", count: 64))
+        #expect(image.ref == String(repeating: "c", count: 64))
         #expect(image.mime == "image/png")
         #expect(stored.withLock { $0.count } == 1)
     }

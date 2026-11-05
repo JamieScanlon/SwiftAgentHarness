@@ -126,6 +126,10 @@ final class ConversationSessionService: APILayerConversationManaging, Sendable {
         await backend.apiComputerUseControl()
     }
 
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        await backend.apiConversationBlob(conversationID: conversationID, blobID: blobID)
+    }
+
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,

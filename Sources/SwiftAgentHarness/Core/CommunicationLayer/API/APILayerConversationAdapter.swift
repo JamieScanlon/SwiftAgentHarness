@@ -259,6 +259,11 @@ public final class APILayerConversationAdapter: APILayerConversationManaging, Se
         computerUse.map(ComputerUseControlService.init)
     }
 
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        if let blob = await catalog.conversationBlob(conversationID: conversationID, blobID: blobID) { return blob }
+        return await apiComputerUseControl()?.runBlob(conversationID: conversationID, blobID: blobID)
+    }
+
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,
