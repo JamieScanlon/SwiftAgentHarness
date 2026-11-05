@@ -134,7 +134,8 @@ extension SubAgentSpawnService {
             task: ComputerUseTaskContext(
                 userRequest: [task.goal],
                 constraints: task.constraints,
-                successCriteria: task.successCriteria
+                successCriteria: task.successCriteria,
+                returnSchema: task.returnSchema
             ),
             model: profile
         )
@@ -245,25 +246,22 @@ extension SubAgentSpawnService {
             idleTimeoutSeconds: configuration.specialist.idleTimeoutSeconds,
             liveness: liveness
         )
+        // A rejected finish ends the loop like any halt signal, so the specialist's one more try is a short rerun, while the session is still live.
+        if case .completed = outcome, let problems = await session.finishRejection {
+            let retry = await runLocalAgentChild(
+                childConversationID: childID,
+                prompt: ComputerUseResultBuilder.refinishPrompt(problems, schema: task.returnSchema),
+                timeoutSeconds: configuration.specialist.cleanupGraceSeconds,
+                idleTimeoutSeconds: configuration.specialist.idleTimeoutSeconds
+            )
+            if case .completed = retry { outcome = retry }
+        }
         await deps.computerUse.sessions.remove(for: childID)
         switch outcome {
         case .completed: await session.end()
         case .idleTimedOut: await session.end(.idleTimeout)
         case .timedOut: await session.end(.timeBudget)
         case .failed, .cancelled: await session.end(.cancelled)
-        }
-        // One chance to fix a report that doesn't match the return schema; after that the builder leaves it out.
-        if case .completed(let text) = outcome, let schema = task.returnSchema {
-            let problems = ComputerUseResultBuilder.reportProblems(text, schema: schema)
-            if !problems.isEmpty {
-                let retry = await runLocalAgentChild(
-                    childConversationID: childID,
-                    prompt: ComputerUseResultBuilder.resubmitPrompt(problems, schema: schema),
-                    timeoutSeconds: configuration.specialist.cleanupGraceSeconds,
-                    idleTimeoutSeconds: configuration.specialist.idleTimeoutSeconds
-                )
-                if case .completed = retry { outcome = retry }
-            }
         }
 
         var result = await Self.specialistResult(
@@ -280,7 +278,7 @@ extension SubAgentSpawnService {
         )
         // Kept downloads become attachments of the delegating conversation; the rest of a managed browser's go.
         let persistence = deps.persistenceDomain
-        let listed = await session.finalizeDownloads { download, data in
+        let listed = await session.finalizeDownloads(attachmentLimit: SessionPersistenceConfiguration.blobMaxBytes) { download, data in
             let mimeType = SessionBlobMIME.sniff(data: data, hint: nil)
             guard let stored = try? cardHarness.putBlob(
                 data: data, durability: .durable, originalName: download.name, mimeType: mimeType,
@@ -372,11 +370,9 @@ extension SubAgentSpawnService {
         actionsLogRef: String?
     ) async -> ComputerUseResult {
         let child: ComputerUseChildOutcome
-        var finalText: String?
         switch outcome {
-        case .completed(let text):
+        case .completed:
             child = .completed
-            finalText = text
         case .failed(let message): child = .failed(message)
         case .timedOut: child = .timedOut
         case .idleTimedOut: child = .idleTimedOut
@@ -400,7 +396,8 @@ extension SubAgentSpawnService {
             unresolvedQuestion: await session.unresolvedQuestion,
             headlessDenials: await session.headlessDenials.map(\.canonical),
             missingGrants: await session.missingGrants,
-            finalText: finalText,
+            finalText: await session.finishedResult,
+            finished: await session.hasFinished,
             actionsLog: actionsLog
         )
     }

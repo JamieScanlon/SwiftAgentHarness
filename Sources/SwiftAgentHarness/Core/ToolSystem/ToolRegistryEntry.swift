@@ -259,7 +259,7 @@ struct ToolRegistryEntry: Sendable {
             parallelHint: parallelHint,
             policyTags: policyTags,
             groupPolicyTags: groupPolicyTags,
-            haltsLoop: Self.defaultHaltsLoop(for: descriptor.definition.name),
+            haltsLoop: Self.defaultHaltsLoop(for: descriptor.definition.name) || descriptor.policyTags.contains(Self.haltsLoopPolicyTag),
             executionEnvironment: executionEnvironment,
             normalizedSchemaFingerprint: descriptor.normalizedSchemaFingerprint,
             normalizedSchemaVersion: descriptor.normalizedSchemaVersion,
@@ -377,6 +377,9 @@ struct ToolRegistryEntry: Sendable {
             )
         }
     }
+
+    /// Declares a provider's tool a halt signal: calling it ends a `terminal-tool` loop.
+    static let haltsLoopPolicyTag = ToolPolicyTag(rawValue: "halts-loop")
 
     private static func defaultHaltsLoop(for toolName: String) -> Bool {
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

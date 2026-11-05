@@ -46,7 +46,7 @@ public struct ComputerUseTask: Sendable {
     /// Requested; the user approves a subset.
     public var grants: [ComputerUseGrant]
     public var budgets: ComputerUseBudgets
-    /// JSON Schema the final report should match.
+    /// JSON Schema the finish result should match.
     public var returnSchema: JSON?
 
     public init(
@@ -177,11 +177,13 @@ public struct ComputerUseTask: Sendable {
         - Your app and domain grants are fixed for this run, and nobody can add to them. When an action is refused \
         as not granted, don't ask for the grant: finish and report what was refused.
         """)
+        let finish = ComputerUseToolProvider.finishToolName
         if let returnSchema, let schemaText = Self.compactJSON(returnSchema) {
-            sections.append("Finish with only a JSON value matching this schema, and nothing else:\n\(schemaText)")
+            sections.append("End by calling \(finish) with a result that is only a JSON value matching this schema:\n\(schemaText)")
         } else {
-            sections.append("Finish with a short report of what you did and what you found.")
+            sections.append("End by calling \(finish) with a short report of what you did and what you found.")
         }
+        sections.append("Name any downloads to keep in its keep_files; the rest are deleted.")
         return sections.joined(separator: "\n\n")
     }
 
@@ -312,7 +314,7 @@ public struct ComputerUseResult: Sendable, Codable {
     }
 
     public var status: Status
-    /// The specialist's final report: JSON when the task set a return schema, text otherwise.
+    /// The specialist's finish result: JSON when the task set a return schema, text otherwise.
     public var result: JSON?
     /// One entry per success criterion, in task order.
     public var verification: [Verification]
@@ -441,6 +443,7 @@ enum ComputerUseResultBuilder {
         headlessDenials: [String],
         missingGrants: [ComputerUseGrant] = [],
         finalText: String?,
+        finished: Bool = true,
         actionsLog: String
     ) -> ComputerUseResult {
         var result = assemble(
@@ -450,7 +453,11 @@ enum ComputerUseResultBuilder {
         )
         let schemaProblems = reportProblems(finalText, schema: task.returnSchema)
         if !schemaProblems.isEmpty {
-            let problem = "the report didn't match the return schema (\(schemaProblems.prefix(3).joined(separator: "; "))), so it was left out"
+            let problem = "the result didn't match the return schema (\(schemaProblems.prefix(3).joined(separator: "; "))), so it was left out"
+            result.reason = result.reason.map { "\($0); \(problem)" } ?? problem
+        }
+        if !finished, child == .completed, terminal == nil || terminal == .ended {
+            let problem = "the specialist stopped without calling \(ComputerUseToolProvider.finishToolName), so there is no result"
             result.reason = result.reason.map { "\($0); \(problem)" } ?? problem
         }
         return result
@@ -524,6 +531,15 @@ enum ComputerUseResultBuilder {
             result.status = .blocked
             result.reason = "a platform permission was revoked"
             return result
+        case .holderLost?:
+            result.status = .failed
+            result.reason = ComputerUseTerminalReason.holderLost.rawValue
+            return result
+        case .policyRevoked?:
+            // The user changed policy; the same mode refuses the next delegate call too.
+            result.status = .blocked
+            result.reason = ComputerUseTerminalReason.policyRevoked.rawValue
+            return result
         case .ended?, .idleTimeout?, .cancelled?, nil:
             // How the child run ended decides these.
             break
@@ -586,7 +602,7 @@ enum ComputerUseResultBuilder {
             .trimmingCharacters(in: CharacterSet(charactersIn: ".:"))
     }
 
-    /// Why a final report fails the task's return schema; empty when it matches, has no schema, or is absent.
+    /// Why a finish result fails the task's return schema; empty when it matches, has no schema, or is absent.
     static func reportProblems(_ text: String?, schema: JSON?) -> [String] {
         guard let schema, let report = report(text, schema: schema) else { return [] }
         if case .string = report, !(Self.isStringSchema(schema)) { return ["$: not JSON"] }
@@ -598,11 +614,11 @@ enum ComputerUseResultBuilder {
         return false
     }
 
-    /// The follow-up a specialist gets once when its report doesn't match the return schema.
-    static func resubmitPrompt(_ problems: [String], schema: JSON) -> String {
-        let schemaText = ComputerUseTask.compactJSON(schema) ?? "the return schema"
-        return "Your final report doesn't match the return schema: \(problems.prefix(5).joined(separator: "; ")). "
-            + "Reply with only the corrected JSON, matching \(schemaText). Don't use any tools."
+    /// The follow-up a specialist gets once when its finish was rejected.
+    static func refinishPrompt(_ problems: [String], schema: JSON?) -> String {
+        var prompt = "Your \(ComputerUseToolProvider.finishToolName) call was rejected: \(problems.prefix(5).joined(separator: "; ")). "
+        if let schema { prompt += "The result must be JSON matching \(ComputerUseTask.compactJSON(schema) ?? "the return schema"). " }
+        return prompt + "Call \(ComputerUseToolProvider.finishToolName) again with that fixed; this is the last try."
     }
 
     private static func report(_ text: String?, schema: JSON?) -> JSON? {

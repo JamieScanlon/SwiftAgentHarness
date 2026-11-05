@@ -162,15 +162,16 @@ public actor RemoteDisplayTarget: DisplayTarget {
         self.handshake = handshake
         listen(to: channel)
         for (leaseID, holder) in holders {
-            guard let token = holder.reattachToken, handshake.capabilities.contains(.reattach),
-                  case .reattached(_, let next, let snapshot)? = try? await channel.call(.reattach(leaseID: leaseID, token: token))
-            else {
-                lose(leaseID)
+            var answer: DisplayHostResponse?
+            if let token = holder.reattachToken, handshake.capabilities.contains(.reattach) {
+                answer = try? await channel.call(.reattach(leaseID: leaseID, token: token))
+            }
+            if case .leaseEnded(let reason)? = answer {
+                lose(leaseID, reason: reason)
                 continue
             }
-            if let reason = snapshot.releasedReason {
-                if reason == .killSwitch { hub.post(.stopRequested, to: leaseID) }
-                lose(leaseID)
+            guard case .reattached(_, let next, let snapshot)? = answer else {
+                lose(leaseID, reason: .holderLost)
                 continue
             }
             holders[leaseID]?.reattachToken = next
@@ -181,13 +182,15 @@ public actor RemoteDisplayTarget: DisplayTarget {
     }
 
     private func giveUp() {
-        for leaseID in holders.keys { lose(leaseID) }
+        for leaseID in holders.keys { lose(leaseID, reason: .holderLost) }
         reconnecting = nil
     }
 
     /// The host released the lease while this client was away.
-    private func lose(_ leaseID: UUID) {
+    /// The lease is gone: the session hears how it ended before its events stop.
+    private func lose(_ leaseID: UUID, reason: ReleaseReason) {
         holders.removeValue(forKey: leaseID)
+        hub.post(.leaseEnded(reason), to: leaseID)
         hub.finish(leaseID)
     }
 

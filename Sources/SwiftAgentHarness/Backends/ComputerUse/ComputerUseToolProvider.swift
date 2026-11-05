@@ -22,7 +22,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let askUserToolName = "computer_ask_user"
     public static let handoffToolName = "computer_handoff"
     public static let scratchpadToolName = "computer_scratchpad"
-    public static let keepDownloadsToolName = "computer_keep_downloads"
+    public static let finishToolName = "computer_finish"
     public static let describeToolName = "computer_describe"
     public static let locateToolName = "computer_locate"
 
@@ -37,16 +37,16 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     /// What a native-toolset session offers besides Anthropic's members: verification, the user, and the cheaper
     /// rungs of the control ladder.
     static let nativeCompanionToolNames: Set<String> = [
-        verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName, launchToolName, openURLToolName,
+        verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, finishToolName, launchToolName, openURLToolName,
         runScriptToolName, describeToolName, locateToolName,
     ]
     /// Tools whose results are harness or user text only.
-    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName]
+    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, finishToolName]
     /// The whole family, in the order the tools are offered.
     static let toolNames: [String] = [
         observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
         menuToolName, launchToolName, openURLToolName, runScriptToolName, zoomToolName, describeToolName, locateToolName,
-        waitForToolName, verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName,
+        waitForToolName, verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, finishToolName,
     ]
 
     static let scriptSourceLimit = 8_000
@@ -70,7 +70,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
         let readOnly: Set<String> = [
             Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName, Self.scratchpadToolName,
-            Self.keepDownloadsToolName, Self.describeToolName, Self.locateToolName,
+            Self.finishToolName, Self.describeToolName, Self.locateToolName,
         ]
         return Dictionary(uniqueKeysWithValues: (Self.ownScreenToolNames.union(Self.harnessToolNames)).map { name in
             // One controller per target: every call is serial.
@@ -91,9 +91,24 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     static let boundsOwnRunTimeTag = ToolPolicyTag(rawValue: ToolRegistryEntry.PolicyTag.boundsOwnRunTime.rawValue)
 
     private static func policyTags(forName name: String) -> [ToolPolicyTag] {
-        ownScreenToolNames.contains(name)
+        if name == finishToolName { return [boundsOwnRunTimeTag, ToolRegistryEntry.haltsLoopPolicyTag] }
+        return ownScreenToolNames.contains(name)
             ? [boundsOwnRunTimeTag, ToolRegistryResultFormattingPolicy.geometryBoundImagesPolicyTag()]
             : [boundsOwnRunTimeTag]
+    }
+
+    /// `keep_files` is an array of strings; the parameter list alone can't say what the items are.
+    public func rawSchema(for definition: ToolDefinition) async -> JSON? {
+        guard definition.name == Self.finishToolName else { return nil }
+        return .object([
+            "type": .string("object"),
+            "properties": .object(Dictionary(uniqueKeysWithValues: definition.parameters.map { parameter in
+                var property: [String: JSON] = ["type": .string(parameter.type), "description": .string(parameter.description)]
+                if parameter.type == "array" { property["items"] = .object(["type": .string("string")]) }
+                return (parameter.name, .object(property))
+            })),
+            "required": .array(definition.parameters.filter(\.required).map { .string($0.name) }),
+        ])
     }
 
     public func availableTools() async -> [ToolDefinition] {
@@ -364,18 +379,24 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                 type: .function
             ),
             ToolDefinition(
-                name: Self.keepDownloadsToolName,
+                name: Self.finishToolName,
                 description: """
-                Keep files the page downloaded. When the task ends, every download is deleted except the ones named in \
-                your latest call, and kept files go to the conversation that delegated the task. Each call replaces the \
-                earlier list; an empty list keeps nothing. Keeping a file doesn't open it.
+                End the task: submit your result and name the downloads to keep. This is how you finish, so verify \
+                every success criterion with computer_verify first. Every download you don't name is deleted. If the \
+                call is rejected, fix what it lists and call it again; there is one more try.
                 """,
                 parameters: [
                     .init(
-                        name: "paths",
-                        description: "One per line: a name as the download notice gives it, or a path inside the download folder.",
+                        name: "result",
+                        description: "Your report on the task. When the task gives a return schema, JSON matching it.",
                         type: "string",
                         required: true
+                    ),
+                    .init(
+                        name: "keep_files",
+                        description: "Downloads to keep, as paths relative to the download folder, such as the name a download notice gives.",
+                        type: "array",
+                        required: false
                     ),
                 ],
                 type: .function
@@ -503,10 +524,9 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                     throw Error.invalidParameter("reason must be one of login, 2fa, captcha, payment, ambiguous, consequential")
                 }
                 return await handoff(reason: reason, prompt: try arguments.requiredString("prompt"), toolCall)
-            case Self.keepDownloadsToolName:
-                guard let raw = arguments.rawString("paths") else { throw Error.missingParameter("paths") }
-                let paths = raw.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                return await keepDownloads(paths, toolCall)
+            case Self.finishToolName:
+                guard let result = arguments.rawString("result") else { throw Error.missingParameter("result") }
+                return await finish(result: result, keepFiles: try arguments.strings("keep_files"), toolCall)
             case Self.scratchpadToolName:
                 guard let notes = arguments.rawString("notes") else { throw Error.missingParameter("notes") }
                 do {
@@ -821,20 +841,18 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         }.sorted()
     }
 
-    /// Echoes only the model's own paths: download names come from the page.
-    private func keepDownloads(_ paths: [String], _ toolCall: ToolCall) async -> ToolResult {
-        let outcome = await session.keepDownloads(paths)
-        let kept = paths.filter { outcome.rejected[$0] == nil }
-        var lines = [kept.isEmpty ? "Keeping no downloads." : "Keeping \(kept.joined(separator: ", "))."]
-        for path in paths where outcome.rejected[path] != nil {
-            lines.append("Not kept: \(path): \(outcome.rejected[path] ?? "")")
+    /// The problems echo only the model's own paths and result: download names come from the page.
+    private func finish(result: String, keepFiles: [String], _ toolCall: ToolCall) async -> ToolResult {
+        let outcome = await session.finish(result: result, keepFiles: keepFiles)
+        let metadata: JSON = .object(["source": .string("computer_use"), "action": .string("finish")])
+        guard outcome.accepted else {
+            let message = "computer_finish was rejected: \(outcome.problems.joined(separator: "; ")). Fix them and call computer_finish again."
+            return ToolResult(success: false, content: message, metadata: metadata, toolCallId: toolCall.id, error: message)
         }
-        return ToolResult(
-            success: true,
-            content: lines.joined(separator: "\n"),
-            metadata: .object(["source": .string("computer_use"), "action": .string("keep_downloads")]),
-            toolCallId: toolCall.id
-        )
+        let content = outcome.problems.isEmpty
+            ? "Finished."
+            : "Finished, without what was wrong: \(outcome.problems.joined(separator: "; "))."
+        return ToolResult(success: true, content: content, metadata: metadata, toolCallId: toolCall.id)
     }
 
     private func failure(_ toolCall: ToolCall, _ message: String) -> ToolResult {
@@ -986,6 +1004,19 @@ extension ComputerUseToolProvider {
         func rawString(_ key: String) -> String? {
             guard case .string(let value)? = fields[key] else { return nil }
             return value
+        }
+
+        /// A list of strings; absent is empty.
+        func strings(_ key: String) throws -> [String] {
+            switch fields[key] {
+            case nil: return []
+            case .array(let items)?:
+                return try items.map { item in
+                    guard case .string(let value) = item else { throw Error.invalidParameter("\(key) must be a list of strings") }
+                    return value
+                }
+            default: throw Error.invalidParameter("\(key) must be a list of strings")
+            }
         }
 
         func requiredString(_ key: String) throws -> String {

@@ -1,18 +1,22 @@
 import CryptoKit
+import EasyJSON
 import Foundation
 
 /// What the user asked for. Carried into every intent check and, for the specialist sub-agent, every step.
-public struct ComputerUseTaskContext: Sendable, Hashable {
+public struct ComputerUseTaskContext: Sendable {
     public var userRequest: [String]
     /// Carried verbatim; lost constraints are the most common long-horizon failure.
     public var constraints: [String]
     /// Each must be confirmed with `computer_verify`; restated until it is.
     public var successCriteria: [String]
+    /// What the specialist's finish result must match, when the task set one.
+    public var returnSchema: JSON?
 
-    public init(userRequest: [String], constraints: [String] = [], successCriteria: [String] = []) {
+    public init(userRequest: [String], constraints: [String] = [], successCriteria: [String] = [], returnSchema: JSON? = nil) {
         self.userRequest = userRequest
         self.constraints = constraints
         self.successCriteria = successCriteria
+        self.returnSchema = returnSchema
     }
 }
 
@@ -109,6 +113,10 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case costBudget = "cost-budget"
     case killSwitch = "kill-switch"
     case permissionRevoked = "permission-revoked"
+    /// A mode over the session started denying computer use.
+    case policyRevoked = "policy-revoked"
+    /// The lease was lost with the holder's connection to a remote target.
+    case holderLost = "holder-lost"
     /// Too many consecutive steps without progress.
     case noProgress = "no-progress"
     /// The cutoff the task stated passed.
@@ -133,6 +141,8 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
         case .idleTimeout: return .idleTimeout
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
+        case .policyRevoked: return .policyRevoked
+        case .holderLost: return .holderLost
         case .ended: return .completed
         }
     }
@@ -396,53 +406,84 @@ public actor ComputerUseSession {
     /// Files the lease downloaded, read when the session ended.
     public private(set) var downloads: [DisplayDownload] = []
 
-    /// Downloads the specialist kept, by resolved path. Only its latest ``keepDownloads(_:)`` counts.
+    /// Downloads the specialist named in its accepted ``finish(result:keepFiles:)``, by resolved path.
     private var keptDownloadPaths: Set<String> = []
+    private var finishAttempts = 0
+    /// Calls to ``finish(result:keepFiles:)`` allowed: one, and one more after a rejection.
+    public static let finishAttemptLimit = 2
+    /// The result of the specialist's accepted ``finish(result:keepFiles:)``; `nil` until it commits.
+    public private(set) var finishedResult: String?
+    public private(set) var hasFinished = false
+    /// Why the latest ``finish(result:keepFiles:)`` was rejected, while none has been accepted.
+    public private(set) var finishRejection: [String]?
 
-    /// What a ``keepDownloads(_:)`` call kept, by file name, and the paths it refused, with why.
-    public struct KeepDownloadsOutcome: Sendable, Equatable {
-        public var kept: [String]
-        public var rejected: [String: String]
+    /// How a ``finish(result:keepFiles:)`` call went. An accepted call may still carry problems: on the last
+    /// allowed attempt the call commits anyway, a mismatched result is left out, and refused paths aren't kept.
+    public struct FinishOutcome: Sendable, Equatable {
+        public var accepted: Bool
+        public var problems: [String]
     }
 
-    /// Names the downloads to keep when the session ends, replacing any earlier list. A path is a file name or a
-    /// path inside the session's download folder; anything that resolves outside it is refused.
-    public func keepDownloads(_ requested: [String]) async -> KeepDownloadsOutcome {
-        let current = terminalReason == nil ? await target.downloads(lease) : downloads
-        var outcome = KeepDownloadsOutcome(kept: [], rejected: [:])
-        guard let folder = current.first.map({ Self.resolved(URL(fileURLWithPath: $0.path).deletingLastPathComponent()) }) else {
-            for path in requested { outcome.rejected[path] = "nothing was downloaded in this session" }
-            keptDownloadPaths = []
-            return outcome
-        }
-        var kept: Set<String> = []
-        for raw in requested {
-            let candidate = Self.resolved(raw.hasPrefix("/") ? URL(fileURLWithPath: raw) : folder.appendingPathComponent(raw))
-            guard candidate.deletingLastPathComponent().path == folder.path else {
-                outcome.rejected[raw] = "outside the session's download folder"
-                continue
-            }
-            guard let match = current.first(where: { Self.resolved(URL(fileURLWithPath: $0.path)).path == candidate.path }) else {
-                outcome.rejected[raw] = "nothing was downloaded by that name"
-                continue
-            }
-            if kept.insert(candidate.path).inserted { outcome.kept.append(match.name) }
+    /// The specialist's single commit: its result, validated against the return schema, and the downloads to keep,
+    /// as paths relative to the session's download folder. A first call with problems is rejected so the
+    /// specialist can call again; the last allowed one commits whatever is valid.
+    public func finish(result: String, keepFiles: [String]) async -> FinishOutcome {
+        guard !hasFinished else { return FinishOutcome(accepted: false, problems: ["computer_finish was already accepted"]) }
+        finishAttempts += 1
+        let (kept, pathProblems) = await resolveKeepFiles(keepFiles)
+        let schemaProblems = ComputerUseResultBuilder.reportProblems(result, schema: configuration.task.returnSchema)
+            .map { "result \($0)" }
+        let problems = pathProblems + schemaProblems
+        if !problems.isEmpty, finishAttempts < Self.finishAttemptLimit {
+            finishRejection = problems
+            return FinishOutcome(accepted: false, problems: problems)
         }
         keptDownloadPaths = kept
-        return outcome
+        finishedResult = result
+        hasFinished = true
+        finishRejection = nil
+        return FinishOutcome(accepted: true, problems: problems)
     }
 
-    /// Lists every download once the session ended. A managed browser's files are deleted unless ``keepDownloads(_:)``
-    /// named them; kept ones are handed to `move`, which returns the attachment they became, and a disposable file
-    /// that moved leaves the folder. The user's browser's files are always kept, and stay where they are.
-    public func finalizeDownloads(moving move: (@Sendable (DisplayDownload, Data) async -> String?)?) async -> [ComputerUseResult.Download] {
+    private func resolveKeepFiles(_ requested: [String]) async -> (kept: Set<String>, problems: [String]) {
+        guard !requested.isEmpty else { return ([], []) }
+        let current = terminalReason == nil ? await target.downloads(lease) : downloads
+        guard let folder = current.first.map({ Self.resolved(URL(fileURLWithPath: $0.path).deletingLastPathComponent()) }) else {
+            return ([], requested.map { "keep_files \($0): nothing was downloaded in this session" })
+        }
+        var kept: Set<String> = []
+        var problems: [String] = []
+        for raw in requested {
+            let candidate = Self.resolved(folder.appendingPathComponent(raw))
+            guard !raw.hasPrefix("/"), candidate.deletingLastPathComponent().path == folder.path else {
+                problems.append("keep_files \(raw): not a path inside the download folder")
+                continue
+            }
+            guard current.contains(where: { Self.resolved(URL(fileURLWithPath: $0.path)).path == candidate.path }) else {
+                problems.append("keep_files \(raw): nothing was downloaded by that name")
+                continue
+            }
+            kept.insert(candidate.path)
+        }
+        return (kept, problems)
+    }
+
+    /// Lists every download once the session ended. A managed browser's files are deleted unless the specialist's
+    /// finish named them, and named ones move to the attachment `move` returns. The user's browser's files all stay
+    /// where they are, and named ones are also copied. A file over `attachmentLimit` bytes isn't copied: a managed
+    /// browser's stays in its folder instead.
+    public func finalizeDownloads(
+        attachmentLimit: Int? = nil,
+        moving move: (@Sendable (DisplayDownload, Data) async -> String?)?
+    ) async -> [ComputerUseResult.Download] {
         var listed: [ComputerUseResult.Download] = []
         for download in downloads {
             let url = URL(fileURLWithPath: download.path)
             let bytes = ((try? FileManager.default.attributesOfItem(atPath: download.path))?[.size] as? NSNumber)?.intValue ?? 0
-            let kept = !download.disposable || keptDownloadPaths.contains(Self.resolved(url).path)
+            let named = keptDownloadPaths.contains(Self.resolved(url).path)
+            let kept = !download.disposable || named
             var entry = ComputerUseResult.Download(name: download.name, bytes: bytes, kept: kept)
-            if kept, download.completed, let move, let data = try? Data(contentsOf: url) {
+            if named, download.completed, bytes <= attachmentLimit ?? .max, let move, let data = try? Data(contentsOf: url) {
                 entry.attachment = await move(download, data)
             }
             if download.disposable, !kept || entry.attachment != nil {
@@ -929,6 +970,12 @@ public actor ComputerUseSession {
             userTypedAt = now()
         case .typedDuringTakeover(let value):
             secrets.insert(value)
+        case .leaseEnded(let reason):
+            switch reason {
+            case .killSwitch: await end(.killSwitch, detail: "the user pressed stop while the target was unreachable")
+            case .permissionRevoked: await end(.permissionRevoked)
+            default: await end(.holderLost)
+            }
         }
     }
 
@@ -1170,7 +1217,7 @@ public actor ComputerUseSession {
         guard let policy = await configuration.modePolicy?() else { return }
         if policy.confirmsInteract { modeTightenedConfirmsInteract = true }
         if policy.denied {
-            await end(.permissionRevoked, detail: "a conversation's mode now denies computer use")
+            await end(.policyRevoked, detail: "a conversation's mode now denies computer use")
         }
     }
 

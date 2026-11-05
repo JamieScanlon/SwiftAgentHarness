@@ -107,7 +107,8 @@ enum ComputerUseSessionFixtures {
         successCriteria: [String] = [],
         storeApprovalImage: (@Sendable (Data) async -> String?)? = nil,
         confirmsInteract: Bool = false,
-        modePolicy: (@Sendable () async -> ComputerUseModePolicy)? = nil
+        modePolicy: (@Sendable () async -> ComputerUseModePolicy)? = nil,
+        returnSchema: JSON? = nil
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         let target = FakeDisplayTarget(manifest: manifest, now: { clock.now() })
         let lease = try await target.lease(LeaseRequest(
@@ -121,7 +122,8 @@ enum ComputerUseSessionFixtures {
         var configuration = ComputerUseSessionConfiguration(
             task: ComputerUseTaskContext(
                 userRequest: ["Make the first line bold and save the document."],
-                successCriteria: successCriteria
+                successCriteria: successCriteria,
+                returnSchema: returnSchema
             ),
             classifier: ComputerUseActionClassifier(reviewer: ComputerUseGrantReviewer(overrides: overrides))
         )
@@ -157,22 +159,39 @@ struct ComputerUseSessionGatingTests {
         return DisplayDownload(name: name, path: path, completed: true, disposable: disposable)
     }
 
-    @Test("keepDownloads keeps downloads named by name or by path inside the folder, and rejects anything else")
-    func keepDownloadsValidates() async throws {
+    @Test("A finish naming paths outside the download folder, or downloads that don't exist, is rejected once")
+    func finishValidatesKeepFiles() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make()
         let folder = try Self.downloadFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let invoice = try Self.file("invoice.pdf", in: folder)
-        let receipt = try Self.file("receipt.pdf", in: folder)
-        await target.setDownloads([invoice, receipt])
-        let outcome = await session.keepDownloads(["invoice.pdf", receipt.path, "../outside.txt", "/etc/hosts", "missing.txt"])
-        #expect(outcome.kept == ["invoice.pdf", "receipt.pdf"])
-        #expect(outcome.rejected["../outside.txt"]?.contains("outside the session's download folder") == true)
-        #expect(outcome.rejected["/etc/hosts"]?.contains("outside the session's download folder") == true)
-        #expect(outcome.rejected["missing.txt"]?.contains("nothing was downloaded by that name") == true)
+        await target.setDownloads([invoice])
+        let first = await session.finish(result: "Saved.", keepFiles: ["invoice.pdf", "../outside.txt", invoice.path, "missing.txt"])
+        #expect(!first.accepted)
+        #expect(first.problems.contains("keep_files ../outside.txt: not a path inside the download folder"))
+        #expect(first.problems.contains("keep_files \(invoice.path): not a path inside the download folder"), "only relative paths")
+        #expect(first.problems.contains("keep_files missing.txt: nothing was downloaded by that name"))
+        #expect(await session.finishRejection == first.problems)
+        #expect(await !session.hasFinished)
+        let second = await session.finish(result: "Saved.", keepFiles: ["invoice.pdf", "../outside.txt"])
+        #expect(second.accepted, "the last try commits what is valid")
+        #expect(await session.finishedResult == "Saved.")
+        #expect(await session.finishRejection == nil)
+        #expect(await !session.finish(result: "Again.", keepFiles: []).accepted, "one commit only")
     }
 
-    @Test("At the end every download is listed; kept files move to attachments, the rest are deleted")
+    @Test("A finish result that doesn't match the return schema is rejected once, then committed for the builder to drop")
+    func finishValidatesResult() async throws {
+        let schema: JSON = .object(["type": .string("object"), "required": .array([.string("saved")])])
+        let (_, session) = try await ComputerUseSessionFixtures.make(returnSchema: schema)
+        let first = await session.finish(result: "I saved it.", keepFiles: [])
+        #expect(!first.accepted)
+        #expect(first.problems.first?.hasPrefix("result ") == true, "\(first.problems)")
+        #expect(await session.finish(result: #"{"saved": true}"#, keepFiles: []).accepted)
+        #expect(await session.finishedResult == #"{"saved": true}"#)
+    }
+
+    @Test("At the end every download is listed; named files become attachments, a managed browser's others are deleted")
     func finalizeDownloads() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make()
         let folder = try Self.downloadFolder()
@@ -180,8 +199,9 @@ struct ComputerUseSessionGatingTests {
         let invoice = try Self.file("invoice.pdf", in: folder)
         let stray = try Self.file("tracker.bin", in: folder)
         let users = try Self.file("user.zip", in: folder, disposable: false)
-        await target.setDownloads([invoice, stray, users])
-        _ = await session.keepDownloads(["invoice.pdf"])
+        let usersNamed = try Self.file("statement.csv", in: folder, disposable: false)
+        await target.setDownloads([invoice, stray, users, usersNamed])
+        #expect(await session.finish(result: "Saved.", keepFiles: ["invoice.pdf", "statement.csv"]).accepted)
         await session.end()
         let moved = Mutex<[String: Data]>([:])
         let listed = await session.finalizeDownloads { download, data in
@@ -191,60 +211,69 @@ struct ComputerUseSessionGatingTests {
         #expect(listed == [
             ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: true, attachment: "blob-invoice.pdf"),
             ComputerUseResult.Download(name: "tracker.bin", bytes: 11, kept: false),
-            ComputerUseResult.Download(name: "user.zip", bytes: 8, kept: true, attachment: "blob-user.zip"),
+            ComputerUseResult.Download(name: "user.zip", bytes: 8, kept: true),
+            ComputerUseResult.Download(name: "statement.csv", bytes: 13, kept: true, attachment: "blob-statement.csv"),
         ])
         #expect(moved.withLock { $0["invoice.pdf"] } == Data("invoice.pdf".utf8))
         #expect(!FileManager.default.fileExists(atPath: invoice.path), "a managed browser's kept file moves")
         #expect(!FileManager.default.fileExists(atPath: stray.path))
-        #expect(FileManager.default.fileExists(atPath: users.path), "the user's browser's file stays where it is")
+        #expect(FileManager.default.fileExists(atPath: users.path), "the user's browser's files stay where they are")
+        #expect(FileManager.default.fileExists(atPath: usersNamed.path), "and a named one is copied, not moved")
     }
 
-    @Test("Only the latest keepDownloads counts, and nothing in the result's text keeps a file")
-    func latestKeepDownloadsWins() async throws {
+    @Test("Without a finish nothing of a managed browser's is kept, whatever the report says")
+    func noFinishKeepsNothing() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make()
         let folder = try Self.downloadFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let invoice = try Self.file("invoice.pdf", in: folder)
         await target.setDownloads([invoice])
-        _ = await session.keepDownloads(["invoice.pdf"])
-        _ = await session.keepDownloads([])
         await session.end()
         let listed = await session.finalizeDownloads(moving: nil)
         #expect(listed == [ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: false)])
         #expect(!FileManager.default.fileExists(atPath: invoice.path))
     }
 
-    @Test("Without a place to move them, kept files stay in the folder")
-    func keptWithoutStore() async throws {
+    @Test("A named file over the attachment cap isn't copied, and a managed browser's stays in its folder")
+    func overTheCap() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make()
         let folder = try Self.downloadFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let invoice = try Self.file("invoice.pdf", in: folder)
         await target.setDownloads([invoice])
-        _ = await session.keepDownloads(["invoice.pdf"])
+        #expect(await session.finish(result: "Saved.", keepFiles: ["invoice.pdf"]).accepted)
         await session.end()
-        let listed = await session.finalizeDownloads(moving: nil)
+        let listed = await session.finalizeDownloads(attachmentLimit: 4) { _, _ in
+            Issue.record("a file over the cap is never read")
+            return nil
+        }
         #expect(listed == [ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: true)])
         #expect(FileManager.default.fileExists(atPath: invoice.path))
     }
 
-    @Test("The keep-downloads tool reports what it kept and why it refused the rest")
-    func keepDownloadsTool() async throws {
+    @Test("The finish tool commits, or reports why it was rejected so the specialist can call it again")
+    func finishTool() async throws {
         let (target, session) = try await ComputerUseSessionFixtures.make()
         let folder = try Self.downloadFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         await target.setDownloads([try Self.file("invoice.pdf", in: folder)])
         let provider = ComputerUseToolProvider(session: session)
-        let result = try await provider.executeTool(ToolCall(
-            name: ComputerUseToolProvider.keepDownloadsToolName,
-            arguments: .object(["paths": .string("invoice.pdf\n../x\n")]),
-            id: "k1"
+        let rejected = try await provider.executeTool(ToolCall(
+            name: ComputerUseToolProvider.finishToolName,
+            arguments: .object(["result": .string("Saved."), "keep_files": .array([.string("invoice.pdf"), .string("../x")])]),
+            id: "f1"
         ))
-        #expect(result.success)
-        #expect(result.content.contains("Keeping invoice.pdf"), "\(result.content)")
-        #expect(result.content.contains("Not kept: ../x: outside the session's download folder"), "\(result.content)")
-        let missing = try await provider.executeTool(ToolCall(name: ComputerUseToolProvider.keepDownloadsToolName, arguments: .object([:]), id: "k2"))
-        #expect(!missing.success)
+        #expect(!rejected.success)
+        #expect(rejected.content.contains("keep_files ../x: not a path inside the download folder"), "\(rejected.content)")
+        let accepted = try await provider.executeTool(ToolCall(
+            name: ComputerUseToolProvider.finishToolName,
+            arguments: .object(["result": .string("Saved."), "keep_files": .array([.string("invoice.pdf")])]),
+            id: "f2"
+        ))
+        #expect(accepted.success)
+        #expect(accepted.content == "Finished.")
+        let noResult = try await provider.executeTool(ToolCall(name: ComputerUseToolProvider.finishToolName, arguments: .object([:]), id: "f3"))
+        #expect(!noResult.success)
     }
 
     @Test("Observations run without approval and are retained for citing")
@@ -417,9 +446,28 @@ struct ComputerUseSessionGatingTests {
         policy.withLock { $0.denied = true }
         let result = await session.perform([.click(at: .ref("e2", observation: "o_1"))])
         #expect(result.outcomes.first?.effect == .notExecuted)
-        #expect(result.terminal == .permissionRevoked)
+        #expect(result.terminal == .policyRevoked)
         #expect(await target.actCalls.isEmpty)
-        #expect(await target.releases == [.permissionRevoked])
+        #expect(await target.releases == [.policyRevoked])
+    }
+
+    @Test("A denial arriving while an action runs lets it finish, and the rest of the batch isn't executed")
+    func modeDeniesMidBatch() async throws {
+        let policy = Mutex(ComputerUseModePolicy())
+        let (target, session) = try await ComputerUseSessionFixtures.make(
+            manifest: FakeDisplayTarget.vmManifest,
+            modePolicy: { policy.withLock { $0 } }
+        )
+        _ = await session.perform([ComputerUseSessionFixtures.observe])
+        await target.setOutcomes { _, index in
+            policy.withLock { $0.denied = true }
+            return ActionOutcome(action: index, effect: .confirmed, evidence: "fake")
+        }
+        let click = ComputerAction.click(at: .ref("e2", observation: "o_1"))
+        let result = await session.perform([click, click])
+        #expect(result.outcomes.map(\.effect) == [.confirmed, .notExecuted])
+        #expect(result.terminal == .policyRevoked)
+        #expect(await target.actCalls.count == 1)
     }
 
     @Test("A consistent intent verdict allows interact actions; the check never sees screen text")

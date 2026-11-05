@@ -97,7 +97,10 @@ public enum ReleaseReason: String, Sendable, Codable, Hashable {
     case expired
     case idleTimeout = "idle-timeout"
     case killSwitch = "kill-switch"
+    /// An operating-system permission was revoked; the user must grant it again.
     case permissionRevoked = "permission-revoked"
+    /// A mode over the session started denying computer use; don't retry.
+    case policyRevoked = "policy-revoked"
     /// The lease holder's connection died.
     case holderLost = "holder-lost"
 }
@@ -306,6 +309,9 @@ public enum DisplayTargetEvent: Sendable, Codable, Hashable {
     case userTyping
     /// A value the user typed during a takeover, which helper models must never be shown.
     case typedDuringTakeover(String)
+    /// The lease ended without the holder releasing it, such as a stop pressed while a remote target was
+    /// unreachable, or a holder that couldn't get its lease back.
+    case leaseEnded(ReleaseReason)
 }
 
 /// Fans a target's events out to the streams of the leases they concern.

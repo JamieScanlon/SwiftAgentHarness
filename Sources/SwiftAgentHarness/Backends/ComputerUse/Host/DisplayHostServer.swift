@@ -4,6 +4,9 @@ public struct DisplayHostServerConfiguration: Sendable {
     /// How long a lease outlives its dropped connection, waiting for the client to reattach, before it is released
     /// as `holder-lost`. Only for connections that agreed on reattaching.
     public var reattachGrace: Duration
+    /// How much longer than the grace period the host remembers why it ended a detached lease, so a holder that
+    /// reattaches at the very end still learns it.
+    public var endedRecordMargin: Duration
     /// How often the host checks the target's permissions while it has leases, to tell holders of a change.
     public var permissionPollInterval: Duration
     /// Where images are written for connections that take them as files. A private temporary folder by default.
@@ -11,10 +14,12 @@ public struct DisplayHostServerConfiguration: Sendable {
 
     public init(
         reattachGrace: Duration = .seconds(5),
+        endedRecordMargin: Duration = .seconds(2),
         permissionPollInterval: Duration = .seconds(2),
         imageDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("display-host-\(UUID().uuidString)", isDirectory: true)
     ) {
         self.reattachGrace = reattachGrace
+        self.endedRecordMargin = endedRecordMargin
         self.permissionPollInterval = permissionPollInterval
         self.imageDirectory = imageDirectory
     }
@@ -59,13 +64,14 @@ public actor DisplayHostServer {
         var takeover = false
     }
 
-    /// A lease the host ended while it was detached, kept for the grace period so its holder learns why.
+    /// A lease the host ended while it was detached: only why, and the token that may learn it. Kept for the grace
+    /// period and a margin, then forgotten.
     private struct EndedLease {
-        var lease: Lease
         var reattachToken: String
         var reason: ReleaseReason
         var expiry: Task<Void, Never>
     }
+
 
     public init(target: any DisplayTarget, name: String = ProcessInfo.processInfo.processName, configuration: DisplayHostServerConfiguration = DisplayHostServerConfiguration()) {
         self.target = target
@@ -164,9 +170,7 @@ public actor DisplayHostServer {
                 if let ended = endedWhileDetached[leaseID], ObserverTokenIssuer.matches(ended.reattachToken, token) {
                     ended.expiry.cancel()
                     endedWhileDetached[leaseID] = nil
-                    return .reattached(ended.lease, reattachToken: nil, snapshot: DisplayHostLeaseSnapshot(
-                        permissions: await target.permissions(), takeover: false, releasedReason: ended.reason
-                    ))
+                    return .leaseEnded(ended.reason)
                 }
                 let expected = leases[leaseID]?.reattachToken ?? decoyToken
                 guard ObserverTokenIssuer.matches(expected, token), var held = leases[leaseID], held.connection == nil else {
@@ -322,13 +326,12 @@ public actor DisplayHostServer {
         case .takeoverChanged(let on):
             leases[leaseID]?.takeover = on
         case .stopRequested where held.connection == nil:
-            let grace = configuration.reattachGrace
+            let keep = configuration.reattachGrace + configuration.endedRecordMargin
             endedWhileDetached[leaseID] = EndedLease(
-                lease: held.lease,
                 reattachToken: held.reattachToken,
                 reason: .killSwitch,
                 expiry: Task { [weak self] in
-                    guard (try? await Task.sleep(for: grace)) != nil else { return }
+                    guard (try? await Task.sleep(for: keep)) != nil else { return }
                     await self?.forgetEnded(leaseID)
                 }
             )

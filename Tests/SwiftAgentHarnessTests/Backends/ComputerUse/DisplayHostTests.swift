@@ -321,7 +321,7 @@ struct DisplayHostTests {
         }
         #expect(back.id == lease.id)
         #expect(next != token, "each reattach issues a new token")
-        #expect(snapshot.releasedReason == nil)
+        #expect(snapshot.permissions == PermissionSnapshot(states: [:]))
         await second.connection.close()
         await serving[1].value
 
@@ -358,6 +358,78 @@ struct DisplayHostTests {
         await serving[1].value
     }
 
+    @Test("A lease ended while detached is reported once to its token's holder; then, or after the record expires, it's unknown")
+    func endedLeaseRecord() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let configuration = DisplayHostServerConfiguration(reattachGrace: .milliseconds(100), endedRecordMargin: .milliseconds(100))
+        let server = DisplayHostServer(target: target, configuration: configuration)
+        var serving: [Task<Void, Never>] = []
+        var first = try await RawClient(server, serving: &serving)
+        guard case .lease(let lease, let token?) = try await first.send(.lease(request: DisplayHostLeaseRequest(Self.leaseRequest()))) else {
+            Issue.record("expected a lease")
+            return
+        }
+        await first.connection.close()
+        await serving[0].value
+        target.eventHub.post(.stopRequested)
+        for _ in 0..<100 where await target.releases.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+
+        var second = try await RawClient(server, serving: &serving)
+        let unknown = try await second.send(.reattach(leaseID: UUID(), token: token))
+        #expect(try await second.send(.reattach(leaseID: lease.id, token: String(token.reversed()))) == unknown, "a wrong token learns nothing")
+        #expect(try await second.send(.reattach(leaseID: lease.id, token: token)) == .leaseEnded(.killSwitch))
+        #expect(try await second.send(.reattach(leaseID: lease.id, token: token)) == unknown, "exactly once")
+        await second.connection.close()
+        await serving[1].value
+    }
+
+    @Test("The record of an ended lease expires after the grace period and its margin")
+    func endedLeaseRecordExpires() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let configuration = DisplayHostServerConfiguration(reattachGrace: .milliseconds(20), endedRecordMargin: .milliseconds(20))
+        let server = DisplayHostServer(target: target, configuration: configuration)
+        var serving: [Task<Void, Never>] = []
+        var first = try await RawClient(server, serving: &serving)
+        guard case .lease(let lease, let token?) = try await first.send(.lease(request: DisplayHostLeaseRequest(Self.leaseRequest()))) else {
+            Issue.record("expected a lease")
+            return
+        }
+        await first.connection.close()
+        await serving[0].value
+        target.eventHub.post(.stopRequested)
+        try await Task.sleep(for: .milliseconds(150))
+        var second = try await RawClient(server, serving: &serving)
+        let unknown = try await second.send(.reattach(leaseID: UUID(), token: token))
+        #expect(try await second.send(.reattach(leaseID: lease.id, token: token)) == unknown)
+        await second.connection.close()
+        await serving[1].value
+    }
+
+    @Test("A holder whose reattach is refused hears that its lease was lost")
+    func refusedReattachIsHolderLost() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let server = DisplayHostServer(target: target, configuration: DisplayHostServerConfiguration(reattachGrace: .milliseconds(20)))
+        let current = Connections()
+        let gate = Gate()
+        let remote = try await RemoteDisplayTarget.connect(using: {
+            if await current.count > 0 { await gate.wait() }
+            let (client, host) = InMemoryDisplayHostConnection.pair()
+            await current.set(host, serving: Task { await server.serve(host) })
+            return client
+        })
+        let lease = try await remote.lease(Self.leaseRequest())
+        let events = await remote.events(lease)
+        await current.dropHost()
+        for _ in 0..<100 where await target.releases.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await target.releases == [.holderLost])
+        await gate.open()
+        var heard: [DisplayTargetEvent] = []
+        for await event in events { heard.append(event) }
+        #expect(heard == [.leaseEnded(.holderLost)])
+        await remote.close()
+        await current.waitAll()
+    }
+
     @Test("A stop pressed while the lease is detached runs cleanup on the host, and the returning holder hears it")
     func stopWhileDetached() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
@@ -379,7 +451,7 @@ struct DisplayHostTests {
         await gate.open()
         var heard: [DisplayTargetEvent] = []
         for await event in events { heard.append(event) }
-        #expect(heard == [.stopRequested])
+        #expect(heard == [.leaseEnded(.killSwitch)], "the stop, not a lost holder")
         await remote.close()
         await current.waitAll()
     }

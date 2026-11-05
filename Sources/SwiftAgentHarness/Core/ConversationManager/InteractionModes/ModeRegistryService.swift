@@ -883,6 +883,7 @@ enum ModeProfileBuiltInCatalog {
             ),
             // The computer-use specialist loops until its task is done: its session counts steps and enforces
             // budgets, and gates each action itself, so a turn cap or tool-level approvals would only cut it short.
+            // It ends only by calling computer_finish; a turn that stops without it is a stall.
             ResolvedModeProfile(
                 id: "subagent-computer-use",
                 interactionMode: .agent,
@@ -893,6 +894,17 @@ enum ModeProfileBuiltInCatalog {
                 semanticLayerTags: [],
                 tools: ModeProfileToolsSlice(allow: ComputerUseDelegateToolProvider.specialistToolNames, deny: [], approvalPolicy: .never),
                 skills: ModeProfileSkillsSlice(allow: []),
+                runtime: ModeProfileRuntimeSlice(
+                    termination: ModeProfileTerminationSlice(
+                        policy: .terminalTool,
+                        recovery: ModeProfileTerminationRecoverySlice(
+                            strategy: .forcedToolChoice,
+                            rollbackStalledTurn: true,
+                            maxAttempts: 2,
+                            reminder: .escalating
+                        )
+                    )
+                ),
                 subAgents: denyAllSubAgents
             ),
             ResolvedModeProfile(

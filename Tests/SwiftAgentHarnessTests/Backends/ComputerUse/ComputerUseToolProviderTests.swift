@@ -46,11 +46,37 @@ struct ComputerUseToolProviderTests {
             "computer_observe", "computer_click", "computer_type", "computer_key", "computer_scroll",
             "computer_press", "computer_set_value", "computer_menu", "computer_launch", "computer_open_url",
             "computer_zoom", "computer_wait_for", "computer_verify", "computer_ask_user", "computer_handoff",
-            "computer_scratchpad", "computer_keep_downloads",
+            "computer_scratchpad", "computer_finish",
         ])
-        let primitive: Set<String> = ["string", "integer", "number", "boolean"]
-        #expect(tools.allSatisfy { $0.type == .function && $0.parameters.allSatisfy { primitive.contains($0.type) } })
+        let flat: Set<String> = ["string", "integer", "number", "boolean"]
+        #expect(tools.allSatisfy { tool in
+            tool.type == .function && tool.parameters.allSatisfy { flat.contains($0.type) || (tool.name == "computer_finish" && $0.name == "keep_files") }
+        })
         #expect(tools.allSatisfy { $0.name.range(of: "^[a-zA-Z0-9_-]{1,64}$", options: .regularExpression) != nil })
+    }
+
+    @Test("computer_finish halts the loop, and its keep_files schema says the items are strings")
+    func finishSchema() async throws {
+        let (_, _, provider) = try await provider()
+        let finish = try #require(await provider.availableTools().first { $0.name == ComputerUseToolProvider.finishToolName })
+        let schema = try #require(await provider.rawSchema(for: finish))
+        guard case .object(let root) = schema, case .object(let properties)? = root["properties"],
+              case .object(let keep)? = properties["keep_files"] else {
+            Issue.record("expected an object schema with keep_files")
+            return
+        }
+        guard case .string("array")? = keep["type"], case .object(let items)? = keep["items"], case .string("string")? = items["type"],
+              case .array(let required)? = root["required"], required.count == 1, case .string("result") = required[0] else {
+            Issue.record("keep_files should be an array of strings, and only result required: \(schema)")
+            return
+        }
+        #expect(await provider.policyTags(for: finish).contains(ToolRegistryEntry.haltsLoopPolicyTag))
+        let entry = ToolRegistryEntry(descriptor: RegisteredToolDescriptor(
+            definition: finish, source: .local, effectClass: .readOnly, parallelHint: .serialOnly,
+            policyTags: await provider.policyTags(for: finish),
+            normalizedSchema: ToolSchemaNormalizer().normalize(rawSchema: schema, source: .local)
+        ))
+        #expect(entry.haltsLoop)
     }
 
     @Test("The observe description carries the control ladder; pointer tools state the frozen coordinate mode")

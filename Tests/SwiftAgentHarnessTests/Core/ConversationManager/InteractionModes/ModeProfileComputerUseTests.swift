@@ -77,4 +77,12 @@ struct ModeProfileComputerUseTests {
         let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: .empty)
         #expect(try await registry.resolve(modeId: "subagent-computer-use").subAgents.computerUse == .neutral)
     }
+
+    @Test("The computer-use specialist ends only through a halt-signal tool, and a stall is recovered by forcing a call")
+    func specialistTerminatesOnFinish() async throws {
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: .empty)
+        let termination = try #require(try await registry.resolve(modeId: "subagent-computer-use").runtime.termination)
+        #expect(termination.policy == .terminalTool)
+        #expect(termination.recovery?.strategy == .forcedToolChoice)
+    }
 }

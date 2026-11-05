@@ -139,7 +139,8 @@ struct ComputerUseSpecialistIntegrationTests {
         requiresZeroRetention: Bool = false,
         approvals: (any ExecApprovalDelivering)? = nil,
         parentModeProfiles: ModeProfileConfiguration? = nil,
-        parentModeProfileID: String? = nil
+        parentModeProfileID: String? = nil,
+        finishes: Bool = true
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -209,7 +210,12 @@ struct ComputerUseSpecialistIntegrationTests {
                 throw NSError(domain: "ComputerUseSpecialistIntegrationTests", code: 1)
             }
             let tools = ComputerUseToolProvider(session: computerSession)
-            for step in script {
+            var steps = script
+            // The specialist ends by committing its reply, unless the script finishes on its own terms.
+            if finishes, !script.contains(where: { $0.name == ComputerUseToolProvider.finishToolName }) {
+                steps.append((ComputerUseToolProvider.finishToolName, ["result": .string(reply)]))
+            }
+            for step in steps {
                 let callID = UUID().uuidString
                 let result = try await tools.executeTool(ToolCall(name: step.name, arguments: .object(step.arguments), id: callID))
                 await recorder.record(result)
@@ -400,7 +406,11 @@ struct ComputerUseSpecialistIntegrationTests {
             files.append(DisplayDownload(name: name, path: path, completed: true, disposable: true))
         }
         await target.setDownloads(files)
-        let script = Self.fullScript + [(ComputerUseToolProvider.keepDownloadsToolName, ["paths": .string("invoice.pdf")])]
+        let finish: (String, [String: JSON]) = (
+            ComputerUseToolProvider.finishToolName,
+            ["result": .string("Saved invoice.pdf and tracker.bin."), "keep_files": .array([.string("invoice.pdf")])]
+        )
+        let script: Script = Self.fullScript + [finish]
         let (session, parent) = try await makeSession(
             model: makeModel(), target: target, script: script, reply: "Saved invoice.pdf and tracker.bin.", recorder: ChildRecorder()
         )
@@ -438,9 +448,20 @@ struct ComputerUseSpecialistIntegrationTests {
         let (_, result) = try await invoke(session, parent: parent, call: delegateCall(["return_schema": .string(schema)]))
         let prompts = await recorder.prompts
         #expect(prompts.count == 2)
-        #expect(prompts.last?.contains("doesn't match the return schema") == true)
+        #expect(prompts.last?.contains("computer_finish call was rejected") == true, "\(prompts.last ?? "")")
         #expect(result["report"] == nil || !(result["report"] as? String ?? "").contains("\"result\""))
         #expect((result["reason"] as? String)?.contains("didn't match the return schema") == true)
+    }
+
+    @Test("A specialist that stops without calling computer_finish leaves no result, and the reason says so")
+    func noFinish() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(), finishes: false
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(!(result["report"] as? String ?? "").contains("Bolded and saved."), "a final message is not a submission")
+        #expect((result["reason"] as? String)?.contains("without calling computer_finish") == true, "\(result)")
     }
 
     @Test("The host's activity observer sees the whole run, for its HUD")
@@ -700,8 +721,7 @@ struct ComputerUseSpecialistIntegrationTests {
         let (_, result) = try await invoke(session, parent: parent)
         #expect(result["status"] as? String == "done-unverified")
 
-        let answer = await recorder.toolResults.last
-        #expect(answer?.content.contains("The quarterly report") == true)
+        #expect(await recorder.toolResults.contains { $0.content.contains("The quarterly report") })
         let events = await published.published
         #expect(events.allSatisfy { $0.0 == parent.id })
         let kinds = events.map(\.1.kind)

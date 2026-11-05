@@ -104,13 +104,10 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
 public struct DisplayHostLeaseSnapshot: Sendable, Codable, Hashable {
     public var permissions: PermissionSnapshot
     public var takeover: Bool
-    /// Set when the host ended the lease while it was detached, such as for a stop press.
-    public var releasedReason: ReleaseReason?
 
-    public init(permissions: PermissionSnapshot, takeover: Bool, releasedReason: ReleaseReason? = nil) {
+    public init(permissions: PermissionSnapshot, takeover: Bool) {
         self.permissions = permissions
         self.takeover = takeover
-        self.releasedReason = releasedReason
     }
 }
 
@@ -146,9 +143,10 @@ public enum DisplayHostResponse: Sendable, Codable, Hashable {
     )
     /// `reattachToken` takes the lease back from a new connection after this one drops.
     case lease(Lease, reattachToken: String?)
-    /// A reattached lease, with a new token and its state now, instead of the events it missed. A lease that ended
-    /// while detached comes back once, with no token and why it ended.
+    /// A reattached lease, with a new token and its state now, instead of the events it missed.
     case reattached(Lease, reattachToken: String?, snapshot: DisplayHostLeaseSnapshot)
+    /// The answer, once, to the holder of a lease the host ended while it was detached: why it ended.
+    case leaseEnded(ReleaseReason)
     case downloads([DisplayDownload])
     case done
     case permissions(PermissionSnapshot)

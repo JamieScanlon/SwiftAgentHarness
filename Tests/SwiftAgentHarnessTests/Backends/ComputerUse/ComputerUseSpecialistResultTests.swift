@@ -64,8 +64,8 @@ struct ComputerUseSpecialistResultTests {
         #expect(invalid.reason?.contains("missing required path") == true)
         #expect(try build(finalText: "Saved it.", schema: schema).result == nil, "prose isn't JSON")
         #expect(ComputerUseResultBuilder.reportProblems("Saved it.", schema: schema) == ["$: not JSON"])
-        let prompt = ComputerUseResultBuilder.resubmitPrompt(["$: missing required path"], schema: schema)
-        #expect(prompt.contains("missing required path") && prompt.contains("Reply with only the corrected JSON"))
+        let prompt = ComputerUseResultBuilder.refinishPrompt(["result $: missing required path"], schema: schema)
+        #expect(prompt.contains("missing required path") && prompt.contains("Call computer_finish again"))
     }
 
     @Test("The parent gets the harness's fields as JSON, and the specialist's own text inside the untrusted envelope")
