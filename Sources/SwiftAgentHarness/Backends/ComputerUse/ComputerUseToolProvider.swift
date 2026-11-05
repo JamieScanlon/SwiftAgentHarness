@@ -22,6 +22,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public static let askUserToolName = "computer_ask_user"
     public static let handoffToolName = "computer_handoff"
     public static let scratchpadToolName = "computer_scratchpad"
+    public static let keepDownloadsToolName = "computer_keep_downloads"
     public static let describeToolName = "computer_describe"
     public static let locateToolName = "computer_locate"
 
@@ -36,16 +37,16 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     /// What a native-toolset session offers besides Anthropic's members: verification, the user, and the cheaper
     /// rungs of the control ladder.
     static let nativeCompanionToolNames: Set<String> = [
-        verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, launchToolName, openURLToolName,
+        verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName, launchToolName, openURLToolName,
         runScriptToolName, describeToolName, locateToolName,
     ]
     /// Tools whose results are harness or user text only.
-    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName, scratchpadToolName]
+    static let harnessToolNames: Set<String> = [verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName]
     /// The whole family, in the order the tools are offered.
     static let toolNames: [String] = [
         observeToolName, clickToolName, typeToolName, keyToolName, scrollToolName, pressToolName, setValueToolName,
         menuToolName, launchToolName, openURLToolName, runScriptToolName, zoomToolName, describeToolName, locateToolName,
-        waitForToolName, verifyToolName, askUserToolName, handoffToolName, scratchpadToolName,
+        waitForToolName, verifyToolName, askUserToolName, handoffToolName, scratchpadToolName, keepDownloadsToolName,
     ]
 
     static let scriptSourceLimit = 8_000
@@ -69,7 +70,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
     public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
         let readOnly: Set<String> = [
             Self.observeToolName, Self.zoomToolName, Self.waitForToolName, Self.verifyToolName, Self.askUserToolName, Self.scratchpadToolName,
-            Self.describeToolName, Self.locateToolName,
+            Self.keepDownloadsToolName, Self.describeToolName, Self.locateToolName,
         ]
         return Dictionary(uniqueKeysWithValues: (Self.ownScreenToolNames.union(Self.harnessToolNames)).map { name in
             // One controller per target: every call is serial.
@@ -362,6 +363,23 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                 ],
                 type: .function
             ),
+            ToolDefinition(
+                name: Self.keepDownloadsToolName,
+                description: """
+                Keep files the page downloaded. When the task ends, every download is deleted except the ones named in \
+                your latest call, and kept files go to the conversation that delegated the task. Each call replaces the \
+                earlier list; an empty list keeps nothing. Keeping a file doesn't open it.
+                """,
+                parameters: [
+                    .init(
+                        name: "paths",
+                        description: "One per line: a name as the download notice gives it, or a path inside the download folder.",
+                        type: "string",
+                        required: true
+                    ),
+                ],
+                type: .function
+            ),
         ]
     }
 
@@ -485,6 +503,10 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                     throw Error.invalidParameter("reason must be one of login, 2fa, captcha, payment, ambiguous, consequential")
                 }
                 return await handoff(reason: reason, prompt: try arguments.requiredString("prompt"), toolCall)
+            case Self.keepDownloadsToolName:
+                guard let raw = arguments.rawString("paths") else { throw Error.missingParameter("paths") }
+                let paths = raw.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                return await keepDownloads(paths, toolCall)
             case Self.scratchpadToolName:
                 guard let notes = arguments.rawString("notes") else { throw Error.missingParameter("notes") }
                 do {
@@ -797,6 +819,22 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
             guard let modifier = KeyModifier.aliases[name] else { throw Error.invalidParameter("unknown modifier \(name)") }
             return modifier
         }.sorted()
+    }
+
+    /// Echoes only the model's own paths: download names come from the page.
+    private func keepDownloads(_ paths: [String], _ toolCall: ToolCall) async -> ToolResult {
+        let outcome = await session.keepDownloads(paths)
+        let kept = paths.filter { outcome.rejected[$0] == nil }
+        var lines = [kept.isEmpty ? "Keeping no downloads." : "Keeping \(kept.joined(separator: ", "))."]
+        for path in paths where outcome.rejected[path] != nil {
+            lines.append("Not kept: \(path): \(outcome.rejected[path] ?? "")")
+        }
+        return ToolResult(
+            success: true,
+            content: lines.joined(separator: "\n"),
+            metadata: .object(["source": .string("computer_use"), "action": .string("keep_downloads")]),
+            toolCallId: toolCall.id
+        )
     }
 
     private func failure(_ toolCall: ToolCall, _ message: String) -> ToolResult {

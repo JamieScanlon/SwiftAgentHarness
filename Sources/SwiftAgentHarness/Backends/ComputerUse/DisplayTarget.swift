@@ -284,7 +284,7 @@ public struct DisplayDownload: Sendable, Codable, Hashable {
     public var name: String
     public var path: String
     public var completed: Bool
-    /// Deleted when the session ends unless its result names the file; otherwise kept and listed.
+    /// Deleted when the session ends unless the specialist keeps it; otherwise always kept. Listed either way.
     public var disposable: Bool
 
     public init(name: String, path: String, completed: Bool, disposable: Bool) {

@@ -483,7 +483,10 @@ public actor ManagedBrowserDisplayTarget: DisplayTarget {
             downloadsByGUID[guid] = download
             let file = folder.appendingPathComponent(download.name)
             if agentDownloads.contains(guid) {
-                notices.append("The page downloaded \(download.name.prefix(120)) to the lease's downloads folder; it wasn't opened.")
+                let keep = profile == .throwaway
+                    ? " It is deleted when the task ends unless you keep it with \(ComputerUseToolProvider.keepDownloadsToolName)."
+                    : ""
+                notices.append("The page downloaded \(download.name.prefix(120)) to the lease's downloads folder; it wasn't opened.\(keep)")
             } else if let home = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
                 // The user's own download, caught by the lease's folder: it goes where the user expects it.
                 try? FileManager.default.moveItem(at: file, to: home.appendingPathComponent(download.name))

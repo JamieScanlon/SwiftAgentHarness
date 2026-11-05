@@ -115,6 +115,34 @@ extension ConversationManager {
         _ = try applyConversationResourceCatalogPatch(conversation)
     }
 
+    /// Adds a file an agent brought back, such as a download, to the conversation's attachments, once per blob.
+    func appendAgentAttachment(
+        conversationID: UUID,
+        blobId: String,
+        name: String,
+        mimeType: String?,
+        byteSize: Int64
+    ) throws {
+        guard var conversation = modelConversation(id: conversationID) else {
+            throw ConversationServiceError.conversationNotFound
+        }
+        let normalized = blobId.lowercased()
+        guard !conversation.attachmentsCatalog.contains(where: { $0.blobId?.lowercased() == normalized }) else { return }
+        conversation.attachmentsCatalog.append(ConversationAttachmentDescriptor(
+            id: UUID(),
+            blobId: normalized,
+            kind: "file",
+            name: name,
+            mimeType: mimeType,
+            byteSize: byteSize,
+            addedAt: Date(),
+            addedBy: .agent,
+            trustRaw: AttachmentProvenancePolicy.defaultTrustRaw(for: .agent)
+        ))
+        replaceConversationInRegistry(conversation)
+        _ = try applyConversationResourceCatalogPatch(conversation)
+    }
+
     func catalogAttachmentID(forBlobId blobId: String, conversationID: UUID) -> UUID? {
         let normalized = blobId.lowercased()
         guard let conversation = modelConversation(id: conversationID) else { return nil }

@@ -326,12 +326,22 @@ public struct ComputerUseResult: Sendable, Codable {
     public var missingGrants: [MissingGrant]? = nil
     /// Requested grants that can't do what they ask, such as a browser above view.
     public var grantNotes: [String]? = nil
-    /// Files the run downloaded and kept, never opened.
+    /// Every file the run downloaded, none of them opened, with whether it was kept.
     public var downloads: [Download]? = nil
 
     public struct Download: Sendable, Codable, Hashable {
         public var name: String
-        public var path: String
+        public var bytes: Int
+        public var kept: Bool
+        /// The blob id of the conversation attachment a kept file became.
+        public var attachment: String?
+
+        public init(name: String, bytes: Int, kept: Bool, attachment: String? = nil) {
+            self.name = name
+            self.bytes = bytes
+            self.kept = kept
+            self.attachment = attachment
+        }
     }
 
     public var jsonString: String {

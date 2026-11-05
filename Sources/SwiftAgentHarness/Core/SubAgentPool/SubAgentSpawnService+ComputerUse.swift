@@ -278,10 +278,24 @@ extension SubAgentSpawnService {
                 targetLabel: targetLabel
             )
         )
-        // A managed browser's downloads are deleted unless the report names them; the user's browser's are kept.
-        let report = result.jsonString
-        let kept = await session.finalizeDownloads { report.contains($0.name) || report.contains($0.path) }
-        if !kept.isEmpty { result.downloads = kept.map { ComputerUseResult.Download(name: $0.name, path: $0.path) } }
+        // Kept downloads become attachments of the delegating conversation; the rest of a managed browser's go.
+        let persistence = deps.persistenceDomain
+        let listed = await session.finalizeDownloads { download, data in
+            let mimeType = SessionBlobMIME.sniff(data: data, hint: nil)
+            guard let stored = try? cardHarness.putBlob(
+                data: data, durability: .durable, originalName: download.name, mimeType: mimeType,
+                trust: AttachmentProvenancePolicy.defaultTrustRaw(for: .agent), ttlSeconds: nil, lane: .inbound
+            ) else { return nil }
+            do {
+                try await persistence.appendAgentAttachment(
+                    conversationID: conversationID, blobId: stored.id, name: download.name, mimeType: mimeType, byteSize: Int64(data.count)
+                )
+            } catch {
+                return nil
+            }
+            return stored.id
+        }
+        if !listed.isEmpty { result.downloads = listed }
         await finishLocalAgentLifecycle(
             lifecycleID: lifecycleID,
             parentConversationID: conversationID,

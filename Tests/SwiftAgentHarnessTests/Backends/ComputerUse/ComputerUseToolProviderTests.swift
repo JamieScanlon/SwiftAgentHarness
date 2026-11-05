@@ -46,7 +46,7 @@ struct ComputerUseToolProviderTests {
             "computer_observe", "computer_click", "computer_type", "computer_key", "computer_scroll",
             "computer_press", "computer_set_value", "computer_menu", "computer_launch", "computer_open_url",
             "computer_zoom", "computer_wait_for", "computer_verify", "computer_ask_user", "computer_handoff",
-            "computer_scratchpad",
+            "computer_scratchpad", "computer_keep_downloads",
         ])
         let primitive: Set<String> = ["string", "integer", "number", "boolean"]
         #expect(tools.allSatisfy { $0.type == .function && $0.parameters.allSatisfy { primitive.contains($0.type) } })

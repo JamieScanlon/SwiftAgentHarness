@@ -396,24 +396,69 @@ public actor ComputerUseSession {
     /// Files the lease downloaded, read when the session ended.
     public private(set) var downloads: [DisplayDownload] = []
 
-    /// Deletes the downloads that are disposable and that `isReferenced` doesn't keep, such as files the result
-    /// doesn't name, and returns the rest.
-    @discardableResult
-    public func finalizeDownloads(keeping isReferenced: @Sendable (DisplayDownload) -> Bool) -> [DisplayDownload] {
-        var kept: [DisplayDownload] = []
-        for download in downloads {
-            if download.disposable, !isReferenced(download) {
-                try? FileManager.default.removeItem(atPath: download.path)
-            } else {
-                kept.append(download)
+    /// Downloads the specialist kept, by resolved path. Only its latest ``keepDownloads(_:)`` counts.
+    private var keptDownloadPaths: Set<String> = []
+
+    /// What a ``keepDownloads(_:)`` call kept, by file name, and the paths it refused, with why.
+    public struct KeepDownloadsOutcome: Sendable, Equatable {
+        public var kept: [String]
+        public var rejected: [String: String]
+    }
+
+    /// Names the downloads to keep when the session ends, replacing any earlier list. A path is a file name or a
+    /// path inside the session's download folder; anything that resolves outside it is refused.
+    public func keepDownloads(_ requested: [String]) async -> KeepDownloadsOutcome {
+        let current = terminalReason == nil ? await target.downloads(lease) : downloads
+        var outcome = KeepDownloadsOutcome(kept: [], rejected: [:])
+        guard let folder = current.first.map({ Self.resolved(URL(fileURLWithPath: $0.path).deletingLastPathComponent()) }) else {
+            for path in requested { outcome.rejected[path] = "nothing was downloaded in this session" }
+            keptDownloadPaths = []
+            return outcome
+        }
+        var kept: Set<String> = []
+        for raw in requested {
+            let candidate = Self.resolved(raw.hasPrefix("/") ? URL(fileURLWithPath: raw) : folder.appendingPathComponent(raw))
+            guard candidate.deletingLastPathComponent().path == folder.path else {
+                outcome.rejected[raw] = "outside the session's download folder"
+                continue
             }
+            guard let match = current.first(where: { Self.resolved(URL(fileURLWithPath: $0.path)).path == candidate.path }) else {
+                outcome.rejected[raw] = "nothing was downloaded by that name"
+                continue
+            }
+            if kept.insert(candidate.path).inserted { outcome.kept.append(match.name) }
+        }
+        keptDownloadPaths = kept
+        return outcome
+    }
+
+    /// Lists every download once the session ended. A managed browser's files are deleted unless ``keepDownloads(_:)``
+    /// named them; kept ones are handed to `move`, which returns the attachment they became, and a disposable file
+    /// that moved leaves the folder. The user's browser's files are always kept, and stay where they are.
+    public func finalizeDownloads(moving move: (@Sendable (DisplayDownload, Data) async -> String?)?) async -> [ComputerUseResult.Download] {
+        var listed: [ComputerUseResult.Download] = []
+        for download in downloads {
+            let url = URL(fileURLWithPath: download.path)
+            let bytes = ((try? FileManager.default.attributesOfItem(atPath: download.path))?[.size] as? NSNumber)?.intValue ?? 0
+            let kept = !download.disposable || keptDownloadPaths.contains(Self.resolved(url).path)
+            var entry = ComputerUseResult.Download(name: download.name, bytes: bytes, kept: kept)
+            if kept, download.completed, let move, let data = try? Data(contentsOf: url) {
+                entry.attachment = await move(download, data)
+            }
+            if download.disposable, !kept || entry.attachment != nil {
+                try? FileManager.default.removeItem(at: url)
+            }
+            listed.append(entry)
         }
         if let folder = downloads.first.map({ URL(fileURLWithPath: $0.path).deletingLastPathComponent() }),
            (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
             try? FileManager.default.removeItem(at: folder)
         }
-        downloads = kept
-        return kept
+        return listed
+    }
+
+    private static func resolved(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     /// The observation the latest targeted action cited; its app is where untargeted input goes.

@@ -1,5 +1,6 @@
 import EasyJSON
 import Foundation
+import SwiftAgentKit
 import Synchronization
 import Testing
 @testable import SwiftAgentHarness
@@ -144,28 +145,106 @@ enum ComputerUseSessionFixtures {
 
 @Suite("Computer use session gating")
 struct ComputerUseSessionGatingTests {
-    @Test("Ending reads the lease's downloads; only disposable files the result doesn't cite are deleted")
-    func finalizeDownloads() async throws {
-        let (target, session) = try await ComputerUseSessionFixtures.make()
+    private static func downloadFolder() throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("downloads-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private static func file(_ name: String, in folder: URL, disposable: Bool = true) throws -> DisplayDownload {
+        let path = folder.appendingPathComponent(name).path
+        try Data(name.utf8).write(to: URL(fileURLWithPath: path))
+        return DisplayDownload(name: name, path: path, completed: true, disposable: disposable)
+    }
+
+    @Test("keepDownloads keeps downloads named by name or by path inside the folder, and rejects anything else")
+    func keepDownloadsValidates() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = try Self.downloadFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
-        func file(_ name: String, disposable: Bool = true) throws -> DisplayDownload {
-            let path = folder.appendingPathComponent(name).path
-            try Data(name.utf8).write(to: URL(fileURLWithPath: path))
-            return DisplayDownload(name: name, path: path, completed: true, disposable: disposable)
-        }
-        let cited = try file("invoice.pdf")
-        let stray = try file("tracker.bin")
-        let kept = try file("user.zip", disposable: false)
-        await target.setDownloads([cited, stray, kept])
+        let invoice = try Self.file("invoice.pdf", in: folder)
+        let receipt = try Self.file("receipt.pdf", in: folder)
+        await target.setDownloads([invoice, receipt])
+        let outcome = await session.keepDownloads(["invoice.pdf", receipt.path, "../outside.txt", "/etc/hosts", "missing.txt"])
+        #expect(outcome.kept == ["invoice.pdf", "receipt.pdf"])
+        #expect(outcome.rejected["../outside.txt"]?.contains("outside the session's download folder") == true)
+        #expect(outcome.rejected["/etc/hosts"]?.contains("outside the session's download folder") == true)
+        #expect(outcome.rejected["missing.txt"]?.contains("nothing was downloaded by that name") == true)
+    }
+
+    @Test("At the end every download is listed; kept files move to attachments, the rest are deleted")
+    func finalizeDownloads() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = try Self.downloadFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let invoice = try Self.file("invoice.pdf", in: folder)
+        let stray = try Self.file("tracker.bin", in: folder)
+        let users = try Self.file("user.zip", in: folder, disposable: false)
+        await target.setDownloads([invoice, stray, users])
+        _ = await session.keepDownloads(["invoice.pdf"])
         await session.end()
-        #expect(await session.downloads.map(\.name) == ["invoice.pdf", "tracker.bin", "user.zip"])
-        let remaining = await session.finalizeDownloads { $0.name == "invoice.pdf" }
-        #expect(remaining.map(\.name) == ["invoice.pdf", "user.zip"])
-        #expect(FileManager.default.fileExists(atPath: cited.path))
+        let moved = Mutex<[String: Data]>([:])
+        let listed = await session.finalizeDownloads { download, data in
+            moved.withLock { $0[download.name] = data }
+            return "blob-\(download.name)"
+        }
+        #expect(listed == [
+            ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: true, attachment: "blob-invoice.pdf"),
+            ComputerUseResult.Download(name: "tracker.bin", bytes: 11, kept: false),
+            ComputerUseResult.Download(name: "user.zip", bytes: 8, kept: true, attachment: "blob-user.zip"),
+        ])
+        #expect(moved.withLock { $0["invoice.pdf"] } == Data("invoice.pdf".utf8))
+        #expect(!FileManager.default.fileExists(atPath: invoice.path), "a managed browser's kept file moves")
         #expect(!FileManager.default.fileExists(atPath: stray.path))
-        #expect(FileManager.default.fileExists(atPath: kept.path))
+        #expect(FileManager.default.fileExists(atPath: users.path), "the user's browser's file stays where it is")
+    }
+
+    @Test("Only the latest keepDownloads counts, and nothing in the result's text keeps a file")
+    func latestKeepDownloadsWins() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = try Self.downloadFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let invoice = try Self.file("invoice.pdf", in: folder)
+        await target.setDownloads([invoice])
+        _ = await session.keepDownloads(["invoice.pdf"])
+        _ = await session.keepDownloads([])
+        await session.end()
+        let listed = await session.finalizeDownloads(moving: nil)
+        #expect(listed == [ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: false)])
+        #expect(!FileManager.default.fileExists(atPath: invoice.path))
+    }
+
+    @Test("Without a place to move them, kept files stay in the folder")
+    func keptWithoutStore() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = try Self.downloadFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let invoice = try Self.file("invoice.pdf", in: folder)
+        await target.setDownloads([invoice])
+        _ = await session.keepDownloads(["invoice.pdf"])
+        await session.end()
+        let listed = await session.finalizeDownloads(moving: nil)
+        #expect(listed == [ComputerUseResult.Download(name: "invoice.pdf", bytes: 11, kept: true)])
+        #expect(FileManager.default.fileExists(atPath: invoice.path))
+    }
+
+    @Test("The keep-downloads tool reports what it kept and why it refused the rest")
+    func keepDownloadsTool() async throws {
+        let (target, session) = try await ComputerUseSessionFixtures.make()
+        let folder = try Self.downloadFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        await target.setDownloads([try Self.file("invoice.pdf", in: folder)])
+        let provider = ComputerUseToolProvider(session: session)
+        let result = try await provider.executeTool(ToolCall(
+            name: ComputerUseToolProvider.keepDownloadsToolName,
+            arguments: .object(["paths": .string("invoice.pdf\n../x\n")]),
+            id: "k1"
+        ))
+        #expect(result.success)
+        #expect(result.content.contains("Keeping invoice.pdf"), "\(result.content)")
+        #expect(result.content.contains("Not kept: ../x: outside the session's download folder"), "\(result.content)")
+        let missing = try await provider.executeTool(ToolCall(name: ComputerUseToolProvider.keepDownloadsToolName, arguments: .object([:]), id: "k2"))
+        #expect(!missing.success)
     }
 
     @Test("Observations run without approval and are retained for citing")

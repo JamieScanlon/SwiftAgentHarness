@@ -387,6 +387,34 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect(await target.releases.isEmpty, "nothing was leased")
     }
 
+    @Test("A download the specialist keeps becomes an attachment of the delegating conversation; the rest are deleted")
+    func keptDownloadBecomesAttachment() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("downloads-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var files: [DisplayDownload] = []
+        for name in ["invoice.pdf", "tracker.bin"] {
+            let path = folder.appendingPathComponent(name).path
+            try Data("%PDF-1.7 \(name)".utf8).write(to: URL(fileURLWithPath: path))
+            files.append(DisplayDownload(name: name, path: path, completed: true, disposable: true))
+        }
+        await target.setDownloads(files)
+        let script = Self.fullScript + [(ComputerUseToolProvider.keepDownloadsToolName, ["paths": .string("invoice.pdf")])]
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: script, reply: "Saved invoice.pdf and tracker.bin.", recorder: ChildRecorder()
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        let downloads = try #require(result["downloads"] as? [[String: Any]])
+        #expect(downloads.map { $0["name"] as? String } == ["invoice.pdf", "tracker.bin"])
+        #expect(downloads.map { $0["kept"] as? Bool } == [true, false], "naming a file in the report doesn't keep it")
+        let attachment = try #require(downloads.first?["attachment"] as? String)
+        let catalog = await session.persistenceDomain.modelConversation(id: parent.id)?.attachmentsCatalog ?? []
+        #expect(catalog.contains { $0.blobId == attachment && $0.name == "invoice.pdf" && $0.addedBy == .agent })
+        #expect(!FileManager.default.fileExists(atPath: files[0].path), "moved into the blob store")
+        #expect(!FileManager.default.fileExists(atPath: files[1].path))
+    }
+
     @Test("A parent in an ordinary mode leaves Interact on an unshared target unconfirmed")
     func ordinaryModeLeavesInteract() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })

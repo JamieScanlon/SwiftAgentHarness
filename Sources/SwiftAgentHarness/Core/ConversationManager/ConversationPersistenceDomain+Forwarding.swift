@@ -207,6 +207,12 @@ extension ConversationPersistenceDomain {
         )
     }
 
+    func appendAgentAttachment(conversationID: UUID, blobId: String, name: String, mimeType: String?, byteSize: Int64) throws {
+        try stack.conversationManager.appendAgentAttachment(
+            conversationID: conversationID, blobId: blobId, name: name, mimeType: mimeType, byteSize: byteSize
+        )
+    }
+
     func persistBudgetSnapshot(conversationID: UUID, snapshot: ConversationBudgetSnapshot) throws {
         try stack.conversationManager.persistBudgetSnapshot(conversationID: conversationID, snapshot: snapshot)
     }
