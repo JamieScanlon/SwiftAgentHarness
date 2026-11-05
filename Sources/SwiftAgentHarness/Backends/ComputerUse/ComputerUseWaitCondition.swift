@@ -19,7 +19,9 @@ public enum WaitCondition: Sendable, Codable, Hashable {
     /// The page URL matches `pattern`, where `*` matches anything; a pattern without `*` matches as a substring.
     /// Browser targets.
     case url(pattern: String)
-    case window(Presence, app: String? = nil, titleContains: String? = nil)
+    /// A window of `app` (a bundle id), or the one window `windowID` names, in the target's window list. Titles
+    /// are screen content an attacker controls, so no condition matches on them.
+    case window(Presence, app: String, windowID: String? = nil)
     /// The value of the element cited by `ref` in the latest observation.
     case value(Match, ref: String, text: String)
     /// No visual or tree change for `quietMs`.
@@ -31,8 +33,8 @@ public enum WaitCondition: Sendable, Codable, Hashable {
             let what = [role, name.map { "\"\($0)\"" }, ref].compactMap { $0 }.joined(separator: " ")
             return "element \(what.isEmpty ? "any" : what) \(presence.rawValue)"
         case .url(let pattern): return "url matches \(pattern)"
-        case .window(let presence, let app, let title):
-            return "window \([app, title.map { "\"\($0)\"" }].compactMap { $0 }.joined(separator: " ")) \(presence.rawValue)"
+        case .window(let presence, let app, let windowID):
+            return "window \([app, windowID].compactMap { $0 }.joined(separator: " ")) \(presence.rawValue)"
         case .value(let match, let ref, let text): return "\(ref) value \(match.rawValue) \"\(text)\""
         case .screenSettles(let quietMs): return "screen settles for \(quietMs) ms"
         }
@@ -44,7 +46,7 @@ enum ComputerUseWaitEvaluator {
     enum Result: Sendable {
         case met(DisplayObservation, afterMilliseconds: Int)
         case timedOut(DisplayObservation?)
-        /// The target can't show what the condition needs, such as window titles or a page URL.
+        /// The target can't show what the condition needs, such as a page URL.
         case unevaluable(String)
     }
 
@@ -58,17 +60,42 @@ enum ComputerUseWaitEvaluator {
                 ? nil : .unevaluable("\(manifest.label) has no element tree")
         case .url:
             return manifest.perception.contains(.dom) ? nil : .unevaluable("\(manifest.label) shows no page URL")
-        case .window:
-            return .unevaluable("observations don't list window titles")
-        case .screenSettles:
+        case .window, .screenSettles:
             return nil
         }
+    }
+
+    /// Polls the target's window list until a window condition holds. A target that lists no windows can't
+    /// evaluate one.
+    static func waitForWindow(
+        _ condition: WaitCondition,
+        timeoutMilliseconds: Int,
+        describe: @Sendable () async throws -> TargetLayout
+    ) async throws -> (met: Bool, afterMilliseconds: Int)? {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let deadline = start.advanced(by: .milliseconds(timeoutMilliseconds))
+        while true {
+            guard let windows = try await describe().windows else { return nil }
+            let now = clock.now
+            if holds(condition, in: windows) { return (true, Int((now - start) / .milliseconds(1))) }
+            guard now < deadline else { return (false, timeoutMilliseconds) }
+            try await Task.sleep(for: pollInterval)
+        }
+    }
+
+    static func holds(_ condition: WaitCondition, in windows: [WindowInfo]) -> Bool {
+        guard case .window(let presence, let app, let windowID) = condition else { return false }
+        let found = windows.contains { window in
+            window.app.bundleID.caseInsensitiveCompare(app) == .orderedSame && (windowID == nil || window.ref.windowID == windowID)
+        }
+        return presence == .appears ? found : !found
     }
 
     static func observeRequest(for condition: WaitCondition, manifest: DisplayTargetManifest) -> ObserveRequest {
         let tree: ObservationMode = manifest.perception.contains(.dom) ? .dom : .accessibility
         switch condition {
-        case .screenSettles:
+        case .screenSettles, .window:
             var modes: [ObservationMode] = [.pixels]
             if manifest.perception.contains(tree) { modes.append(tree) }
             return ObserveRequest(modes: modes, scope: .display(nil))

@@ -210,6 +210,74 @@ struct ComputerUseWaitForTests {
         #expect(ContinuousClock.now - started >= .milliseconds(50))
     }
 
+    private static func window(_ id: String, app: AppIdentity = ComputerUseFixtures.textEdit) -> WindowInfo {
+        WindowInfo(
+            ref: WindowRef(pid: 42, processStart: ComputerUseFixtures.epoch, windowID: id, bounds: DisplayRect(x: 0, y: 0, width: 400, height: 300)),
+            app: app,
+            isFocused: false
+        )
+    }
+
+    @Test("A window condition is polled on the target's window list by app, then observed")
+    func windowAppears() async throws {
+        let (target, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        await target.setWindowLists([[], [], [Self.window("w7")]])
+        let app = ComputerUseFixtures.textEdit.bundleID
+        let result = await session.perform([.waitFor(condition: .window(.appears, app: app), timeoutMilliseconds: 5_000)])
+        let outcome = try #require(result.outcomes.first)
+        #expect(outcome.effect == .confirmed, "\(outcome.evidence ?? "")")
+        #expect(outcome.evidence?.contains("window \(app) appears") == true)
+        #expect(outcome.observation != nil, "the model gets an observation of the state it waited for")
+        #expect(await target.describeCalls == 3)
+    }
+
+    @Test("A window condition with a window id waits on that window only")
+    func windowDisappearsByID() async throws {
+        let (target, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        await target.setWindowLists([[Self.window("w1"), Self.window("w2")], [Self.window("w1")]])
+        let app = ComputerUseFixtures.textEdit.bundleID
+        let gone = await session.perform([.waitFor(condition: .window(.disappears, app: app, windowID: "w2"), timeoutMilliseconds: 5_000)])
+        #expect(gone.outcomes.first?.effect == .confirmed, "\(gone.outcomes.first?.evidence ?? "")")
+        let stays = await session.perform([.waitFor(condition: .window(.disappears, app: app, windowID: "w1"), timeoutMilliseconds: 300)])
+        #expect(stays.outcomes.first?.effect == .partial)
+    }
+
+    @Test("A target that lists no windows makes a window condition a bounded wait")
+    func windowUnlisted() async throws {
+        let (_, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        let result = await session.perform([.waitFor(condition: .window(.appears, app: ComputerUseFixtures.textEdit.bundleID), timeoutMilliseconds: 50)])
+        let outcome = try #require(result.outcomes.first)
+        #expect(outcome.effect == .unverifiable)
+        #expect(outcome.evidence?.contains("doesn't list windows") == true, "\(outcome.evidence ?? "")")
+    }
+
+    @Test("A window condition on an app outside the grant is refused")
+    func windowOutsideGrant() async throws {
+        let (target, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        await target.setWindowLists([[Self.window("w1", app: AppIdentity(bundleID: "com.apple.Mail"))]])
+        let result = await session.perform([.waitFor(condition: .window(.appears, app: "com.apple.Mail"), timeoutMilliseconds: 300)])
+        let outcome = try #require(result.outcomes.first)
+        #expect(outcome.effect == .refused)
+        #expect(outcome.evidence?.contains("com.apple.Mail isn't granted") == true, "\(outcome.evidence ?? "")")
+        #expect(await target.describeCalls == 0)
+    }
+
+    @Test("The window kinds need an app and take no title")
+    func windowToolArguments() async throws {
+        let (_, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)
+        let provider = ComputerUseToolProvider(session: session)
+        let noApp = try await provider.executeTool(ToolCall(name: "computer_wait_for", arguments: .object(["kind": .string("window-appears")]), id: "c1"))
+        #expect(!noApp.success)
+        #expect(noApp.content.contains("window-appears needs app"))
+        let titled = try await provider.executeTool(ToolCall(
+            name: "computer_wait_for",
+            arguments: .object(["kind": .string("window-appears"), "app": .string("com.apple.TextEdit"), "title_contains": .string("Invoice")]),
+            id: "c2"
+        ))
+        #expect(!titled.success)
+        #expect(titled.content.contains("title_contains is not a parameter of computer_wait_for"), "\(titled.content)")
+    }
+
     @Test("The tool takes a structured condition and refuses prose")
     func toolArguments() async throws {
         let (_, session) = try await S.make(manifest: FakeDisplayTarget.vmManifest)

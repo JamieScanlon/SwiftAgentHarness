@@ -303,7 +303,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                 parameters: [
                     .init(
                         name: "kind",
-                        description: "element-appears, element-disappears (role, name, or ref), url-matches (pattern), window-appears, window-disappears (app, title_contains), value-equals, value-contains (ref, text), or screen-settles (quiet_ms).",
+                        description: "element-appears, element-disappears (role, name, or ref), url-matches (pattern), window-appears, window-disappears (app, window_id), value-equals, value-contains (ref, text), or screen-settles (quiet_ms).",
                         type: "string",
                         required: true
                     ),
@@ -311,8 +311,8 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
                     .init(name: "name", description: "Text the element's name contains.", type: "string", required: false),
                     .init(name: "ref", description: "An element ref from the latest observation.", type: "string", required: false),
                     .init(name: "pattern", description: "The URL to match; * matches anything, and without * it matches as a substring.", type: "string", required: false),
-                    .init(name: "app", description: "The window's app.", type: "string", required: false),
-                    .init(name: "title_contains", description: "Text the window's title contains.", type: "string", required: false),
+                    .init(name: "app", description: "The window's app, as a bundle id.", type: "string", required: false),
+                    .init(name: "window_id", description: "One window of that app, by the id an observation shows.", type: "string", required: false),
                     .init(name: "text", description: "The value to compare against.", type: "string", required: false),
                     .init(name: "quiet_ms", description: "How long the screen must stay unchanged. Default 1000.", type: "integer", required: false),
                     .init(name: "timeout_ms", description: "Maximum wait in milliseconds. Default 5000.", type: "integer", required: false),
@@ -823,7 +823,7 @@ public struct ComputerUseToolProvider: ToolProvider, ToolDescriptorHinting {
         case "url-matches":
             return .url(pattern: try required("pattern"))
         case "window-appears", "window-disappears":
-            return .window(kind == "window-appears" ? .appears : .disappears, app: arguments.string("app"), titleContains: arguments.string("title_contains"))
+            return .window(kind == "window-appears" ? .appears : .disappears, app: try required("app"), windowID: arguments.string("window_id"))
         case "value-equals", "value-contains":
             return .value(kind == "value-equals" ? .equals : .contains, ref: try required("ref"), text: try required("text"))
         case "screen-settles":

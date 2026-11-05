@@ -218,7 +218,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
                 )
             }
         }
-        return TargetLayout(displays: displays, windows: [], tabs: [], focusedApp: await workingApp()?.identity)
+        let working = await workingApp()
+        return TargetLayout(displays: displays, windows: await grantedWindows(focused: working?.pid), tabs: [], focusedApp: working?.identity)
     }
 
     public func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
@@ -640,6 +641,29 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     private func noWorkingApp() -> ActionOutcome {
         refused("no granted app is on screen to receive input; launch one or observe again", escalation: .observe)
+    }
+
+    /// Normal windows of granted apps only: listing the rest would tell the model what else the user has open.
+    private func grantedWindows(focused: pid_t?) async -> [WindowInfo] {
+        let granted = grantedBundleIDs
+        var apps: [pid_t: MacRunningApp?] = [:]
+        var listed: [WindowInfo] = []
+        for window in await workspace.windows() where window.layer == 0 && window.pid != getpid() {
+            if apps[window.pid] == nil { apps[window.pid] = await workspace.runningApp(pid: window.pid) }
+            guard let app = apps[window.pid] ?? nil, granted.contains(app.identity.bundleID),
+                  !configuration.excludedBundleIDs.contains(app.identity.bundleID) else { continue }
+            listed.append(WindowInfo(
+                ref: WindowRef(
+                    pid: window.pid,
+                    processStart: app.launchDate ?? .distantPast,
+                    windowID: String(window.windowID),
+                    bounds: DisplayRect(window.bounds)
+                ),
+                app: app.identity,
+                isFocused: window.pid == focused && !listed.contains { $0.ref.pid == window.pid }
+            ))
+        }
+        return listed
     }
 
     private var grantedBundleIDs: Set<String> {

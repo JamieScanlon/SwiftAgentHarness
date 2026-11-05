@@ -41,6 +41,9 @@ actor FakeDisplayTarget: DisplayTarget {
     var screenshot: Data?
     /// Trees for successive observations, in place of the fixture's.
     var trees: [ObservationTree] = []
+    /// Window lists for successive layouts; the last repeats. Empty means the target doesn't list windows.
+    var windowLists: [[WindowInfo]] = []
+    private(set) var describeCalls = 0
     var outcomes: @Sendable (ComputerAction, Int) -> ActionOutcome = { _, index in
         ActionOutcome(action: index, effect: .confirmed, evidence: "fake")
     }
@@ -92,6 +95,10 @@ actor FakeDisplayTarget: DisplayTarget {
         self.trees = trees
     }
 
+    func setWindowLists(_ lists: [[WindowInfo]]) {
+        windowLists = lists
+    }
+
     func setOutcomes(_ outcomes: @escaping @Sendable (ComputerAction, Int) -> ActionOutcome) {
         self.outcomes = outcomes
     }
@@ -116,8 +123,10 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func describe(_ lease: Lease) async throws -> TargetLayout {
         try await requireLease(lease)
+        describeCalls += 1
         return TargetLayout(
             displays: [DisplayInfo(id: "main", frame: ComputerUseFixtures.geometry.capturedRect, scaleFactor: 2, isPrimary: true)],
+            windows: windowLists.isEmpty ? nil : windowLists[min(describeCalls, windowLists.count) - 1],
             focusedApp: observedApp
         )
     }

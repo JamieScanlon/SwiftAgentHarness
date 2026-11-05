@@ -549,6 +549,9 @@ public actor ComputerUseSession {
     /// Polls fresh observations until the condition holds; only the last is retained. A condition the target can't
     /// show is a bounded wait followed by an observation, and the evidence says so.
     private func waitFor(_ condition: WaitCondition, timeoutMilliseconds: Int, index: Int) async throws -> (ActionOutcome, DisplayObservation?) {
+        if case .window(_, let app, _) = condition {
+            return try await waitForWindow(condition, app: app, timeoutMilliseconds: timeoutMilliseconds, index: index)
+        }
         var request = ComputerUseWaitEvaluator.observeRequest(for: condition, manifest: manifest)
         request.maxImage = configuration.imageLimit
         var result = ComputerUseWaitEvaluator.modes(for: condition, manifest: manifest)
@@ -586,6 +589,34 @@ public actor ComputerUseSession {
         case nil:
             return (ActionOutcome(action: index, effect: .unverifiable, evidence: "nothing to wait for"), nil)
         }
+    }
+
+    /// Window conditions are checked against the target's window list, then one observation shows the result.
+    private func waitForWindow(_ condition: WaitCondition, app: String, timeoutMilliseconds: Int, index: Int) async throws -> (ActionOutcome, DisplayObservation?) {
+        guard grants.tier(forApp: app) != nil else {
+            return (ActionOutcome(action: index, effect: .refused, evidence: "\(app) isn't granted, so its windows aren't listed"), nil)
+        }
+        let waited = try await ComputerUseWaitEvaluator.waitForWindow(condition, timeoutMilliseconds: timeoutMilliseconds) {
+            [target, lease] in try await target.describe(lease)
+        }
+        guard let waited else {
+            let bounded = min(timeoutMilliseconds, 10_000)
+            try await Task.sleep(for: .milliseconds(bounded))
+            let kept = retainFresh(try await target.observe(lease, ObserveRequest(modes: [.pixels], scope: .display(nil), maxImage: configuration.imageLimit)))
+            return (ActionOutcome(
+                action: index,
+                effect: .unverifiable,
+                evidence: "can't evaluate \(condition.summary) here (\(manifest.label) doesn't list windows); waited \(bounded) ms and observed",
+                observation: kept.id
+            ), kept)
+        }
+        var request = ComputerUseWaitEvaluator.observeRequest(for: condition, manifest: manifest)
+        request.maxImage = configuration.imageLimit
+        let kept = retainFresh(try await target.observe(lease, request))
+        let evidence = waited.met
+            ? "\(condition.summary) after \(waited.afterMilliseconds) ms"
+            : "\(condition.summary) did not happen within \(timeoutMilliseconds) ms"
+        return (ActionOutcome(action: index, effect: waited.met ? .confirmed : .partial, evidence: evidence, observation: kept.id), kept)
     }
 
     private static func sameDocument(_ base: DisplayObservation, _ current: DisplayObservation) -> Bool {

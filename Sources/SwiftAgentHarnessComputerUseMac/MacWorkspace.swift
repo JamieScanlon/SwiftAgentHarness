@@ -10,6 +10,7 @@ struct MacWindowEntry: Sendable, Equatable {
     /// 0 for normal app windows; higher for the Dock, menus, panels, and other floating windows.
     var layer: Int
     var bounds: CGRect
+    var windowID: CGWindowID = 0
 }
 
 /// The installed apps that open web pages.
@@ -47,7 +48,8 @@ struct LiveMacWorkspace: MacWorkspaceReading {
                   let bounds = (info[kCGWindowBounds] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else {
                 return nil
             }
-            return MacWindowEntry(pid: pid, layer: layer, bounds: bounds)
+            let windowID = (info[kCGWindowNumber] as? NSNumber)?.uint32Value ?? 0
+            return MacWindowEntry(pid: pid, layer: layer, bounds: bounds, windowID: windowID)
         }
     }
 

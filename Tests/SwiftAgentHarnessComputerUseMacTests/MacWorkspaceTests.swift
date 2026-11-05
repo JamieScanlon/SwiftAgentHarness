@@ -130,6 +130,22 @@ struct MacHostDisplayTargetFocusTests {
         #expect(try await target.describe(lease).focusedApp == F.textEdit.identity)
     }
 
+    @Test("The layout lists only granted apps' normal windows, with their window ids")
+    func describeListsGrantedWindows() async throws {
+        var desktop = F.harnessInFront()
+        desktop.windows = desktop.windows.enumerated().map { index, window in
+            var window = window
+            window.windowID = CGWindowID(100 + index)
+            return window
+        }
+        let target = target(desktop)
+        let lease = try await target.lease(request(Self.textEditGrant))
+        let windows = try #require(try await target.describe(lease).windows)
+        #expect(windows.map(\.app) == [F.textEdit.identity])
+        #expect(windows.first?.ref.windowID == "103")
+        #expect(windows.first?.isFocused == true)
+    }
+
     @Test("A granted frontmost app is the focused app")
     func grantedFrontmostWins() async throws {
         var desktop = F.harnessInFront()

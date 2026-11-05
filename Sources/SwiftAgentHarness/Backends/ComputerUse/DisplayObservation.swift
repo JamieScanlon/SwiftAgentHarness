@@ -287,13 +287,15 @@ public struct TabInfo: Sendable, Codable, Hashable {
 
 public struct TargetLayout: Sendable, Codable, Hashable {
     public var displays: [DisplayInfo]
-    public var windows: [WindowInfo]
+    /// The windows of granted apps, front to back. `nil` when the target can't list windows, which is not the same
+    /// as listing none.
+    public var windows: [WindowInfo]?
     public var tabs: [TabInfo]
     /// The app that input naming no target goes to. It need not be frontmost: a target on a shared desktop
     /// reports the granted app it works in, not the harness's own app in front of it.
     public var focusedApp: AppIdentity?
 
-    public init(displays: [DisplayInfo], windows: [WindowInfo] = [], tabs: [TabInfo] = [], focusedApp: AppIdentity? = nil) {
+    public init(displays: [DisplayInfo], windows: [WindowInfo]? = nil, tabs: [TabInfo] = [], focusedApp: AppIdentity? = nil) {
         self.displays = displays
         self.windows = windows
         self.tabs = tabs
