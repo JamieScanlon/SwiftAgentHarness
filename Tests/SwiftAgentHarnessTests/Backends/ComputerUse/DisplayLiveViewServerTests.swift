@@ -341,6 +341,28 @@ struct DisplayLiveViewServerTests {
         await #expect(throws: DisplayTargetError.self) { try await closed.link(for: closedFeed, role: .observer) }
     }
 
+    @Test("A shared target's feed takes no observers unless the host allows them; the user's links still work")
+    func sharedFeedObservers() async throws {
+        let server = DisplayLiveViewServer()
+        defer { Task { await server.stop() } }
+        let shared = await server.open(DisplayLiveViewFeed(label: "This Mac", isShared: true))
+        await #expect(throws: DisplayTargetError.unsupported("observer links are off for This Mac, which is someone's own screen")) {
+            try await server.link(for: shared, role: .observer)
+        }
+        let user = try Viewer(try await server.link(for: shared))
+        _ = try await user.status()
+        let unshared = await server.open(FeedLog().feed)
+        _ = try await server.link(for: unshared, role: .observer)
+
+        let allowing = DisplayLiveViewServer(configuration: DisplayLiveViewConfiguration(maxObserversPerSharedFeed: 1))
+        defer { Task { await allowing.stop() } }
+        let allowed = await allowing.open(DisplayLiveViewFeed(label: "This Mac", isShared: true))
+        let observer = try Viewer(try await allowing.link(for: allowed, role: .observer))
+        #expect(try await observer.status().observer == true)
+        let second = try Viewer(try await allowing.link(for: allowed, role: .observer))
+        #expect(await second.next() == nil, "the shared limit applies")
+    }
+
     @Test("Ending observers closes their streams and revokes their links, and leaves the user's")
     func endObservers() async throws {
         let server = DisplayLiveViewServer()

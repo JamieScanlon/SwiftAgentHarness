@@ -167,11 +167,7 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
     private let guest: @Sendable (VirtualMachineInstance) async throws -> any DisplayTarget
     private let lock = DisplayTargetLeaseLock()
     private var current: (lease: Lease, guest: any DisplayTarget, guestLease: Lease, instance: VirtualMachineInstance)?
-    private let liveViewServer: DisplayLiveViewServer?
-    private let liveViewFrameInterval: Duration
-    private var liveFeed: UUID?
-    private var frames: Task<Void, Never>?
-    private var takeoverActive = false
+    private let relay: DisplayLiveViewRelay?
 
     /// - Parameters:
     ///   - guest: Connects to the guest's driver. Called once per lease, after the VM has an address.
@@ -186,8 +182,7 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
     ) {
         self.manifest = manifest
         self.controller = controller
-        self.liveViewServer = liveView
-        self.liveViewFrameInterval = liveViewFrameInterval
+        self.relay = liveView.map { DisplayLiveViewRelay(server: $0, frameInterval: liveViewFrameInterval) }
         self.guest = guest
     }
 
@@ -203,20 +198,16 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
             guestRequest.target = target.manifest.id
             let guestLease = try await target.lease(guestRequest)
             current = (lease, target, guestLease, started)
-            takeoverActive = false
             // The guest's own news, such as its stop key, belongs to this lease.
             let fromGuest = await target.events(guestLease)
             guestEvents = Task { [eventHub, leaseID = lease.id] in
                 for await event in fromGuest { eventHub.post(event, to: leaseID) }
             }
-            if let liveViewServer {
-                liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
-                    label: manifest.label,
-                    viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
-                    input: { [weak self] input in await self?.relayInput(input) },
-                    typed: { [eventHub, leaseID = lease.id] value in eventHub.post(.typedDuringTakeover(value), to: leaseID) }
-                ))
-            }
+            await relay?.open(lease.id, label: manifest.label, isShared: manifest.humanPresence == .shared, source: DisplayLiveViewRelay.Source(
+                frame: { try? await target.liveFrame(guestLease) },
+                input: { input in try? await target.liveInput(guestLease, input) },
+                typed: { [eventHub, leaseID = lease.id] value in eventHub.post(.typedDuringTakeover(value), to: leaseID) }
+            ))
             return lease
         } catch {
             if let instance { await controller.stop(instance) }
@@ -236,11 +227,7 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
         guestEvents?.cancel()
         guestEvents = nil
         eventHub.finish(lease.id)
-        frames?.cancel()
-        frames = nil
-        takeoverActive = false
-        if let liveFeed { await liveViewServer?.close(liveFeed) }
-        liveFeed = nil
+        await relay?.close(lease.id)
         await current.guest.release(current.guestLease, reason: reason)
         await controller.stop(current.instance)
         await lock.release(leaseID: lease.id)
@@ -268,46 +255,31 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
 
     public func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
         let (guest, guestLease) = try await leased(lease)
-        if let liveViewServer {
-            guard let liveFeed else { return nil }
-            return try await liveViewServer.link(for: liveFeed, role: role)
-        }
+        if let relay { return try await relay.link(for: lease.id, role: role) }
         return try await guest.liveView(guestLease, role: role)
     }
 
     public func endObservers(_ lease: Lease) async throws {
         let (guest, guestLease) = try await leased(lease)
-        if let liveViewServer {
-            if let liveFeed { await liveViewServer.endObservers(liveFeed) }
-            return
-        }
+        if let relay { return await relay.endObservers(lease.id) }
         try await guest.endObservers(guestLease)
     }
 
     public func liveViewers(_ lease: Lease) async throws -> Int {
         let (guest, guestLease) = try await leased(lease)
-        if let liveViewServer {
-            guard let liveFeed else { return 0 }
-            return await liveViewServer.viewerCount(liveFeed)
-        }
+        if let relay { return await relay.viewerCount(lease.id) }
         return try await guest.liveViewers(guestLease)
     }
 
     public func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
         let (guest, guestLease) = try await leased(lease)
-        if let liveViewServer {
-            guard let liveFeed else { return [] }
-            return await liveViewServer.connections(liveFeed)
-        }
+        if let relay { return await relay.connections(lease.id) }
         return try await guest.liveConnections(guestLease)
     }
 
     public func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
         let (guest, guestLease) = try await leased(lease)
-        if let liveViewServer {
-            guard let liveFeed else { return false }
-            return await liveViewServer.revoke(id, in: liveFeed)
-        }
+        if let relay { return await relay.revoke(id, for: lease.id) }
         return try await guest.revokeLiveView(guestLease, id: id)
     }
 
@@ -324,37 +296,7 @@ public actor VirtualMachineDisplayTarget: DisplayTarget {
     public func takeover(_ lease: Lease, on: Bool) async throws {
         let (guest, guestLease) = try await leased(lease)
         try await guest.takeover(guestLease, on: on)
-        takeoverActive = on
-        if let liveFeed { await liveViewServer?.setControl(on, for: liveFeed) }
-    }
-
-    // MARK: - Live view
-
-    private func viewersChanged(_ count: Int) {
-        guard current != nil else { return }
-        if count > 0, frames == nil {
-            frames = Task { [weak self] in
-                while !Task.isCancelled {
-                    guard let self else { return }
-                    await self.publishFrame()
-                    try? await Task.sleep(for: self.liveViewFrameInterval)
-                }
-            }
-        } else if count == 0 {
-            frames?.cancel()
-            frames = nil
-        }
-    }
-
-    private func publishFrame() async {
-        guard let current, let liveFeed, let liveViewServer,
-              let frame = try? await current.guest.liveFrame(current.guestLease) else { return }
-        await liveViewServer.publish(frame, to: liveFeed)
-    }
-
-    private func relayInput(_ input: DisplayLiveViewInput) async {
-        guard takeoverActive, let current else { return }
-        try? await current.guest.liveInput(current.guestLease, input)
+        await relay?.setControl(on, for: lease.id)
     }
 
     private func leased(_ lease: Lease) async throws -> (any DisplayTarget, Lease) {

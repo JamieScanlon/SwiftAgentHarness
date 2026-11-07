@@ -577,6 +577,112 @@ struct DisplayHostTests {
         await remote.close()
         await serving.value
     }
+
+    /// A host desktop that gives out live frames, as a Mac host serving them would.
+    private static var framingHostManifest: DisplayTargetManifest {
+        var manifest = FakeDisplayTarget.hostManifest
+        manifest.observerAccess = .stream
+        return manifest
+    }
+
+    @Test("With a live-view server, a remote target serves its host's frames here and passes input on only during takeover")
+    func relayedLiveView() async throws {
+        let liveView = DisplayLiveViewServer()
+        defer { Task { await liveView.stop() } }
+        let target = FakeDisplayTarget(manifest: Self.framingHostManifest)
+        await target.setServedFrame(DisplayLiveViewFrame(jpeg: DisplayLiveViewServerTests.jpeg, width: 1440, height: 900))
+        let server = DisplayHostServer(target: target, name: "test-host")
+        let (client, host) = InMemoryDisplayHostConnection.pair()
+        let serving = Task { await server.serve(host) }
+        let remote = try await RemoteDisplayTarget.connect(over: client, liveView: liveView, liveViewFrameInterval: .milliseconds(10))
+        #expect(remote.manifest.observerAccess == .stream)
+        let lease = try await remote.lease(Self.leaseRequest(target: target.manifest.id))
+        var events = await remote.events(lease).makeAsyncIterator()
+        #expect(await target.liveFrameCalls == 0, "no frames while nobody watches")
+
+        let viewer = try DisplayLiveViewServerTests.Viewer(try #require(try await remote.liveView(lease)))
+        _ = try await viewer.status()
+        #expect(await target.liveViewRoles.isEmpty, "the view is served here, not by the host")
+        #expect(try await remote.liveViewers(lease) == 1)
+        #expect(try await remote.liveConnections(lease).count == 1)
+        let frame = try await viewer.frame()
+        #expect(frame.width == 1440 && frame.height == 900)
+        await #expect(throws: DisplayTargetError.self, "the user's own screen isn't shared with observers by default") {
+            try await remote.liveView(lease, role: .observer)
+        }
+
+        let click = #"{"type":"mouse","action":"down","x":40,"y":50,"button":"left","clickCount":1,"modifiers":[]}"#
+        try await viewer.send(click)
+        try await viewer.roundTrip()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await target.liveInputs.isEmpty, "input waits for takeover")
+        try await remote.takeover(lease, on: true)
+        #expect(await target.takeoverStates == [true])
+        try await viewer.send(click)
+        try await viewer.send(#"{"type":"text","text":"hunter2"}"#)
+        try await viewer.roundTrip()
+        #expect(await DisplayLiveViewServerTests.eventually { await target.liveInputs.count == 2 })
+        try await remote.takeover(lease, on: false)
+        #expect(await events.next() == .typedDuringTakeover("hunter2"), "what the user typed is kept from helper models")
+
+        await remote.release(lease, reason: .completed)
+        var last = try await viewer.status()
+        while last.type != "ended" { last = try await viewer.status() }
+        #expect(last.reason == .sessionEnded)
+        await remote.close()
+        await serving.value
+    }
+
+    @Test("Without a live-view server, or for a host that serves no live view, live-view calls go to the host")
+    func passthroughLiveView() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
+        let server = DisplayHostServer(target: target, name: "test-host")
+        let (client, host) = InMemoryDisplayHostConnection.pair()
+        let serving = Task { await server.serve(host) }
+        let liveView = DisplayLiveViewServer()
+        defer { Task { await liveView.stop() } }
+        let remote = try await RemoteDisplayTarget.connect(over: client, liveView: liveView)
+        #expect(remote.manifest.observerAccess == .none, "a host whose target declares no live view isn't given one here")
+        let lease = try await remote.lease(Self.leaseRequest(target: target.manifest.id))
+        _ = try await remote.liveView(lease)
+        #expect(await target.liveViewRoles == [.user])
+        await remote.close()
+        await serving.value
+    }
+
+    @Test("A relayed view survives a reconnect, and closes when the lease is lost")
+    func relayedViewAcrossReconnect() async throws {
+        let liveView = DisplayLiveViewServer()
+        defer { Task { await liveView.stop() } }
+        let target = FakeDisplayTarget(manifest: Self.framingHostManifest)
+        await target.setServedFrame(DisplayLiveViewFrame(jpeg: DisplayLiveViewServerTests.jpeg, width: 640, height: 400))
+        let server = DisplayHostServer(target: target, configuration: DisplayHostServerConfiguration(reattachGrace: .seconds(5)))
+        let current = Connections()
+        actor Reachable {
+            var isOpen = true
+            func close() { isOpen = false }
+        }
+        let reachable = Reachable()
+        let remote = try await RemoteDisplayTarget.connect(using: {
+            guard await reachable.isOpen else { throw DisplayHostError.connectionClosed }
+            let (client, host) = InMemoryDisplayHostConnection.pair()
+            await current.set(host, serving: Task { await server.serve(host) })
+            return client
+        }, reattachWindow: .milliseconds(300), liveView: liveView, liveViewFrameInterval: .milliseconds(10))
+        let lease = try await remote.lease(Self.leaseRequest(target: target.manifest.id))
+        let viewer = try DisplayLiveViewServerTests.Viewer(try #require(try await remote.liveView(lease)))
+        _ = try await viewer.status()
+        _ = try await viewer.frame()
+
+        await current.dropHost()
+        for _ in 0..<100 where await current.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(try await viewer.frame().width == 640, "the viewer stays connected across the reconnect")
+
+        await reachable.close()
+        await current.dropHost()
+        #expect(try await viewer.status().reason == .sessionEnded, "a lost lease closes its view")
+        await remote.close()
+    }
 }
 
 @Suite("Display host framing")

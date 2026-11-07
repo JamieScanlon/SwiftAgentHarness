@@ -80,6 +80,9 @@ public enum DisplayLiveViewInput: Sendable, Hashable, Codable {
 /// One target's side of a live view: told when viewers come and go, and handed their input while they have control.
 public struct DisplayLiveViewFeed: Sendable {
     public var label: String
+    /// The target is someone's own screen (`humanPresence: shared`), so it takes observers only up to
+    /// ``DisplayLiveViewConfiguration/maxObserversPerSharedFeed``.
+    public var isShared: Bool
     /// Called with the new count whenever a viewer joins or leaves.
     public var viewersChanged: @Sendable (Int) async -> Void
     public var input: @Sendable (DisplayLiveViewInput) async -> Void
@@ -89,11 +92,13 @@ public struct DisplayLiveViewFeed: Sendable {
 
     public init(
         label: String,
+        isShared: Bool = false,
         viewersChanged: @escaping @Sendable (Int) async -> Void = { _ in },
         input: @escaping @Sendable (DisplayLiveViewInput) async -> Void = { _ in },
         typed: @escaping @Sendable (String) async -> Void = { _ in }
     ) {
         self.label = label
+        self.isShared = isShared
         self.viewersChanged = viewersChanged
         self.input = input
         self.typed = typed

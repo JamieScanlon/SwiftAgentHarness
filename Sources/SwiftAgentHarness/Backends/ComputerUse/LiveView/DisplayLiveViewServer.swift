@@ -22,6 +22,9 @@ public struct DisplayLiveViewConfiguration: Sendable {
     /// How many observers can watch one feed, counted apart from the user's viewers so they can't crowd them out.
     /// `0` turns observer links off.
     public var maxObserversPerFeed: Int
+    /// How many observers can watch a shared target's feed: someone's own screen, such as their Mac or their browser.
+    /// `0`, the default, keeps it to its user.
+    public var maxObserversPerSharedFeed: Int
     /// How long a new stream has to present its link's token.
     public var authenticationTimeout: Duration
 
@@ -32,6 +35,7 @@ public struct DisplayLiveViewConfiguration: Sendable {
         linkLifetime: Duration = .seconds(600),
         maxViewersPerFeed: Int = 4,
         maxObserversPerFeed: Int = 4,
+        maxObserversPerSharedFeed: Int = 0,
         authenticationTimeout: Duration = .seconds(5)
     ) {
         self.host = host
@@ -40,6 +44,7 @@ public struct DisplayLiveViewConfiguration: Sendable {
         self.linkLifetime = linkLifetime
         self.maxViewersPerFeed = max(1, maxViewersPerFeed)
         self.maxObserversPerFeed = max(0, maxObserversPerFeed)
+        self.maxObserversPerSharedFeed = max(0, maxObserversPerSharedFeed)
         self.authenticationTimeout = authenticationTimeout
     }
 }
@@ -219,9 +224,11 @@ public actor DisplayLiveViewServer {
     /// A new link to the feed. `viewOnly` is whether its input is ignored right now; for the user's links it changes
     /// with control, and an observer's is always view-only.
     public func link(for id: UUID, role: DisplayLiveViewRole = .user) async throws -> DisplayLiveView {
-        guard feeds[id] != nil else { throw DisplayTargetError.leaseNotHeld }
-        if role == .observer, configuration.maxObserversPerFeed == 0 {
-            throw DisplayTargetError.unsupported("observer links are turned off")
+        guard let opened = feeds[id] else { throw DisplayTargetError.leaseNotHeld }
+        if role == .observer, limit(for: .observer, of: opened.feed) == 0 {
+            throw DisplayTargetError.unsupported(
+                opened.feed.isShared ? "observer links are off for \(opened.feed.label), which is someone's own screen" : "observer links are turned off"
+            )
         }
         let base = try await start()
         guard let feed = feeds[id] else { throw DisplayTargetError.leaseNotHeld }
@@ -315,8 +322,7 @@ public actor DisplayLiveViewServer {
 
     private func admit(_ token: String) async -> (feed: UUID, viewer: UUID, messages: AsyncStream<Outgoing>)? {
         guard let link = links[token], link.expiresAt > now(), var feed = feeds[link.feedID] else { return nil }
-        let limit = link.role == .user ? configuration.maxViewersPerFeed : configuration.maxObserversPerFeed
-        guard feed.count(link.role) < limit else { return nil }
+        guard feed.count(link.role) < limit(for: link.role, of: feed.feed) else { return nil }
         // A token establishes one connection; staying connected doesn't depend on it.
         links[token] = nil
         let viewer = link.id
@@ -327,6 +333,13 @@ public actor DisplayLiveViewServer {
         feeds[link.feedID] = feed
         await feed.feed.viewersChanged(feed.viewers.count)
         return (link.feedID, viewer, messages)
+    }
+
+    private func limit(for role: DisplayLiveViewRole, of feed: DisplayLiveViewFeed) -> Int {
+        switch role {
+        case .user: configuration.maxViewersPerFeed
+        case .observer: feed.isShared ? configuration.maxObserversPerSharedFeed : configuration.maxObserversPerFeed
+        }
     }
 
     private func leave(_ feedID: UUID, _ viewer: UUID) async {

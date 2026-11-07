@@ -3,11 +3,15 @@ import Foundation
 /// A ``DisplayTarget`` served by a display host over a ``DisplayHostConnection``. The harness uses it like any
 /// local target.
 ///
-/// Made with ``connect(using:clientName:reattachWindow:)``, it reconnects when the connection drops and takes its
-/// leases back within the host's grace period; calls in flight at the drop fail as
+/// Made with ``connect(using:clientName:reattachWindow:liveView:liveViewFrameInterval:)``, it reconnects when the
+/// connection drops and takes its leases back within the host's grace period; calls in flight at the drop fail as
 /// ``DisplayTargetError/driverFailure(_:)``, and later calls wait for the reconnection. Made with
-/// ``connect(over:clientName:)``, a dropped connection is final: calls throw, `permissions()` reports nothing
-/// granted, and the host releases the leases. Call ``close()`` when done with it.
+/// ``connect(over:clientName:liveView:liveViewFrameInterval:)``, a dropped connection is final: calls throw,
+/// `permissions()` reports nothing granted, and the host releases the leases. Call ``close()`` when done with it.
+///
+/// Given a ``DisplayLiveViewServer``, it serves the live view itself from the frames the host gives out, for a host
+/// whose target declares a live view (`observerAccess: stream`) and gives out frames, as `MacHostDisplayTarget` does
+/// with `servesLiveFrames`. Without one, live-view calls go to the host.
 public actor RemoteDisplayTarget: DisplayTarget {
     public typealias Connector = @Sendable () async throws -> any DisplayHostConnection
 
@@ -30,6 +34,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
     private let connector: Connector?
     private let clientName: String
     private let reattachWindow: Duration
+    private let relay: DisplayLiveViewRelay?
     private var channel: DisplayHostClientChannel
     private var handshake: Handshake
     private var reconnecting: Task<Void, Never>?
@@ -38,7 +43,15 @@ public actor RemoteDisplayTarget: DisplayTarget {
     /// Leases this client holds, with the local holder's liveness.
     private var holders: [UUID: Holder] = [:]
 
-    private init(channel: DisplayHostClientChannel, handshake: Handshake, connector: Connector?, clientName: String, reattachWindow: Duration) {
+    private init(
+        channel: DisplayHostClientChannel,
+        handshake: Handshake,
+        connector: Connector?,
+        clientName: String,
+        reattachWindow: Duration,
+        liveView: DisplayLiveViewServer?,
+        liveViewFrameInterval: Duration
+    ) {
         self.channel = channel
         self.handshake = handshake
         self.manifest = handshake.manifest
@@ -46,28 +59,45 @@ public actor RemoteDisplayTarget: DisplayTarget {
         self.connector = connector
         self.clientName = clientName
         self.reattachWindow = reattachWindow
+        let relays = handshake.manifest.observerAccess == .stream && handshake.capabilities.contains(.liveView)
+        self.relay = relays ? liveView.map { DisplayLiveViewRelay(server: $0, frameInterval: liveViewFrameInterval) } : nil
     }
 
     /// Opens the protocol on `connection` and reads the host's manifest. A dropped connection is final.
+    ///
+    /// - Parameter liveView: Serves the live view here from the host's frames; see the type's documentation.
     public static func connect(
         over connection: any DisplayHostConnection,
-        clientName: String = ProcessInfo.processInfo.processName
+        clientName: String = ProcessInfo.processInfo.processName,
+        liveView: DisplayLiveViewServer? = nil,
+        liveViewFrameInterval: Duration = .milliseconds(500)
     ) async throws -> RemoteDisplayTarget {
         let (channel, handshake) = try await open(connection, clientName: clientName)
-        let target = RemoteDisplayTarget(channel: channel, handshake: handshake, connector: nil, clientName: clientName, reattachWindow: .zero)
+        let target = RemoteDisplayTarget(
+            channel: channel, handshake: handshake, connector: nil, clientName: clientName, reattachWindow: .zero,
+            liveView: liveView, liveViewFrameInterval: liveViewFrameInterval
+        )
         await target.listen(to: channel)
         return target
     }
 
     /// Connects with `connector`, and again whenever the connection drops, for up to `reattachWindow`, taking back
     /// the leases the host kept for this client.
+    ///
+    /// - Parameter liveView: Serves the live view here from the host's frames; see the type's documentation. A
+    ///   viewer stays connected while the lease is taken back.
     public static func connect(
         using connector: @escaping Connector,
         clientName: String = ProcessInfo.processInfo.processName,
-        reattachWindow: Duration = .seconds(5)
+        reattachWindow: Duration = .seconds(5),
+        liveView: DisplayLiveViewServer? = nil,
+        liveViewFrameInterval: Duration = .milliseconds(500)
     ) async throws -> RemoteDisplayTarget {
         let (channel, handshake) = try await open(try await connector(), clientName: clientName)
-        let target = RemoteDisplayTarget(channel: channel, handshake: handshake, connector: connector, clientName: clientName, reattachWindow: reattachWindow)
+        let target = RemoteDisplayTarget(
+            channel: channel, handshake: handshake, connector: connector, clientName: clientName, reattachWindow: reattachWindow,
+            liveView: liveView, liveViewFrameInterval: liveViewFrameInterval
+        )
         await target.listen(to: channel)
         return target
     }
@@ -118,6 +148,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
         closed = true
         reconnecting?.cancel()
         for holder in holders.values {
+            await relay?.close(holder.lease.id)
             _ = try? await channel.call(.release(leaseID: holder.lease.id, reason: .holderLost))
             hub.finish(holder.lease.id)
         }
@@ -137,8 +168,13 @@ public actor RemoteDisplayTarget: DisplayTarget {
         }
     }
 
-    private func ended(_ old: DisplayHostClientChannel) {
-        guard !closed, old === channel, reconnecting == nil, let connector else { return }
+    private func ended(_ old: DisplayHostClientChannel) async {
+        guard !closed, old === channel, reconnecting == nil else { return }
+        guard let connector else {
+            // The drop is final, so nothing will come to watch.
+            for leaseID in holders.keys { await relay?.close(leaseID) }
+            return
+        }
         let window = reattachWindow
         reconnecting = Task { [weak self] in
             let deadline = ContinuousClock.now.advanced(by: window)
@@ -167,11 +203,11 @@ public actor RemoteDisplayTarget: DisplayTarget {
                 answer = try? await channel.call(.reattach(leaseID: leaseID, token: token))
             }
             if case .leaseEnded(let reason)? = answer {
-                lose(leaseID, reason: reason)
+                await lose(leaseID, reason: reason)
                 continue
             }
             guard case .reattached(_, let next, let snapshot)? = answer else {
-                lose(leaseID, reason: .holderLost)
+                await lose(leaseID, reason: .holderLost)
                 continue
             }
             holders[leaseID]?.reattachToken = next
@@ -181,17 +217,17 @@ public actor RemoteDisplayTarget: DisplayTarget {
         reconnecting = nil
     }
 
-    private func giveUp() {
-        for leaseID in holders.keys { lose(leaseID, reason: .holderLost) }
+    private func giveUp() async {
+        for leaseID in holders.keys { await lose(leaseID, reason: .holderLost) }
         reconnecting = nil
     }
 
-    /// The host released the lease while this client was away.
     /// The lease is gone: the session hears how it ended before its events stop.
-    private func lose(_ leaseID: UUID, reason: ReleaseReason) {
+    private func lose(_ leaseID: UUID, reason: ReleaseReason) async {
         holders.removeValue(forKey: leaseID)
         hub.post(.leaseEnded(reason), to: leaseID)
         hub.finish(leaseID)
+        await relay?.close(leaseID)
     }
 
     // MARK: - Target
@@ -209,6 +245,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         holders.removeValue(forKey: lease.id)
         hub.finish(lease.id)
+        await relay?.close(lease.id)
         _ = try? await call(.release(leaseID: lease.id, reason: reason))
     }
 
@@ -240,18 +277,21 @@ public actor RemoteDisplayTarget: DisplayTarget {
     }
 
     public func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
+        if let relay { return try await relay.link(for: lease.id, role: role) }
         guard handshake.capabilities.contains(.liveView) else { return nil }
         guard case .liveView(let view) = try await call(.liveView(leaseID: lease.id, role: role)) else { throw unexpected("live view") }
         return view
     }
 
     public func liveViewers(_ lease: Lease) async throws -> Int {
+        if let relay { return await relay.viewerCount(lease.id) }
         guard handshake.capabilities.contains(.liveView) else { return 0 }
         guard case .liveViewers(let count) = try await call(.liveViewers(leaseID: lease.id)) else { throw unexpected("viewer count") }
         return count
     }
 
     public func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
+        if let relay { return await relay.connections(lease.id) }
         guard handshake.capabilities.contains(.liveView) else { return [] }
         guard case .liveConnections(let connections) = try await call(.liveConnections(leaseID: lease.id)) else {
             throw unexpected("live connections")
@@ -260,6 +300,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
     }
 
     public func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
+        if let relay { return await relay.revoke(id, for: lease.id) }
         guard handshake.capabilities.contains(.liveView) else { return false }
         guard case .revoked(let revoked) = try await call(.revokeLiveView(leaseID: lease.id, id: id)) else { throw unexpected("revoked") }
         return revoked
@@ -278,12 +319,14 @@ public actor RemoteDisplayTarget: DisplayTarget {
     }
 
     public func endObservers(_ lease: Lease) async throws {
+        if let relay { return await relay.endObservers(lease.id) }
         guard handshake.capabilities.contains(.liveView) else { return }
         guard case .done = try await call(.endObservers(leaseID: lease.id)) else { throw unexpected("done") }
     }
 
     public func takeover(_ lease: Lease, on: Bool) async throws {
         guard case .done = try await call(.takeover(leaseID: lease.id, on: on)) else { throw unexpected("done") }
+        await relay?.setControl(on, for: lease.id)
     }
 
     public func downloads(_ lease: Lease) async -> [DisplayDownload] {
@@ -303,6 +346,11 @@ public actor RemoteDisplayTarget: DisplayTarget {
             throw unexpected("lease")
         }
         holders[lease.id] = Holder(lease: lease, isAlive: request.isHolderAlive, reattachToken: token)
+        await relay?.open(lease.id, label: manifest.label, isShared: manifest.humanPresence == .shared, source: DisplayLiveViewRelay.Source(
+            frame: { [weak self] in try? await self?.liveFrame(lease) },
+            input: { [weak self] input in try? await self?.liveInput(lease, input) },
+            typed: { [hub, leaseID = lease.id] value in hub.post(.typedDuringTakeover(value), to: leaseID) }
+        ))
         return lease
     }
 

@@ -128,6 +128,7 @@ public actor X11DisplayTarget: DisplayTarget {
         if let liveViewServer {
             liveFeed = await liveViewServer.open(DisplayLiveViewFeed(
                 label: configuration.label,
+                isShared: manifest.humanPresence == .shared,
                 viewersChanged: { [weak self] count in await self?.viewersChanged(count) },
                 input: { [weak self] input in await self?.liveInput(input) },
                 typed: { [eventHub, leaseID = lease.id] value in eventHub.post(.typedDuringTakeover(value), to: leaseID) }
