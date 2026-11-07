@@ -54,6 +54,8 @@ approvalRequest = MessagePresentation {
 }
 ```
 
+When the justification is visual, as for a computer-use click, the card adds an `image` block (a crop of the target region) whose `alt` restates the action in words ("Click 'Pay now' in Safari, checkout.example.com"). Core degrades the block to that text on surfaces without images, so the card stays decidable everywhere.
+
 Because this is the *same* `MessagePresentation` an ordinary agent message uses, it flows through the *same* outbound path: the surface's `renderPresentation` maps it to a native card (Block Kit, an inline keyboard, an Adaptive Card, a terminal overlay with selectable buttons), and **core's text fallback** renders it conservatively when the surface can't — title as a line, the command inline, the choices listed as "`/approve` to allow, `/deny` to reject." No producer ever branches on surface type; no surface needs an approval-specific rendering path distinct from its message-rendering path.
 
 This is why approval delivery can be portable while approval classification stays per-tool: the *classification* carries tool-specific richness, but it's expressed in a *surface-agnostic* presentation that every renderer already knows how to degrade.

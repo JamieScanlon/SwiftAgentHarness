@@ -217,7 +217,7 @@ Well-known roles. A harness need not bind all of them. An unbound role falls bac
 | `vision-describe` | generate (image in) | describe images for models without vision | any vision `generate` |
 | `transcriber` / `speaker` / `voice-session` | transcribe / render(audio) / session | Interface voice slots | none |
 | `image` / `video` | render | Tool System media tools | none, so the tools are unregistered |
-| `computer-use` | generate + `computer-use` feature | computer-use specialist sub-agent | `main` if it has the feature |
+| `computer-use` | generate with tool calling and image input (or text-only with a bound `vision-describe`, limited to ref-based actions); the `computer-use` feature, when present, selects the native-toolset dialect, otherwise harness function tools | computer-use specialist sub-agent | `main` if it meets the contract |
 | `grounder` | generate (image in → coordinates) | computer-use perception fallback | none |
 
 This table is the missing **"cheap-and-fast slot"** that sibling pages already refer to ([tool-use-summaries](../tool-system/tool-use-summaries.md), [personality](../../surfaces/interface/personality.md), [compaction](../context-engine/compaction.md)): it is `background-small`. The "auxiliary-client fallback chain" in [providers](../../backends/providers/README.md#aux-model-patterns-are-a-pool-concern-not-a-provider-concern) is a role's `fallback` list.

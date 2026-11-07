@@ -68,6 +68,9 @@ type ModeProfile = {
     allow?: string[] | "*"
     maxDepth?: number
     childModeOnSpawn?: string           // mode id new sub-agents default to
+    computerUse?: {
+      confirmInteract?: boolean         // confirm every Interact action in computer-use sessions started under this mode
+    }
   }
 
   // Optional transition hooks (run on enter/exit)
@@ -303,6 +306,8 @@ Sub-agent runs are nested conversations (per [README.md § Sub-agent runs as nes
 - **Thinking is suppressed for sub-agents by default.** The spawned mode profile's `model.thinkingConfig` defaults to `"disabled"` unless the profile explicitly sets otherwise. A parent with `thinkingConfig: { level: "high" }` must not silently propagate that budget into every sub-agent it spawns — the token cost compounds rapidly across parallel delegates. Sub-agent profiles that genuinely need thinking (e.g., a deep-research sub-agent) should declare it explicitly in their profile.
 
 The spawn call decides; the parent mode's `subAgents.childModeOnSpawn` is the configurable default; the harness's hard default is `agent`.
+
+**Policy restrictions are the exception: they accumulate.** Capability (tools, skills, model, termination) is assigned fresh to each child, but a restriction a mode places on what delegates may do applies down the whole delegation chain. `subAgents.computerUse.confirmInteract` is such a restriction, and so is a `tools.deny` entry. An ancestor's `deny` reaches every delegate below it, while an ancestor's allow-list doesn't: an allow-list is capability, assigned afresh to each child. To deny a tool down the chain, such as the computer-use delegate, a mode needs a `deny` entry. A computer-use session obeys the strictest setting among the delegating conversation and all its ancestors. Like `deny`, it only accumulates through profile `extends`: a profile that extends one with `confirmInteract: true` cannot turn it off. A change that tightens it reaches a running session at its next action; a change that loosens it waits for the next session. See [computer-use § Permission classification](../../backends/computer-use/README.md#permission-classification-per-action).
 
 ### Branching behavior
 

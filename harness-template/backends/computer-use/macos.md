@@ -14,7 +14,7 @@ The prescriptive shape:
 4. **Background-first delivery.** The ladder is AX action → events posted to the target pid → foreground global events with explicit consent and restore. Every result reports evidence. Possibly-delivered actions are never retried.
 5. **One coordinate space.** CoreGraphics global, top-left origin, in **points**. Convert Cocoa's bottom-left rects once at the boundary, and map model pixels through recorded screenshot geometry.
 6. **A permission broker with honest onboarding.** Preflight each permission separately. Expect a restart after granting Screen Recording and the system's periodic re-confirmation prompt. On macOS 27, managed fleets can no longer silently pre-grant Accessibility.
-7. **Isolation by VM when the task doesn't need the user's apps.** Virtualization.framework runs at most two macOS guests per Mac. Run the same host app *inside* the guest and keep VNC for human observers.
+7. **Isolation by VM when the task doesn't need the user's apps.** Virtualization.framework runs at most two macOS guests per Mac. Run the same host app *inside* the guest. Serve human observers a view-only stream, or VNC behind a proxy that drops observer input (README § Display targets).
 
 ---
 
@@ -61,6 +61,21 @@ The prescriptive shape:
 - **The harness library stays framework-free.** It defines the [`DisplayTarget`](./README.md#runtime-contract) protocol and receives an implementation through a host-supplied tool-provider factory. The library builds and tests on any platform. Only the host target links ScreenCaptureKit, ApplicationServices, and AppKit.
 - **Keep one owner per capture stack.** Don't let several processes run ScreenCaptureKit captures for the agent at once. The host is the single owner, and clients connect to it.
 - **Keep a dev escape hatch.** An in-process dev mode that runs the drivers inside the harness and borrows the terminal's grants is useful for development. Make the host the default and label the escape hatch clearly in onboarding.
+- **A signed GUI app that embeds the harness is its own responsible process.** The separate host is needed when the harness is a CLI, a server, or anything launched from another app's process tree. A notarized GUI app that embeds the harness and owns its own grants can run the drivers in-process, as long as it keeps the same rules: drivers off the cooperative pool, its own windows excluded from capture, and the HUD and stop key provided.
+
+#### The host protocol
+
+`CUHostProtocol` is the contract between the harness and the host, so it needs the discipline of a wire protocol:
+- **Format.** Length-prefixed `Codable` messages (JSON, or a binary encoding of the same schema) with a request id, a message kind, and a payload. Images travel as references to shared files or memory the host wrote, not inline in every message.
+- **Versioning.** On connect, each side sends its protocol version (major.minor) and capability list. A major mismatch refuses the connection with a typed error. A minor mismatch proceeds using the intersection of capabilities. Adding fields is minor; changing or removing them is major.
+- **Liveness.** The lease is bound to the connection, not to a closure in the client. When the connection drops, the host keeps the lease for a short grace period (a few seconds) for reconnect, then releases it with `holder-lost`, running the full cleanup path.
+- **Proving holdership on reattach.** Passing the code-signature check only proves the client is *a* harness, not *the* holder. The lease response carries an opaque, single-use **reattach token** (at least 128 random bits). A reattach request must present it alongside the lease id. The host compares it in constant time, and on success issues a new token and invalidates the old one. A wrong or reused token is refused without revealing whether the lease exists.
+- **No queue for a detached lease.** Events for a lease whose connection is gone are dropped, not queued. The host acts on them itself (a stop press runs cleanup locally), and on reattach sends a snapshot of the lease's current state instead of a backlog.
+- **A lease that ended while detached is reported once, to the token holder.** Without this, the harness can't tell a user's stop from a crash. A stop is the user's intent and must reach the parent as "stopped by the user", not as `holder-lost`.
+  - When the host ends a detached lease, it keeps a record holding only the ending reason, for the grace period plus a small margin.
+  - A reattach presenting that lease's valid token gets the reason exactly once, and the record is then deleted. The client applies it as the ending the session missed.
+  - A wrong token, a reused token, or a reattach after the record has expired is refused exactly like an unknown lease, and the client then treats the session as `holder-lost`.
+- **Host-to-client events.** The protocol is bidirectional. The host pushes events the client didn't ask for: the user pressed the stop key, a permission changed, takeover started or ended, the user started typing on the shared desktop. The stop key is detected in the host, so without this channel it can't reach the harness.
 
 ### Permissions: map, broker, onboarding
 
@@ -129,6 +144,9 @@ Rules:
 | 3. Foreground | activate the app, `CGEvent.post(tap: .cghidEventTap)`, restore the previous app and cursor | **yes** | partly | nothing, but it interrupts the user |
 
 - **Background-first is the default.** Escalating to rung 3 is a policy event. It requires `delivery: "foreground-allowed"` on the lease, and on a host target with `humanPresence: shared` it is announced in the HUD. After foreground actions, restore the previous app, focus and cursor, but never override something the user changed in the meantime. User input always wins over restoration.
+- **What triggers foreground delivery.** Background failures are often silent, so the trigger can't be "background failed". It is one of:
+  - **Known-hostile app classes, up front.** If the lease allows foreground, apps the table above lists as failing on rung 2 (canvas and game apps, Chromium web content for right-clicks) get foreground delivery from their first action.
+  - **Evidence, for the next action.** A background-delivered action that came back `suspected-noop` (no tree change and no visual change, for example an idle stream frame) switches *subsequent* actions in that app to foreground, and the outcome carries `escalation: "foreground"`. The action that came back `suspected-noop` is never re-delivered automatically, since it may have landed. The model observes and decides whether to repeat it.
 - **Event mechanics:**
   - Use an event source with private state (`CGEventSource(stateID: .privateState)`) so synthetic modifiers don't leak into, or get polluted by, the user's physical keyboard.
   - Double and triple clicks set `mouseEventClickState` to 1, 2, 3 on each down/up pair.
@@ -153,17 +171,17 @@ Rules:
 
 ### Safety specifics on the host desktop
 
-- **Kill switch.** The primary guarantee is at the action layer (README § Safety): the host never synthesizes the stop key while a session is active. Detect the user's key press with a *listen-only* event tap, which needs only Input Monitoring and is the lower-risk option. A *modifying* tap could also swallow synthetic stop-key events from other sources. However, revoking Accessibility while an active tap is installed has been reported to hang system input. Treat a modifying tap as optional hardening: test the revoke path and remove the tap on any permission change.
-- **Hide or exclude non-granted apps** during the agent's turn and restore them at turn end, on abort, and on host crash. Use a watchdog in the host and a timeout on unhide.
+- **Kill switch.** Use a dedicated chord (for example ⌃⌥⌘. or a configurable equivalent), not Escape, which the agent needs for dismissing dialogs. The primary guarantee is at the action layer (README § Safety): the host never synthesizes the stop key while a session is active. Detect the user's key press with a *listen-only* event tap, which needs only Input Monitoring and is the lower-risk option. A *modifying* tap could also swallow synthetic stop-key events from other sources. However, revoking Accessibility while an active tap is installed has been reported to hang system input. Treat a modifying tap as optional hardening: test the revoke path and remove the tap on any permission change.
+- **Exclude non-granted apps from capture; hit-test foreground input.** Filtering capture to granted apps (the `excludingApplications` filter above, or per-window capture of granted windows) meets the README's exclusion rule without hiding the user's windows. Before a foreground pointer event, find the window under the point (`CGWindowListCopyWindowInfo` ordered front to back, or `AXUIElementCopyElementAtPosition` and its owning pid) and refuse the action if it belongs to a non-granted app. If you do hide windows instead, restore them at turn end, on abort, and on host crash, with a watchdog in the host and a timeout on unhide.
 - **Single controller.** The host enforces the lease. A second harness asking for the same display gets `target-busy`.
-- **Sensitive app categories.** Default tiers: browsers *view* unless the domain is granted, terminals and IDEs *click*, System Settings, Finder, password managers, and trading/banking apps *blocked or sentinel-warned*. Detect categories by bundle id and app category, never by window title, which is attacker-controllable screen content.
+- **Sensitive app categories.** Default tiers: browsers *click* for the browser chrome (launching, opening URLs, switching tabs), with page actions following domain grants; terminals and IDEs *click*; System Settings, Finder, password managers, and trading/banking apps *blocked or sentinel-warned*. A browser granted as an app exposes every open page to observation, so the grant dialog says so (README § Sessions). Detect categories by bundle id and app category, never by window title, which is attacker-controllable screen content.
 - **Sanitize app names before they reach the model.** Installed-app lists injected into tool descriptions are a prompt-injection channel. Treat app names as untrusted strings: restrict their character set, bound their length and the number listed, and prefer apps from system-managed install locations.
 
 ### Isolation: macOS VMs and their limits
 
 - **Virtualization.framework** runs macOS guests on Apple silicon. The license and the framework both cap a host at **two concurrent macOS guests**. Linux guests are uncapped. Signing in with an Apple Account inside a guest needs a 15+ host and a 15+ guest.
 - **Tooling:** Tart (OCI-distributed images, CI integrations; its maintainers joined OpenAI in April 2026 and dropped license fees), Lume (CLI, local HTTP API, and MCP control from the Cua project), Anka and Orka for fleets, and UTM for manual setups.
-- **Drive from inside.** Install the same host app in the golden image, grant permissions once interactively (on 27, MDM can't pre-grant Accessibility), snapshot, and connect over a forwarded port or vsock. Driving from outside over VNC gives pixels only and no AX. Keep VNC for the human live view.
+- **Drive from inside.** Install the same host app in the golden image, grant permissions once interactively (on 27, MDM can't pre-grant Accessibility), snapshot, and connect over a forwarded port or vsock. Driving from outside over VNC gives pixels only and no AX. The guest's built-in VNC server accepts input from anyone connected, so serve observers through a proxy that drops input, or through a view-only stream from the in-guest host. Pass input through only for the user holding takeover.
 - **What doesn't isolate:**
   - A second login session via fast user switching. Capture and TCC are per GUI session. Capture from non-foreground session contexts (launchd, SSH) has been reported to return wallpaper or redacted images while reporting success. There is no documented support for agents in background sessions.
   - A virtual display (only via a private API) gives the agent its own screen area but not its own cursor, focus, or menu bar. It helps only in combination with background delivery, and it has persistence side effects.
@@ -184,7 +202,8 @@ ComputerUseKit (SwiftPM, macOS 15+)
 │                  (global post + activate/restore); chords; Unicode chunking; scroll; drag; agent-cursor overlay.
 ├─ CUAppControl    NSWorkspace launch/hide/quit (activates=false), open URL, Apple Events runner with consent probe,
 │                  `shortcuts` wrapper and catalog.
-├─ CUHostProtocol  Codable request/response + capability negotiation; peer code-signature validation.
+├─ CUHostProtocol  Versioned, length-prefixed Codable messages; capability negotiation; host→client events;
+│                  connection-bound lease liveness; peer code-signature validation.
 └─ CUIsolation     (optional) VM adapters (Tart/Lume CLI or Virtualization.framework), in-guest connector, VNC observer.
 
 ComputerUseHost.app   LSUIElement; links all of the above; serves CUHostProtocol; owns grants;
