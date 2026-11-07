@@ -139,6 +139,7 @@ extension SubAgentSpawnService {
             ),
             model: profile
         )
+        sessionConfiguration.classifier.reviewer = configuration.registry.reviewer
         sessionConfiguration.conversationID = childID
         sessionConfiguration.showsScreenshots = seesImages
         sessionConfiguration.describer = perception.describer

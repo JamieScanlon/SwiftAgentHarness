@@ -441,6 +441,8 @@ The flags are `clipboard-read`, `clipboard-write` (needed for `paste` typing) an
 
 `ComputerUseGrantReviewer.clamp` keeps an approver from raising a tier above its cap or adding grants and flags that weren't requested. Category rules are applied again at action time, because the category is known only once the target reports it.
 
+Set the policy and its overrides once, on the reviewer you pass to `DisplayTargetRegistry(targets:reviewer:)`. That reviewer shapes the grant dialog and clamps the answer, and every specialist session leased through the registry classifies its actions with it. An app the overrides unblock or uncap is then acted on within its grant, and `skipInteractConfirmationWithoutIntentCheck` applies to each interact action.
+
 ## How each action is gated
 
 `ComputerUseActionClassifier` works only from data the harness derives itself: the action, the cited element (role, label, app, URL), and the grant.

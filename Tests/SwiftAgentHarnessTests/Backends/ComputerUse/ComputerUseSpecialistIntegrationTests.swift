@@ -140,7 +140,8 @@ struct ComputerUseSpecialistIntegrationTests {
         approvals: (any ExecApprovalDelivering)? = nil,
         parentModeProfiles: ModeProfileConfiguration? = nil,
         parentModeProfileID: String? = nil,
-        finishes: Bool = true
+        finishes: Bool = true,
+        reviewer: ComputerUseGrantReviewer = ComputerUseGrantReviewer()
     ) async throws -> (HarnessRuntimeSession, ModelConversation) {
         let container = try HarnessTestModelContainer.makeInMemory()
         let entry = ModelRegistryEntry(
@@ -171,7 +172,7 @@ struct ComputerUseSpecialistIntegrationTests {
             modeRegistry: parentModeProfiles.map { ModeRegistryTestSupport.makePort(modeProfileConfiguration: $0) }
         )
         let configuration = ComputerUseConfiguration(
-            registry: try DisplayTargetRegistry(targets: [target]),
+            registry: try DisplayTargetRegistry(targets: [target], reviewer: reviewer),
             defaults: ComputerUseSpecialistDefaults(
                 target: target.manifest.id,
                 budgets: ComputerUseBudgetPolicy(defaultSteps: 40, ceilingSteps: 200, maxDuration: .seconds(1_800))
@@ -435,6 +436,58 @@ struct ComputerUseSpecialistIntegrationTests {
         )
         _ = try await invoke(session, parent: parent)
         #expect(await approvals.requests.isEmpty)
+    }
+
+    @Test("The registry's reviewer gates each action: its override lets an in-grant click on a shared screen through without a card")
+    func registryReviewerSkipsInteractCard() async throws {
+        let skipping = ComputerUseGrantReviewer(overrides: ComputerUseOperatorOverrides(skipInteractConfirmationWithoutIntentCheck: true))
+        for (reviewer, cards) in [(ComputerUseGrantReviewer(), 1), (skipping, 0)] {
+            let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, now: { Date() })
+            let approvals = RecordingComputerUseApprovals(.approved)
+            let (session, parent) = try await makeSession(
+                model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: ChildRecorder(),
+                approvals: approvals, reviewer: reviewer
+            )
+            _ = try await invoke(session, parent: parent)
+            #expect(await approvals.requests.count == cards)
+            #expect(await target.actCalls.count == 1)
+        }
+    }
+
+    @Test("With the registry's override set, a consequential action on a shared screen still asks once")
+    func registryReviewerStillConfirmsConsequential() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, now: { Date() })
+        let approvals = RecordingComputerUseApprovals(.approved)
+        let script: Script = [
+            Self.observe,
+            (ComputerUseToolProvider.clickToolName, ["observation": .string("o_1"), "ref": .string("e8")]),
+        ]
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: script, reply: "Deleted.", recorder: ChildRecorder(), approvals: approvals,
+            reviewer: ComputerUseGrantReviewer(overrides: ComputerUseOperatorOverrides(skipInteractConfirmationWithoutIntentCheck: true))
+        )
+        _ = try await invoke(session, parent: parent)
+        #expect(await approvals.requests.count == 1)
+        #expect(await target.actCalls.count == 1)
+    }
+
+    @Test("An app the registry's reviewer unblocks is acted on within its grant, not refused as blocked")
+    func registryReviewerUnblocksApp() async throws {
+        let manager = AppIdentity(bundleID: "com.1password.1password")
+        let call = delegateCall(["apps": .string("\(manager.bundleID):full")])
+        let unblocking = ComputerUseGrantReviewer(overrides: ComputerUseOperatorOverrides(allowBlockedBundleIDs: [manager.bundleID]))
+        #expect(ComputerUseGrantReviewer().ruling(for: manager).blockedReason != nil, "blocked by default")
+
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setObserved(app: manager)
+        let recorder = ChildRecorder()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: recorder,
+            reviewer: unblocking
+        )
+        _ = try await invoke(session, parent: parent, call: call)
+        #expect(await target.actCalls.count == 1)
+        #expect(await !recorder.toolResults.contains { $0.content.contains("blocked") })
     }
 
     @Test("A report that doesn't match the return schema gets one resubmission, then is left out with the reason")
