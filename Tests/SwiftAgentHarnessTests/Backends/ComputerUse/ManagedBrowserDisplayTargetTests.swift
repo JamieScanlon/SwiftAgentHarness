@@ -552,6 +552,17 @@ struct ManagedBrowserDisplayTargetTests {
         #expect(UserBrowserEndpoint.chrome == .devToolsActivePort(directory: UserBrowserEndpoint.chromeUserDataDirectory))
     }
 
+    @Test("Chrome's profile directory is under the user's home")
+    func chromeProfileDirectory() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let directory = UserBrowserEndpoint.chromeUserDataDirectory.standardizedFileURL.path
+        #if os(macOS)
+        #expect(directory == home + "/Library/Application Support/Google/Chrome")
+        #else
+        #expect(directory == home + "/.config/google-chrome")
+        #endif
+    }
+
     @Test("Apps and menus don't exist in a managed browser")
     func unsupported() async throws {
         let fixture = try await Self.fixture()

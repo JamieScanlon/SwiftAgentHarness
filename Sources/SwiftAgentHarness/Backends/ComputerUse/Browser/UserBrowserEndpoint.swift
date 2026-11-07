@@ -13,7 +13,7 @@ public enum UserBrowserEndpoint: Sendable, Hashable {
     public static let chrome = UserBrowserEndpoint.devToolsActivePort(directory: chromeUserDataDirectory)
 
     public static var chromeUserDataDirectory: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = FileManager.default.sahHomeDirectory
         #if os(macOS)
         return home.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
         #else
