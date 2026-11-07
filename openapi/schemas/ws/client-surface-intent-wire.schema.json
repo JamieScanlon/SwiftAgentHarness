@@ -44,6 +44,10 @@
         "liveView": {
           "type": "boolean",
           "description": "On computerUseActivity: whether the target serves a live view. Mint a link with POST …/computer-use/runs/{lifecycleID}/live-view."
+        },
+        "sharedScreen": {
+          "type": "boolean",
+          "description": "On computerUseActivity: whether the target is someone's own screen, such as their Mac, which the user may be at. A handoff there can be done at the machine as well as through the live view."
         }
       },
       "additionalProperties": false

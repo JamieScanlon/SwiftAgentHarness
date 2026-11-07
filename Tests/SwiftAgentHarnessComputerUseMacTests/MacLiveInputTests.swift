@@ -44,7 +44,7 @@ struct MacLiveInputTests {
             excludedBundleIDs: [], permissionProbe: FakePermissionProbe(granted: [.screenCapture, .accessibility, .postEvents]), eventPoster: poster
         )
         #expect(MacHostDisplayTarget(configuration: configuration).manifest.observerAccess == .none)
-        configuration.servesLiveFrames = true
+        configuration.liveFrames = .wholeDisplay
         let target = MacHostDisplayTarget(configuration: configuration)
         #expect(target.manifest.observerAccess == .stream)
         let lease = try await target.lease(LeaseRequest(

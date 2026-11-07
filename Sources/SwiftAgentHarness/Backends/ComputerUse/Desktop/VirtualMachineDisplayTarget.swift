@@ -397,7 +397,7 @@ extension VirtualMachineDisplayTarget {
     /// ``DisplayHostTCP``) has the guest's screen-capture and accessibility permissions. Nobody uses the guest, so
     /// it is unshared, whatever the guest's driver declares.
     /// - Parameter liveView: Serves the guest's screen, from frames its display host sends, to the user and
-    ///   observers. The guest's display host must give frames out (`MacHostDisplayTarget`'s `servesLiveFrames`).
+    ///   observers. The guest's display host must give frames out (`MacHostDisplayTarget` with `liveFrames: .wholeDisplay`).
     public static func macOS(
         controller: any VirtualMachineController,
         configuration: MacGuestConfiguration,

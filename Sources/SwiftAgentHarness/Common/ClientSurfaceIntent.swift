@@ -103,6 +103,9 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
     public var terminalReason: String?
     /// On activity: whether the target serves a live view, so the surface can offer to mint a link.
     public var liveView: Bool?
+    /// On activity: whether the target is someone's own screen (`humanPresence: shared`), such as their Mac. The user
+    /// may be at it, so a handoff there can be done at the machine as well as through a live view.
+    public var sharedScreen: Bool?
     /// On a request from a specialist delegated by another delegate: its path in the delegation tree.
     public var delegatePath: String?
 
@@ -121,6 +124,7 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         action: String? = nil,
         terminalReason: String? = nil,
         liveView: Bool? = nil,
+        sharedScreen: Bool? = nil,
         delegatePath: String? = nil
     ) {
         self.requestID = requestID
@@ -137,6 +141,7 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         self.action = action
         self.terminalReason = terminalReason
         self.liveView = liveView
+        self.sharedScreen = sharedScreen
         self.delegatePath = delegatePath
     }
 }

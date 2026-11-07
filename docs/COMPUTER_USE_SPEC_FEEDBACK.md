@@ -1,78 +1,70 @@
 # Computer use: open feedback for the spec team
 
-Questions raised by a downstream change request: a live view of the user's own Mac, limited to granted apps, so a user who started a run from their phone can watch it and complete handoffs. Each item gives the problem, what the implementation does today, and a suggested change. Spec references are relative to `harness-template/`.
+## A live view of the user's own Mac: decided, spec text pending
 
-The part of the request that needs no spec change is built: `RemoteDisplayTarget` can have the harness serve a display host's live view from the host's frames, and a shared target's live view takes no observers by default. What remains is a live-view mode for `MacHostDisplayTarget` on the user's own Mac, which waits on the decisions below.
+A downstream change request asked for a live view of the user's own Mac, limited to granted apps, so a user who started a run from their phone can watch it and complete handoffs. The spec treated the host desktop as having no live view. The questions below were decided, and the implementation follows the decisions. The spec text still says otherwise in the places each item names. Spec references are relative to `harness-template/`.
 
-## 1. May a shared host desktop have a live view?
+### 1. A shared host desktop may have a live view, in one mode
 
-**Problem.** The spec treats a live view as something isolated targets have and the host desktop doesn't:
+**Decided.** A shared host target may serve a live view that shows granted apps only and takes input only for granted apps during the user's takeover (items 4 and 5). The grant dialog says so: "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover."
+
+**Spec text to change.**
 - `backends/computer-use/README.md` § Runtime contract, `humanPresence`: "People may watch through a live view or act during takeover" appears only under `exclusive`.
-- § Safety is layered, not a single gate, item 5, names "the host desktop, which is the user's own screen" as the example of a target without a live view.
+- § Safety is layered, not a single gate, item 5: "the host desktop, which is the user's own screen" is the example of a target without a live view.
 - The same section, item 7: "On isolated targets the user acts through the live view."
 - `backends/computer-use/macos.md` describes live views only for VM guests (TL;DR item 7, § Isolation: macOS VMs and their limits).
 
-None of these forbids a host-desktop view, but none allows one either.
+**Implementation.** `MacHostDisplayTarget.Configuration.liveFrames: .grantedApps`. The VM guest's whole-display frames are `.wholeDisplay`. `ComputerUseGrantRequest.liveViewNotice` carries the dialog text.
 
-**Implementation.** `MacHostDisplayTarget` gives out live frames only with `servesLiveFrames`, which is meant for VM guests. Those frames show the whole main display, every app except the excluded ones. Its viewer input goes to the foreground with no grant check. For the user's own Mac it stays off, so the host desktop has no live view.
+### 2. Presence stays as it is; the live view is how a remote user completes a handoff
 
-**Suggested change.** Allow a live view of a shared host target in one mode only: it shows granted apps, and it takes input only for granted apps during the user's takeover. Items 4 and 5 give the terms. The grant dialog should say so, for example: "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover."
+**Decided.** Option (a). Hosts and clients are assumed to be aligned in capability: a host that can serve a screen view is used by a client that can show a live view. Mismatched pairs aren't solved for, and the handoff timeout is acceptable there.
 
-## 2. Does a present user have to be able to see the target?
+**Spec text to change.** § Sessions, leases, grants, and tiers could say that a present user on a shared target completes a handoff at the machine or through its live view, and that a pairing with neither waits out the handoff's timeout.
 
-**Problem.**
-- `userPresent` is "an interactive user is attached and can answer approvals now" (§ Sessions, leases, grants, and tiers).
-- Host targets need an operator initiator and a present user (the same section, on `initiator` and `userPresent`).
-- A user on a phone, connected to the server on their Mac, qualifies on both counts, but can't see the Mac's screen. A handoff on the host desktop, such as a login, 2FA, a CAPTCHA, or a payment, then has nothing to be completed in. It waits out its 15 minutes, and the run comes back `needs-user`.
-- The rationale for `shared` is that "a person may be using this screen right now". A present user who is somewhere else makes that rationale weaker, not stronger.
+**Implementation.** No change to presence.
 
-**Implementation.** Presence is the run's origin: interactive runs count as present wherever the user is. A handoff on the host desktop waits for its full timeout, whether or not the user can reach the screen.
+### 3. Watch mode on a shared target: an open view or the user's confirmation
 
-**Suggested change.** Pick one:
-- **(a) The live view is the answer.** Accept item 1. A remote user completes handoffs through the view, and the presence rule stays as it is.
-- **(b) Presence also says where the user is.** Split "can answer approvals" from "is at the target". A shared target with no live view could then end a handoff at once as `needs-user` when the user isn't at it, rather than wait 15 minutes. It could also refuse the host desktop for such a run.
+**Decided.** On a `shared` target, either an open view or a present user's confirmation on a card keeps a sensitive-domain session going. "Only while a view is open" stays for `exclusive` targets. Surfaces offer the view for a handoff on a shared target, and say the user can act at the machine instead.
 
-(a) is what the change request asks for. (b) is worth having even with (a), for hosts that don't enable the view.
+**Spec text to change.** § Safety is layered, not a single gate, item 5, which splits watch mode only by whether the target has a live view. § Oversight surfaces, for the handoff guidance.
 
-## 3. Watch mode on a shared target that has a live view
+**Implementation.**
+- The session asks for the card on a shared target when nobody is watching its view.
+- Activity intents and the session listing carry `sharedScreen`.
+- The terminal's handoff dialog says to use the target at the machine or through the link.
 
-**Problem.** § Safety is layered, not a single gate, item 5, splits watch mode by whether the target has a live view. On targets with one, the session continues only while a view is open. On targets without one, a present user confirms on an approval card. If the host desktop gains a view under item 1, the first rule applies. A user sitting at their Mac would then have to open a live view of their own screen to keep a sensitive-domain session going.
+### 4. A viewer's input on a shared target reaches granted apps only
 
-**Implementation.** The session uses the manifest's `observerAccess`: a target that declares a live view waits for a viewer, and one that doesn't asks for a confirmation card.
-
-**Suggested change.** On a `shared` target, accept either: an open view, or a present user's confirmation on a card. Keep "only while a view is open" for `exclusive` targets, where nobody is at the screen.
-
-The same reasoning applies to the oversight surface. The interface shouldn't tell a user at the Mac to "use the live view" for a handoff on a shared target. It should offer the view and say they can act at the machine instead.
-
-## 4. What may a viewer's input reach on a shared target?
-
-**Problem.** § Display targets as an execution-environment family and § Oversight surfaces say a live view takes input only from the user who started a takeover. They don't say where that input may go. On an isolated target everything on the screen belongs to the session. On the host desktop, a user link during takeover is remote control of the whole Mac, so a link that leaks reaches everything.
-
-**Implementation.** For VM guests, viewer input goes to the foreground with no further check, which is right for a disposable guest.
-
-**Suggested change.** On a shared target, viewer input during takeover reaches granted apps only:
-- **Pointer events.** The window on top at the point must belong to a granted app. The agent's own hit test lets the harness's windows through, because a foreground delivery brings the app to the front first. Viewer input brings nothing forward, so here the harness's own windows and the "agent active" HUD count as not granted, or the working app is brought to the front when takeover starts.
-- **Drags.** Checked at every move while a button is held, and at the release, so a drag can't drop into an ungranted app.
+**Decided.** During takeover, a viewer's input on a shared target reaches granted apps only:
+- **Pointer events.** The window on top at the point must belong to a granted app. The harness's own windows and the HUD count as ungranted.
+- **Drags.** Checked at every move. A release outside granted windows lands where the drag last was.
 - **Keys and text.** Delivered only while a granted app is frontmost.
-- **Global shortcuts** (⌘Tab, ⌘Space, ⌃⌘Q, Force Quit, …): only with `system-keys`, the same rule the classifier applies to the agent (`README.md` § Permission classification per action). The system handles them whatever app is frontmost, so the frontmost check doesn't cover them.
-- **The stop key** is never passed through.
+- **Global shortcuts.** Only with the frontmost app's `system-keys` flag.
+- **The stop key.** Never passed.
 
-**A question in return.** Does a granted app's tier limit the user? The suggestion is no: tiers limit the agent, and takeover is the user acting. A `view`-tier app would then still take the user's typing.
+A granted app's tier doesn't limit the user: tiers limit the agent, and takeover is the user acting.
 
-## 5. What does a shared target's live view show?
+**Spec text to change.** § Display targets as an execution-environment family and § Oversight surfaces, which say who may send input but not where it may go.
 
-**Problem.** The spec says nothing about what a live view's frames contain. For the host desktop, the agent's captures show granted apps only (`macos.md` § Perception: ScreenCaptureKit, "Exclude yourself"). A whole-display view would show the user's own observers what the agent itself is never shown.
+**Implementation.** `MacHostDisplayTarget.liveInput` with `.grantedApps`. The stop key is refused in every mode.
 
-**Implementation.** Live frames from `MacHostDisplayTarget` show the whole main display, minus excluded apps, with the pointer.
+### 5. A shared target's frames show what the agent sees, with covered parts blanked
 
-**Suggested change.** Frames use the agent's capture filter: granted apps, minus the excluded ones, never the harness's own UI. The pointer can be shown. Frames keep coming during takeover, unlike the agent's capture.
+**Decided.**
+- Frames use the agent's capture filter: granted apps, minus the excluded ones, never the harness's own UI. The pointer is shown.
+- Frames keep coming during takeover.
+- Where an ungranted window, or the harness's own, covers a granted one, that part is blanked, so the view shows where input won't land.
 
-**What the frames must show about ungranted windows.** That filter leaves ungranted windows out entirely. A granted window under an ungranted one is drawn as if it were on top. The viewer clicks it, and the click is refused with no visible reason. Suggest blanking the area where an ungranted window, or the harness's own window, covers a granted one, so the view shows where input won't land.
+**Spec text to change.** § Display targets as an execution-environment family, which doesn't say what a live view's frames contain. `macos.md` § Perception: ScreenCaptureKit, beside "Exclude yourself".
 
-## 6. Observers on a shared target
+**Implementation.** `MacHostDisplayTarget.liveFrame` with `.grantedApps`.
 
-**Problem.** § Display targets as an execution-environment family allows observer links on any target: an observer link "is view-only and may be shared with someone who is only watching". On a shared target that is a view of someone's own screen, even when limited to granted apps.
+### 6. No observers on a shared target unless the operator opts in
 
-**Implementation.** Since `a732b5e`, a shared target's live view takes no observers. A host can allow them with `DisplayLiveViewConfiguration.maxObserversPerSharedFeed`. This is stricter than the spec and compatible with it.
+**Decided.** A shared target's live view takes no observer links unless the operator opts in.
 
-**Suggested change.** Have the spec say this: observers on a `shared` target only if the operator opts in. Otherwise, confirm that the implementation's default is a local choice.
+**Spec text to change.** § Display targets as an execution-environment family, which allows observer links on any target.
+
+**Implementation.** `DisplayLiveViewConfiguration.maxObserversPerSharedFeed`, 0 by default.

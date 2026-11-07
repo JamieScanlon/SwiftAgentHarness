@@ -49,10 +49,12 @@ struct TUIComputerUseTests {
         return (app, recorder)
     }
 
-    private func activity(_ status: ComputerUseSurfaceIntentPayload.Status, step: Int = 3, liveView: Bool? = nil) -> ChatStreamingPartial {
+    private func activity(
+        _ status: ComputerUseSurfaceIntentPayload.Status, step: Int = 3, liveView: Bool? = nil, sharedScreen: Bool? = nil
+    ) -> ChatStreamingPartial {
         .surfaceIntent(.computerUseActivity(ComputerUseSurfaceIntentPayload(
             target: "This Mac", lifecycleID: "call-1", status: status, step: step, maxSteps: 40, app: "com.apple.TextEdit", action: "click",
-            liveView: liveView
+            liveView: liveView, sharedScreen: sharedScreen
         )))
     }
 
@@ -337,6 +339,16 @@ struct TUIComputerUseTests {
         let rendered = await frame(app)
         #expect(rendered.contains("through the live view"))
         #expect(rendered.contains("token-1"), "the link stays visible under the dialog")
+    }
+
+    @Test("A handoff on someone's own screen offers the machine itself or its live view")
+    func handoffOnSharedScreen() async {
+        let (app, _) = await makeApp()
+        await app.ingest(activity(.takenOver, liveView: true, sharedScreen: true))
+        await app.ingest(handoff())
+        let rendered = await frame(app)
+        #expect(rendered.contains("at the machine"))
+        #expect(rendered.contains("token-1"))
     }
 
     @Test("The indicator drops a link once it can no longer connect")

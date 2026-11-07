@@ -117,24 +117,46 @@ actor MacScreenCapture {
         return try await capture(filter: filter, rect: clipped, scale: CGFloat(filter.pointPixelScale), maxLongEdge: nil, sourceRect: local)
     }
 
-    /// The main display as a live-view frame: every app's windows except `excludedBundleIDs`, with the pointer, as
-    /// JPEG.
-    func captureLiveFrame(excludedBundleIDs: Set<String>, maxLongEdge: Int) async throws -> (jpeg: Data, space: MacLiveFrameSpace) {
+    /// The main display as a live-view frame, with the pointer, as JPEG: every app's windows except
+    /// `excludedBundleIDs`, or with `grantedBundleIDs`, only those apps' windows, with `occluders` (display points)
+    /// painted over.
+    func captureLiveFrame(
+        excludedBundleIDs: Set<String>,
+        grantedBundleIDs: Set<String>? = nil,
+        occluders: [CGRect] = [],
+        maxLongEdge: Int
+    ) async throws -> (jpeg: Data, space: MacLiveFrameSpace) {
         let content = try await content()
         guard let display = content.displays.first(where: { CGDisplayIsMain($0.displayID) != 0 }) ?? content.displays.first else {
             throw MacCaptureError.noDisplay
         }
-        let excluded = content.applications.filter { excludedBundleIDs.contains($0.bundleIdentifier) }
-        let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+        let filter: SCContentFilter
+        if let grantedBundleIDs {
+            let included = Set(MacCaptureSizing.capturedBundleIDs(granted: grantedBundleIDs, excluded: excludedBundleIDs))
+            let apps = content.applications.filter { included.contains($0.bundleIdentifier) }
+            guard !apps.isEmpty else {
+                // Nothing granted is on screen, so there is nothing to show.
+                let size = MacCaptureSizing.pixelSize(for: display.frame, nativeScale: 1, maxLongEdge: maxLongEdge)
+                guard let blank = MacLiveView.blank(size: size), let jpeg = Self.jpeg(blank) else { throw MacCaptureError.encodingFailed }
+                return (jpeg, MacLiveFrameSpace(display: display.frame, frame: size))
+            }
+            filter = SCContentFilter(display: display, including: apps, exceptingWindows: [])
+        } else {
+            let excluded = content.applications.filter { excludedBundleIDs.contains($0.bundleIdentifier) }
+            filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+        }
         let size = MacCaptureSizing.pixelSize(for: display.frame, nativeScale: CGFloat(filter.pointPixelScale), maxLongEdge: maxLongEdge)
         let configuration = SCStreamConfiguration()
         configuration.width = size.width
         configuration.height = size.height
         configuration.scalesToFit = true
         configuration.showsCursor = true
-        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-        guard let jpeg = Self.jpeg(image) else { throw MacCaptureError.encodingFailed }
-        return (jpeg, MacLiveFrameSpace(display: display.frame, frame: ImagePixelSize(width: image.width, height: image.height)))
+        let captured = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        let space = MacLiveFrameSpace(display: display.frame, frame: ImagePixelSize(width: captured.width, height: captured.height))
+        guard let image = MacLiveView.painting(captured, occluders: occluders, space: space), let jpeg = Self.jpeg(image) else {
+            throw MacCaptureError.encodingFailed
+        }
+        return (jpeg, space)
     }
 
     /// The window under a frontmost app, for pinning an observation to its window.

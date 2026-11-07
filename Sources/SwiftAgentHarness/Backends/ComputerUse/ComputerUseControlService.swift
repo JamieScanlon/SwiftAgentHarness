@@ -9,6 +9,8 @@ public struct ComputerUseSessionStatus: Sendable, Codable, Equatable {
     public var takenOver: Bool
     /// Whether the target can serve a live view; ask for a link with ``ComputerUseControlService/liveView(conversationID:lifecycleID:)``.
     public var liveView: Bool
+    /// Whether the target is someone's own screen, such as their Mac, which the user may be at.
+    public var sharedScreen: Bool
 }
 
 /// What is waiting on the user, and what is running, for one conversation.
@@ -64,7 +66,8 @@ public struct ComputerUseControlService: Sendable {
                 step: await entry.session.stepCount,
                 maxSteps: await entry.session.budgets.steps,
                 takenOver: await entry.session.isTakeoverActive,
-                liveView: entry.session.manifest.observerAccess != .none
+                liveView: entry.session.manifest.observerAccess != .none,
+                sharedScreen: entry.session.manifest.humanPresence == .shared
             ))
         }
         return ComputerUseControlStatus(pending: pending, sessions: sessions)

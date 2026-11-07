@@ -19,10 +19,12 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// Called when delivery escalates to the foreground and the target activates an app (its bundle id), so
         /// the HUD can announce it.
         public var onForegroundDelivery: (@Sendable (String?) async -> Void)?
-        /// Gives the whole screen out as live-view frames and takes a viewer's input during takeover, for a
-        /// display host whose harness serves the live view, as in a VM guest. Off for the user's own Mac, whose
-        /// screen is theirs.
-        public var servesLiveFrames: Bool
+        /// Whether the target gives out live-view frames and takes a viewer's input during takeover, for a display
+        /// host whose harness serves the live view. Off by default.
+        public var liveFrames: LiveFrames
+        /// Shortcuts the system handles whatever app is in front. A viewer's input sends one only to a frontmost app
+        /// granted with the system-keys flag, in ``LiveFrames/grantedApps``.
+        public var systemShortcuts: Set<KeyCombo>
         /// The long edge of a live-view frame.
         public var liveFrameLongEdge: Int
         /// This process is a signed GUI app that owns its own grants, so in-process drivers aren't the development
@@ -41,13 +43,13 @@ public actor MacHostDisplayTarget: DisplayTarget {
         public init(
             id: DisplayTargetID = MacHostDisplayTarget.defaultID,
             excludedBundleIDs: Set<String> = Self.defaultExcludedBundleIDs,
-            servesLiveFrames: Bool = false,
+            liveFrames: LiveFrames = .off,
             liveFrameLongEdge: Int = 1_600,
             stopKey: KeyCombo? = .defaultStopKey,
             embeddedInSignedApp: Bool = false
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
-            self.servesLiveFrames = servesLiveFrames
+            self.liveFrames = liveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
             self.stopKey = stopKey
             self.embeddedInSignedApp = embeddedInSignedApp
@@ -69,7 +71,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.eventPoster = eventPoster
             self.workspace = workspace
             self.axBudget = axBudget
-            self.servesLiveFrames = false
+            self.liveFrames = .off
+            self.systemShortcuts = ComputerUseActionClassifier.defaultSystemShortcuts
             self.liveFrameLongEdge = 1_600
             self.stopKey = nil
             self.embeddedInSignedApp = false
@@ -78,6 +81,18 @@ public actor MacHostDisplayTarget: DisplayTarget {
         public static var defaultExcludedBundleIDs: Set<String> {
             Set([Bundle.main.bundleIdentifier].compactMap { $0 })
         }
+    }
+
+    /// What a live view of this target shows, and where a viewer's input may go during takeover.
+    public enum LiveFrames: Sendable, Hashable {
+        /// No live view.
+        case off
+        /// The granted apps' windows, as the agent sees them, for the user's own Mac. Where another window covers a
+        /// granted one, that part is blanked. A viewer's input reaches granted apps only.
+        case grantedApps
+        /// The whole main display with every app but the excluded ones, for a VM guest, where nothing on screen is
+        /// anyone else's. A viewer's input goes wherever it points.
+        case wholeDisplay
     }
 
     public nonisolated let manifest: DisplayTargetManifest
@@ -103,6 +118,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var cited: (pid: pid_t, start: Date?)?
     private var liveFrameSpace: MacLiveFrameSpace?
     private var liveHeldButton: MouseButton?
+    /// Where the viewer's pointer last went through, in the frame's space.
+    private(set) var lastLivePoint: CGPoint?
     private var grants = ComputerUseGrantSet([])
     private var foregroundAllowed = false
     /// The app that was frontmost before a foreground action, restored on release unless the user moved on.
@@ -136,7 +153,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             delivery: [.background, .foreground],
             semanticActions: [.press, .setValue, .focus, .menuPath, .launchApp, .openURL],
             multiDisplay: true,
-            observerAccess: configuration.servesLiveFrames ? .stream : .none,
+            observerAccess: configuration.liveFrames == .off ? .none : .stream,
             requires: [.screenCapture, .accessibility, .postEvents],
             humanPresence: .shared
         )
@@ -337,6 +354,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         try await requireLease(lease)
         await input.releaseAll()
         liveHeldButton = nil
+        lastLivePoint = nil
         takeoverActive = on
     }
 
@@ -344,8 +362,21 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     public func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
         try await requireLease(lease)
-        guard configuration.servesLiveFrames else { return nil }
-        let shot = try await capture.captureLiveFrame(excludedBundleIDs: configuration.excludedBundleIDs, maxLongEdge: configuration.liveFrameLongEdge)
+        let shot: (jpeg: Data, space: MacLiveFrameSpace)
+        switch configuration.liveFrames {
+        case .off:
+            return nil
+        case .wholeDisplay:
+            shot = try await capture.captureLiveFrame(excludedBundleIDs: configuration.excludedBundleIDs, maxLongEdge: configuration.liveFrameLongEdge)
+        case .grantedApps:
+            let windows = await workspace.windows()
+            shot = try await capture.captureLiveFrame(
+                excludedBundleIDs: configuration.excludedBundleIDs,
+                grantedBundleIDs: grantedBundleIDs,
+                occluders: MacLiveView.occluders(windows: windows, grantedPIDs: await grantedPIDs(in: windows)),
+                maxLongEdge: configuration.liveFrameLongEdge
+            )
+        }
         noteLiveFrame(shot.space)
         return DisplayLiveViewFrame(jpeg: shot.jpeg, width: shot.space.frame.width, height: shot.space.frame.height)
     }
@@ -355,14 +386,66 @@ public actor MacHostDisplayTarget: DisplayTarget {
         liveFrameSpace = space
     }
 
+    /// A viewer's input during takeover. The stop key never passes. With ``LiveFrames/grantedApps`` it reaches
+    /// granted apps only, at any tier, since takeover is the user acting: pointer events where a granted app's
+    /// window is on top, keys and text while a granted app is in front, and global shortcuts only with the
+    /// system-keys flag. A drag's release outside them lands where the drag last was, so no button stays held.
     public func liveInput(_ lease: Lease, _ viewerInput: DisplayLiveViewInput) async throws {
         try await requireLease(lease)
-        guard configuration.servesLiveFrames, takeoverActive, let liveFrameSpace else { return }
+        guard configuration.liveFrames != .off, takeoverActive, let liveFrameSpace else { return }
+        if case .key(true, let key, let code, _, _, let modifiers) = viewerInput,
+           MacLiveInput.combos(key: key, code: code, modifiers: modifiers).contains(configuration.stopKey ?? .defaultStopKey) {
+            return
+        }
+        var viewerInput = viewerInput
+        if configuration.liveFrames == .grantedApps {
+            guard let allowed = await grantedAppsInput(viewerInput, space: liveFrameSpace) else { return }
+            viewerInput = allowed
+        }
         let events = MacLiveInput.events(for: viewerInput, space: liveFrameSpace, held: liveHeldButton)
-        if case .mouse(let action, _, _, let button, _, _) = viewerInput {
+        if case .mouse(let action, let x, let y, let button, _, _) = viewerInput {
             if action == .down { liveHeldButton = button } else if action == .up { liveHeldButton = nil }
+            lastLivePoint = CGPoint(x: x, y: y)
         }
         await input.post(events, delivery: .foreground)
+    }
+
+    /// `viewerInput` as it may reach granted apps, or `nil` when it may not.
+    private func grantedAppsInput(_ viewerInput: DisplayLiveViewInput, space: MacLiveFrameSpace) async -> DisplayLiveViewInput? {
+        let windows = await workspace.windows()
+        let frontmost = await workspace.frontmostApp()
+        let gate = MacLiveInputGate(
+            grantedPIDs: await grantedPIDs(in: windows, also: frontmost),
+            windows: windows,
+            frontmost: frontmost?.pid,
+            frontmostFlags: frontmost.map { grants.flags(forApp: $0.identity.bundleID) } ?? [],
+            systemShortcuts: configuration.systemShortcuts
+        )
+        switch viewerInput {
+        case .mouse(let action, let x, let y, let button, let count, let modifiers):
+            if gate.allows(point: space.point(x, y)) { return viewerInput }
+            guard action == .up, liveHeldButton != nil, let last = lastLivePoint else { return nil }
+            return .mouse(.up, x: last.x, y: last.y, button: button, clickCount: count, modifiers: modifiers)
+        case .wheel(let x, let y, _, _, _):
+            return gate.allows(point: space.point(x, y)) ? viewerInput : nil
+        case .key(let down, let key, let code, _, _, let modifiers):
+            // A release never reaches anything new, and dropping it could leave a key held.
+            guard down else { return viewerInput }
+            return gate.allowsKeys && gate.allows(MacLiveInput.combos(key: key, code: code, modifiers: modifiers)) ? viewerInput : nil
+        case .text:
+            return gate.allowsKeys ? viewerInput : nil
+        }
+    }
+
+    /// The processes among `windows`' owners, and `also`, that are granted apps other than this one.
+    private func grantedPIDs(in windows: [MacWindowEntry], also app: MacRunningApp? = nil) async -> Set<pid_t> {
+        let granted = grantedBundleIDs
+        var pids: Set<pid_t> = []
+        if let app, app.pid != getpid(), granted.contains(app.identity.bundleID) { pids.insert(app.pid) }
+        for pid in Set(windows.map(\.pid)) where pid != getpid() && !pids.contains(pid) {
+            if let running = await workspace.runningApp(pid: pid), granted.contains(running.identity.bundleID) { pids.insert(pid) }
+        }
+        return pids
     }
 
     private func perform(_ action: ComputerAction) async -> ActionOutcome {

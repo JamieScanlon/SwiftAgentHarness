@@ -11,6 +11,8 @@ struct MacWindowEntry: Sendable, Equatable {
     var layer: Int
     var bounds: CGRect
     var windowID: CGWindowID = 0
+    /// 0 for a window that shows nothing, such as a transparent overlay.
+    var alpha: Double = 1
 }
 
 /// The installed apps that open web pages.
@@ -49,7 +51,8 @@ struct LiveMacWorkspace: MacWorkspaceReading {
                 return nil
             }
             let windowID = (info[kCGWindowNumber] as? NSNumber)?.uint32Value ?? 0
-            return MacWindowEntry(pid: pid, layer: layer, bounds: bounds, windowID: windowID)
+            let alpha = (info[kCGWindowAlpha] as? NSNumber)?.doubleValue ?? 1
+            return MacWindowEntry(pid: pid, layer: layer, bounds: bounds, windowID: windowID, alpha: alpha)
         }
     }
 

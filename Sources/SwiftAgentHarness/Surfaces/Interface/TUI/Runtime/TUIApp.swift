@@ -760,7 +760,8 @@ public actor TUIApp {
         installOverlayDismissHandler()
         composer.isFocused = false
         let showsLiveView = request.lifecycleID.flatMap(computerUseIndicator.liveView(for:)) != nil
-        overlayHost.show(ComputerUseRequestDialogComponent(request: request, showsLiveView: showsLiveView))
+        let sharedScreen = request.lifecycleID.map(computerUseIndicator.sharesScreen) ?? false
+        overlayHost.show(ComputerUseRequestDialogComponent(request: request, showsLiveView: showsLiveView, sharedScreen: sharedScreen))
         renderFrame()
     }
 

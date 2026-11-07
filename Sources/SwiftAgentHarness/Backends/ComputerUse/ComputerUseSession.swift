@@ -1398,24 +1398,27 @@ public actor ComputerUseSession {
     // MARK: - Watch mode
 
     /// Whether someone watches the live view, waiting up to ``ComputerUseSessionConfiguration/watchModeWait`` for a
-    /// viewer to connect. On a target with no live view, such as the user's own screen, a present user confirms on a
-    /// card instead. Ends the session when nobody can or does.
+    /// viewer to connect. On a target with no live view, a present user confirms on a card instead, and so they do on
+    /// someone's own screen when nobody watches its view, since the user may be at it. Ends the session when nobody
+    /// can or does.
     private func waitForWatcher() async -> Bool {
         let rule = "after a sensitive-domain signal the session continues only while someone watches its live view"
         guard lease.userPresent else {
             await end(.liveViewRequired, detail: "\(rule), and nobody is present")
             return false
         }
-        guard manifest.observerAccess != .none else {
+        let servesLiveView = manifest.observerAccess != .none
+        if servesLiveView, await isWatched() { return true }
+        guard servesLiveView, manifest.humanPresence != .shared else {
             if watchModeConfirmed { return true }
             if await confirmWatchMode() {
                 watchModeConfirmed = true
                 return true
             }
-            await end(.liveViewRequired, detail: "a sensitive-domain signal needs the user's confirmation on \(manifest.label), which serves no live view, and the user didn't give it")
+            let why = servesLiveView ? "nobody watched its live view" : "it serves no live view"
+            await end(.liveViewRequired, detail: "a sensitive-domain signal needs the user's confirmation on \(manifest.label), since \(why), and the user didn't give it")
             return false
         }
-        if await isWatched() { return true }
         await report(.waitingForLiveView)
         let deadline = ContinuousClock.now.advanced(by: configuration.watchModeWait)
         while ContinuousClock.now < deadline {
@@ -1432,7 +1435,9 @@ public actor ComputerUseSession {
 
     private func confirmWatchMode() async -> Bool {
         let title = "Computer use: continue on a sensitive page on \(manifest.label)?"
-        let detail = "The vendor flagged this page as sensitive. \(manifest.label) has no live view to watch, so the agent continues only if you confirm."
+        let detail = manifest.observerAccess == .none
+            ? "The vendor flagged this page as sensitive. \(manifest.label) has no live view to watch, so the agent continues only if you confirm."
+            : "The vendor flagged this page as sensitive. Nobody is watching \(manifest.label)'s live view, so the agent continues only if you confirm."
         let request = ExecApprovalRequest(
             id: "computer-use-watch-\(UUID().uuidString.prefix(8))",
             command: "continue in watch mode",

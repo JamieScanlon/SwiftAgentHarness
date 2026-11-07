@@ -31,6 +31,13 @@ public struct ComputerUseGrantRequest: Sendable {
     /// The user's conversation that asked, where the dialog belongs. For a delegated specialist this is the
     /// parent conversation, not the specialist's child.
     public var conversationID: UUID? { lease.conversationID }
+
+    /// What the dialog must tell the user when the target is their own screen and serves a live view: the view
+    /// shows the granted apps, and takes their input during a takeover.
+    public var liveViewNotice: String? {
+        guard target.humanPresence == .shared, target.observerAccess != .none else { return nil }
+        return "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover."
+    }
 }
 
 /// Presents the one start-of-session grant dialog. Returns the approved subset, or `nil` when the user declines.

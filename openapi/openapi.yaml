@@ -3845,7 +3845,7 @@ components:
 
     ComputerUseSessionStatus:
       type: object
-      required: [lifecycleID, target, step, maxSteps, takenOver, liveView]
+      required: [lifecycleID, target, step, maxSteps, takenOver, liveView, sharedScreen]
       properties:
         lifecycleID:
           type: string
@@ -3860,6 +3860,9 @@ components:
         liveView:
           type: boolean
           description: Whether the run's target serves a live view.
+        sharedScreen:
+          type: boolean
+          description: Whether the run's target is someone's own screen, such as their Mac, which the user may be at. A handoff there can be done at the machine as well as through the live view.
 
     ComputerUseControlStatus:
       type: object

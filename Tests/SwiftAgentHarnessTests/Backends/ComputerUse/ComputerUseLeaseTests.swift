@@ -193,6 +193,17 @@ struct DisplayTargetRegistryTests {
         #expect(request.review.grantable.map(\.grant) == leaseRequest.grants)
     }
 
+    @Test("The grant dialog says when someone's own screen can be watched and controlled from a live view")
+    func liveViewNotice() {
+        var viewed = FakeDisplayTarget.hostManifest
+        viewed.observerAccess = .stream
+        let review = ComputerUseGrantReview(grantable: [], blocked: [])
+        let notice = ComputerUseGrantRequest(review: review, lease: request(target: viewed.id), target: viewed).liveViewNotice
+        #expect(notice == "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover.")
+        #expect(ComputerUseGrantRequest(review: review, lease: request(target: FakeDisplayTarget.hostManifest.id), target: FakeDisplayTarget.hostManifest).liveViewNotice == nil)
+        #expect(ComputerUseGrantRequest(review: review, lease: request(target: FakeDisplayTarget.vmManifest.id), target: FakeDisplayTarget.vmManifest).liveViewNotice == nil, "an isolated target is nobody's own")
+    }
+
     @Test("An approver cannot raise a grant above its cap or add grants that were not requested")
     func approverClamped() async throws {
         let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)

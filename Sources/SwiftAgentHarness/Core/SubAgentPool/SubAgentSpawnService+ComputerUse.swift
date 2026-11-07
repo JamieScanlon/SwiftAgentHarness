@@ -187,6 +187,7 @@ extension SubAgentSpawnService {
         sessionConfiguration.modePolicy = modePolicy
         let targetLabel = grant.target.manifest.label
         let servesLiveView = grant.target.manifest.observerAccess != .none
+        let sharedScreen = grant.target.manifest.humanPresence == .shared
         let liveness = DelegateLiveness()
         var approvals = configuration.approvals
         if approvals == nil {
@@ -213,7 +214,7 @@ extension SubAgentSpawnService {
             }
             if changed { on ? liveness.pause() : liveness.resume() } else { liveness.touch() }
             guard publish != nil || observer != nil else { return }
-            let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID, liveView: servesLiveView)
+            let payload = Self.activityPayload(update, target: targetLabel, lifecycleID: lifecycleID, liveView: servesLiveView, sharedScreen: sharedScreen)
             await publish?(userConversationID, .computerUseActivity(payload))
             await observer?(payload)
         }
@@ -348,7 +349,9 @@ extension SubAgentSpawnService {
         return ComputerUseNativeDialect(toolset: toolset, displayWidthPx: size.width, displayHeightPx: size.height, api: api)
     }
 
-    static func activityPayload(_ activity: ComputerUseActivity, target: String, lifecycleID: String, liveView: Bool) -> ComputerUseSurfaceIntentPayload {
+    static func activityPayload(
+        _ activity: ComputerUseActivity, target: String, lifecycleID: String, liveView: Bool, sharedScreen: Bool = false
+    ) -> ComputerUseSurfaceIntentPayload {
         ComputerUseSurfaceIntentPayload(
             target: target,
             lifecycleID: lifecycleID,
@@ -359,7 +362,8 @@ extension SubAgentSpawnService {
             app: activity.app,
             action: activity.action?.rawValue,
             terminalReason: activity.terminalReason?.rawValue,
-            liveView: liveView
+            liveView: liveView,
+            sharedScreen: sharedScreen
         )
     }
 

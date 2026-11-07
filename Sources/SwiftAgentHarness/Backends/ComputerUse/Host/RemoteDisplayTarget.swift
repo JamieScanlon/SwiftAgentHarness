@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Given a ``DisplayLiveViewServer``, it serves the live view itself from the frames the host gives out, for a host
 /// whose target declares a live view (`observerAccess: stream`) and gives out frames, as `MacHostDisplayTarget` does
-/// with `servesLiveFrames`. Without one, live-view calls go to the host.
+/// with `liveFrames`. Without one, live-view calls go to the host.
 public actor RemoteDisplayTarget: DisplayTarget {
     public typealias Connector = @Sendable () async throws -> any DisplayHostConnection
 

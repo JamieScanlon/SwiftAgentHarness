@@ -24,7 +24,7 @@ struct ComputerUseControlServiceTests {
         let status = await control.status(conversationID: parent)
         #expect(status.pending.map(\.prompt) == ["Which file?"])
         #expect(status.sessions == [
-            ComputerUseSessionStatus(lifecycleID: "call-1", target: "Fake host desktop", step: 0, maxSteps: 12, takenOver: false, liveView: false),
+            ComputerUseSessionStatus(lifecycleID: "call-1", target: "Fake host desktop", step: 0, maxSteps: 12, takenOver: false, liveView: false, sharedScreen: true),
         ])
     }
 

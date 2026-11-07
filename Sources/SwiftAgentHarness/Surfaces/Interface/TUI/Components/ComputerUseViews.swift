@@ -32,6 +32,11 @@ public final class ComputerUseIndicatorComponent: TUIComponent {
     /// Whether any run has been shared with observers and not stopped since.
     public var isSharing: Bool { !observerLinks.isEmpty }
 
+    /// Whether the run's target is someone's own screen, as its latest activity said.
+    public func sharesScreen(_ lifecycleID: String) -> Bool {
+        sessions.contains { $0.lifecycleID == lifecycleID && $0.sharedScreen == true }
+    }
+
     /// Runs whose target serves a live view.
     public var liveViewSessions: [String] {
         sessions.compactMap { $0.liveView == true ? $0.lifecycleID : nil }
@@ -161,6 +166,8 @@ public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
     public let request: ComputerUseSurfaceIntentPayload
     /// Whether the indicator shows a live-view link for the request's run, which a handoff then points to.
     public let showsLiveView: Bool
+    /// Whether the run's target is someone's own screen, which the user may be at rather than use through the link.
+    public let sharedScreen: Bool
     public var isFocused: Bool = true
     public private(set) var answer = ""
     public var selectedButtonIndex = 0
@@ -168,9 +175,10 @@ public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
 
     public static let maximumWidth = 60
 
-    public init(request: ComputerUseSurfaceIntentPayload, showsLiveView: Bool = false) {
+    public init(request: ComputerUseSurfaceIntentPayload, showsLiveView: Bool = false, sharedScreen: Bool = false) {
         self.request = request
         self.showsLiveView = showsLiveView
+        self.sharedScreen = sharedScreen
     }
 
     public var requestID: String { request.requestID ?? "" }
@@ -218,9 +226,12 @@ public final class ComputerUseRequestDialogComponent: TUIComponent, Focusable {
         } else {
             if let reason = request.reason { add(ANSIStyle.dim("Needs you for: \(TUITextSanitizer.sanitizeSingleLine(reason))")) }
             add(prompt)
-            add(ANSIStyle.dim(showsLiveView
-                ? "The agent has paused. Use \(target) through the live view link, then hand back control."
-                : "The agent has paused. Use \(target), then hand back control."))
+            let guidance = switch (showsLiveView, sharedScreen) {
+            case (true, true): "The agent has paused. Use \(target) at the machine, or through the live view link, then hand back control."
+            case (true, false): "The agent has paused. Use \(target) through the live view link, then hand back control."
+            case (false, _): "The agent has paused. Use \(target), then hand back control."
+            }
+            add(ANSIStyle.dim(guidance))
             lines.append(ANSIStyle.finishLine(buttonLine(boxWidth: boxWidth)))
         }
         lines.append(ANSIStyle.finishLine(DialogChrome.bottom(width: boxWidth)))

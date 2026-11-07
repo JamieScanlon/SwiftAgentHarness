@@ -130,6 +130,31 @@ struct ComputerUseWatchModeTests {
         #expect(await other.actCalls.isEmpty)
     }
 
+    @Test("On someone's own screen with a live view, an open view or the user's confirmation both keep the session going")
+    func sharedWithLiveView() async throws {
+        var manifest = FakeDisplayTarget.hostManifest
+        manifest.observerAccess = .stream
+
+        let watching = RecordingComputerUseApprovals(.approved)
+        let (watched, session) = try await make(manifest: manifest, approvals: watching)
+        await watched.setViewers(1)
+        _ = await session.perform([click], safetySignals: [0: [.sensitiveDomain]])
+        #expect(await watching.requests.count == 1, "only the signal's own card: the view is open")
+        #expect(await watched.actCalls.count == 1)
+
+        let log = ActivityLog()
+        let confirming = RecordingComputerUseApprovals(.approved)
+        let (atDesk, deskSession) = try await make(manifest: manifest, approvals: confirming, log: log)
+        let result = await deskSession.perform([click], safetySignals: [0: [.sensitiveDomain]])
+        #expect(result.outcomes.map(\.effect) == [.confirmed])
+        #expect(await confirming.requests.count == 2, "the user at the screen confirms rather than open a view of it")
+        #expect(await !log.statuses.contains(.waitingForLiveView))
+        #expect(await atDesk.actCalls.count == 1)
+
+        let (_, declined) = try await make(manifest: manifest, approvals: RecordingComputerUseApprovals(.denied("no")))
+        #expect(await declined.perform([click], safetySignals: [0: [.sensitiveDomain]]).terminal == .liveViewRequired)
+    }
+
     @Test("Any viewer counts as watching, the user's or an observer's")
     func observerWatches() async throws {
         let (target, session) = try await make(wait: .milliseconds(50))

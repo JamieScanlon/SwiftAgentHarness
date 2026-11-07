@@ -16,11 +16,50 @@ struct MacLiveFrameSpace: Sendable, Equatable {
         let clampedY = min(max(y, 0), Double(frame.height - 1))
         return CGPoint(x: display.minX + CGFloat(clampedX) * scaleX, y: display.minY + CGFloat(clampedY) * scaleY)
     }
+
+    /// `rect`, in display points, in the frame's pixels, counting rows from the top.
+    func pixelRect(for rect: CGRect) -> CGRect {
+        let scaleX = CGFloat(frame.width) / max(display.width, 1)
+        let scaleY = CGFloat(frame.height) / max(display.height, 1)
+        return CGRect(
+            x: (rect.minX - display.minX) * scaleX,
+            y: (rect.minY - display.minY) * scaleY,
+            width: rect.width * scaleX,
+            height: rect.height * scaleY
+        )
+    }
 }
 
 /// A live viewer's input as event sequences. Pure, so the mapping is testable without posting anything.
 enum MacLiveInput {
     static let domModifiers: [String: KeyModifier] = ["Shift": .shift, "Control": .ctrl, "Alt": .option, "Meta": .cmd, "Fn": .fn]
+
+    /// The physical keys whose DOM `code` names a key the harness knows. Option changes the character a key types on
+    /// a Mac (⌥. is ≥), so a combo is also read from the key's code.
+    static let codeKeys: [String: String] = [
+        "Period": ".", "Comma": ",", "Slash": "/", "Semicolon": ";", "Quote": "'", "BracketLeft": "[", "BracketRight": "]",
+        "Backslash": "\\", "Minus": "-", "Equal": "=", "Backquote": "`", "Space": "space", "Tab": "tab", "Escape": "escape",
+        "Enter": "return", "Backspace": "delete", "Delete": "forward-delete",
+    ]
+
+    /// The combos a viewer's key could be: by the key it typed and by the physical key. None for a modifier alone.
+    static func combos(key: String, code: String, modifiers: Set<KeyModifier>) -> [KeyCombo] {
+        guard domModifiers[key] == nil else { return [] }
+        let named = key == " " ? "space" : key == "Delete" ? "forward-delete" : key == "Backspace" ? "delete" : key
+        var combos = [KeyCombo(modifiers: modifiers, key: named)]
+        let physical: String? = if code.hasPrefix("Key"), code.count == 4 {
+            code.suffix(1).lowercased()
+        } else if code.hasPrefix("Digit"), code.count == 6 {
+            String(code.suffix(1))
+        } else {
+            codeKeys[code]
+        }
+        if let physical {
+            let combo = KeyCombo(modifiers: modifiers, key: physical)
+            if !combos.contains(combo) { combos.append(combo) }
+        }
+        return combos
+    }
 
     /// `held` is the mouse button the viewer is holding, if any, so moves while it is down become drags.
     static func events(for input: DisplayLiveViewInput, space: MacLiveFrameSpace, held: MouseButton?) -> [MacInputEvent] {
