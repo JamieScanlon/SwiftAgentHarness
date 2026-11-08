@@ -33,12 +33,18 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// Watched during a lease with a listen-only event tap (it needs Input Monitoring): pressing it sends the
         /// holder `stopRequested`, and any other key the user presses sends `userTyping`. `nil` watches nothing.
         public var stopKey: KeyCombo?
+        /// Wakes the display for each lease and keeps it awake until release, for a host whose user is often away
+        /// from the Mac. The Mac's own display-sleep and lock settings apply again after release. Off by default.
+        public var wakesDisplay: Bool
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
         var workspace: any MacWorkspaceReading
         /// Tells whether a background delivery changed anything; `nil` uses the live tree-and-pixels probe.
         var deliveryProbe: (any MacDeliveryProbing)?
+        var displayPower: any MacDisplayPowering
+        /// How long a lease waits for a woken display to report it is awake.
+        var wakeTimeout: Duration
 
         public init(
             id: DisplayTargetID = MacHostDisplayTarget.defaultID,
@@ -46,9 +52,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
             liveFrames: LiveFrames = .off,
             liveFrameLongEdge: Int = 1_600,
             stopKey: KeyCombo? = .defaultStopKey,
-            embeddedInSignedApp: Bool = false
+            embeddedInSignedApp: Bool = false,
+            wakesDisplay: Bool = false
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
+            self.wakesDisplay = wakesDisplay
             self.liveFrames = liveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
             self.stopKey = stopKey
@@ -62,9 +70,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
             eventPoster: any MacEventPosting,
             workspace: any MacWorkspaceReading = LiveMacWorkspace(),
             axBudget: MacAXTraversalBudget = .default,
-            deliveryProbe: (any MacDeliveryProbing)? = nil
+            deliveryProbe: (any MacDeliveryProbing)? = nil,
+            displayPower: any MacDisplayPowering = LiveMacDisplayPower(),
+            wakeTimeout: Duration = .seconds(3)
         ) {
             self.deliveryProbe = deliveryProbe
+            self.displayPower = displayPower
+            self.wakeTimeout = wakeTimeout
+            self.wakesDisplay = false
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
@@ -139,6 +152,12 @@ public actor MacHostDisplayTarget: DisplayTarget {
         )
     }
     private var stopKeyMonitor: MacStopKeyMonitor?
+    /// Held from lease to release while ``Configuration/wakesDisplay`` is on.
+    private var wakeAssertions: [UInt32] = []
+    private var power: any MacDisplayPowering { configuration.displayPower }
+
+    static let lockedReason = "this Mac is locked; unlock it and try again"
+    static let noDisplayReason = "this Mac's display is asleep or disconnected; wake it and try again"
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -174,6 +193,13 @@ public actor MacHostDisplayTarget: DisplayTarget {
         }
         let lease = Lease(request: granted, issuedAt: Date())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
+        do {
+            try await prepareDisplay(for: request.agentID)
+        } catch {
+            endWake()
+            _ = await lock.release(leaseID: lease.id)
+            throw error
+        }
         grants = ComputerUseGrantSet(lease.grants)
         foregroundAllowed = lease.delivery == .foregroundAllowed
         takeoverActive = false
@@ -192,6 +218,37 @@ public actor MacHostDisplayTarget: DisplayTarget {
         return lease
     }
 
+    /// Wakes the display when configured to, then refuses a locked Mac: past the lock screen only the user's
+    /// password gets anywhere.
+    private func prepareDisplay(for agentID: String) async throws {
+        if configuration.wakesDisplay {
+            endWake()
+            wakeAssertions = power.holdAwake(reason: "Computer use: \(agentID)")
+            // A display that never reports waking still gets its lease; capture says if it can't see the screen.
+            let deadline = ContinuousClock.now + configuration.wakeTimeout
+            while power.displayIsAsleep, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            await capture.invalidate()
+        }
+        try requireUnlocked()
+    }
+
+    private func endWake() {
+        power.release(wakeAssertions)
+        wakeAssertions = []
+    }
+
+    private func requireUnlocked() throws {
+        if power.screenIsLocked { throw DisplayTargetError.targetUnavailable(Self.lockedReason) }
+    }
+
+    /// A capture that finds no display means one that is asleep or disconnected, which retrying won't fix.
+    static func unavailable(_ error: any Error) -> any Error {
+        if case .noDisplay? = error as? MacCaptureError { return DisplayTargetError.targetUnavailable(noDisplayReason) }
+        return error
+    }
+
     public func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> {
         guard await lock.holds(leaseID: lease.id) else { return AsyncStream { $0.finish() } }
         return eventHub.stream(for: lease.id)
@@ -199,6 +256,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.release(leaseID: lease.id) else { return }
+        endWake()
         stopKeyMonitor?.stop()
         stopKeyMonitor = nil
         eventHub.finish(lease.id)
@@ -242,6 +300,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
     public func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
         try await requireLease(lease)
         guard !takeoverActive else { throw DisplayTargetError.unsupported("the user has taken over; capture is paused") }
+        try requireUnlocked()
         observationCounter += 1
         let id: ObservationID = "o_\(observationCounter)"
         let now = Date()
@@ -255,49 +314,53 @@ public actor MacHostDisplayTarget: DisplayTarget {
         var app: AppIdentity?
         var processStart: Date?
 
-        switch request.scope {
-        case .region(let region):
-            let shot = try await capture.captureRegion(MacCoordinateSpace.cgRect(region), grantedBundleIDs: grantedApps, excludedBundleIDs: configuration.excludedBundleIDs)
-            image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
-            bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
-        case .window(let window):
-            guard let running = await workspace.runningApp(pid: window.pid), grantedApps.contains(running.identity.bundleID) else {
-                throw DisplayTargetError.unsupported("window \(window.windowID) is not in a granted app")
-            }
-            pid = running.pid
-            app = running.identity
-            processStart = running.launchDate
-            bounds = MacCoordinateSpace.cgRect(window.bounds)
-            if wantsPixels, let windowID = CGWindowID(window.windowID) {
-                let shot = try await capture.captureWindow(
-                    windowID: windowID,
-                    maxLongEdge: request.maxImage?.longEdgePx,
-                    maxPixels: request.maxImage?.maxPixels
-                )
+        do {
+            switch request.scope {
+            case .region(let region):
+                let shot = try await capture.captureRegion(MacCoordinateSpace.cgRect(region), grantedBundleIDs: grantedApps, excludedBundleIDs: configuration.excludedBundleIDs)
                 image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
                 bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
+            case .window(let window):
+                guard let running = await workspace.runningApp(pid: window.pid), grantedApps.contains(running.identity.bundleID) else {
+                    throw DisplayTargetError.unsupported("window \(window.windowID) is not in a granted app")
+                }
+                pid = running.pid
+                app = running.identity
+                processStart = running.launchDate
+                bounds = MacCoordinateSpace.cgRect(window.bounds)
+                if wantsPixels, let windowID = CGWindowID(window.windowID) {
+                    let shot = try await capture.captureWindow(
+                        windowID: windowID,
+                        maxLongEdge: request.maxImage?.longEdgePx,
+                        maxPixels: request.maxImage?.maxPixels
+                    )
+                    image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
+                    bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
+                }
+            case .display, .tab:
+                if let working = await workingApp() {
+                    pid = working.pid
+                    app = working.identity
+                    processStart = working.launchDate
+                }
+                if wantsPixels {
+                    var displayID: CGDirectDisplayID?
+                    if case .display(let raw?) = request.scope { displayID = CGDirectDisplayID(raw) }
+                    let shot = try await capture.captureDisplay(
+                        displayID: displayID,
+                        grantedBundleIDs: grantedApps,
+                        excludedBundleIDs: configuration.excludedBundleIDs,
+                        maxLongEdge: request.maxImage?.longEdgePx,
+                        maxPixels: request.maxImage?.maxPixels
+                    )
+                    image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
+                    bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
+                } else {
+                    bounds = CGDisplayBounds(CGMainDisplayID())
+                }
             }
-        case .display, .tab:
-            if let working = await workingApp() {
-                pid = working.pid
-                app = working.identity
-                processStart = working.launchDate
-            }
-            if wantsPixels {
-                var displayID: CGDirectDisplayID?
-                if case .display(let raw?) = request.scope { displayID = CGDirectDisplayID(raw) }
-                let shot = try await capture.captureDisplay(
-                    displayID: displayID,
-                    grantedBundleIDs: grantedApps,
-                    excludedBundleIDs: configuration.excludedBundleIDs,
-                    maxLongEdge: request.maxImage?.longEdgePx,
-                    maxPixels: request.maxImage?.maxPixels
-                )
-                image = ObservationImage(blobRef: "mac:\(id)", data: shot.data, mediaType: shot.mediaType, geometry: shot.geometry, capturedAt: shot.capturedAt)
-                bounds = MacCoordinateSpace.cgRect(shot.geometry.capturedRect)
-            } else {
-                bounds = CGDisplayBounds(CGMainDisplayID())
-            }
+        } catch {
+            throw Self.unavailable(error)
         }
 
         var tree: ObservationTree?
@@ -337,6 +400,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     public func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome] {
         try await requireLease(lease)
+        try requireUnlocked()
         var outcomes: [ActionOutcome] = []
         for (index, action) in batch.actions.enumerated() {
             currentAction = action

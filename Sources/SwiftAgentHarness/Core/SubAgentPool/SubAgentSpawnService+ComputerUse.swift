@@ -435,6 +435,8 @@ extension SubAgentSpawnService {
             return .notStarted(.blocked, reason: "the target does not support foreground delivery", task: task)
         case .driverFailure(let message):
             return .notStarted(.failed, reason: message, task: task)
+        case .targetUnavailable(let reason):
+            return .notStarted(.needsUser, reason: reason, task: task)
         }
     }
 

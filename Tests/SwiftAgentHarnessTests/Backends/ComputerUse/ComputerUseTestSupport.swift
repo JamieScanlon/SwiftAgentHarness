@@ -62,6 +62,10 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var liveInputs: [DisplayLiveViewInput] = []
     /// Like a remote target, work requested from a cancelled task never reaches the screen.
     private(set) var failsWhenCancelled = false
+    /// Thrown by ``lease(_:)``, and by ``observe(_:_:)`` and ``act(_:_:)``.
+    private(set) var leaseError: DisplayTargetError?
+    private(set) var observeError: DisplayTargetError?
+    private(set) var actError: DisplayTargetError?
 
     init(
         manifest: DisplayTargetManifest,
@@ -72,6 +76,12 @@ actor FakeDisplayTarget: DisplayTarget {
         self.permissionStates = permissions
             ?? Dictionary(uniqueKeysWithValues: manifest.requires.map { ($0, PermissionState.granted) })
         self.now = now
+    }
+
+    func setErrors(lease: DisplayTargetError? = nil, observe: DisplayTargetError? = nil, act: DisplayTargetError? = nil) {
+        leaseError = lease
+        observeError = observe
+        actError = act
     }
 
     func setFailsWhenCancelled(_ fails: Bool) {
@@ -104,6 +114,7 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func lease(_ request: LeaseRequest) async throws -> Lease {
+        if let leaseError { throw leaseError }
         let lease = Lease(request: request, issuedAt: now())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
         return lease
@@ -133,6 +144,7 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
         try await requireLease(lease)
+        if let observeError { throw observeError }
         observeCalls.append(request)
         observationCounter += 1
         var observation = ComputerUseFixtures.observation(
@@ -153,6 +165,7 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome] {
         try await requireLease(lease)
+        if let actError { throw actError }
         actCalls.append(batch.actions)
         var results: [ActionOutcome] = []
         for (index, action) in batch.actions.enumerated() {

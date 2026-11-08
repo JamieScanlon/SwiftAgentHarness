@@ -125,6 +125,8 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
     case liveViewRequired = "live-view-required"
     /// The specialist produced nothing for its idle timeout.
     case idleTimeout = "idle-timeout"
+    /// The target can't be used until the user does something at it, such as unlock it or wake its display.
+    case targetUnavailable = "target-unavailable"
     /// A question or handoff went unanswered for its timeout.
     case needsUser = "needs-user"
     /// The run was stopped or failed before the session ended on its own.
@@ -137,7 +139,7 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
         case .timeBudget: return .expired
         case .deadline: return .deadline
         case .noProgress: return .noProgress
-        case .liveViewRequired, .needsUser, .cancelled: return .cancelled
+        case .liveViewRequired, .needsUser, .cancelled, .targetUnavailable: return .cancelled
         case .idleTimeout: return .idleTimeout
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
@@ -895,6 +897,10 @@ public actor ComputerUseSession {
         } catch DisplayTargetError.leaseNotHeld {
             outcome = ActionOutcome(action: index, effect: .refused, evidence: "lease is no longer held")
             await end(.ended)
+        } catch DisplayTargetError.targetUnavailable(let reason) {
+            // Retrying can't help until the user acts at the target, so the run ends with the reason.
+            outcome = ActionOutcome(action: index, effect: .refused, evidence: reason)
+            await end(.targetUnavailable, detail: reason)
         } catch {
             // The action may already have been delivered; the next step is an observe, never a second attempt.
             outcome = ActionOutcome(action: index, effect: .unverifiable, evidence: "driver error: \(error)", escalation: .observe)

@@ -517,6 +517,10 @@ enum ComputerUseResultBuilder {
             result.status = .needsUser
             result.reason = terminalDetail ?? "the session needed the user to watch its live view"
             return result
+        case .targetUnavailable?:
+            result.status = .needsUser
+            result.reason = terminalDetail ?? "the display target couldn't be used"
+            return result
         case .needsUser?:
             return Self.awaitingUser(result, handoff: unresolvedHandoff, question: unresolvedQuestion, reason: terminalDetail ?? "the user didn't answer")
         case .killSwitch?:

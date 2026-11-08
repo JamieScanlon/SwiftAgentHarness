@@ -169,6 +169,9 @@ public enum DisplayTargetError: Error, Sendable, Codable, Hashable {
     case permissionsMissing([DisplayPlatformPermission])
     case unsupported(String)
     case driverFailure(String)
+    /// The target can't be used until the user does something at it, such as unlock it or wake its display. Ends
+    /// the session, and refuses a lease, with the reason, which says what to do.
+    case targetUnavailable(String)
 }
 
 /// One display target behind the canonical observe/act contract: a host desktop, a VM, a desktop container, a

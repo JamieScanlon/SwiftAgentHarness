@@ -126,7 +126,7 @@ What happens:
 |---|---|
 | `done` | Every criterion has a `computer_verify` entry that is met |
 | `done-unverified` | Finished, but some criterion is unverified or not met |
-| `needs-user` | A handoff nobody could take, a question or handoff nobody answered in time, a stop while one was open, or a consequential action denied with nobody present |
+| `needs-user` | A handoff nobody could take, a question or handoff nobody answered in time, a stop while one was open, or a consequential action denied with nobody present. Also a target the user must act at first, such as a locked Mac or one whose display is asleep, at lease time or during the run; `reason` is the target's, and says what to do |
 | `blocked` | Grants declined, target busy, permissions missing, model unsuitable (including a vendor-stored model when the host requires zero retention), or stopped by the user. Also a run whose refused actions needed grants it didn't have and that met no criterion, whether it finished or ended with no progress; `reason` names the `apps` and `domains` to delegate again with |
 | `budget-exhausted` | The step ceiling, the time ceiling, the unattended grant expiry, the cost cap, or the run timeout was reached. After extensions it means the work was moving and ran out of room, so delegating the remainder is reasonable |
 | `no-progress` | Too many steps in a row made no progress. Repeating the same delegation won't help: rephrase the goal, try another approach, or ask the user |
@@ -149,6 +149,7 @@ var macConfiguration = MacHostDisplayTarget.Configuration(
 )
 macConfiguration.onForegroundDelivery = { app in await hud.noteForegroundDelivery(app: app) }
 macConfiguration.embeddedInSignedApp = true           // a notarized GUI app that owns its grants
+macConfiguration.wakesDisplay = true                  // runs started away from the Mac wake its display
 let mac = MacHostDisplayTarget(configuration: macConfiguration)
 // Show mac.permissionChecklist() during onboarding. The stop key (⌃⌥⌘. by default, `stopKey`) is watched
 // during each lease and needs Input Monitoring.
@@ -173,6 +174,7 @@ session.installComputerUse(ComputerUseConfiguration(
 | HUD | `MacAgentActiveHUD` is a non-activating panel at the top of the main screen, on every Space, for the whole session. It says who is in control, the step, app, and last action, and how to stop. It has a Stop button, and it announces each escalation to foreground delivery. `sharingType = .none` keeps it out of every capture. |
 | Stop key | ⌃⌥⌘. by default (`Configuration.stopKey`; `nil` watches nothing), not Escape, which the agent needs for dialogs. During each lease a `MacStopKeyMonitor`, a listen-only event tap (Input Monitoring) on its own run-loop thread, sends the session `stopRequested`. Any other key the user presses is reported as `userTyping`, and the agent's input waits two seconds after the last one; keys this process posted aren't the user's. The tap can't swallow events, and it doesn't need to: the harness never synthesizes the stop key. |
 | Evidence | Most pointer and key actions are `unverifiable`, because only a fresh observation can confirm them. A set-value that reads back is `confirmed`. A semantic call that timed out is `unverifiable` with `escalation: observe` and is never retried. |
+| Sleep and lock | With `wakesDisplay` on, each lease declares user activity, which wakes a sleeping display, and holds a "prevent idle display sleep" assertion until release, when the Mac's own display-sleep and lock settings apply again. Off by default. A locked Mac refuses the lease, and refuses observing and acting if it locks mid-lease, with `targetUnavailable("this Mac is locked; unlock it and try again")`: the agent never types into the lock screen. A capture that finds no display reports `targetUnavailable` too, as asleep or disconnected. Either way the run ends at once as `needs-user` with that reason. |
 
 **A live view of the user's own Mac.** Set `liveFrames: .grantedApps` to let the user watch the agent, and complete handoffs, from somewhere other than the Mac, such as their phone. The target then declares `observerAccess: stream`. The display host process serves it, and the harness serves the view by connecting with `RemoteDisplayTarget.connect(using:…, liveView:)` (see [Live view through a host](#hosting-a-target-in-another-process)).
 
@@ -412,6 +414,7 @@ The driver's obligations:
 - **A live view from frames.** A target whose screen is reached only through it, such as a guest or a host, can serve a live view with `DisplayLiveViewRelay`: open a feed per lease with a `Source` (frames, input, typed values), call `setControl` on takeover, and `close` at release. Mark the feed `isShared` for someone's own screen.
 - **Events.** A target that learns something the session should hear (its stop key, a permission change, a takeover the user started at the target, the user typing on a shared desktop) returns it from `events(_:)`, for example through a `DisplayTargetEventHub`. The stream ends at release.
 - **`release` always restores UI state** and is idempotent.
+- **Say when the user must act.** Throw `DisplayTargetError.targetUnavailable(reason)` when the target can't be used until the user does something at it, such as unlock it, and say what in `reason`. A lease refused this way, or a session that hits it, comes back `needs-user` with the reason rather than being retried.
 - **Every `DisplayObservation` has its own id, timestamps, and target identity.** Image geometry is recorded in `ScreenshotGeometry`, and the process start time is pinned alongside the pid.
 - **`act` re-resolves cited elements and refuses on drift.** It reports evidence (`confirmed | unverifiable | suspected-noop | partial | refused | not-executed`) and stops at the first failure.
 - **Release modifiers and buttons in `defer`.**

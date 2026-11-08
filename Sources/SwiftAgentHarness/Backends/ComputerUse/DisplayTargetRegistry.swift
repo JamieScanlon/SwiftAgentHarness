@@ -9,6 +9,8 @@ public enum ComputerUseLeaseDenial: Error, Sendable, Equatable {
     case grantsDeclined
     case targetBusy(holder: String)
     case driverFailure(String)
+    /// The target can't be used until the user does something at it; the reason says what.
+    case targetUnavailable(String)
 }
 
 /// What the start-of-session grant dialog asks the user to approve, and on whose behalf.
@@ -137,6 +139,7 @@ public actor DisplayTargetRegistry {
             switch error {
             case .targetBusy(let holder): throw .targetBusy(holder: holder)
             case .permissionsMissing(let permissions): throw .permissionsMissing(permissions)
+            case .targetUnavailable(let reason): throw .targetUnavailable(reason)
             case .leaseNotHeld, .unsupported, .driverFailure: throw .driverFailure(String(describing: error))
             }
         } catch {

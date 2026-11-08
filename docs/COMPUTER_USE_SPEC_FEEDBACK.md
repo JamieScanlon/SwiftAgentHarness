@@ -68,3 +68,16 @@ A granted app's tier doesn't limit the user: tiers limit the agent, and takeover
 **Spec text to change.** § Display targets as an execution-environment family, which allows observer links on any target.
 
 **Implementation.** `DisplayLiveViewConfiguration.maxObserversPerSharedFeed`, 0 by default.
+
+## The host desktop asleep or locked: implemented, spec silent
+
+A downstream change request found that a run started away from the Mac failed every observation, because its display was asleep, and that a Mac set to lock when its display sleeps shows a lock screen the agent can't, and mustn't, get past. The spec says nothing about display sleep or the lock screen. Spec references are relative to `harness-template/`.
+
+**Implemented.**
+- `MacHostDisplayTarget.Configuration.wakesDisplay`, off by default: each lease declares user activity and holds a "prevent idle display sleep" assertion until release.
+- A locked Mac refuses the lease, and refuses observing and acting mid-lease, so the agent never types into the lock screen.
+- `DisplayTargetError.targetUnavailable(reason)` for a target the user must act at first. A lease refused with it, or a session that hits it, ends at once as `needs-user` with the reason. The session's terminal reason is `target-unavailable`, and its lease is released as `cancelled`.
+
+**Spec text to consider.**
+- `backends/computer-use/macos.md` § Safety specifics on the host desktop could cover display sleep and the lock screen.
+- `backends/computer-use/README.md` § The computer-use sub-agent could list a target the user must wake or unlock among the `needs-user` cases, and § Runtime contract could name an error for it.

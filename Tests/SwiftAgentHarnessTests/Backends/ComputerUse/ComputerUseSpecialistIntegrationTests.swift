@@ -517,6 +517,21 @@ struct ComputerUseSpecialistIntegrationTests {
         #expect((result["reason"] as? String)?.contains("without calling computer_finish") == true, "\(result)")
     }
 
+    @Test("A target that is locked when leased reports it to the parent before any step runs")
+    func lockedTargetNeedsUser() async throws {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
+        await target.setErrors(lease: .targetUnavailable("this Mac is locked; unlock it and try again"))
+        let recorder = ChildRecorder()
+        let (session, parent) = try await makeSession(
+            model: makeModel(), target: target, script: Self.fullScript, reply: "Bolded and saved.", recorder: recorder
+        )
+        let (_, result) = try await invoke(session, parent: parent)
+        #expect(result["status"] as? String == "needs-user")
+        #expect(result["reason"] as? String == "this Mac is locked; unlock it and try again")
+        #expect(await recorder.childIDs.isEmpty, "no specialist was spawned")
+        #expect(await target.actCalls.isEmpty)
+    }
+
     @Test("The host's activity observer sees the whole run, for its HUD")
     func activityObserver() async throws {
         let target = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest, now: { Date() })
