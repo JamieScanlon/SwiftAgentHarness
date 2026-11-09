@@ -14,7 +14,8 @@ The prescriptive shape:
 4. **Background-first delivery.** The ladder is AX action → events posted to the target pid → foreground global events with explicit consent and restore. Every result reports evidence. Possibly-delivered actions are never retried.
 5. **One coordinate space.** CoreGraphics global, top-left origin, in **points**. Convert Cocoa's bottom-left rects once at the boundary, and map model pixels through recorded screenshot geometry.
 6. **A permission broker with honest onboarding.** Preflight each permission separately. Expect a restart after granting Screen Recording and the system's periodic re-confirmation prompt. On macOS 27, managed fleets can no longer silently pre-grant Accessibility.
-7. **Isolation by VM when the task doesn't need the user's apps.** Virtualization.framework runs at most two macOS guests per Mac. Run the same host app *inside* the guest. Serve human observers a view-only stream, or VNC behind a proxy that drops observer input (README § Display targets).
+7. **Isolation by VM when the task doesn't need the user's apps.** Virtualization.framework runs at most two macOS guests per Mac. Run the same host app *inside* the guest. Serve human observers a view-only stream, or VNC behind a proxy that drops observer input (README § Display targets). On the host desktop itself, the host app may serve a live view limited to granted apps, so a user who is away can watch and finish a handoff.
+8. **The lock screen is a hard stop.** Lock state comes from the OS session, never from the screen. Only the user unlocks, with their own password, at the Mac or through Screen Sharing. A session that found the Mac locked must lock it again at release.
 
 ---
 
@@ -60,7 +61,7 @@ The prescriptive shape:
 - **The host authenticates its clients.** Check the peer's code signature (team identifier plus designated requirement) on every connection. A local socket that accepts any process turns the host's grants into a privilege-escalation path for every program on the machine.
 - **The harness library stays framework-free.** It defines the [`DisplayTarget`](./README.md#runtime-contract) protocol and receives an implementation through a host-supplied tool-provider factory. The library builds and tests on any platform. Only the host target links ScreenCaptureKit, ApplicationServices, and AppKit.
 - **Keep one owner per capture stack.** Don't let several processes run ScreenCaptureKit captures for the agent at once. The host is the single owner, and clients connect to it.
-- **Keep a dev escape hatch.** An in-process dev mode that runs the drivers inside the harness and borrows the terminal's grants is useful for development. Make the host the default and label the escape hatch clearly in onboarding.
+- **Keep a dev escape hatch.** An in-process dev mode that runs the drivers inside the harness and borrows the terminal's grants is useful for development. Make the host the default and label the escape hatch clearly in onboarding. **Dev mode offers no unlock flow.** A harness crash there leaves nothing to relock the Mac, so in dev mode a locked Mac is refused with `target-unavailable`, the grant dialog never offers to unlock, and the lease never waits for an unlock.
 - **A signed GUI app that embeds the harness is its own responsible process.** The separate host is needed when the harness is a CLI, a server, or anything launched from another app's process tree. A notarized GUI app that embeds the harness and owns its own grants can run the drivers in-process, as long as it keeps the same rules: drivers off the cooperative pool, its own windows excluded from capture, and the HUD and stop key provided.
 
 #### The host protocol
@@ -75,6 +76,7 @@ The prescriptive shape:
   - When the host ends a detached lease, it keeps a record holding only the ending reason, for the grace period plus a small margin.
   - A reattach presenting that lease's valid token gets the reason exactly once, and the record is then deleted. The client applies it as the ending the session missed.
   - A wrong token, a reused token, or a reattach after the record has expired is refused exactly like an unknown lease, and the client then treats the session as `holder-lost`.
+- **Lock state is a capability** (`lock-state`). A client asks a host that offers it for lock state before the grant dialog. A client takes a host without it as unlocked and never asks. The host still refuses a lease on a locked Mac with `target-unavailable`, so a missing capability changes only the dialog, not the safety rule.
 - **Host-to-client events.** The protocol is bidirectional. The host pushes events the client didn't ask for: the user pressed the stop key, a permission changed, takeover started or ended, the user started typing on the shared desktop. The stop key is detected in the host, so without this channel it can't reach the harness.
 
 ### Permissions: map, broker, onboarding
@@ -109,6 +111,7 @@ Rules:
 - **Screenshot vs. stream.** A turn-based loop takes one screenshot per step, so the screenshot manager is enough. For sub-100 ms "observe after action," keep a long-lived `SCStream` on the target window and take the latest complete frame. Frames carry their own geometry attachments, and `.idle` status means nothing changed, which is a free "no visual change" signal for `suspected-noop`.
 - **Points vs. pixels.** `SCStreamConfiguration.width/height` are **pixels**. Display and window frames are **points**. Multiply by the filter's `pointPixelScale` for full resolution. To produce a model-sized image, set `width/height` to the model's target size with `scalesToFit` and `preservesAspectRatio`. The scaling then happens inside the capture pipeline rather than in your process, which avoids a full-resolution CPU copy (measure on your hardware). Keep a separate full-resolution capture path only for `zoom`.
 - **Exclude yourself.** Filter out the host's and the harness's bundle ids. Set `NSWindow.sharingType = .none` on the "agent active" HUD and any overlay so they never appear in captures. The model must not read its own transcript, approval prompts, or the user's chat input off the screen.
+- **Live-view frames of the host desktop use the same filter**, and blank the parts of granted windows that other windows cover. Compute the covered regions from the front-to-back window list (`CGWindowListCopyWindowInfo`) at each frame, treating the HUD and every ungranted window, notification banners included, as covering.
 - **Occluded and off-Space windows.** Per-window capture works for occluded, non-frontmost windows, which is what makes background operation possible. Behavior for minimized windows and windows on other Spaces is not documented. Verify on hardware and degrade to "activate with consent" when capture fails.
 - **Encoding.** PNG via ImageIO for UI text sharpness. JPEG at 0.8–0.9 when bandwidth matters. Do not send HEIC.
 
@@ -176,6 +179,27 @@ Rules:
 - **Single controller.** The host enforces the lease. A second harness asking for the same display gets `target-busy`.
 - **Sensitive app categories.** Default tiers: browsers *click* for the browser chrome (launching, opening URLs, switching tabs), with page actions following domain grants; terminals and IDEs *click*; System Settings, Finder, password managers, and trading/banking apps *blocked or sentinel-warned*. A browser granted as an app exposes every open page to observation, so the grant dialog says so (README § Sessions). Detect categories by bundle id and app category, never by window title, which is attacker-controllable screen content.
 - **Sanitize app names before they reach the model.** Installed-app lists injected into tool descriptions are a prompt-injection channel. Treat app names as untrusted strings: restrict their character set, bound their length and the number listed, and prefer apps from system-managed install locations.
+- **Remote takeover input goes to a process.** Keys and text from a live view during takeover are delivered with `postToPid` to the handoff app's pid, never posted globally after a frontmost check. Pointer events are hit-tested against the front-to-back window list first (README § Display targets).
+- **Display sleep.** A host may wake the display for a lease, off by default. It declares user activity (`IOPMAssertionDeclareUserActivity`) and holds a `PreventUserIdleDisplaySleep` assertion until release, on every release path. After release, the user's own sleep and lock settings apply again. Background delivery (AX actions, `postToPid`) doesn't reset the system idle timer, so without the assertion the display can sleep mid-run.
+- **The lock screen is a hard stop.**
+  - **Lock state comes from the OS session**, never from screen content: the console session dictionary (`CGSessionCopyCurrentDictionary`). Its screen-locked key is undocumented, so verify it on hardware (below).
+  - **A locked session refuses the agent.** `lease`, and `observe` or `act` if the Mac locks mid-lease, throw `target-unavailable` ("this Mac is locked; unlock it and try again"). The agent never types into the lock screen and never synthesizes anything there.
+  - **A Mac that locks mid-session is refused at once.**
+  - **Only the lease may wait.** A host may give the lease a bounded wait for an unlock already under way, with the display kept awake meanwhile. The wait is zero by default.
+- **The only unlock is the user's.** The user types their own password into macOS, at the Mac or through Screen Sharing (an OS-provided remote session). The harness never receives, stores, or relays it, and never drives the lock screen. A remote unlock, as a client runs it:
+  1. The harness asks the target `isLocked()` and gets `true`.
+  2. The grant card says the Mac is locked and offers "Unlock and allow". It says the Mac will stay unlocked and awake until the run ends, and that anyone at it can use it.
+  3. The user connects to the Mac through Screen Sharing, types their password at the lock screen, and disconnects.
+  4. The user answers the card. The lease waits up to its configured time for the unlock to register, then the run starts.
+  5. At release, the host locks the Mac (below).
+- **Relocking is mandatory when the session found the Mac locked.** When `foundLocked` is set, at the dialog or at lease, the host must lock the Mac at release, on every release path. That includes abort, a dropped holder, a lease taken over from a holder that died, and a crash of the host itself. This is not a setting.
+  - **Lock the session explicitly, then check.** Use the system's lock-screen action. Synthesizing its shortcut (⌃⌘Q) from the host's private event source is acceptable here because locking only ever moves the Mac to a safer state, or use a lock call behind a capability probe. Then read the session's lock state. If the Mac isn't locked within a couple of seconds, fall back to display sleep.
+  - **Display sleep is only the fallback** (`IORequestIdle` on `IODisplayWrangler`, which `pmset displaysleepnow` uses). It locks only when the Mac asks for its password immediately. With a delay set, the Mac stays unlocked until the delay passes.
+  - **If the Mac still isn't locked, say so.** After the fallback, read the lock state again. If it is still unlocked, the host sends a host-to-client event and the harness posts a notice to the conversation ("Your Mac could not be locked after the run and may be unlocked"). A failed relock must never be silent.
+  - **Surviving a host crash: launchd is the watchdog.** Nothing in a crashed host process can lock the Mac, so the obligation is persisted. Before the first action on a Mac it found locked, the host writes a *relock-pending* marker to its own container: lease id and time, written atomically. It clears the marker only after a verified relock. The host runs as a launchd agent that is restarted after a crash (`SMAppService.agent` with keep-alive). At startup, before accepting any connection, it checks for the marker. If it finds one and holds no live lease, it locks the Mac, follows the fallback and notice rules above, and clears the marker. No separate watchdog process is needed.
+- **Local input ends a remotely unlocked session.** If the user unlocked the Mac remotely for this session, physical keyboard or mouse input at the Mac means someone else is there. The session should end with `target-unavailable` ("someone started using this Mac") and the host should lock the Mac.
+  - **Knowing the unlock was remote needs no hardware signal.** The harness knows which surface answered the "Unlock and allow" card. If it was answered from a surface that isn't on this Mac (a phone, another computer), the unlock was remote, and the lease carries that as `remoteUnlock: true`. If it was answered on the Mac itself, or the user unlocked without the card, the user is presumed present, and this rule doesn't apply.
+  - **Knowing the input is local does need hardware.** The rule applies only where the host can tell local input apart from Screen Sharing input and from its own synthesized events (below). Until that is verified, a host that can't tell them apart doesn't end the session. It still pauses the agent's input while anyone types (the `userTyping` host-to-client event), and the relock at release still applies.
 
 ### Isolation: macOS VMs and their limits
 
@@ -306,6 +330,13 @@ These questions could not be settled from documentation:
 - What the 26+ `SCScreenshotConfiguration` "ignore UI elements" option actually removes (cursor, menu bar, overlays).
 - Whether a window's `SCWindow.frame` exactly matches the region a `desktopIndependentWindow` capture produces (shadow, title-bar inclusion) when `ignoreShadowsSingleWindow` is set. Any mismatch shifts every click.
 - Whether pasteboard reads by a background host trigger the 15.4+ privacy prompt, and how often.
+- Whether the session's screen-locked flag (`CGSSessionScreenIsLocked` in the console session dictionary) is reliable on 26 and 27, while the display sleeps and during a Screen Sharing session.
+- Whether declaring user activity wakes the display of a locked Mac.
+- Whether `IORequestIdle` on `IODisplayWrangler` sleeps every display on Apple silicon on 27, including external displays and during Screen Sharing.
+- Whether "require password immediately" relocks after a forced display sleep.
+- Whether the explicit lock (the lock-screen shortcut, or a lock call) locks immediately on 26 and 27, including while Screen Sharing is connected.
+- Whether events sent with `postToPid` reach secure password fields during a remote takeover while another app has secure event input enabled.
+- Whether local HID input can be told apart from Screen Sharing input and from the host's own private-state event source.
 
 ---
 

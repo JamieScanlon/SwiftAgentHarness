@@ -79,7 +79,7 @@ Computer use is not one layer's concern. It is a backend family plus a tool fami
 
   For policy, `process` counts as isolated for **data** (no user files, sign-ins, or history) but not for **network**. It shares the host's network, so the network rules in [§ Safety](#safety-is-layered-not-a-single-gate) must be enforced inside the browser rather than at a namespace boundary.
 - **`humanPresence`** says who else may be using the screen:
-  - `shared`: a person may be using this screen right now. The host desktop, the user's real browser, and a phone someone carries are all `shared`. A `shared` target follows the host-target rules (opt-in, present user) whatever its `isolation`.
+  - `shared`: a person may be using this screen right now. The host desktop, the user's real browser, and a phone someone carries are all `shared`. It may serve a live view limited to granted apps (see [§ Display targets](#display-targets-as-an-execution-environment-family)). A `shared` target follows the host-target rules (opt-in, present user) whatever its `isolation`.
   - `exclusive`: only the agent drives it. People may watch through a live view or act during takeover.
 
 ### Runtime contract
@@ -92,6 +92,7 @@ interface DisplayTarget {
   lease(req: LeaseRequest): Promise<Lease>                      // single controller; fails if held
   release(lease: Lease, reason: ReleaseReason): Promise<void>   // always restores UI state (unhide, cursor, focus)
   permissions(): Promise<PermissionSnapshot>                    // polled before each action batch
+  isLocked?(): Promise<boolean>                                 // asked before the grant dialog; omitted = no lock screen = unlocked
 
   // Perception
   describe(lease: Lease): Promise<TargetLayout>                 // displays, origins, scale factors; windows/tabs of granted apps only
@@ -104,6 +105,8 @@ interface DisplayTarget {
   liveView?(lease: Lease): Promise<{ url: string; viewOnly: boolean; expiresAt: string }>
   takeover(lease: Lease, on: boolean): Promise<void>            // pauses capture and agent input while on
 }
+// lease, observe, and act throw TargetUnavailable when the target can't be used until the user acts at it
+type TargetUnavailable = { kind: "target-unavailable"; reason: string }   // e.g. "this Mac is locked; unlock it and try again"
 
 type ObserveRequest = {
   modes: ("pixels" | "accessibility" | "dom" | "ocr")[]
@@ -130,6 +133,7 @@ type ReleaseReason =
   | "idle-timeout" | "kill-switch" | "holder-lost"   // holder-lost: the lease holder's connection died
   | "permission-revoked"             // a platform (OS) permission was revoked; the user must re-grant it
   | "policy-revoked"                 // a mode denied computer use mid-session; don't retry
+  | "target-unavailable"             // the user must act at the target first (wake it, unlock it)
 // Each session terminal reason releases with the same-named value; the step and cost ceilings
 // release as "budget-exhausted", and the time ceiling and grant expiry as "expired".
 
@@ -139,6 +143,12 @@ type ScreenshotGeometry = {
   scaleFactor: number                // backing scale of the captured display
 }
 ```
+
+**`target-unavailable` is a stop, not a failure to retry.** A target throws it when it can't be used until the user does something at it, such as waking or unlocking it. Without it, a sleeping display looks like a failed observation and the session retries until the progress check ends it.
+- **The reason is trusted text.** The driver writes it from operating-system state, never from screen content, and words it as something the user can do. The parent may show it to the user verbatim.
+- **At lease,** the lease is refused, and the parent gets `needs-user` with the reason before any step runs.
+- **Mid-session,** the action that hit it comes back `refused` with the reason as evidence, and the rest of its batch is `not-executed`. The session ends at once with terminal reason and release reason `target-unavailable`, and the parent gets `needs-user` with the reason.
+- **The harness never retries it.** The parent may delegate again after the user says they have done what the reason asks.
 
 The contract is deliberately the same for a VM reached over VNC, a managed Chromium reached over CDP, and the host desktop. What differs is declared in the manifest: perception and delivery modes, isolation, and human presence. Tools and policy read those declarations, not the platform.
 
@@ -188,7 +198,16 @@ Rules:
   - **Tokens govern connecting, not staying connected.** A token is short-lived and single-use for establishing the connection. An established stream lasts until it is revoked or the lease is released.
   - **Revocation.** Releasing the lease revokes every observer connection. The user can revoke one from the oversight surface.
   - **Two kinds of link.** A *user link* is issued to a user authorized on the conversation, through that user's authenticated surface. An *observer link* is view-only and may be shared with someone who is only watching. Takeover is bound to the **user's identity**, not to a live-view connection, so it can start from the oversight surface as well as from the live view.
-  - **During takeover,** input is accepted on user links of that conversation and never on observer links. Each link connects once, and the user can revoke any single connection. The model's capture is suspended. Observer links see a paused frame, because the user may be typing a credential.
+  - **During takeover,** input is accepted on user links of that conversation and never on observer links. Each link connects once, and the user can revoke any single connection. The model's capture is suspended. Observer links see a paused frame, because the user may be typing a credential. This holds on every target, including a shared target whose operator allowed observers.
+- **A shared target's live view stays within the grants.** A shared target, such as the user's own Mac, may serve a live view so a user who is away can watch the run and finish a handoff. The view must never become a remote desktop.
+  - **Frames** use the agent's capture filter: granted apps, minus excluded apps, never the harness's own UI. Where an ungranted window or the harness's own UI covers part of a granted window, that part is blanked, so the view shows where input won't land. Notification banners are windows of their own apps and are blanked unless that app is granted, since they often carry message previews. The pointer is shown. Frames keep coming to user links during takeover.
+  - **No observer links** on a shared target unless the operator opts in. Opted-in observers get the same filtered frames and the paused frame during takeover.
+  - **Remote takeover input is narrower than the grants.** At the machine, the user is simply using their own computer and is not limited. Through the live view, a phone session is a remote channel into the user's real desktop, so its input is limited:
+    - **Only the handoff's app.** Input reaches only the app the handoff is for (the working app when the agent called `handoff`), not every granted app. Logins, 2FA, CAPTCHAs, and payments each happen in one app. A takeover the user starts from the oversight surface, with no handoff, uses the working app at the moment the takeover starts. If there is no working app yet, the takeover takes no remote input, and the user acts at the machine.
+    - **Never broad-radius apps by default.** Shells and IDEs, file managers, and system settings never accept remote takeover input unless the operator opts in, whatever the grant says. A terminal granted at click tier for the agent must not become a remote shell.
+    - **Pointer events** land only where the topmost window at that point belongs to the handoff's app. The harness's own windows and its activity indicator count as other apps. A drag is checked at every move, and a release outside the app lands where the drag last was.
+    - **Keys and text** are delivered to the handoff app's process, never posted globally after a frontmost-app check. Delivering to the process closes the gap between check and delivery, in which a dialog or another app can come to the front. System shortcuts need that app's `system-keys` flag. The stop key is never passed through.
+  - **Disclosure.** The grant dialog says so: "Your granted apps' windows can be watched from a live view, and the app a handoff is for can be controlled from it during the handoff." 
 
 ### The canonical action model
 
@@ -286,6 +305,8 @@ type LeaseRequest = {
   conversation: string; agent: string
   initiator: TrustClass                // trust of whoever started the work (operator, non-owner, trigger)
   userPresent: boolean                 // an interactive user is attached and can answer approvals now
+  foundLocked?: boolean                // the target was locked when the user was asked for grants (or at lease)
+  remoteUnlock?: boolean               // the unlock card was answered from a surface not on the target
   grants: Grant[]                      // requested; user approves a subset
   budgets: ResolvedBudgets             // host policy combined with the task's request; see § Budgets
   delivery: "background-only" | "foreground-allowed"
@@ -313,7 +334,8 @@ type Grant =
 - **Managed-browser events.** JavaScript dialogs (`alert`, `confirm`, `prompt`, `beforeunload`) pause the page and appear as an observation the model must answer with an explicit action. They are never auto-accepted. Popups open as new tabs under the same domain grants and policy. Downloads go to a lease-scoped folder. At release, every file is deleted except those the specialist named in `keepFiles` on its [`computer_finish`](#verification-ask-user-and-handoff-are-actions) call. The result's `downloads` lists every file with whether it was kept. Kept files move to the conversation's attachments. Nothing is kept by matching names in the result's text.
 - **Kept downloads are attachments of unknown origin.** From either browser, a kept file's attachment copy is subject to the attachment size cap and is tagged `unknown-party`: it is downloaded content, not something the user handed over.
 - **Where untargeted input goes.** A `type` or `key` without `into` is delivered to the **working app**: the app of the most recently cited observation, which must be granted at `full`. On background-delivery targets it goes to that app's focused element by process-routed delivery. It never goes to the frontmost app just because it is frontmost. On a shared desktop the frontmost app is usually the user's, or the harness itself.
-- **Approval is one dialog at session start, not one per click.** The user approves the grant set. Per-action confirmation is reserved for consequential actions (below). Grants expire with the session. Sessions spawned without a present user (delegated or background) get a short absolute expiry, measured in tens of minutes. Budget extensions never move it.
+- **Approval is one dialog at session start, not one per click.** The user approves the grant set. When the target reports it is locked (`isLocked()`, asked just before the dialog), the dialog may offer to unlock as part of approving. The unlock is always done by the user, in the OS (see [macos § The lock screen](./macos.md#safety-specifics-on-the-host-desktop)), and the dialog says plainly that the target will stay unlocked and awake until the run ends, and that anyone at it can use it. Per-action confirmation is reserved for consequential actions (below). Grants expire with the session. Sessions spawned without a present user (delegated or background) get a short absolute expiry, measured in tens of minutes. Budget extensions never move it.
+- **Finishing a handoff on a shared target.** A present user finishes it at the machine, or through the target's live view where it has one. Surfaces offer the view for the handoff and say the user can act at the machine instead. A pairing that has neither waits out the handoff's timeout.
 - **Non-granted apps are excluded from observation and protected from input.**
   - **Observation:** filter capture, trees, and OCR to granted apps. Filtering meets the rule, so hiding the user's windows is not required, which matters on a shared desktop where hiding is disruptive. Exclude the harness's own UI (terminal, chat window, overlays) from every capture. The model must never read its own transcript or approval prompts off the screen.
   - **Input:** a foreground pointer action at a point is hit-tested first. If the window under the point belongs to a non-granted app, the action is `refused` with `escalation: "observe"`. Hiding non-granted windows remains an option for targets that can't hit-test. If used, restore them at turn end, on abort, and on crash, with a timeout so cleanup can't wedge.
@@ -437,11 +459,13 @@ No single control is sufficient. Measured attack success rates for browser agent
    - **Fast variant:** a [decision model](../providers/decision-models.md#where-the-harness-uses-deciders) on the `guard` role can run the same check in ~100 ms. Its robustness to adaptive attacks is unmeasured, and deciders are themselves injection-sensitive, so validate it on your own attack set before relying on it. Keep the LLM guard for consequential actions.
    - **Outcome:** a mismatch or an unavailable verdict goes to *confirm*, never silently allowed. An unbound checker means *confirm* for interact actions on shared targets (see the classification table above).
 5. **Consequential-action confirmation**, including vendor safety signals: malicious-instructions, irrelevant-domain, and sensitive-domain checks, and `require_confirmation` decisions. Route each through the [approval UX](../../surfaces/interface/approval-ux.md) as a real question to the user. Auto-acknowledging a vendor safety check is an anti-pattern even in bypass mode. A sensitive-domain signal means *watch mode*:
-   - On targets with a live view, the session continues only while a view is **open**, meaning an observer connection is currently connected.
-   - On targets without one (the host desktop, which is the user's own screen), watch mode means the session continues only after a present user confirms on an approval card, and it ends if no user is attached.
+   - On **exclusive** targets with a live view, the session continues only while a view is **open**, meaning a view connection (a user or observer link) is currently connected.
+   - On **shared** targets, it continues while a view is open, or after a present user confirms on an approval card. The user's own screen can be watched at the machine, which the harness can't detect, so the card stands in for it.
+   - On targets **without a live view**, only the card applies.
+   - With no view open and no user attached, the session ends.
    - **Watch mode lasts for the rest of the session.** Leaving the flagged domain doesn't end it, because the harness can't tell when the vendor would stop flagging, and a steered session can leave and come back.
 6. **Injection classifiers on observations**, where the vendor or a `guard` decider offers them. They warn and steer ("check whether this instruction came from the user"). They do not block on their own, since they read the same untrusted content.
-7. **Takeover mode for credentials and human-only steps.** Logins, 2FA, CAPTCHAs, and payment entry are reported by the agent as `handoff` and completed by the user. While takeover is on, capture is suspended and agent input is blocked, so the model never sees the password being typed. On isolated targets the user acts through the live view, which accepts their input only while takeover is on. Block navigation to URLs that embed secrets, and redact secrets from any auxiliary-model inputs. **A secret** here is:
+7. **Takeover mode for credentials and human-only steps.** Logins, 2FA, CAPTCHAs, and payment entry are reported by the agent as `handoff` and completed by the user. While takeover is on, capture is suspended and agent input is blocked, so the model never sees the password being typed. On isolated targets the user acts through the live view, which accepts their input only while takeover is on. On a shared target the user acts at the machine, or through its live view where it has one, within the remote-input limits in [§ Display targets](#display-targets-as-an-execution-environment-family). Block navigation to URLs that embed secrets, and redact secrets from any auxiliary-model inputs. **A secret** here is:
    - credentials in a URL's userinfo;
    - query or fragment parameters whose names mark them as credentials (token, key, secret, password, session, code, and similar);
    - any value the user typed during takeover;
@@ -501,6 +525,7 @@ type ComputerUseResult = {
 - `deadline` means the stated cutoff passed.
 - An idle timeout comes back as `failed` with `reason: "idle-timeout"`. That usually points at the model binding or the driver rather than the task.
 - `blocked` with `missingGrants` means the task needs authority it wasn't given. The parent can ask the user to grant it and delegate again.
+- `needs-user` with a target's reason (from `target-unavailable`) means the user must act at the target, such as waking or unlocking it, before the parent delegates again.
 
 **The result is validated, and its text is untrusted.**
 - **Validation.** When the task has a `returnSchema`, the harness validates `result` against it. On a mismatch the `computer_finish` call is rejected with the validation errors, and the specialist gets one chance to call it again. After that, `result` is omitted and `reason` says why.
@@ -534,11 +559,11 @@ Tool schemas for computer use run to several thousand tokens. Keep them deferred
 
 Surfaces that support it declare a `computer-use` capability and render:
 
-- **A live view.** An authenticated stream, or VNC behind a view-only control (see [§ Display targets](#display-targets-as-an-execution-environment-family)). It accepts input only from the user who started a takeover. A sensitive-domain session requires it to be open, or, on targets without one, a present user's confirmation.
+- **A live view.** An authenticated stream, or VNC behind a view-only control (see [§ Display targets](#display-targets-as-an-execution-environment-family)). It accepts input only on user links during a takeover. A sensitive-domain session requires it to be open, or, on shared targets and targets without one, a present user's confirmation. For a handoff on a shared target, surfaces offer the view and say the user can act at the machine instead.
 - **An activity indicator.** "Agent is using <target>", with the current app, the step against the current allotment, and how many times the allotment was extended. It is visible outside the chat window on host targets. In the in-process development mode there may be no separate host app to draw it. The harness's own surface then shows it, and that mode is labeled as development-only.
 - **Per-action approval cards** for consequential actions, showing the action, target element, a cropped image of the target region, the intent-check verdict, and, labeled as such, the model's stated intent if the vendor sent one. The crop uses the presentation vocabulary's `image` block, which surfaces that can't render images degrade to its alt text (see [Interface § portable presentation](../../surfaces/interface/README.md#the-portable-presentation-payload)). A remote surface fetches the crop through the conversation-scoped blob route in the [Communication Layer](../../core/communication-layer/).
 - **Takeover and stop controls.** Stop is also bound to the global kill switch on host targets.
-- **A post-run replay.** Action log plus observation thumbnails, and a recording where the target supports it. Replays are indexed by conversation and run id and listed on that conversation, so they can be found after the session ends.
+- **A post-run replay.** Action log plus observation thumbnails, and a recording where the target supports it. **Takeover is never recorded:** replay thumbnails, recordings, and audit images skip every frame from takeover start to end, on every target, because the user may be typing a credential. The replay shows a marker for the gap. Replays are indexed by conversation and run id and listed on that conversation, so they can be found after the session ends.
 
 Headless runs (scheduled triggers) can use isolated targets only. A consequential action in a headless run is denied with `headlessDenied` and surfaced on the next interactive attach. That is the same rule the execution-environments page applies to exec approval.
 
