@@ -1,5 +1,7 @@
 # Computer use: open feedback for the spec team
 
+Both sections below are written up for the spec team as one change request, [Computer use on the user's own Mac: proposed spec changes](https://claude.ai/artifact/L1RBD8sdFYNyTZMQmgzSyq). It adds two items found while writing it: the `target-unavailable` terminal reason releases as `cancelled`, against README § Runtime contract's rule that each terminal reason releases under its own name; and the hardware checks macos.md § Verify on hardware before relying on should list for sleep and lock.
+
 ## A live view of the user's own Mac: decided, spec text pending
 
 A downstream change request asked for a live view of the user's own Mac, limited to granted apps, so a user who started a run from their phone can watch it and complete handoffs. The spec treated the host desktop as having no live view. The questions below were decided, and the implementation follows the decisions. The spec text still says otherwise in the places each item names. Spec references are relative to `harness-template/`.
