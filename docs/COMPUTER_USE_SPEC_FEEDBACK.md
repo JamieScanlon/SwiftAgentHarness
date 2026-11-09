@@ -78,6 +78,12 @@ A downstream change request found that a run started away from the Mac failed ev
 - A locked Mac refuses the lease, and refuses observing and acting mid-lease, so the agent never types into the lock screen.
 - `DisplayTargetError.targetUnavailable(reason)` for a target the user must act at first. A lease refused with it, or a session that hits it, ends at once as `needs-user` with the reason. The session's terminal reason is `target-unavailable`, and its lease is released as `cancelled`.
 
+**Implemented later, for a locked Mac the user unlocks remotely.** A second change request asked for the user to unlock the Mac from a phone, through macOS Screen Sharing, as part of approving the session.
+- `DisplayTarget.isLocked()`, with a default of `false`. The registry asks it before the grant dialog and passes the answer as `ComputerUseGrantRequest.targetLocked`, and to the target as `LeaseRequest.targetLocked`. It crosses the display host wire under a new `lock-state` capability, as protocol version 7.1.
+- `MacHostDisplayTarget.Configuration.unlockTimeout`, zero by default: how long a lease waits for an unlock already under way. Only the lease waits; a Mac that locks mid-session is still refused at once.
+- `MacHostDisplayTarget.Configuration.relocksOnRelease`, off by default: a session that found the Mac locked sleeps its display at release, which relocks a Mac set to ask for its password immediately.
+- The harness never sees the password; the user types it into macOS itself.
+
 **Spec text to consider.**
-- `backends/computer-use/macos.md` § Safety specifics on the host desktop could cover display sleep and the lock screen.
+- `backends/computer-use/macos.md` § Safety specifics on the host desktop could cover display sleep and the lock screen. The change request asked for three notes there, which this project can't make since the spec is read-only: lock state is part of the grant request; the only supported remote unlock is the user's own password, through Screen Sharing; and a session that found the Mac locked leaves it locked.
 - `backends/computer-use/README.md` § The computer-use sub-agent could list a target the user must wake or unlock among the `needs-user` cases, and § Runtime contract could name an error for it.

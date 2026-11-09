@@ -2,6 +2,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Logging
 import SwiftAgentHarness
 
 /// The user's own Mac as a display target, with the drivers inside this process. Run from a CLI or anything
@@ -36,6 +37,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// Wakes the display for each lease and keeps it awake until release, for a host whose user is often away
         /// from the Mac. The Mac's own display-sleep and lock settings apply again after release. Off by default.
         public var wakesDisplay: Bool
+        /// How long a lease waits for a locked Mac to be unlocked before refusing it, for a user who unlocks it
+        /// remotely as they approve the session. Only the lease waits; a Mac that locks mid-session is refused at
+        /// once. Zero, the default, refuses a locked Mac straight away.
+        public var unlockTimeout: Duration
+        /// Sleeps the display at release when the session found the Mac locked, so that, with the Mac set to ask
+        /// for its password immediately, it's locked again. With a delay before the password is asked for, the Mac
+        /// stays unlocked until the delay passes. Off by default.
+        public var relocksOnRelease: Bool
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
@@ -53,10 +62,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
             liveFrameLongEdge: Int = 1_600,
             stopKey: KeyCombo? = .defaultStopKey,
             embeddedInSignedApp: Bool = false,
-            wakesDisplay: Bool = false
+            wakesDisplay: Bool = false,
+            unlockTimeout: Duration = .zero,
+            relocksOnRelease: Bool = false
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
             self.wakesDisplay = wakesDisplay
+            self.unlockTimeout = unlockTimeout
+            self.relocksOnRelease = relocksOnRelease
             self.liveFrames = liveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
             self.stopKey = stopKey
@@ -78,6 +91,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.displayPower = displayPower
             self.wakeTimeout = wakeTimeout
             self.wakesDisplay = false
+            self.unlockTimeout = .zero
+            self.relocksOnRelease = false
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
@@ -154,7 +169,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var stopKeyMonitor: MacStopKeyMonitor?
     /// Held from lease to release while ``Configuration/wakesDisplay`` is on.
     private var wakeAssertions: [UInt32] = []
+    /// The lease was found locked, so release locks the Mac again when ``Configuration/relocksOnRelease`` is on.
+    private var relocksAtRelease = false
     private var power: any MacDisplayPowering { configuration.displayPower }
+    private let logger = Logger(label: "SwiftAgentHarness.ComputerUse.MacHost")
 
     static let lockedReason = "this Mac is locked; unlock it and try again"
     static let noDisplayReason = "this Mac's display is asleep or disconnected; wake it and try again"
@@ -194,7 +212,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
         let lease = Lease(request: granted, issuedAt: Date())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
         do {
-            try await prepareDisplay(for: request.agentID)
+            let foundLocked = try await prepareDisplay(for: request.agentID)
+            relocksAtRelease = foundLocked || request.targetLocked
         } catch {
             endWake()
             _ = await lock.release(leaseID: lease.id)
@@ -218,9 +237,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
         return lease
     }
 
-    /// Wakes the display when configured to, then refuses a locked Mac: past the lock screen only the user's
-    /// password gets anywhere.
-    private func prepareDisplay(for agentID: String) async throws {
+    /// Wakes the display when configured to, then refuses a locked Mac once ``Configuration/unlockTimeout`` passes
+    /// without the user unlocking it: past the lock screen only the user's password gets anywhere. Returns whether
+    /// the Mac was locked.
+    private func prepareDisplay(for agentID: String) async throws -> Bool {
         if configuration.wakesDisplay {
             endWake()
             wakeAssertions = power.holdAwake(reason: "Computer use: \(agentID)")
@@ -231,7 +251,23 @@ public actor MacHostDisplayTarget: DisplayTarget {
             }
             await capture.invalidate()
         }
-        try requireUnlocked()
+        return try await awaitUnlock()
+    }
+
+    private func awaitUnlock() async throws -> Bool {
+        guard power.screenIsLocked else { return false }
+        let deadline = ContinuousClock.now + configuration.unlockTimeout
+        if configuration.unlockTimeout > .zero {
+            logger.debug("Lease waiting for this Mac to be unlocked", metadata: ["timeout": "\(configuration.unlockTimeout)"])
+        }
+        while power.screenIsLocked, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let unlocked = !power.screenIsLocked
+        logger.info("Lease found this Mac locked", metadata: ["unlocked": "\(unlocked)"])
+        if !unlocked { throw DisplayTargetError.targetUnavailable(Self.lockedReason) }
+        await capture.invalidate()
+        return true
     }
 
     private func endWake() {
@@ -257,6 +293,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.release(leaseID: lease.id) else { return }
         endWake()
+        if relocksAtRelease, configuration.relocksOnRelease {
+            logger.info("Sleeping the display to lock this Mac again, as the session found it")
+            power.sleepDisplay()
+        }
+        relocksAtRelease = false
         stopKeyMonitor?.stop()
         stopKeyMonitor = nil
         eventHub.finish(lease.id)
@@ -275,6 +316,12 @@ public actor MacHostDisplayTarget: DisplayTarget {
 
     public func permissions() async -> PermissionSnapshot {
         broker.snapshot(manifest.requires)
+    }
+
+    public func isLocked() async -> Bool {
+        let locked = power.screenIsLocked
+        logger.info("This Mac's lock state", metadata: ["target": "\(manifest.id)", "locked": "\(locked)"])
+        return locked
     }
 
     // MARK: - Perception

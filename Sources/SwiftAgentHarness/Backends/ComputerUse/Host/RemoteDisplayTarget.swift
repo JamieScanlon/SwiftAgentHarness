@@ -256,6 +256,14 @@ public actor RemoteDisplayTarget: DisplayTarget {
         return snapshot
     }
 
+    /// Asks the host. A host that can't say, or doesn't answer, is taken as unlocked: the lease then says if it isn't.
+    public func isLocked() async -> Bool {
+        guard handshake.capabilities.contains(.lockState), case .locked(let locked)? = try? await call(.isLocked) else {
+            return false
+        }
+        return locked
+    }
+
     public func describe(_ lease: Lease) async throws -> TargetLayout {
         guard case .layout(let layout) = try await call(.describe(leaseID: lease.id)) else { throw unexpected("layout") }
         return layout

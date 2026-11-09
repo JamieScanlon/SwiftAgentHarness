@@ -19,6 +19,9 @@ public struct LeaseRequest: Sendable {
     public var initiator: ComputerUseInitiator
     /// A person is present to watch, approve, and take over.
     public var userPresent: Bool
+    /// The target was locked when the user was asked for the grants, so the user unlocked it for this session.
+    /// The registry sets it; a target that locks again at release reads it.
+    public var targetLocked: Bool
     /// Lets a target tell a crashed holder from a live one.
     public var isHolderAlive: @Sendable () async -> Bool
 
@@ -31,6 +34,7 @@ public struct LeaseRequest: Sendable {
         delivery: ComputerUseDeliveryPolicy = .backgroundOnly,
         initiator: ComputerUseInitiator,
         userPresent: Bool,
+        targetLocked: Bool = false,
         isHolderAlive: @escaping @Sendable () async -> Bool = { true }
     ) {
         self.target = target
@@ -41,6 +45,7 @@ public struct LeaseRequest: Sendable {
         self.delivery = delivery
         self.initiator = initiator
         self.userPresent = userPresent
+        self.targetLocked = targetLocked
         self.isHolderAlive = isHolderAlive
     }
 }
@@ -219,6 +224,10 @@ public protocol DisplayTarget: Sendable {
 
     /// Pauses capture and agent input while on.
     func takeover(_ lease: Lease, on: Bool) async throws
+
+    /// The target's screen is locked, so only the user can let a session in. Asked before the grant dialog, which
+    /// can then offer to unlock it. Targets with no lock screen answer `false`.
+    func isLocked() async -> Bool
 }
 
 public extension DisplayTarget {
@@ -231,6 +240,7 @@ public extension DisplayTarget {
     func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {}
     func downloads(_ lease: Lease) async -> [DisplayDownload] { [] }
     func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> { AsyncStream { $0.finish() } }
+    func isLocked() async -> Bool { false }
 
     func liveView(_ lease: Lease) async throws -> DisplayLiveView? {
         try await liveView(lease, role: .user)

@@ -14,6 +14,8 @@ final class FakeDisplayPower: MacDisplayPowering {
         var nextID: UInt32 = 1
         var held: Set<UInt32> = []
         var holds: [String] = []
+        /// The assertions still held at each display sleep.
+        var sleeps: [Set<UInt32>] = []
     }
 
     private let state: Mutex<State>
@@ -37,12 +39,20 @@ final class FakeDisplayPower: MacDisplayPowering {
         state.withLock { $0.held.subtract(assertions) }
     }
 
+    func sleepDisplay() {
+        state.withLock { state in
+            state.sleeps.append(state.held)
+            state.asleep = true
+        }
+    }
+
     var displayIsAsleep: Bool { state.withLock { $0.asleep } }
     var screenIsLocked: Bool { state.withLock { $0.locked } }
 
     func setLocked(_ locked: Bool) { state.withLock { $0.locked = locked } }
     var held: Set<UInt32> { state.withLock { $0.held } }
     var holds: [String] { state.withLock { $0.holds } }
+    var sleeps: [Set<UInt32>] { state.withLock { $0.sleeps } }
 }
 
 @Suite("macOS host display target: waking the display and the lock screen")

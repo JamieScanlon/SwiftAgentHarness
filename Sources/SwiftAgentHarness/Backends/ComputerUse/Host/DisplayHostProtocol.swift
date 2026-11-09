@@ -13,9 +13,9 @@ import Foundation
 /// a host honours only the leases it issued on the same connection, or that the connection reattached. The host
 /// also sends events unprompted.
 public enum DisplayHostProtocol {
-    public static let version = DisplayHostVersion(major: 7, minor: 0)
+    public static let version = DisplayHostVersion(major: 7, minor: 1)
     /// What this build of the protocol supports.
-    public static let capabilities: Set<DisplayHostCapability> = [.liveView, .downloads, .events, .reattach, .imageFiles]
+    public static let capabilities: Set<DisplayHostCapability> = [.liveView, .downloads, .events, .reattach, .imageFiles, .lockState]
     /// The largest message either side accepts.
     public static let maxMessageBytes = 64 * 1024 * 1024
 }
@@ -61,6 +61,8 @@ public struct DisplayHostCapability: RawRepresentable, Sendable, Codable, Hashab
     public static let reattach = Self(rawValue: "reattach")
     /// Images travel as files the host wrote, not inline. Offered only on transports that share a filesystem.
     public static let imageFiles = Self(rawValue: "image-files")
+    /// The host says whether its target's screen is locked. Without it, a client takes the target as unlocked.
+    public static let lockState = Self(rawValue: "lock-state")
 }
 
 /// A lease request as it travels; the host supplies holder liveness from the connection.
@@ -73,6 +75,8 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
     public var delivery: ComputerUseDeliveryPolicy
     public var initiator: ComputerUseInitiator
     public var userPresent: Bool
+    /// Absent from an older client's request, which reads as unlocked.
+    public var targetLocked: Bool
 
     public init(_ request: LeaseRequest) {
         self.target = request.target
@@ -83,6 +87,20 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         self.delivery = request.delivery
         self.initiator = request.initiator
         self.userPresent = request.userPresent
+        self.targetLocked = request.targetLocked
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        target = try container.decode(DisplayTargetID.self, forKey: .target)
+        conversationID = try container.decodeIfPresent(UUID.self, forKey: .conversationID)
+        agentID = try container.decode(String.self, forKey: .agentID)
+        grants = try container.decode([ComputerUseGrant].self, forKey: .grants)
+        budgets = try container.decode(ComputerUseBudgets.self, forKey: .budgets)
+        delivery = try container.decode(ComputerUseDeliveryPolicy.self, forKey: .delivery)
+        initiator = try container.decode(ComputerUseInitiator.self, forKey: .initiator)
+        userPresent = try container.decode(Bool.self, forKey: .userPresent)
+        targetLocked = try container.decodeIfPresent(Bool.self, forKey: .targetLocked) ?? false
     }
 
     func leaseRequest(isHolderAlive: @escaping @Sendable () async -> Bool) -> LeaseRequest {
@@ -95,6 +113,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
             delivery: delivery,
             initiator: initiator,
             userPresent: userPresent,
+            targetLocked: targetLocked,
             isHolderAlive: isHolderAlive
         )
     }
@@ -119,6 +138,8 @@ public enum DisplayHostRequest: Sendable, Codable, Hashable {
     case downloads(leaseID: UUID)
     case release(leaseID: UUID, reason: ReleaseReason)
     case permissions
+    /// Needs ``DisplayHostCapability/lockState``.
+    case isLocked
     case describe(leaseID: UUID)
     case observe(leaseID: UUID, request: ObserveRequest)
     case act(leaseID: UUID, batch: ActionBatch)
@@ -150,6 +171,7 @@ public enum DisplayHostResponse: Sendable, Codable, Hashable {
     case downloads([DisplayDownload])
     case done
     case permissions(PermissionSnapshot)
+    case locked(Bool)
     case layout(TargetLayout)
     /// With `imageFile`, the image's bytes are in that file instead of the observation; the client reads and
     /// deletes it.

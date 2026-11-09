@@ -66,6 +66,10 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var leaseError: DisplayTargetError?
     private(set) var observeError: DisplayTargetError?
     private(set) var actError: DisplayTargetError?
+    /// What ``isLocked()`` answers.
+    private(set) var locked = false
+    /// Each lease request's ``LeaseRequest/targetLocked``, in order.
+    private(set) var leasedLocked: [Bool] = []
 
     init(
         manifest: DisplayTargetManifest,
@@ -82,6 +86,14 @@ actor FakeDisplayTarget: DisplayTarget {
         leaseError = lease
         observeError = observe
         actError = act
+    }
+
+    func setLocked(_ locked: Bool) {
+        self.locked = locked
+    }
+
+    func isLocked() async -> Bool {
+        locked
     }
 
     func setFailsWhenCancelled(_ fails: Bool) {
@@ -114,6 +126,7 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func lease(_ request: LeaseRequest) async throws -> Lease {
+        leasedLocked.append(request.targetLocked)
         if let leaseError { throw leaseError }
         let lease = Lease(request: request, issuedAt: now())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))

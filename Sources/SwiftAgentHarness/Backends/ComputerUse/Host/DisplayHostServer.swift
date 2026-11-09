@@ -191,6 +191,8 @@ public actor DisplayHostServer {
                 return .done
             case .permissions:
                 return .permissions(await target.permissions())
+            case .isLocked:
+                return .locked(await target.isLocked())
             case .describe(let leaseID):
                 return .layout(try await target.describe(try lease(leaseID, connection: id)))
             case .observe(let leaseID, let observe):
@@ -242,6 +244,7 @@ public actor DisplayHostServer {
         case .liveView, .liveViewers, .liveConnections, .revokeLiveView, .endObservers, .liveFrame, .liveInput: .liveView
         case .downloads: .downloads
         case .reattach: .reattach
+        case .isLocked: .lockState
         case .hello, .lease, .release, .permissions, .describe, .observe, .act, .takeover: nil
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 
 public enum ComputerUseLeaseDenial: Error, Sendable, Equatable {
     case unknownTarget(DisplayTargetID)
@@ -22,6 +23,10 @@ public struct ComputerUseGrantRequest: Sendable {
     public var target: DisplayTargetManifest
     /// What the session is for, such as a delegated task's goal.
     public var purpose: String?
+
+    /// The target's screen is locked, so a plain approval would fail at the lease: the dialog can offer to unlock
+    /// it first. A lease waits for that unlock only as long as the target is configured to.
+    public var targetLocked: Bool { lease.targetLocked }
 
     public init(review: ComputerUseGrantReview, lease: LeaseRequest, target: DisplayTargetManifest, purpose: String? = nil) {
         self.review = review
@@ -64,6 +69,7 @@ public actor DisplayTargetRegistry {
     public nonisolated let unattendedMaxDuration: Duration
     private let sandboxBackendIDs: @Sendable () -> Set<String>
     private let now: @Sendable () -> Date
+    private let logger = Logger(label: "SwiftAgentHarness.ComputerUse.Registry")
 
     /// Throws when a target's id is already a sandbox backend's or another target's.
     public init(
@@ -119,6 +125,12 @@ public actor DisplayTargetRegistry {
         }
         let missing = await target.permissions().missing(manifest.requires)
         if !missing.isEmpty { throw .permissionsMissing(missing) }
+
+        var request = request
+        request.targetLocked = await target.isLocked()
+        logger.info("Display target lock state before the grant dialog", metadata: [
+            "target": "\(manifest.id)", "locked": "\(request.targetLocked)",
+        ])
 
         let review = reviewer.review(request.grants)
         guard let answer = await approve(ComputerUseGrantRequest(review: review, lease: request, target: manifest, purpose: purpose)) else {
