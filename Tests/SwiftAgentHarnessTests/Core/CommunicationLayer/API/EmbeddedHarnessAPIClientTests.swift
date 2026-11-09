@@ -69,6 +69,28 @@ struct EmbeddedHarnessAPIClientTests {
     }
   }
 
+  @Test("embedded resolve says where the approval was answered")
+  func resolveOffTarget() async throws {
+    let container = try HarnessTestModelContainer.makeInMemory()
+    try await ExecApprovalStoreTestSupport.isolated {
+      try await Self.withHost(container: container, model: Self.makeModel()) { host in
+        let scope = ExecApprovalScope(conversationID: UUID(), ownerAccountID: nil)
+        let delivery = DefaultExecApprovalDelivery(store: .shared, approvalScope: scope, waitTimeoutSeconds: 5)
+        let request = ExecApprovalRequest(
+          id: "embedded-grant", command: "computer-use grant", title: "Allow computer use", description: "TextEdit",
+          allowsDurableBypass: false
+        )
+        async let answer = delivery.requestAnswer(request, headless: false)
+        try await awaitPendingApproval("embedded-grant", in: .shared)
+        try await host.apiClient.resolveExecApproval(
+          session: host.defaultSession, approvalID: "embedded-grant", approved: true, durable: false, reason: nil,
+          answeredOffTarget: true
+        )
+        #expect(await answer == ExecApprovalAnswer(result: .approved, answeredOffTarget: true))
+      }
+    }
+  }
+
   @Test("strict tenancy rejects embedded create without bearer")
   func strictTenancyRequiresAuth() async throws {
     let container = try HarnessTestModelContainer.makeInMemory()

@@ -69,6 +69,7 @@ Resolved by `SandboxConfigResolver`:
 - `ChannelExecApprovalDelivery` — posts approval cards on trigger channel surfaces (mock transport today)
 - `/approve <id> [durable]` — CLI fallback resolution
 - `POST /api/exec-approvals/:id` — REST resolution
+- `answeredOffTarget` — a resolving client's own word that it is away from what the approval is about (a phone answering for a Mac); `ExecApprovalDelivering.requestAnswer` returns it with the result
 
 ### Sandbox-denial escalation
 

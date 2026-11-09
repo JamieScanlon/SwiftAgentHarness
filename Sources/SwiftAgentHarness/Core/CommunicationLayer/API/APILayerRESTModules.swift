@@ -2588,6 +2588,7 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var approved: Bool
         var durable: Bool?
         var reason: String?
+        var answeredOffTarget: Bool?
     }
 
     /// Unified resolve body on the spec's decision vocabulary. `decision` is
@@ -2598,6 +2599,9 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var approved: Bool?
         var durable: Bool?
         var reason: String?
+        /// The client's own word that it is away from what the approval is about, such as a phone answering
+        /// for a Mac. It only ever makes the harness stricter.
+        var answeredOffTarget: Bool?
     }
 
     private struct ExecApprovalGrantsResponse: Content {
@@ -2642,7 +2646,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 store: store,
                 approved: body.approved,
                 durable: body.durable ?? false,
-                reason: body.reason ?? "denied via api.rest"
+                reason: body.reason ?? "denied via api.rest",
+                answeredOffTarget: body.answeredOffTarget ?? false
             ) {
             case .forbidden(let response):
                 return response
@@ -2692,7 +2697,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 store: store,
                 approved: approved,
                 durable: durable,
-                reason: body.reason ?? "denied via api.rest"
+                reason: body.reason ?? "denied via api.rest",
+                answeredOffTarget: body.answeredOffTarget ?? false
             ) {
             case .forbidden(let response):
                 return response
@@ -2716,7 +2722,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         store: ExecApprovalStore,
         approved: Bool,
         durable: Bool,
-        reason: String?
+        reason: String?,
+        answeredOffTarget: Bool
     ) async -> ExecApprovalRESTResolveOutcome {
         guard let pendingScope = await store.pendingScope(id: id) else {
             return .notFound
@@ -2734,7 +2741,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             ownerScope: APISessionContext.authenticatedOwnerAccountID,
             approved: approved,
             durable: durable,
-            reason: reason
+            reason: reason,
+            answeredOffTarget: answeredOffTarget
         ) else {
             return .notFound
         }

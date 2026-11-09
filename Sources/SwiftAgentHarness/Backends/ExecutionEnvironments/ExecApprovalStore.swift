@@ -115,6 +115,7 @@ public actor ExecApprovalStore {
     /// can be derived (interpreter/wrapper prefixes are peeled) and the pending request
     /// allowed durable bypass (elevated/host exec does not persist grants). Unpeelable
     /// interpreter commands still resolve as allow-always for the pending request but leave no grant.
+    /// `answeredOffTarget` is the resolving client's own word that it is away from what the approval is about.
     @discardableResult
     public func resolve(
         id: String,
@@ -123,7 +124,8 @@ public actor ExecApprovalStore {
         ownerScope: UUID?,
         approved: Bool,
         durable: Bool = false,
-        reason: String? = nil
+        reason: String? = nil,
+        answeredOffTarget: Bool = false
     ) async -> ExecApprovalResolution? {
         guard await coordinator.isPending(id: id) else { return nil }
         guard let pendingScope = scopesByID[id],
@@ -146,7 +148,8 @@ public actor ExecApprovalStore {
             id: id,
             decision: decision,
             source: "exec.resolve",
-            reason: approved ? nil : (reason ?? "denied")
+            reason: approved ? nil : (reason ?? "denied"),
+            answeredOffTarget: answeredOffTarget
         ) else { return nil }
         if !approved, let command {
             await denialHygieneHandler.poisonPriorMatchingToolResults(
@@ -159,10 +162,12 @@ public actor ExecApprovalStore {
     }
 
     public func waitForResolution(id: String, timeoutSeconds: TimeInterval?) async -> ExecApprovalResolution? {
-        guard let outcome = await coordinator.waitForResolution(id: id, timeoutSeconds: timeoutSeconds) else {
-            return nil
-        }
-        return Self.execResolution(from: outcome)
+        await waitForOutcome(id: id, timeoutSeconds: timeoutSeconds).map(Self.execResolution(from:))
+    }
+
+    /// Like ``waitForResolution(id:timeoutSeconds:)``, with everything the resolver said.
+    public func waitForOutcome(id: String, timeoutSeconds: TimeInterval?) async -> ApprovalOutcome? {
+        await coordinator.waitForResolution(id: id, timeoutSeconds: timeoutSeconds)
     }
 
     static func scopeMatches(
@@ -179,7 +184,7 @@ public actor ExecApprovalStore {
         )
     }
 
-    private static func execResolution(from outcome: ApprovalOutcome) -> ExecApprovalResolution {
+    static func execResolution(from outcome: ApprovalOutcome) -> ExecApprovalResolution {
         switch outcome.decision {
         case .allowAlways:
             return .approved(durable: true)

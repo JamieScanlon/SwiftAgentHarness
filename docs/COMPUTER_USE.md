@@ -88,6 +88,8 @@ session.installComputerUse(ComputerUseConfiguration(
 ))
 ```
 
+To show the grant dialog as an approval card, ask with `requestAnswer` on any `ExecApprovalDelivering` and pass its `answeredOffTarget` on. The client that resolves the card declares it about itself: `"answeredOffTarget": true` in the body of `POST /api/approvals/{id}` or `POST /api/exec-approvals/{id}`, or the same argument to `ExecApprovalInbound.resolve` and `EmbeddedHarnessAPIClient.resolveExecApproval`. A phone answering for the Mac sets it, and the Mac's own app leaves it off. It defaults to `false`, and because a client can claim anything, it only ever turns extra checks on. A client that unlocks the Mac remotely for the card reads that target's `locked` from `GET /api/conversations/{id}/computer-use` immediately before typing anything, and unlocks only when it is `true`: the user may have unlocked the Mac at the desk since the dialog went up, and typing then would go to whatever app is in front.
+
 Every conversation now has `delegate_computer_use`. Bind your surface's stop control to `session.stopComputerUse()`, which ends every live specialist session; no model-facing tool can call it. A target's own stop key (the macOS host's, a display host's) reaches its session as a target event, with nothing to wire.
 
 A host that drives a session directly can still build one by hand: lease through `DisplayTargetRegistry.lease(_:purpose:approve:)`, create a `ComputerUseSession`, and install `ComputerUseToolProvider(session:)`.
@@ -555,7 +557,7 @@ Clients answer and steer through REST. Each route checks conversation tenancy:
 
 | Route | Does |
 |---|---|
-| `GET /api/conversations/{id}/computer-use` | Lists pending requests and live sessions (`lifecycleID`, target, step, `maxSteps`, `takenOver`, `liveView`: whether the target serves one, and `sharedScreen`) |
+| `GET /api/conversations/{id}/computer-use` | Lists pending requests, live sessions (`lifecycleID`, target, step, `maxSteps`, `takenOver`, `liveView`: whether the target serves one, and `sharedScreen`), and every registered target (`id`, `label`, and `locked`, the target's own answer to `isLocked()` when the status is read; a target that doesn't answer within 2 seconds reads `false`, so treat only `true` as locked) |
 | `POST /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view` | Mints a live-view link (`url`, `viewOnly`, `expiresAt`, `role`), sent `no-store`. An optional body `{"role": "observer"}` mints an observer link; the default is the user's. 404 when no live run matches or its target serves no live view. |
 | `DELETE /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view/observers` | Ends the run's observers and revokes its observer links (204). 404 when no live run matches. |
 | `GET /api/conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections` | The connected viewers: each link's `id`, `role`, and `connectedAt` |

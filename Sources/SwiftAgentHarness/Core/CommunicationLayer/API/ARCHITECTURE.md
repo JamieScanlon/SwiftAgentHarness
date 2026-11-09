@@ -107,7 +107,7 @@ When session blob storage is configured, the server stores bytes in the session 
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| POST | `/api/exec-approvals/:id` | `{"approved":<Bool>,"durable":<Bool>?,"reason":<String>?}` | **200** on success; **400** + error JSON for invalid id/body; **404** when the approval id is unknown. |
+| POST | `/api/exec-approvals/:id` | `{"approved":<Bool>,"durable":<Bool>?,"reason":<String>?,"answeredOffTarget":<Bool>?}` | **200** on success; **400** + error JSON for invalid id/body; **404** when the approval id is unknown. |
 
 ### Computer use (conversation-scoped)
 
@@ -115,7 +115,7 @@ When session blob storage is configured, the server stores bytes in the session 
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| GET | `/api/conversations/:id/computer-use` | — | `{"pending":[ComputerUsePendingRequest],"sessions":[ComputerUseSessionStatus]}` |
+| GET | `/api/conversations/:id/computer-use` | — | `{"pending":[ComputerUsePendingRequest],"sessions":[ComputerUseSessionStatus],"targets":[ComputerUseTargetStatus]}` |
 | POST | `/api/conversations/:id/computer-use/requests/:requestID` | `{"action":"answer"\|"hand-back"\|"decline","answer":<String>?,"note":<String>?}` | **200**; **400** bad body; **404** unknown request; **409** action doesn't fit the request kind. |
 | POST | `/api/conversations/:id/computer-use/stop` | — | `{"lifecycleIDs":[String]}` (empty when nothing ran) |
 | GET | `/api/conversations/:id/computer-use/replays` | — | `{"replays":[ComputerUseReplaySummary]}`, newest first; rebuilt from the conversation's delegate results after a restart |

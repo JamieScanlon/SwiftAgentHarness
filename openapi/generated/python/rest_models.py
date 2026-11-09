@@ -824,6 +824,10 @@ class ExecApprovalResolutionRequest(BaseModel):
         description='When true and approved, persists a durable grant by command name.',
     )
     reason: Optional[str] = Field(None, description='Optional denial reason.')
+    answeredOffTarget: Optional[bool] = Field(
+        None,
+        description="The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock.",
+    )
 
 
 class ApprovalDecision(Enum):
@@ -844,6 +848,10 @@ class UnifiedApprovalResolutionRequest(BaseModel):
         None, description='When true with `approved`, resolves as `allowAlways`.'
     )
     reason: Optional[str] = Field(None, description='Optional denial reason.')
+    answeredOffTarget: Optional[bool] = Field(
+        None,
+        description="The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock.",
+    )
 
 
 class SimpleTypeResponse(BaseModel):

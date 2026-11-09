@@ -1792,7 +1792,7 @@ paths:
     get:
       operationId: getConversationComputerUse
       tags: [ComputerUse]
-      summary: Pending computer-use questions and handoffs, and live specialist sessions
+      summary: Pending computer-use questions and handoffs, live specialist sessions, and each target's lock state
       parameters:
         - $ref: "#/components/parameters/ConversationId"
       responses:
@@ -3864,9 +3864,21 @@ components:
           type: boolean
           description: Whether the run's target is someone's own screen, such as their Mac, which the user may be at. A handoff there can be done at the machine as well as through the live view.
 
+    ComputerUseTargetStatus:
+      type: object
+      required: [id, label, locked]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        locked:
+          type: boolean
+          description: Whether the target's OS session is locked, asked of the target when the status is read. A target that doesn't answer within 2 seconds reads false, so treat only true as locked; a client that unlocks the target remotely checks this immediately before typing.
+
     ComputerUseControlStatus:
       type: object
-      required: [pending, sessions]
+      required: [pending, sessions, targets]
       properties:
         pending:
           type: array
@@ -3876,6 +3888,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ComputerUseSessionStatus"
+        targets:
+          type: array
+          description: Every registered display target, by id.
+          items:
+            $ref: "#/components/schemas/ComputerUseTargetStatus"
 
     ComputerUseRequestResolution:
       type: object
@@ -4090,6 +4107,9 @@ components:
         reason:
           type: string
           description: Optional denial reason.
+        answeredOffTarget:
+          type: boolean
+          description: "The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock."
 
     ApprovalDecision:
       type: string
@@ -4113,6 +4133,9 @@ components:
         reason:
           type: string
           description: Optional denial reason.
+        answeredOffTarget:
+          type: boolean
+          description: "The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock."
 
     SimpleTypeResponse:
       type: object

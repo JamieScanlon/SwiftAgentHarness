@@ -87,6 +87,26 @@ struct APILayerComputerUseRouteTests {
         }
     }
 
+    @Test("GET …/computer-use gives each target's live lock state")
+    func targetLockState() async throws {
+        let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
+        await host.setLocked(true)
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher(), targets: [host])
+
+        try await withRoutes(installation) { app in
+            try await app.testing().test(.GET, base) { res async throws in
+                #expect(res.status == .ok)
+                let status = try JSONDecoder().decode(ComputerUseControlStatus.self, from: Data(res.body.readableBytesView))
+                #expect(status.targets == [ComputerUseTargetStatus(id: host.manifest.id, label: host.manifest.label, locked: true)])
+            }
+            await host.setLocked(false)
+            try await app.testing().test(.GET, base) { res async throws in
+                let status = try JSONDecoder().decode(ComputerUseControlStatus.self, from: Data(res.body.readableBytesView))
+                #expect(status.targets.map(\.locked) == [false])
+            }
+        }
+    }
+
     @Test("POST …/requests/{id} answers a question, and rejects bad bodies, unknown ids, and the wrong action")
     func answer() async throws {
         let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher())

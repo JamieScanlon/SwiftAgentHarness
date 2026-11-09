@@ -13,10 +13,27 @@ public struct ComputerUseSessionStatus: Sendable, Codable, Equatable {
     public var sharedScreen: Bool
 }
 
+/// A display target as the user's surfaces see it.
+public struct ComputerUseTargetStatus: Sendable, Codable, Equatable {
+    public var id: DisplayTargetID
+    public var label: String
+    /// Whether the target's OS session is locked, asked of the target when the status is read. A target that
+    /// can't say in time reads as unlocked, so a client should treat only `true` as locked.
+    public var locked: Bool
+
+    public init(id: DisplayTargetID, label: String, locked: Bool) {
+        self.id = id
+        self.label = label
+        self.locked = locked
+    }
+}
+
 /// What is waiting on the user, and what is running, for one conversation.
 public struct ComputerUseControlStatus: Sendable, Codable, Equatable {
     public var pending: [ComputerUsePendingRequest]
     public var sessions: [ComputerUseSessionStatus]
+    /// Every registered target, by id.
+    public var targets: [ComputerUseTargetStatus]
 }
 
 /// A run's audit mark and when its images expire.
@@ -56,7 +73,14 @@ public enum ComputerUseRequestResolutionResult: Sendable, Equatable {
 public struct ComputerUseControlService: Sendable {
     let installation: ComputerUseInstallation
 
+    /// How long the status waits for each target to say whether it is locked.
+    static let lockStateTimeout: Duration = .seconds(2)
+
     public func status(conversationID: UUID) async -> ComputerUseControlStatus {
+        await status(conversationID: conversationID, lockStateTimeout: Self.lockStateTimeout)
+    }
+
+    func status(conversationID: UUID, lockStateTimeout: Duration) async -> ComputerUseControlStatus {
         let pending = await installation.coordinator?.pending(conversationID: conversationID) ?? []
         var sessions: [ComputerUseSessionStatus] = []
         for entry in await installation.sessions.entries(parent: conversationID) where await entry.session.terminalReason == nil {
@@ -70,7 +94,44 @@ public struct ComputerUseControlService: Sendable {
                 sharedScreen: entry.session.manifest.humanPresence == .shared
             ))
         }
-        return ComputerUseControlStatus(pending: pending, sessions: sessions)
+        return ComputerUseControlStatus(pending: pending, sessions: sessions, targets: await targets(lockStateTimeout: lockStateTimeout))
+    }
+
+    private func targets(lockStateTimeout: Duration) async -> [ComputerUseTargetStatus] {
+        guard let registry = installation.configuration?.registry else { return [] }
+        var targets: [any DisplayTarget] = []
+        for manifest in await registry.manifests {
+            if let target = await registry.target(for: manifest.id) { targets.append(target) }
+        }
+        let locked = await withTaskGroup(of: (Int, Bool).self) { group in
+            for (index, target) in targets.enumerated() {
+                group.addTask { (index, await Self.isLocked(target, timeout: lockStateTimeout)) }
+            }
+            var locked = Array(repeating: false, count: targets.count)
+            for await (index, value) in group { locked[index] = value }
+            return locked
+        }
+        return zip(targets, locked).map { ComputerUseTargetStatus(id: $0.manifest.id, label: $0.manifest.label, locked: $1) }
+    }
+
+    /// The target's answer, or `false` once `timeout` passes. Neither the ask nor the clock is awaited past the
+    /// first answer, so a target that ignores cancellation can't hold the status up.
+    private static func isLocked(_ target: any DisplayTarget, timeout: Duration) async -> Bool {
+        let (answers, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let asking = Task {
+            continuation.yield(await target.isLocked())
+            continuation.finish()
+        }
+        let clock = Task {
+            try? await Task.sleep(for: timeout)
+            continuation.finish()
+        }
+        defer {
+            asking.cancel()
+            clock.cancel()
+        }
+        for await locked in answers { return locked }
+        return false
     }
 
     public func resolve(requestID: String, conversationID: UUID, resolution: ComputerUseRequestResolution) async -> ComputerUseRequestResolutionResult {

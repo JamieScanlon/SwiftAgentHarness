@@ -28,6 +28,39 @@ struct ComputerUseControlServiceTests {
         ])
     }
 
+    @Test("Status gives each target's lock state as the target reports it when the status is read")
+    func targetLockState() async throws {
+        let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
+        let vm = FakeDisplayTarget(manifest: FakeDisplayTarget.vmManifest)
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher(), targets: [vm, host])
+        let control = ComputerUseControlService(installation: installation)
+        await host.setLocked(true)
+
+        let expected = [
+            ComputerUseTargetStatus(id: host.manifest.id, label: host.manifest.label, locked: true),
+            ComputerUseTargetStatus(id: vm.manifest.id, label: vm.manifest.label, locked: false),
+        ].sorted { $0.id < $1.id }
+        #expect(await control.status(conversationID: parent).targets == expected)
+
+        await host.setLocked(false)
+        let unlocked = await control.status(conversationID: parent).targets.first { $0.id == host.manifest.id }
+        #expect(unlocked?.locked == false, "unlocked at the desk since the last read")
+    }
+
+    @Test("A target that doesn't answer in time reads as unlocked, so a client never unlocks a screen it can't vouch for")
+    func lockStateTimeout() async throws {
+        let host = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest)
+        await host.setLocked(true)
+        await host.setOnIsLocked { try? await Task.sleep(for: .seconds(60)) }
+        let installation = ComputerUseFixtures.installation(publisher: RecordingIntentPublisher(), targets: [host])
+        let control = ComputerUseControlService(installation: installation)
+
+        let started = ContinuousClock.now
+        let status = await control.status(conversationID: parent, lockStateTimeout: .milliseconds(50))
+        #expect(status.targets.map(\.locked) == [false])
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     @Test("Stop ends only the conversation's sessions and declines their pending requests")
     func stop() async throws {
         let installation = installation()

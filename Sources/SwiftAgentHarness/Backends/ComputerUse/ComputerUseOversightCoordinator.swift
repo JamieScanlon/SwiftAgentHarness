@@ -189,6 +189,12 @@ struct ComputerUseLivenessApprovals: ExecApprovalDelivering {
         return await base.requestApproval(request, headless: headless)
     }
 
+    func requestAnswer(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalAnswer {
+        liveness.pause()
+        defer { liveness.resume() }
+        return await base.requestAnswer(request, headless: headless)
+    }
+
     func sendFollowup(approvalID: String, approved: Bool) async {
         await base.sendFollowup(approvalID: approvalID, approved: approved)
     }

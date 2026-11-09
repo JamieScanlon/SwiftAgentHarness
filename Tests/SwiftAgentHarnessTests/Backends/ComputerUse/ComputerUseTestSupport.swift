@@ -72,6 +72,8 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var relockNotice: String?
     /// What ``isLocked()`` answers.
     private(set) var locked = false
+    /// Runs before ``isLocked()`` answers, as a slow host would.
+    private(set) var onIsLocked: (@Sendable () async -> Void)?
     /// Each lease request's ``LeaseRequest/foundLocked``, in order.
     private(set) var leasedLocked: [Bool] = []
     /// Each lease request's ``LeaseRequest/remoteUnlock``, in order.
@@ -106,8 +108,13 @@ actor FakeDisplayTarget: DisplayTarget {
         self.locked = locked
     }
 
+    func setOnIsLocked(_ hook: (@Sendable () async -> Void)?) {
+        onIsLocked = hook
+    }
+
     func isLocked() async -> Bool {
-        locked
+        await onIsLocked?()
+        return locked
     }
 
     func setFailsWhenCancelled(_ fails: Bool) {
@@ -324,11 +331,11 @@ enum ComputerUseFixtures {
 
 extension ComputerUseFixtures {
     /// An installation with the oversight coordinator wired to `publisher`.
-    static func installation(publisher: RecordingIntentPublisher) -> ComputerUseInstallation {
+    static func installation(publisher: RecordingIntentPublisher, targets: [any DisplayTarget] = []) -> ComputerUseInstallation {
         let installation = ComputerUseInstallation()
         installation.install(
             ComputerUseConfiguration(
-                registry: try! DisplayTargetRegistry(targets: []),
+                registry: try! DisplayTargetRegistry(targets: targets),
                 defaults: ComputerUseSpecialistDefaults(
                     target: FakeDisplayTarget.hostManifest.id,
                     budgets: ComputerUseBudgetPolicy(defaultSteps: 12, ceilingSteps: 12, maxDuration: .seconds(600))
