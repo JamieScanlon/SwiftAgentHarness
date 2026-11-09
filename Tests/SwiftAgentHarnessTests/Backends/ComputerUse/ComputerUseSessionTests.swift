@@ -108,7 +108,8 @@ enum ComputerUseSessionFixtures {
         storeApprovalImage: (@Sendable (Data) async -> String?)? = nil,
         confirmsInteract: Bool = false,
         modePolicy: (@Sendable () async -> ComputerUseModePolicy)? = nil,
-        returnSchema: JSON? = nil
+        returnSchema: JSON? = nil,
+        activity: (@Sendable (ComputerUseActivity) async -> Void)? = nil
     ) async throws -> (FakeDisplayTarget, ComputerUseSession) {
         let target = FakeDisplayTarget(manifest: manifest, now: { clock.now() })
         let lease = try await target.lease(LeaseRequest(
@@ -137,6 +138,7 @@ enum ComputerUseSessionFixtures {
             approvals: approvals,
             intentChecker: intentChecker,
             oversight: oversight,
+            activity: activity,
             now: { clock.now() }
         )
         return (target, session)

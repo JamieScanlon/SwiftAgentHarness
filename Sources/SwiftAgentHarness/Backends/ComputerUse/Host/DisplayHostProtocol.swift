@@ -13,9 +13,9 @@ import Foundation
 /// a host honours only the leases it issued on the same connection, or that the connection reattached. The host
 /// also sends events unprompted.
 public enum DisplayHostProtocol {
-    public static let version = DisplayHostVersion(major: 7, minor: 1)
+    public static let version = DisplayHostVersion(major: 7, minor: 2)
     /// What this build of the protocol supports.
-    public static let capabilities: Set<DisplayHostCapability> = [.liveView, .downloads, .events, .reattach, .imageFiles, .lockState]
+    public static let capabilities: Set<DisplayHostCapability> = [.liveView, .downloads, .events, .reattach, .imageFiles, .lockState, .relockNotice]
     /// The largest message either side accepts.
     public static let maxMessageBytes = 64 * 1024 * 1024
 }
@@ -63,6 +63,8 @@ public struct DisplayHostCapability: RawRepresentable, Sendable, Codable, Hashab
     public static let imageFiles = Self(rawValue: "image-files")
     /// The host says whether its target's screen is locked. Without it, a client takes the target as unlocked.
     public static let lockState = Self(rawValue: "lock-state")
+    /// The host sends `relockFailed` at release, before the release's reply, so the client can tell the user.
+    public static let relockNotice = Self(rawValue: "relock-notice")
 }
 
 /// A lease request as it travels; the host supplies holder liveness from the connection.
@@ -77,6 +79,8 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
     public var userPresent: Bool
     /// Absent from an older client's request, which reads as unlocked.
     public var foundLocked: Bool
+    /// Absent from an older client's request, which reads as not remote.
+    public var remoteUnlock: Bool
 
     public init(_ request: LeaseRequest) {
         self.target = request.target
@@ -88,6 +92,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         self.initiator = request.initiator
         self.userPresent = request.userPresent
         self.foundLocked = request.foundLocked
+        self.remoteUnlock = request.remoteUnlock
     }
 
     public init(from decoder: any Decoder) throws {
@@ -101,6 +106,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         initiator = try container.decode(ComputerUseInitiator.self, forKey: .initiator)
         userPresent = try container.decode(Bool.self, forKey: .userPresent)
         foundLocked = try container.decodeIfPresent(Bool.self, forKey: .foundLocked) ?? false
+        remoteUnlock = try container.decodeIfPresent(Bool.self, forKey: .remoteUnlock) ?? false
     }
 
     func leaseRequest(isHolderAlive: @escaping @Sendable () async -> Bool) -> LeaseRequest {
@@ -114,6 +120,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
             initiator: initiator,
             userPresent: userPresent,
             foundLocked: foundLocked,
+            remoteUnlock: remoteUnlock,
             isHolderAlive: isHolderAlive
         )
     }

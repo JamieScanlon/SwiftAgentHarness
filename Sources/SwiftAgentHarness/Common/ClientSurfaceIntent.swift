@@ -108,6 +108,8 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
     public var sharedScreen: Bool?
     /// On a request from a specialist delegated by another delegate: its path in the delegation tree.
     public var delegatePath: String?
+    /// On the end of a session: something the user must know, such as their Mac being left unlocked.
+    public var notice: String?
 
     public init(
         requestID: String? = nil,
@@ -125,7 +127,8 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         terminalReason: String? = nil,
         liveView: Bool? = nil,
         sharedScreen: Bool? = nil,
-        delegatePath: String? = nil
+        delegatePath: String? = nil,
+        notice: String? = nil
     ) {
         self.requestID = requestID
         self.requestKind = requestKind
@@ -143,6 +146,7 @@ public struct ComputerUseSurfaceIntentPayload: Codable, Sendable, Equatable {
         self.liveView = liveView
         self.sharedScreen = sharedScreen
         self.delegatePath = delegatePath
+        self.notice = notice
     }
 }
 

@@ -19,12 +19,14 @@ final class FakeDisplayPower: MacDisplayPowering {
         /// Whether an explicit lock locks the session, and the assertions still held at each one.
         var lockTakes = true
         var locks: [Set<UInt32>] = []
+        /// Whether sleeping the display locks the session, as it does when the Mac asks for its password at once.
+        var sleepLocks = false
     }
 
     private let state: Mutex<State>
 
-    init(asleep: Bool = false, wakes: Bool = true, locked: Bool = false, lockTakes: Bool = true) {
-        state = Mutex(State(asleep: asleep, wakes: wakes, locked: locked, lockTakes: lockTakes))
+    init(asleep: Bool = false, wakes: Bool = true, locked: Bool = false, lockTakes: Bool = true, sleepLocks: Bool = false) {
+        state = Mutex(State(asleep: asleep, wakes: wakes, locked: locked, lockTakes: lockTakes, sleepLocks: sleepLocks))
     }
 
     func holdAwake(reason: String) -> [UInt32] {
@@ -53,6 +55,7 @@ final class FakeDisplayPower: MacDisplayPowering {
         state.withLock { state in
             state.sleeps.append(state.held)
             state.asleep = true
+            if state.sleepLocks { state.locked = true }
         }
     }
 

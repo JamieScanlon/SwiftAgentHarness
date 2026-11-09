@@ -9,6 +9,20 @@ import SwiftAgentHarness
 /// launched from another app it is the development escape hatch, borrowing that app's TCC grants (the terminal's),
 /// and its label says so; the production shapes are the signed host app serving this contract over XPC, or a
 /// notarized GUI app that embeds the harness and owns its grants (`embeddedInSignedApp`).
+/// What a host restarted after a crash did about a relock left pending.
+public enum MacRelockRecovery: Sendable, Equatable {
+    case nothingPending
+    case relocked
+    /// The Mac couldn't be locked and may be unlocked; the notice says so for the user.
+    case failed(String)
+}
+
+/// Recorded before a session that found the Mac locked acts, and cleared once the Mac is locked again.
+struct MacRelockMarker: Codable, Sendable, Equatable {
+    var leaseID: UUID
+    var at: Date
+}
+
 public actor MacHostDisplayTarget: DisplayTarget {
     public static let defaultID: DisplayTargetID = "macos-host"
 
@@ -48,6 +62,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
         public var remoteTakeoverBundleIDs: Set<String>
         /// Decides which apps have broad reach. Give it the registry reviewer's policy when that isn't the default.
         public var appPolicy: ComputerUseAppPolicy
+        /// Where a session that found the Mac locked records that it must lock it again, before its first action,
+        /// so a host restarted after a crash can do it: see ``MacHostDisplayTarget/recoverPendingRelock()``. In the
+        /// app's own Application Support folder by default. `nil` records nothing.
+        public var relockMarker: URL?
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
@@ -70,9 +88,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
             wakesDisplay: Bool = false,
             unlockTimeout: Duration = .zero,
             remoteTakeoverBundleIDs: Set<String> = [],
-            appPolicy: ComputerUseAppPolicy = .default
+            appPolicy: ComputerUseAppPolicy = .default,
+            relockMarker: URL? = Self.defaultRelockMarker
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
+            self.relockMarker = relockMarker
             self.wakesDisplay = wakesDisplay
             self.unlockTimeout = unlockTimeout
             self.remoteTakeoverBundleIDs = remoteTakeoverBundleIDs
@@ -103,6 +123,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.unlockTimeout = .zero
             self.remoteTakeoverBundleIDs = []
             self.appPolicy = .default
+            self.relockMarker = nil
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
@@ -114,6 +135,13 @@ public actor MacHostDisplayTarget: DisplayTarget {
             self.liveFrameLongEdge = 1_600
             self.stopKey = nil
             self.embeddedInSignedApp = false
+        }
+
+        /// `computer-use-relock-pending.json` in this app's Application Support folder.
+        public static var defaultRelockMarker: URL? {
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent(Bundle.main.bundleIdentifier ?? "SwiftAgentHarness", isDirectory: true)
+                .appendingPathComponent("computer-use-relock-pending.json")
         }
 
         public static var defaultExcludedBundleIDs: Set<String> {
@@ -188,6 +216,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private let logger = Logger(label: "SwiftAgentHarness.ComputerUse.MacHost")
 
     static let lockedReason = "this Mac is locked; unlock it and try again"
+    static let relockFailedNotice = "Your Mac could not be locked after the run and may be unlocked."
+
+    /// Only a signed app that owns its grants unlocks for a session. In development mode a harness crash would leave
+    /// nothing to lock the Mac again, so a locked Mac is simply refused.
+    private var offersUnlock: Bool { configuration.embeddedInSignedApp }
     static let noDisplayReason = "this Mac's display is asleep or disconnected; wake it and try again"
 
     public init(configuration: Configuration = Configuration()) {
@@ -225,10 +258,12 @@ public actor MacHostDisplayTarget: DisplayTarget {
         let lease = Lease(request: granted, issuedAt: Date())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
         // A holder that died never released, so a Mac it was handed unlocked is still waiting to be locked again.
-        if relocksAtRelease { await relock() }
+        if relocksAtRelease { _ = await relock() }
         do {
             let foundLocked = try await prepareDisplay(for: request)
             relocksAtRelease = foundLocked || request.foundLocked
+            if relocksAtRelease { writeRelockMarker(for: lease.id) }
+            if request.remoteUnlock { logger.info("This Mac was unlocked remotely for the session") }
         } catch {
             endWake()
             _ = await lock.release(leaseID: lease.id)
@@ -257,7 +292,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
     /// screen only the user's password gets anywhere. Returns whether the Mac was locked.
     private func prepareDisplay(for request: LeaseRequest) async throws -> Bool {
         endWake()
-        let waitsForUnlock = configuration.unlockTimeout > .zero && power.screenIsLocked
+        let waitsForUnlock = offersUnlock && configuration.unlockTimeout > .zero && power.screenIsLocked
         if configuration.wakesDisplay || request.foundLocked || waitsForUnlock {
             try await wake(for: request.agentID)
         }
@@ -277,8 +312,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
         await capture.invalidate()
     }
 
-    /// Locks the Mac explicitly, falling back to sleeping the display when the lock doesn't take.
-    private func relock() async {
+    /// Locks the Mac explicitly, falling back to sleeping the display when the lock doesn't take, and says whether
+    /// it is locked now. A verified relock clears the marker.
+    private func relock() async -> Bool {
         relocksAtRelease = false
         logger.info("Locking this Mac again, as the session found it")
         power.lockScreen()
@@ -290,12 +326,46 @@ public actor MacHostDisplayTarget: DisplayTarget {
             logger.info("The explicit lock didn't take; sleeping the display instead")
             power.sleepDisplay()
         }
+        guard power.screenIsLocked else {
+            logger.error("This Mac could not be locked again and may be unlocked")
+            return false
+        }
+        clearRelockMarker()
+        return true
+    }
+
+    /// For a host restarted after a crash: locks the Mac if a session that found it locked never got to. Call it at
+    /// startup, before accepting any connection. A failure comes back with the notice to show the user.
+    public func recoverPendingRelock() async -> MacRelockRecovery {
+        guard let marker = configuration.relockMarker, FileManager.default.fileExists(atPath: marker.path),
+              await lock.holderID == nil
+        else { return .nothingPending }
+        logger.info("Found a relock left pending by a host that stopped")
+        let locked = await relock()
+        clearRelockMarker()
+        return locked ? .relocked : .failed(Self.relockFailedNotice)
+    }
+
+    private func writeRelockMarker(for leaseID: UUID) {
+        guard let marker = configuration.relockMarker else { return }
+        do {
+            try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(MacRelockMarker(leaseID: leaseID, at: Date())).write(to: marker, options: .atomic)
+        } catch {
+            logger.error("Couldn't record the pending relock", metadata: ["error": "\(error)"])
+        }
+    }
+
+    private func clearRelockMarker() {
+        guard let marker = configuration.relockMarker else { return }
+        try? FileManager.default.removeItem(at: marker)
     }
 
     private func awaitUnlock() async throws -> Bool {
         guard power.screenIsLocked else { return false }
-        let deadline = ContinuousClock.now + configuration.unlockTimeout
-        if configuration.unlockTimeout > .zero {
+        let timeout = offersUnlock ? configuration.unlockTimeout : .zero
+        let deadline = ContinuousClock.now + timeout
+        if timeout > .zero {
             logger.debug("Lease waiting for this Mac to be unlocked", metadata: ["timeout": "\(configuration.unlockTimeout)"])
         }
         while power.screenIsLocked, ContinuousClock.now < deadline {
@@ -331,7 +401,9 @@ public actor MacHostDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.release(leaseID: lease.id) else { return }
         endWake()
-        if relocksAtRelease { await relock() }
+        if relocksAtRelease, !(await relock()) {
+            eventHub.post(.relockFailed(Self.relockFailedNotice), to: lease.id)
+        }
         stopKeyMonitor?.stop()
         stopKeyMonitor = nil
         eventHub.finish(lease.id)
@@ -352,7 +424,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
         broker.snapshot(manifest.requires)
     }
 
+    /// Always `false` in development mode, which offers no unlock flow: the grant dialog then never offers to
+    /// unlock, and the lease refuses a locked Mac.
     public func isLocked() async -> Bool {
+        guard offersUnlock else { return false }
         let locked = power.screenIsLocked
         logger.info("This Mac's lock state", metadata: ["target": "\(manifest.id)", "locked": "\(locked)"])
         return locked

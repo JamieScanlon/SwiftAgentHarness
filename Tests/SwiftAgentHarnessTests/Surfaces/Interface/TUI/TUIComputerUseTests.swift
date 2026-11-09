@@ -91,6 +91,19 @@ struct TUIComputerUseTests {
         #expect(await !frame(app).contains("This Mac"))
     }
 
+    @Test("A notice on the session's end, such as a Mac left unlocked, stays in the transcript after the indicator goes")
+    func endNotice() async {
+        let (app, _) = await makeApp()
+        await app.ingest(activity(.acting))
+        await app.ingest(.surfaceIntent(.computerUseActivity(ComputerUseSurfaceIntentPayload(
+            target: "This Mac", lifecycleID: "call-1", status: .ended,
+            notice: "Your Mac could not be locked after the run and may be unlocked."
+        ))))
+        await app.finishTurn()
+        let messages = await app.transcriptMessages()
+        #expect(messages.contains { $0.role == .system && $0.content.contains("Your Mac could not be locked after the run and may be unlocked.") })
+    }
+
     @Test("Finishing the turn clears an indicator whose end event was missed")
     func finishClears() async {
         let (app, _) = await makeApp()

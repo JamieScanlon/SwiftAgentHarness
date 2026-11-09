@@ -57,6 +57,23 @@ public struct ComputerUseGrantRequest: Sendable {
 /// Presents the one start-of-session grant dialog. Returns the approved subset, or `nil` when the user declines.
 public typealias ComputerUseGrantApprover = @Sendable (ComputerUseGrantRequest) async -> [ComputerUseGrant]?
 
+/// The user's answer to the grant dialog.
+public struct ComputerUseGrantAnswer: Sendable, Hashable {
+    public var grants: [ComputerUseGrant]
+    /// The dialog was answered from a surface that isn't on the target, such as a phone. When the dialog offered to
+    /// unlock the target, this makes the unlock remote.
+    public var answeredOffTarget: Bool
+
+    public init(grants: [ComputerUseGrant], answeredOffTarget: Bool = false) {
+        self.grants = grants
+        self.answeredOffTarget = answeredOffTarget
+    }
+}
+
+/// Presents the one start-of-session grant dialog and says where it was answered. Returns `nil` when the user
+/// declines.
+public typealias ComputerUseGrantAnswerer = @Sendable (ComputerUseGrantRequest) async -> ComputerUseGrantAnswer?
+
 public struct ComputerUseLeaseGrant: Sendable {
     public let target: any DisplayTarget
     public let lease: Lease
@@ -117,10 +134,19 @@ public actor DisplayTargetRegistry {
         targets.values.map(\.manifest).sorted { $0.id < $1.id }
     }
 
+    /// Leases with an approver that doesn't say where it was answered, which is taken as on the target.
     public func lease(
         _ request: LeaseRequest,
         purpose: String? = nil,
-        approve: ComputerUseGrantApprover
+        approve: @escaping ComputerUseGrantApprover
+    ) async throws(ComputerUseLeaseDenial) -> ComputerUseLeaseGrant {
+        try await lease(request, purpose: purpose, answer: { await approve($0).map { ComputerUseGrantAnswer(grants: $0) } })
+    }
+
+    public func lease(
+        _ request: LeaseRequest,
+        purpose: String? = nil,
+        answer: ComputerUseGrantAnswerer
     ) async throws(ComputerUseLeaseDenial) -> ComputerUseLeaseGrant {
         guard let target = targets[request.target] else { throw .unknownTarget(request.target) }
         let manifest = target.manifest
@@ -140,14 +166,15 @@ public actor DisplayTargetRegistry {
         ])
 
         let review = reviewer.review(request.grants)
-        guard let answer = await approve(ComputerUseGrantRequest(review: review, lease: request, target: manifest, purpose: purpose)) else {
+        guard let answered = await answer(ComputerUseGrantRequest(review: review, lease: request, target: manifest, purpose: purpose)) else {
             throw .grantsDeclined
         }
-        let approved = reviewer.clamp(answer, to: review)
+        let approved = reviewer.clamp(answered.grants, to: review)
         if approved.isEmpty { throw .grantsDeclined }
 
         var granted = request
         granted.grants = approved
+        granted.remoteUnlock = request.foundLocked && answered.answeredOffTarget
         if !request.userPresent {
             granted.budgets.grantExpiry = min(granted.budgets.grantExpiry ?? unattendedMaxDuration, unattendedMaxDuration)
         }

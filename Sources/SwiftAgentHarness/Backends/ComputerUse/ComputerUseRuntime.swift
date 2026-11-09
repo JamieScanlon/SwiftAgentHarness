@@ -44,8 +44,8 @@ public struct ComputerUseSpecialistProfile: Sendable {
 public struct ComputerUseConfiguration: Sendable {
     public var registry: DisplayTargetRegistry
     public var defaults: ComputerUseSpecialistDefaults
-    /// Shows the one start-of-session grant dialog.
-    public var approveGrants: ComputerUseGrantApprover
+    /// Shows the one start-of-session grant dialog, and says where it was answered.
+    public var answerGrants: ComputerUseGrantAnswerer
     /// Per-action confirmation cards for consequential actions.
     public var approvals: (any ExecApprovalDelivering)?
     public var intentChecker: ComputerUseIntentChecker?
@@ -59,6 +59,7 @@ public struct ComputerUseConfiguration: Sendable {
     /// hosts whose users or operators require that screenshots not be retained by the vendor.
     public var requiresZeroRetention: Bool
 
+    /// With an approver that doesn't say where it was answered, which is taken as on the target.
     public init(
         registry: DisplayTargetRegistry,
         defaults: ComputerUseSpecialistDefaults,
@@ -71,9 +72,35 @@ public struct ComputerUseConfiguration: Sendable {
         specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
         requiresZeroRetention: Bool = false
     ) {
+        self.init(
+            registry: registry,
+            defaults: defaults,
+            answerGrants: { await approveGrants($0).map { ComputerUseGrantAnswer(grants: $0) } },
+            approvals: approvals,
+            intentChecker: intentChecker,
+            oversight: oversight,
+            activityObserver: activityObserver,
+            retention: retention,
+            specialist: specialist,
+            requiresZeroRetention: requiresZeroRetention
+        )
+    }
+
+    public init(
+        registry: DisplayTargetRegistry,
+        defaults: ComputerUseSpecialistDefaults,
+        answerGrants: @escaping ComputerUseGrantAnswerer,
+        approvals: (any ExecApprovalDelivering)? = nil,
+        intentChecker: ComputerUseIntentChecker? = nil,
+        oversight: (any ComputerUseOversight)? = nil,
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
+        retention: ComputerUseRetention = ComputerUseRetention(),
+        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
+        requiresZeroRetention: Bool = false
+    ) {
         self.registry = registry
         self.defaults = defaults
-        self.approveGrants = approveGrants
+        self.answerGrants = answerGrants
         self.approvals = approvals
         self.intentChecker = intentChecker
         self.oversight = oversight

@@ -165,6 +165,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
             for await event in channel.events {
                 guard let self else { return }
                 if case .target(let leaseID, let event) = event { self.hub.post(event, to: leaseID) }
+                await channel.noteEventHandled()
             }
             await self?.ended(channel)
         }
@@ -246,9 +247,12 @@ public actor RemoteDisplayTarget: DisplayTarget {
 
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         holders.removeValue(forKey: lease.id)
-        hub.finish(lease.id)
         await relay?.close(lease.id)
         _ = try? await call(.release(leaseID: lease.id, reason: wireReason(reason)))
+        // The host sends what the target said at release before replying; the holder must hear it before its
+        // events end.
+        await channel.awaitEventsHandled()
+        hub.finish(lease.id)
     }
 
     /// Hosts before 7.1 can't decode `target-unavailable`.
@@ -427,6 +431,9 @@ actor DisplayHostClientChannel {
     private var pending: [UInt64: CheckedContinuation<DisplayHostResponse, any Error>] = [:]
     private var closedError: (any Error)?
     private var reader: Task<Void, Never>?
+    private var eventsReceived = 0
+    private var eventsHandled = 0
+    private var handledWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(connection: any DisplayHostConnection) {
         self.connection = connection
@@ -493,14 +500,33 @@ actor DisplayHostClientChannel {
         case .response(let id, let body):
             pending.removeValue(forKey: id)?.resume(returning: body)
         case .event(let event):
+            eventsReceived += 1
             eventContinuation.yield(event)
         case .request:
             break
         }
     }
 
+    /// The listener handed on one more event.
+    func noteEventHandled() {
+        eventsHandled += 1
+        let ready = handledWaiters.filter { $0.count <= eventsHandled }
+        handledWaiters.removeAll { $0.count <= eventsHandled }
+        for waiter in ready { waiter.continuation.resume() }
+    }
+
+    /// Returns once every event received so far has been handed on, or the channel has closed.
+    func awaitEventsHandled() async {
+        let count = eventsReceived
+        guard eventsHandled < count, closedError == nil else { return }
+        await withCheckedContinuation { handledWaiters.append((count, $0)) }
+    }
+
     private func finish(_ error: any Error) {
         guard closedError == nil else { return }
+        let waiters = handledWaiters
+        handledWaiters.removeAll()
+        for waiter in waiters { waiter.continuation.resume() }
         closedError = error
         let waiting = pending
         pending.removeAll()

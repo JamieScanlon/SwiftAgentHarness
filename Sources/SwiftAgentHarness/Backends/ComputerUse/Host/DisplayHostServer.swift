@@ -42,6 +42,8 @@ public actor DisplayHostServer {
     private let decoyToken = DisplayLiveViewServer.token()
     /// Holder keys whose lease is still held, connected or within its grace.
     private var liveHolders: Set<UUID> = []
+    /// Leases being released, by the connection that held them, which still hears what the target says at release.
+    private var releasing: [UUID: UUID] = [:]
     private var permissionWatch: Task<Void, Never>?
     private var lastPermissions: PermissionSnapshot?
 
@@ -298,10 +300,22 @@ public actor DisplayHostServer {
 
     private func release(_ leaseID: UUID, reason: ReleaseReason) async {
         guard let held = leases.removeValue(forKey: leaseID) else { return }
-        held.forwarder?.cancel()
         held.expiry?.cancel()
         liveHolders.remove(held.holderKey)
+        if let connection = held.connection { releasing[leaseID] = connection }
         await target.release(held.lease, reason: reason)
+        // The lease's events end at release. Forwarding them all before the release replies means the holder hears
+        // what the target said at release, such as a failed relock, before it lets go.
+        if let forwarder = held.forwarder {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await forwarder.value }
+                group.addTask { try? await Task.sleep(for: .milliseconds(500)) }
+                await group.next()
+                forwarder.cancel()
+                group.cancelAll()
+            }
+        }
+        releasing[leaseID] = nil
         if leases.isEmpty {
             permissionWatch?.cancel()
             permissionWatch = nil
@@ -324,7 +338,10 @@ public actor DisplayHostServer {
     /// The host keeps the lease's state for a returning holder, and acts on a stop press itself while nobody holds
     /// the connection: the event would otherwise go nowhere.
     private func handle(_ event: DisplayTargetEvent, about leaseID: UUID) async {
-        guard let held = leases[leaseID] else { return }
+        guard let held = leases[leaseID] else {
+            if releasing[leaseID] != nil { await send(event, about: leaseID) }
+            return
+        }
         switch event {
         case .takeoverChanged(let on):
             leases[leaseID]?.takeover = on
@@ -354,8 +371,9 @@ public actor DisplayHostServer {
 
     /// Sends `event` to the connection holding the lease. An orphaned lease's events are dropped.
     private func send(_ event: DisplayTargetEvent, about leaseID: UUID) async {
-        guard let id = leases[leaseID]?.connection, let state = connections[id], state.open,
+        guard let id = leases[leaseID]?.connection ?? releasing[leaseID], let state = connections[id], state.open,
               state.capabilities.contains(.events),
+              state.capabilities.contains(.relockNotice) || !event.isRelockFailed,
               let message = try? DisplayHostCodec.encode(.event(.target(leaseID: leaseID, event: event)))
         else { return }
         try? await state.connection.send(message)
@@ -382,5 +400,12 @@ public actor DisplayHostServer {
         for leaseID in leases.keys {
             await send(.permissionsChanged(current), about: leaseID)
         }
+    }
+}
+
+private extension DisplayTargetEvent {
+    var isRelockFailed: Bool {
+        if case .relockFailed = self { return true }
+        return false
     }
 }

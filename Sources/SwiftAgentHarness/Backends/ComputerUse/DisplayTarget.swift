@@ -23,6 +23,9 @@ public struct LeaseRequest: Sendable {
     /// The registry sets it, and a target that finds itself locked at lease counts the same; either way the target
     /// locks itself again at release.
     public var foundLocked: Bool
+    /// The user unlocked the target from a surface that isn't on it, such as a phone, by answering the grant
+    /// dialog's unlock offer there. Someone using the target itself is then someone else.
+    public var remoteUnlock: Bool
     /// Lets a target tell a crashed holder from a live one.
     public var isHolderAlive: @Sendable () async -> Bool
 
@@ -36,6 +39,7 @@ public struct LeaseRequest: Sendable {
         initiator: ComputerUseInitiator,
         userPresent: Bool,
         foundLocked: Bool = false,
+        remoteUnlock: Bool = false,
         isHolderAlive: @escaping @Sendable () async -> Bool = { true }
     ) {
         self.target = target
@@ -47,6 +51,7 @@ public struct LeaseRequest: Sendable {
         self.initiator = initiator
         self.userPresent = userPresent
         self.foundLocked = foundLocked
+        self.remoteUnlock = remoteUnlock
         self.isHolderAlive = isHolderAlive
     }
 }
@@ -328,6 +333,9 @@ public enum DisplayTargetEvent: Sendable, Codable, Hashable {
     /// The lease ended without the holder releasing it, such as a stop pressed while a remote target was
     /// unreachable, or a holder that couldn't get its lease back.
     case leaseEnded(ReleaseReason)
+    /// Sent at release: the target found itself locked, couldn't lock itself again, and may be unlocked. The text is
+    /// the notice for the user's conversation.
+    case relockFailed(String)
 }
 
 /// Fans a target's events out to the streams of the leases they concern.

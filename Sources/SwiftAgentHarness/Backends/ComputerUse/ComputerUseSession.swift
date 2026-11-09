@@ -254,6 +254,8 @@ public struct ComputerUseActivity: Sendable, Equatable {
     public var terminalReason: ComputerUseTerminalReason?
     /// How many times the step allotment was extended.
     public var extensions = 0
+    /// On the end: something the user must know, such as the target being left unlocked.
+    public var notice: String?
 }
 
 /// The ceiling a session reached, which a present user decides on with a continue-or-stop card.
@@ -375,6 +377,8 @@ public actor ComputerUseSession {
     /// The time-ceiling decision in flight, so an action and the child run's timer reaching it together ask once.
     private var endTimeDecision: Task<Void, Never>?
     public private(set) var isTakeoverActive = false
+    /// The target reported at release that it couldn't lock itself again, in words for the user.
+    public private(set) var relockNotice: String?
     private var targetEvents: Task<Void, Never>?
     private var secrets: Set<String> = []
     private var endsAtObserver: (@Sendable (Date) async -> Void)?
@@ -933,7 +937,8 @@ public actor ComputerUseSession {
             app: app,
             action: action,
             terminalReason: status == .ended ? terminalReason : nil,
-            extensions: extensions
+            extensions: extensions,
+            notice: status == .ended ? relockNotice : nil
         ))
     }
 
@@ -964,7 +969,24 @@ public actor ComputerUseSession {
         }
     }
 
+    /// Hears out what the target says at release, such as a failed relock, until its event stream ends there.
+    private func drainTargetEvents() async {
+        guard let listener = targetEvents else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await listener.value }
+            // A target whose stream outlives release isn't waited on.
+            group.addTask { try? await Task.sleep(for: .seconds(1)) }
+            await group.next()
+            listener.cancel()
+            group.cancelAll()
+        }
+    }
+
     private func handle(_ event: DisplayTargetEvent) async {
+        if case .relockFailed(let notice) = event {
+            relockNotice = notice
+            return
+        }
         guard terminalReason == nil else { return }
         switch event {
         case .stopRequested:
@@ -986,6 +1008,8 @@ public actor ComputerUseSession {
             case .permissionRevoked: await end(.permissionRevoked)
             default: await end(.holderLost)
             }
+        case .relockFailed:
+            break
         }
     }
 
@@ -1389,7 +1413,6 @@ public actor ComputerUseSession {
             reason: reason
         ))
         for waiter in endWaiters.values { waiter.finish() }
-        targetEvents?.cancel()
         switch awaitingUser {
         case .question(let question)?: unresolvedQuestion = question
         case .handoff(let request)?: unresolvedHandoff = request
@@ -1402,6 +1425,7 @@ public actor ComputerUseSession {
             await target.release(lease, reason: reason.releaseReason)
             return downloads
         }.value
+        await drainTargetEvents()
         await report(.ended)
     }
 

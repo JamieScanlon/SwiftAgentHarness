@@ -97,7 +97,7 @@ extension SubAgentSpawnService {
                     userPresent: origin.userPresent
                 ),
                 purpose: task.goal,
-                approve: configuration.approveGrants
+                answer: configuration.answerGrants
             )
         } catch {
             return reply(Self.leaseDenialResult(error, task: task))
@@ -364,7 +364,8 @@ extension SubAgentSpawnService {
             action: activity.action?.rawValue,
             terminalReason: activity.terminalReason?.rawValue,
             liveView: liveView,
-            sharedScreen: sharedScreen
+            sharedScreen: sharedScreen,
+            notice: activity.notice
         )
     }
 

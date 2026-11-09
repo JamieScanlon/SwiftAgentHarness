@@ -68,10 +68,14 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var actError: DisplayTargetError?
     /// Runs during each observation, before it returns.
     private(set) var onObserve: (@Sendable () async -> Void)?
+    /// Posted to the lease's events at release, as a host whose relock failed does.
+    private(set) var relockNotice: String?
     /// What ``isLocked()`` answers.
     private(set) var locked = false
     /// Each lease request's ``LeaseRequest/foundLocked``, in order.
     private(set) var leasedLocked: [Bool] = []
+    /// Each lease request's ``LeaseRequest/remoteUnlock``, in order.
+    private(set) var leasedRemoteUnlock: [Bool] = []
 
     init(
         manifest: DisplayTargetManifest,
@@ -92,6 +96,10 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func setOnObserve(_ hook: (@Sendable () async -> Void)?) {
         onObserve = hook
+    }
+
+    func setRelockNotice(_ notice: String?) {
+        relockNotice = notice
     }
 
     func setLocked(_ locked: Bool) {
@@ -133,6 +141,7 @@ actor FakeDisplayTarget: DisplayTarget {
 
     func lease(_ request: LeaseRequest) async throws -> Lease {
         leasedLocked.append(request.foundLocked)
+        leasedRemoteUnlock.append(request.remoteUnlock)
         if let leaseError { throw leaseError }
         let lease = Lease(request: request, issuedAt: now())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
@@ -143,6 +152,7 @@ actor FakeDisplayTarget: DisplayTarget {
         if failsWhenCancelled, Task.isCancelled { return }
         if await lock.release(leaseID: lease.id) {
             releases.append(reason)
+            if let relockNotice { eventHub.post(.relockFailed(relockNotice), to: lease.id) }
             eventHub.finish(lease.id)
         }
     }

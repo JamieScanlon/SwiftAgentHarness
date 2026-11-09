@@ -744,6 +744,9 @@ public actor TUIApp {
         case .computerUseActivity:
             guard let activity = intent.computerUse else { return }
             computerUseIndicator.apply(activity)
+            if activity.status == .ended, let notice = activity.notice {
+                transcript.appendMessage(TUIMessage(role: .system, content: TUITextSanitizer.sanitizeSingleLine(notice)))
+            }
             // Taking over a target the user can't otherwise see (a headless browser) is useless without its view, and
             // watch mode goes on only while the user watches it.
             if activity.status == .takenOver || activity.status == .waitingForLiveView,
