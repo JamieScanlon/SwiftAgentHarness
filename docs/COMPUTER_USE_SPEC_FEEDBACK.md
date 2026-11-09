@@ -1,6 +1,6 @@
 # Computer use: open feedback for the spec team
 
-Both sections below are written up for the spec team as one change request, [Computer use on the user's own Mac: proposed spec changes](https://claude.ai/artifact/L1RBD8sdFYNyTZMQmgzSyq). It adds two items found while writing it: the `target-unavailable` terminal reason releases as `cancelled`, against README § Runtime contract's rule that each terminal reason releases under its own name; and the hardware checks macos.md § Verify on hardware before relying on should list for sleep and lock.
+Both sections below are written up for the spec team as one change request, [Computer use on the user's own Mac: proposed spec changes](https://claude.ai/artifact/L1RBD8sdFYNyTZMQmgzSyq), saved here as [COMPUTER_USE_SPEC_CHANGE_REQUEST.md](COMPUTER_USE_SPEC_CHANGE_REQUEST.md). It adds two items found while writing it: the `target-unavailable` terminal reason releases as `cancelled`, against README § Runtime contract's rule that each terminal reason releases under its own name; and the hardware checks macos.md § Verify on hardware before relying on should list for sleep and lock.
 
 ## A live view of the user's own Mac: decided, spec text pending
 
