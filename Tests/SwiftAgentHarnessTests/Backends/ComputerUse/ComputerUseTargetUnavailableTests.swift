@@ -27,7 +27,8 @@ struct ComputerUseTargetUnavailableTests {
         #expect(result.outcomes.first?.evidence == Self.asleep)
         #expect(result.terminal == .targetUnavailable)
         #expect(await session.terminalDetail == Self.asleep)
-        #expect(await target.releases == [.cancelled])
+        #expect(await target.releases == [.targetUnavailable], "the lease is released under the same name")
+        #expect(ReleaseReason.targetUnavailable.rawValue == "target-unavailable")
     }
 
     @Test("An action the target can't deliver ends the session too, and nothing after it runs")

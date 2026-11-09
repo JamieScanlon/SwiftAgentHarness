@@ -19,6 +19,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
     public nonisolated let hostName: String
 
     private struct Handshake: Sendable {
+        var version: DisplayHostVersion
         var manifest: DisplayTargetManifest
         var hostName: String
         var capabilities: Set<DisplayHostCapability>
@@ -123,6 +124,7 @@ public actor RemoteDisplayTarget: DisplayTarget {
         where version.major == DisplayHostProtocol.version.major:
             let agreed = offered.intersection(capabilities)
             return (channel, Handshake(
+                version: version,
                 manifest: manifest,
                 hostName: host,
                 capabilities: agreed,
@@ -246,7 +248,12 @@ public actor RemoteDisplayTarget: DisplayTarget {
         holders.removeValue(forKey: lease.id)
         hub.finish(lease.id)
         await relay?.close(lease.id)
-        _ = try? await call(.release(leaseID: lease.id, reason: reason))
+        _ = try? await call(.release(leaseID: lease.id, reason: wireReason(reason)))
+    }
+
+    /// Hosts before 7.1 can't decode `target-unavailable`.
+    private func wireReason(_ reason: ReleaseReason) -> ReleaseReason {
+        reason == .targetUnavailable && handshake.version.minor < 1 ? .cancelled : reason
     }
 
     public func permissions() async -> PermissionSnapshot {

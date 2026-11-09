@@ -35,25 +35,25 @@ struct ComputerUseTargetLockTests {
 
     @Test("A request nobody has checked says the target isn't locked")
     func uncheckedRequest() {
-        #expect(Self.request("x").targetLocked == false)
+        #expect(Self.request("x").foundLocked == false)
     }
 
     @Test("The lock state the user was shown crosses the display host wire, and an older client's request reads as unlocked")
     func wire() throws {
         var request = Self.request("fake-vm")
-        request.targetLocked = true
+        request.foundLocked = true
         let wire = DisplayHostLeaseRequest(request)
         let decoded = try JSONDecoder().decode(DisplayHostLeaseRequest.self, from: JSONEncoder().encode(wire))
         #expect(decoded == wire)
-        #expect(decoded.leaseRequest(isHolderAlive: { true }).targetLocked)
+        #expect(decoded.leaseRequest(isHolderAlive: { true }).foundLocked)
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let json = try #require(String(data: try encoder.encode(wire), encoding: .utf8))
-        #expect(json.contains(#""targetLocked":true,"#))
-        let olderJSON = json.replacingOccurrences(of: #""targetLocked":true,"#, with: "")
+        #expect(json.contains(#""foundLocked":true,"#))
+        let olderJSON = json.replacingOccurrences(of: #""foundLocked":true,"#, with: "")
         let older = try JSONDecoder().decode(DisplayHostLeaseRequest.self, from: Data(olderJSON.utf8))
-        #expect(older.targetLocked == false)
+        #expect(older.foundLocked == false)
     }
 
     @Test("A remote target asks its display host whether the target is locked, and the lease carries the answer")
@@ -69,7 +69,7 @@ struct ComputerUseTargetLockTests {
         #expect(await remote.isLocked())
 
         var request = Self.request(target.manifest.id)
-        request.targetLocked = true
+        request.foundLocked = true
         let lease = try await remote.lease(request)
         #expect(await target.leasedLocked == [true])
         await remote.release(lease, reason: .completed)
@@ -116,5 +116,51 @@ struct ComputerUseTargetLockTests {
         #expect(refused == .response(id: 2, body: .failure(.unsupported(.lockState))))
         await client.close()
         await serving.value
+    }
+
+    @Test("A locked target's grant dialog says it stays unlocked and awake until the run ends, and that anyone at it can use it")
+    func unlockNotice() {
+        let review = ComputerUseGrantReview(grantable: [], blocked: [])
+        var request = Self.request(FakeDisplayTarget.hostManifest.id)
+        #expect(ComputerUseGrantRequest(review: review, lease: request, target: FakeDisplayTarget.hostManifest).unlockNotice == nil)
+        request.foundLocked = true
+        let locked = ComputerUseGrantRequest(review: review, lease: request, target: FakeDisplayTarget.hostManifest)
+        #expect(locked.targetLocked)
+        #expect(locked.unlockNotice == "Fake host desktop is locked. Unlock it to approve: it then stays unlocked and awake until the run ends, and anyone at it can use it.")
+    }
+
+    @Test("A session ended on an unavailable target releases a remote lease under that name, or as cancelled to a host that predates it")
+    func remoteReleaseReason() async throws {
+        for (minor, expected) in [(DisplayHostProtocol.version.minor, ReleaseReason.targetUnavailable), (0, .cancelled)] {
+            let (client, host) = InMemoryDisplayHostConnection.pair()
+            let released = Mutex<[ReleaseReason]>([])
+            let fakeHost = Task {
+                for try await data in host.inbound {
+                    guard case .request(let id, let body) = try DisplayHostCodec.decode(data) else { continue }
+                    switch body {
+                    case .hello:
+                        try await host.send(DisplayHostCodec.encode(.response(id: id, body: .welcome(
+                            version: DisplayHostVersion(major: DisplayHostProtocol.version.major, minor: minor),
+                            host: "host", manifest: FakeDisplayTarget.vmManifest, capabilities: [], imageDirectory: nil
+                        ))))
+                    case .lease(let wire):
+                        let lease = Lease(request: wire.leaseRequest(isHolderAlive: { true }), issuedAt: ComputerUseFixtures.epoch)
+                        try await host.send(DisplayHostCodec.encode(.response(id: id, body: .lease(lease, reattachToken: nil))))
+                    case .release(_, let reason):
+                        released.withLock { $0.append(reason) }
+                        try await host.send(DisplayHostCodec.encode(.response(id: id, body: .done)))
+                    default:
+                        try await host.send(DisplayHostCodec.encode(.response(id: id, body: .done)))
+                    }
+                }
+            }
+            let remote = try await RemoteDisplayTarget.connect(over: client)
+            let lease = try await remote.lease(Self.request(FakeDisplayTarget.vmManifest.id))
+            await remote.release(lease, reason: .targetUnavailable)
+            #expect(released.withLock { $0 } == [expected])
+            await remote.close()
+            await host.close()
+            _ = await fakeHost.result
+        }
     }
 }

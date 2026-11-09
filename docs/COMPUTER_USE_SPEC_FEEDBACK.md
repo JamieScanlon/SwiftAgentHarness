@@ -1,91 +1,31 @@
 # Computer use: open feedback for the spec team
 
-Both sections below are written up for the spec team as one change request, [Computer use on the user's own Mac: proposed spec changes](https://claude.ai/artifact/L1RBD8sdFYNyTZMQmgzSyq), saved here as [COMPUTER_USE_SPEC_CHANGE_REQUEST.md](COMPUTER_USE_SPEC_CHANGE_REQUEST.md). It adds two items found while writing it: the `target-unavailable` terminal reason releases as `cancelled`, against README § Runtime contract's rule that each terminal reason releases under its own name; and the hardware checks macos.md § Verify on hardware before relying on should list for sleep and lock.
+The spec team adopted the change request in [COMPUTER_USE_SPEC_CHANGE_REQUEST.md](COMPUTER_USE_SPEC_CHANGE_REQUEST.md): the live view of the user's own Mac, `target-unavailable`, and display sleep and the lock screen are now in `backends/computer-use/README.md` and `macos.md`, and the implementation follows them. Some rules came back stricter than we asked: relocking is mandatory and explicit, remote takeover input reaches only the handoff's app and no broad-reach app, keys go to that app's process, and takeover is never recorded.
 
-## A live view of the user's own Mac: decided, spec text pending
+What's still open after that update is below. Spec references are relative to `harness-template/`.
 
-A downstream change request asked for a live view of the user's own Mac, limited to granted apps, so a user who started a run from their phone can watch it and complete handoffs. The spec treated the host desktop as having no live view. The questions below were decided, and the implementation follows the decisions. The spec text still says otherwise in the places each item names. Spec references are relative to `harness-template/`.
+## Local input ending a remotely unlocked session: not implemented
 
-### 1. A shared host desktop may have a live view, in one mode
+`macos.md` § Safety specifics on the host desktop says a session the user unlocked remotely should end with `target-unavailable` ("someone started using this Mac"), and the host should lock the Mac, when someone uses the Mac's own keyboard or mouse. It applies "where the host can tell local input apart from Screen Sharing input and from its own synthesized events".
 
-**Decided.** A shared host target may serve a live view that shows granted apps only and takes input only for granted apps during the user's takeover (items 4 and 5). The grant dialog says so: "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover."
+We can't tell either thing yet:
+- **Whether the unlock was remote.** The harness sees only that the Mac was locked and then wasn't. A user who walked up and unlocked it at the Mac looks the same.
+- **Whether input is local.** Telling the Mac's own keyboard from Screen Sharing input is one of the spec's own hardware questions (§ Verify on hardware before relying on).
 
-**Spec text to change.**
-- `backends/computer-use/README.md` § Runtime contract, `humanPresence`: "People may watch through a live view or act during takeover" appears only under `exclusive`.
-- § Safety is layered, not a single gate, item 5: "the host desktop, which is the user's own screen" is the example of a target without a live view.
-- The same section, item 7: "On isolated targets the user acts through the live view."
-- `backends/computer-use/macos.md` describes live views only for VM guests (TL;DR item 7, § Isolation: macOS VMs and their limits).
+Until both are settled on hardware, the host doesn't end the session on local input. The existing `userTyping` event still pauses the agent's input while anyone types.
 
-**Implementation.** `MacHostDisplayTarget.Configuration.liveFrames: .grantedApps`. The VM guest's whole-display frames are `.wholeDisplay`. `ComputerUseGrantRequest.liveViewNotice` carries the dialog text.
+## Relocking after a crash
 
-### 2. Presence stays as it is; the live view is how a remote user completes a handoff
+§ Safety specifics requires relocking "on every release path, including abort and the crash watchdog". Every release, every abort, and a display host releasing a dropped holder relock. A lease taken over from a holder that died without releasing relocks first. Two paths remain:
+- **The display host itself crashes.** Nothing in its process survives to lock the Mac, and there's no separate watchdog process.
+- **In-process development mode.** The harness and the target share a process, so a harness crash leaves the Mac unlocked.
 
-**Decided.** Option (a). Hosts and clients are assumed to be aligned in capability: a host that can serve a screen view is used by a client that can show a live view. Mismatched pairs aren't solved for, and the handoff timeout is acceptable there.
+A watchdog outside the host process would close both. The spec could say whether one is required, or whether the hosted shape with its liveness check is enough.
 
-**Spec text to change.** § Sessions, leases, grants, and tiers could say that a present user on a shared target completes a handoff at the machine or through its live view, and that a pairing with neither waits out the handoff's timeout.
+## Which app a user-started takeover is for
 
-**Implementation.** No change to presence.
+README § Display targets limits remote takeover input to "the app the handoff is for (the working app when the agent called `handoff`)". A takeover the user starts from the oversight surface, with no handoff, has no such app. We use the working app when the takeover starts, the same rule as a handoff, and take no remote input when there is none. The spec could say so, or say that a takeover without a handoff takes no remote input.
 
-### 3. Watch mode on a shared target: an open view or the user's confirmation
+## How the Mac is locked
 
-**Decided.** On a `shared` target, either an open view or a present user's confirmation on a card keeps a sensitive-domain session going. "Only while a view is open" stays for `exclusive` targets. Surfaces offer the view for a handoff on a shared target, and say the user can act at the machine instead.
-
-**Spec text to change.** § Safety is layered, not a single gate, item 5, which splits watch mode only by whether the target has a live view. § Oversight surfaces, for the handoff guidance.
-
-**Implementation.**
-- The session asks for the card on a shared target when nobody is watching its view.
-- Activity intents and the session listing carry `sharedScreen`.
-- The terminal's handoff dialog says to use the target at the machine or through the link.
-
-### 4. A viewer's input on a shared target reaches granted apps only
-
-**Decided.** During takeover, a viewer's input on a shared target reaches granted apps only:
-- **Pointer events.** The window on top at the point must belong to a granted app. The harness's own windows and the HUD count as ungranted.
-- **Drags.** Checked at every move. A release outside granted windows lands where the drag last was.
-- **Keys and text.** Delivered only while a granted app is frontmost.
-- **Global shortcuts.** Only with the frontmost app's `system-keys` flag.
-- **The stop key.** Never passed.
-
-A granted app's tier doesn't limit the user: tiers limit the agent, and takeover is the user acting.
-
-**Spec text to change.** § Display targets as an execution-environment family and § Oversight surfaces, which say who may send input but not where it may go.
-
-**Implementation.** `MacHostDisplayTarget.liveInput` with `.grantedApps`. The stop key is refused in every mode.
-
-### 5. A shared target's frames show what the agent sees, with covered parts blanked
-
-**Decided.**
-- Frames use the agent's capture filter: granted apps, minus the excluded ones, never the harness's own UI. The pointer is shown.
-- Frames keep coming during takeover.
-- Where an ungranted window, or the harness's own, covers a granted one, that part is blanked, so the view shows where input won't land.
-
-**Spec text to change.** § Display targets as an execution-environment family, which doesn't say what a live view's frames contain. `macos.md` § Perception: ScreenCaptureKit, beside "Exclude yourself".
-
-**Implementation.** `MacHostDisplayTarget.liveFrame` with `.grantedApps`.
-
-### 6. No observers on a shared target unless the operator opts in
-
-**Decided.** A shared target's live view takes no observer links unless the operator opts in.
-
-**Spec text to change.** § Display targets as an execution-environment family, which allows observer links on any target.
-
-**Implementation.** `DisplayLiveViewConfiguration.maxObserversPerSharedFeed`, 0 by default.
-
-## The host desktop asleep or locked: implemented, spec silent
-
-A downstream change request found that a run started away from the Mac failed every observation, because its display was asleep, and that a Mac set to lock when its display sleeps shows a lock screen the agent can't, and mustn't, get past. The spec says nothing about display sleep or the lock screen. Spec references are relative to `harness-template/`.
-
-**Implemented.**
-- `MacHostDisplayTarget.Configuration.wakesDisplay`, off by default: each lease declares user activity and holds a "prevent idle display sleep" assertion until release.
-- A locked Mac refuses the lease, and refuses observing and acting mid-lease, so the agent never types into the lock screen.
-- `DisplayTargetError.targetUnavailable(reason)` for a target the user must act at first. A lease refused with it, or a session that hits it, ends at once as `needs-user` with the reason. The session's terminal reason is `target-unavailable`, and its lease is released as `cancelled`.
-
-**Implemented later, for a locked Mac the user unlocks remotely.** A second change request asked for the user to unlock the Mac from a phone, through macOS Screen Sharing, as part of approving the session.
-- `DisplayTarget.isLocked()`, with a default of `false`. The registry asks it before the grant dialog and passes the answer as `ComputerUseGrantRequest.targetLocked`, and to the target as `LeaseRequest.targetLocked`. It crosses the display host wire under a new `lock-state` capability, as protocol version 7.1.
-- `MacHostDisplayTarget.Configuration.unlockTimeout`, zero by default: how long a lease waits for an unlock already under way. Only the lease waits; a Mac that locks mid-session is still refused at once.
-- `MacHostDisplayTarget.Configuration.relocksOnRelease`, off by default: a session that found the Mac locked sleeps its display at release, which relocks a Mac set to ask for its password immediately.
-- The harness never sees the password; the user types it into macOS itself.
-
-**Spec text to consider.**
-- `backends/computer-use/macos.md` § Safety specifics on the host desktop could cover display sleep and the lock screen. The change request asked for three notes there, which this project can't make since the spec is read-only: lock state is part of the grant request; the only supported remote unlock is the user's own password, through Screen Sharing; and a session that found the Mac locked leaves it locked.
-- `backends/computer-use/README.md` § The computer-use sub-agent could list a target the user must wake or unlock among the `needs-user` cases, and § Runtime contract could name an error for it.
+§ Safety specifics allows the Lock Screen shortcut or "a lock call behind a capability probe". We post ⌃⌘Q from a private event source and fall back to sleeping the display when the Mac isn't locked 2 seconds later. Whether that shortcut locks at once on 26 and 27, including during Screen Sharing, is on the spec's hardware list.

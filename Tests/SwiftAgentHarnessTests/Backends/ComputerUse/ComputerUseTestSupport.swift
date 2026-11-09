@@ -66,9 +66,11 @@ actor FakeDisplayTarget: DisplayTarget {
     private(set) var leaseError: DisplayTargetError?
     private(set) var observeError: DisplayTargetError?
     private(set) var actError: DisplayTargetError?
+    /// Runs during each observation, before it returns.
+    private(set) var onObserve: (@Sendable () async -> Void)?
     /// What ``isLocked()`` answers.
     private(set) var locked = false
-    /// Each lease request's ``LeaseRequest/targetLocked``, in order.
+    /// Each lease request's ``LeaseRequest/foundLocked``, in order.
     private(set) var leasedLocked: [Bool] = []
 
     init(
@@ -86,6 +88,10 @@ actor FakeDisplayTarget: DisplayTarget {
         leaseError = lease
         observeError = observe
         actError = act
+    }
+
+    func setOnObserve(_ hook: (@Sendable () async -> Void)?) {
+        onObserve = hook
     }
 
     func setLocked(_ locked: Bool) {
@@ -126,7 +132,7 @@ actor FakeDisplayTarget: DisplayTarget {
     }
 
     func lease(_ request: LeaseRequest) async throws -> Lease {
-        leasedLocked.append(request.targetLocked)
+        leasedLocked.append(request.foundLocked)
         if let leaseError { throw leaseError }
         let lease = Lease(request: request, issuedAt: now())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
@@ -158,6 +164,7 @@ actor FakeDisplayTarget: DisplayTarget {
     func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
         try await requireLease(lease)
         if let observeError { throw observeError }
+        await onObserve?()
         observeCalls.append(request)
         observationCounter += 1
         var observation = ComputerUseFixtures.observation(

@@ -20,8 +20,9 @@ public struct LeaseRequest: Sendable {
     /// A person is present to watch, approve, and take over.
     public var userPresent: Bool
     /// The target was locked when the user was asked for the grants, so the user unlocked it for this session.
-    /// The registry sets it; a target that locks again at release reads it.
-    public var targetLocked: Bool
+    /// The registry sets it, and a target that finds itself locked at lease counts the same; either way the target
+    /// locks itself again at release.
+    public var foundLocked: Bool
     /// Lets a target tell a crashed holder from a live one.
     public var isHolderAlive: @Sendable () async -> Bool
 
@@ -34,7 +35,7 @@ public struct LeaseRequest: Sendable {
         delivery: ComputerUseDeliveryPolicy = .backgroundOnly,
         initiator: ComputerUseInitiator,
         userPresent: Bool,
-        targetLocked: Bool = false,
+        foundLocked: Bool = false,
         isHolderAlive: @escaping @Sendable () async -> Bool = { true }
     ) {
         self.target = target
@@ -45,7 +46,7 @@ public struct LeaseRequest: Sendable {
         self.delivery = delivery
         self.initiator = initiator
         self.userPresent = userPresent
-        self.targetLocked = targetLocked
+        self.foundLocked = foundLocked
         self.isHolderAlive = isHolderAlive
     }
 }
@@ -108,6 +109,8 @@ public enum ReleaseReason: String, Sendable, Codable, Hashable {
     case policyRevoked = "policy-revoked"
     /// The lease holder's connection died.
     case holderLost = "holder-lost"
+    /// The user must act at the target first, such as waking or unlocking it.
+    case targetUnavailable = "target-unavailable"
 }
 
 public enum PermissionState: String, Sendable, Codable, Hashable {

@@ -199,7 +199,7 @@ struct DisplayTargetRegistryTests {
         viewed.observerAccess = .stream
         let review = ComputerUseGrantReview(grantable: [], blocked: [])
         let notice = ComputerUseGrantRequest(review: review, lease: request(target: viewed.id), target: viewed).liveViewNotice
-        #expect(notice == "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover.")
+        #expect(notice == "Your granted apps' windows can be watched from a live view, and the app a handoff is for can be controlled from it during the handoff.")
         #expect(ComputerUseGrantRequest(review: review, lease: request(target: FakeDisplayTarget.hostManifest.id), target: FakeDisplayTarget.hostManifest).liveViewNotice == nil)
         #expect(ComputerUseGrantRequest(review: review, lease: request(target: FakeDisplayTarget.vmManifest.id), target: FakeDisplayTarget.vmManifest).liveViewNotice == nil, "an isolated target is nobody's own")
     }

@@ -84,6 +84,7 @@ struct MacLiveViewTests {
         _ state: FakeMacWorkspace.State = Self.desktop(),
         mode: MacHostDisplayTarget.LiveFrames = .grantedApps,
         grants: [ComputerUseGrant] = [.app(bundleID: Desktop.textEdit.identity.bundleID, tier: .view)],
+        remoteTakeoverBundleIDs: Set<String> = [],
         poster: RecordingEventPoster
     ) async throws -> (MacHostDisplayTarget, Lease) {
         var configuration = MacHostDisplayTarget.Configuration(
@@ -93,6 +94,7 @@ struct MacLiveViewTests {
             workspace: FakeMacWorkspace(state)
         )
         configuration.liveFrames = mode
+        configuration.remoteTakeoverBundleIDs = remoteTakeoverBundleIDs
         let target = MacHostDisplayTarget(configuration: configuration)
         let lease = try await target.lease(LeaseRequest(
             target: MacHostDisplayTarget.defaultID, agentID: "agent", grants: grants,
@@ -111,7 +113,18 @@ struct MacLiveViewTests {
         .key(down: true, key: key, code: code, keyCode: 0, text: text, modifiers: modifiers)
     }
 
-    @Test("Granted-apps frames declare a stream; a click reaches only a granted app's window, never one over it")
+    private static let terminal = MacRunningApp(pid: 90_010, identity: AppIdentity(bundleID: "com.apple.Terminal"), launchDate: Desktop.launched)
+
+    /// Terminal's window where TextEdit's would be, in front.
+    private static func terminalDesktop() -> FakeMacWorkspace.State {
+        FakeMacWorkspace.State(
+            apps: [Desktop.harness, terminal, Desktop.dock],
+            frontmost: terminal.pid,
+            windows: [Desktop.dockWindow, MacWindowEntry(pid: terminal.pid, layer: 0, bounds: Desktop.textEditWindow.bounds)]
+        )
+    }
+
+    @Test("Granted-apps frames declare a stream; a click reaches only the handoff app's window, never one over it")
     func pointer() async throws {
         let poster = RecordingEventPoster()
         let (target, lease) = try await target(poster: poster)
@@ -128,7 +141,24 @@ struct MacLiveViewTests {
         await target.release(lease, reason: .completed)
     }
 
-    @Test("A drag can't carry into an ungranted window; its release lands where it last was allowed")
+    @Test("Remote input reaches only the app the handoff is for, not every granted app")
+    func handoffAppOnly() async throws {
+        let poster = RecordingEventPoster()
+        let (target, lease) = try await target(
+            grants: [
+                .app(bundleID: Desktop.textEdit.identity.bundleID, tier: .full),
+                .app(bundleID: Desktop.notes.identity.bundleID, tier: .full),
+            ],
+            poster: poster
+        )
+        try await target.liveInput(lease, Self.mouse(.down, 650, 250))
+        #expect(poster.count == 0, "Notes is granted, but the handoff is for TextEdit")
+        try await target.liveInput(lease, Self.mouse(.down, 400, 500))
+        #expect(poster.count == 2)
+        await target.release(lease, reason: .completed)
+    }
+
+    @Test("A drag can't carry out of the handoff app's window; its release lands where it last was allowed")
     func drag() async throws {
         let poster = RecordingEventPoster()
         let (target, lease) = try await target(poster: poster)
@@ -143,7 +173,7 @@ struct MacLiveViewTests {
         await target.release(lease, reason: .completed)
     }
 
-    @Test("Keys and text reach only a granted frontmost app; global shortcuts need system-keys; the stop key never passes")
+    @Test("Keys and text go to the handoff app's process, whatever is in front; global shortcuts need system-keys; never the stop key")
     func keys() async throws {
         let poster = RecordingEventPoster()
         let (target, lease) = try await target(poster: poster)
@@ -151,6 +181,7 @@ struct MacLiveViewTests {
         try await target.liveInput(lease, .text("hello"))
         let typed = poster.count
         #expect(typed > 0)
+        #expect(poster.deliveries.allSatisfy { $0 == .process(Desktop.textEdit.pid) }, "delivered to the process, never posted globally")
         try await target.liveInput(lease, Self.key("Tab", code: "Tab", [.cmd]))
         try await target.liveInput(lease, Self.key(" ", code: "Space", [.cmd]))
         try await target.liveInput(lease, Self.key("≥", code: "Period", [.ctrl, .option, .cmd]))
@@ -170,10 +201,50 @@ struct MacLiveViewTests {
 
         let elsewhere = RecordingEventPoster()
         let (harnessFront, frontLease) = try await self.target(Self.desktop(frontmost: Desktop.harness.pid), poster: elsewhere)
-        try await harnessFront.liveInput(frontLease, Self.key("a", code: "KeyA", text: "a"))
         try await harnessFront.liveInput(frontLease, .text("hello"))
-        #expect(elsewhere.count == 0, "the harness's own app is in front")
+        #expect(elsewhere.count > 0)
+        #expect(elsewhere.deliveries.allSatisfy { $0 == .process(Desktop.textEdit.pid) }, "the harness in front never gets them")
         await harnessFront.release(frontLease, reason: .completed)
+    }
+
+    @Test("A broad-reach app, such as a terminal, takes no remote input unless the operator opts it in")
+    func broadReachApps() async throws {
+        let grants: [ComputerUseGrant] = [.app(bundleID: Self.terminal.identity.bundleID, tier: .click)]
+        let refused = RecordingEventPoster()
+        let (target, lease) = try await target(Self.terminalDesktop(), grants: grants, poster: refused)
+        try await target.liveInput(lease, Self.mouse(.down, 400, 500))
+        try await target.liveInput(lease, .text("rm -rf ~"))
+        #expect(refused.count == 0, "a terminal granted for the agent must not become a remote shell")
+        await target.release(lease, reason: .completed)
+
+        let optedIn = RecordingEventPoster()
+        let (allowed, allowedLease) = try await self.target(
+            Self.terminalDesktop(), grants: grants, remoteTakeoverBundleIDs: [Self.terminal.identity.bundleID], poster: optedIn
+        )
+        try await allowed.liveInput(allowedLease, .text("ls"))
+        #expect(optedIn.count > 0)
+        await allowed.release(allowedLease, reason: .completed)
+    }
+
+    @Test("A takeover with no granted app on screen takes no remote input")
+    func noHandoffApp() async throws {
+        let poster = RecordingEventPoster()
+        let state = FakeMacWorkspace.State(apps: [Desktop.harness, Desktop.dock], frontmost: Desktop.harness.pid, windows: [Desktop.dockWindow])
+        let (target, lease) = try await target(state, poster: poster)
+        try await target.liveInput(lease, .text("hello"))
+        try await target.liveInput(lease, Self.mouse(.down, 400, 500))
+        #expect(poster.count == 0)
+        await target.release(lease, reason: .completed)
+    }
+
+    @Test("The broad-reach apps are the terminals and IDEs, file managers, and system settings")
+    func broadReachPolicy() {
+        let policy = ComputerUseAppPolicy.default
+        for bundleID in ["com.apple.Terminal", "com.microsoft.VSCode", "com.apple.finder", "com.apple.systempreferences"] {
+            #expect(policy.hasBroadReach(AppIdentity(bundleID: bundleID)), "\(bundleID)")
+        }
+        #expect(!policy.hasBroadReach(AppIdentity(bundleID: "com.apple.TextEdit")))
+        #expect(!policy.hasBroadReach(AppIdentity(bundleID: "com.apple.Safari")))
     }
 
     @Test("Whole-display frames, for a VM guest, take input anywhere but still never the stop key")

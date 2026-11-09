@@ -25,8 +25,15 @@ public struct ComputerUseGrantRequest: Sendable {
     public var purpose: String?
 
     /// The target's screen is locked, so a plain approval would fail at the lease: the dialog can offer to unlock
-    /// it first. A lease waits for that unlock only as long as the target is configured to.
-    public var targetLocked: Bool { lease.targetLocked }
+    /// it first, which only the user can do, at the target. A lease waits for that unlock only as long as the target
+    /// is configured to.
+    public var targetLocked: Bool { lease.foundLocked }
+
+    /// What the dialog must tell the user when it offers to unlock the target.
+    public var unlockNotice: String? {
+        guard targetLocked else { return nil }
+        return "\(target.label) is locked. Unlock it to approve: it then stays unlocked and awake until the run ends, and anyone at it can use it."
+    }
 
     public init(review: ComputerUseGrantReview, lease: LeaseRequest, target: DisplayTargetManifest, purpose: String? = nil) {
         self.review = review
@@ -40,10 +47,10 @@ public struct ComputerUseGrantRequest: Sendable {
     public var conversationID: UUID? { lease.conversationID }
 
     /// What the dialog must tell the user when the target is their own screen and serves a live view: the view
-    /// shows the granted apps, and takes their input during a takeover.
+    /// shows the granted apps, and takes input for the app a handoff is for, during the handoff.
     public var liveViewNotice: String? {
         guard target.humanPresence == .shared, target.observerAccess != .none else { return nil }
-        return "Your granted apps' windows can be watched from a live view, and controlled from it during a takeover."
+        return "Your granted apps' windows can be watched from a live view, and the app a handoff is for can be controlled from it during the handoff."
     }
 }
 
@@ -127,9 +134,9 @@ public actor DisplayTargetRegistry {
         if !missing.isEmpty { throw .permissionsMissing(missing) }
 
         var request = request
-        request.targetLocked = await target.isLocked()
+        request.foundLocked = await target.isLocked()
         logger.info("Display target lock state before the grant dialog", metadata: [
-            "target": "\(manifest.id)", "locked": "\(request.targetLocked)",
+            "target": "\(manifest.id)", "locked": "\(request.foundLocked)",
         ])
 
         let review = reviewer.review(request.grants)

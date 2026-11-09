@@ -139,7 +139,8 @@ public enum ComputerUseTerminalReason: String, Sendable, Codable, Hashable {
         case .timeBudget: return .expired
         case .deadline: return .deadline
         case .noProgress: return .noProgress
-        case .liveViewRequired, .needsUser, .cancelled, .targetUnavailable: return .cancelled
+        case .liveViewRequired, .needsUser, .cancelled: return .cancelled
+        case .targetUnavailable: return .targetUnavailable
         case .idleTimeout: return .idleTimeout
         case .killSwitch: return .killSwitch
         case .permissionRevoked: return .permissionRevoked
@@ -277,6 +278,9 @@ public struct ComputerUseSessionEvent: Sendable, Codable, Hashable {
         case ceilingQuestion = "ceiling-question"
         /// A sensitive-domain signal put the session in watch mode.
         case watchMode = "watch-mode"
+        /// The user took over. Nothing is recorded until the takeover ends, since they may be typing a credential.
+        case takeoverStarted = "takeover-started"
+        case takeoverEnded = "takeover-ended"
         case ended
     }
 
@@ -969,7 +973,7 @@ public actor ComputerUseSession {
             if !snapshot.missing(manifest.requires).isEmpty { await end(.permissionRevoked) }
         case .takeoverChanged(let on):
             guard on != isTakeoverActive else { return }
-            isTakeoverActive = on
+            markTakeover(on)
             if on { pendingActing = nil }
             await report(on ? .takenOver : .acting)
         case .userTyping:
@@ -1371,6 +1375,8 @@ public actor ComputerUseSession {
     /// Ends the session and releases the lease. Idempotent.
     public func end(_ reason: ComputerUseTerminalReason = .ended, detail: String? = nil) async {
         guard terminalReason == nil else { return }
+        let handBack = isTakeoverActive
+        if handBack { markTakeover(false) }
         terminalReason = reason
         terminalDetail = detail
         endedAt = now()
@@ -1389,8 +1395,6 @@ public actor ComputerUseSession {
         case .handoff(let request)?: unresolvedHandoff = request
         case nil: break
         }
-        let handBack = isTakeoverActive
-        isTakeoverActive = false
         // A task of its own: a cancelled caller's requests never reach a remote target, and cleanup must.
         downloads = await Task { [target, lease] in
             if handBack { try? await target.takeover(lease, on: false) }
@@ -1493,7 +1497,7 @@ public actor ComputerUseSession {
         if let terminalReason { throw ComputerUseSessionError.ended(terminalReason) }
         guard on != isTakeoverActive else { return }
         try await target.takeover(lease, on: on)
-        isTakeoverActive = on
+        markTakeover(on)
         // What the user does meanwhile is never credited to the agent's last action.
         if on { pendingActing = nil }
         await report(on ? .takenOver : .acting)
@@ -1503,7 +1507,7 @@ public actor ComputerUseSession {
     /// takeover would refuse every later action.
     private func endTakeover() async {
         guard isTakeoverActive, terminalReason == nil else { return }
-        isTakeoverActive = false
+        markTakeover(false)
         await Task { [target, lease] in try? await target.takeover(lease, on: false) }.value
         await report(.acting)
     }
@@ -1650,8 +1654,15 @@ public actor ComputerUseSession {
         }
     }
 
+    /// Takeover starts and ends are marked in the events, so a replay shows where its frames stop.
+    private func markTakeover(_ on: Bool) {
+        isTakeoverActive = on
+        events.append(ComputerUseSessionEvent(kind: on ? .takeoverStarted : .takeoverEnded, at: now(), step: steps))
+    }
+
     private func keepReplayFrame(of observation: DisplayObservation) {
-        guard let data = observation.image?.data,
+        // An observation that returns after a takeover began may show the user typing a credential.
+        guard !isTakeoverActive, let data = observation.image?.data,
               let image = ComputerUseImageEncoding.thumbnail(
                   of: data,
                   maxEdgePx: configuration.replayThumbnailEdgePx,

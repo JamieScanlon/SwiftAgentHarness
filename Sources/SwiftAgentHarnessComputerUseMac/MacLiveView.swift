@@ -73,33 +73,26 @@ enum MacLiveView {
     }
 }
 
-/// Where a viewer's input may go on the user's own Mac during a takeover: granted apps only.
+/// Where a viewer's input may go on the user's own Mac during a takeover: the app the handoff is for, only.
 struct MacLiveInputGate {
-    /// Processes of granted apps, other than this one and the excluded apps.
-    var grantedPIDs: Set<pid_t>
+    var handoffPID: pid_t
     /// On-screen windows, front to back.
     var windows: [MacWindowEntry]
-    var frontmost: pid_t?
-    /// The frontmost app's grant flags, for global shortcuts.
-    var frontmostFlags: Set<ComputerUseGrantFlag>
+    /// The handoff app's grant flags, for global shortcuts.
+    var flags: Set<ComputerUseGrantFlag>
     var systemShortcuts: Set<KeyCombo>
 
-    /// A pointer event at `point` reaches the window on top there, which must be a granted app's. The harness's own
-    /// windows count as ungranted: a viewer's click doesn't bring the target app forward first, as the agent's
+    /// A pointer event at `point` reaches the window on top there, which must be the handoff app's. The harness's
+    /// own windows count as other apps: a viewer's click doesn't bring the app forward first, as the agent's
     /// foreground delivery does, so it would land on them.
     func allows(point: CGPoint) -> Bool {
-        MacLiveView.owner(at: point, windows: windows).map(grantedPIDs.contains) ?? false
-    }
-
-    /// Keys and text go to the frontmost app, which must be granted.
-    var allowsKeys: Bool {
-        frontmost.map(grantedPIDs.contains) ?? false
+        MacLiveView.owner(at: point, windows: windows) == handoffPID
     }
 
     /// The system handles global shortcuts whatever app is in front, so they need the grant's system-keys flag.
     func allows(_ combos: [KeyCombo]) -> Bool {
         let global = combos.contains { systemShortcuts.contains($0) || $0.modifiers.contains(.fn) }
-        return !global || frontmostFlags.contains(.systemKeys)
+        return !global || flags.contains(.systemKeys)
     }
 }
 #endif

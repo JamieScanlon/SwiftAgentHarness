@@ -9,7 +9,6 @@ struct MacDisplayUnlockTests {
     private func target(
         _ power: FakeDisplayPower,
         unlockTimeout: Duration = .zero,
-        relocksOnRelease: Bool = false,
         wakesDisplay: Bool = true
     ) -> MacHostDisplayTarget {
         var configuration = MacHostDisplayTarget.Configuration(
@@ -17,32 +16,30 @@ struct MacDisplayUnlockTests {
             permissionProbe: FakePermissionProbe(granted: [.screenCapture, .accessibility, .postEvents]),
             eventPoster: RecordingEventPoster(),
             displayPower: power,
-            wakeTimeout: .milliseconds(100)
+            wakeTimeout: .milliseconds(100),
+            relockTimeout: .milliseconds(100)
         )
         configuration.wakesDisplay = wakesDisplay
         configuration.unlockTimeout = unlockTimeout
-        configuration.relocksOnRelease = relocksOnRelease
         return MacHostDisplayTarget(configuration: configuration)
     }
 
-    private func request(targetLocked: Bool = false) -> LeaseRequest {
-        var request = LeaseRequest(
+    private func request(foundLocked: Bool = false, isHolderAlive: @escaping @Sendable () async -> Bool = { true }) -> LeaseRequest {
+        LeaseRequest(
             target: MacHostDisplayTarget.defaultID,
             agentID: "agent",
             grants: [.app(bundleID: "com.apple.TextEdit", tier: .full)],
             budgets: ComputerUseBudgets(steps: 10, maxDuration: .seconds(60)),
             initiator: .operator,
-            userPresent: true
+            userPresent: true,
+            foundLocked: foundLocked,
+            isHolderAlive: isHolderAlive
         )
-        request.targetLocked = targetLocked
-        return request
     }
 
-    @Test("By default a lease doesn't wait for an unlock, and release leaves the display alone")
+    @Test("By default a lease doesn't wait for an unlock")
     func defaults() {
-        let configuration = MacHostDisplayTarget.Configuration()
-        #expect(configuration.unlockTimeout == .zero)
-        #expect(configuration.relocksOnRelease == false)
+        #expect(MacHostDisplayTarget.Configuration().unlockTimeout == .zero)
     }
 
     @Test("The target says whether the Mac is locked")
@@ -63,7 +60,7 @@ struct MacDisplayUnlockTests {
             #expect(power.held.count == 2, "the display stays awake while the user unlocks it")
             power.setLocked(false)
         }
-        let lease = try await target.lease(request(targetLocked: true))
+        let lease = try await target.lease(request(foundLocked: true))
         try await unlocking.value
         await target.release(lease, reason: .completed)
     }
@@ -74,10 +71,11 @@ struct MacDisplayUnlockTests {
         let target = target(power, unlockTimeout: .milliseconds(150))
         let start = ContinuousClock.now
         await #expect(throws: DisplayTargetError.targetUnavailable(MacHostDisplayTarget.lockedReason)) {
-            _ = try await target.lease(request(targetLocked: true))
+            _ = try await target.lease(request(foundLocked: true))
         }
         #expect(ContinuousClock.now - start >= .milliseconds(150))
         #expect(power.held.isEmpty)
+        #expect(power.locks.isEmpty, "the Mac is still locked; nothing to put back")
         power.setLocked(false)
         let other = try await target.lease(request())
         await target.release(other, reason: .completed)
@@ -97,58 +95,75 @@ struct MacDisplayUnlockTests {
         await target.release(lease, reason: .completed)
     }
 
-    @Test("A session whose user found the Mac locked sleeps the display at release, after letting it sleep")
-    func relocksWhenFoundLocked() async throws {
+    @Test("A session the user unlocked for keeps the display awake until release, even with waking off")
+    func awakeWhileUnlocked() async throws {
         let power = FakeDisplayPower()
-        let target = target(power, relocksOnRelease: true)
-        let lease = try await target.lease(request(targetLocked: true))
+        let target = target(power, wakesDisplay: false)
+        let lease = try await target.lease(request(foundLocked: true))
+        #expect(power.held.count == 2, "the dialog said it stays awake until the run ends")
         await target.release(lease, reason: .completed)
-        #expect(power.sleeps == [[]], "the wake assertions are gone before the display sleeps")
+        #expect(power.held.isEmpty)
+    }
+
+    @Test("A session that found the Mac locked locks it explicitly at release, on every release path, after letting it sleep")
+    func relocksWhenFoundLocked() async throws {
+        for reason in [ReleaseReason.completed, .cancelled, .killSwitch, .holderLost, .targetUnavailable] {
+            let power = FakeDisplayPower()
+            let target = target(power)
+            let lease = try await target.lease(request(foundLocked: true))
+            await target.release(lease, reason: reason)
+            #expect(power.locks == [[]], "locked with no wake assertion left, after \(reason)")
+            #expect(power.screenIsLocked)
+            #expect(power.sleeps.isEmpty, "the explicit lock took, so no fallback")
+            await target.release(lease, reason: reason)
+            #expect(power.locks.count == 1, "release is idempotent")
+        }
+    }
+
+    @Test("When the explicit lock doesn't take, release falls back to sleeping the display")
+    func relockFallsBackToSleep() async throws {
+        let power = FakeDisplayPower(lockTakes: false)
+        let target = target(power)
+        let lease = try await target.lease(request(foundLocked: true))
         await target.release(lease, reason: .completed)
-        #expect(power.sleeps.count == 1, "release is idempotent")
+        #expect(power.locks.count == 1)
+        #expect(power.sleeps.count == 1)
     }
 
     @Test("A Mac still locked when the lease began is locked again at release, even if the grant said otherwise")
     func relocksWhenLockedAtLease() async throws {
         let power = FakeDisplayPower(locked: true)
-        let target = target(power, unlockTimeout: .seconds(5), relocksOnRelease: true)
+        let target = target(power, unlockTimeout: .seconds(5))
         let unlocking = Task {
             try await Task.sleep(for: .milliseconds(100))
             power.setLocked(false)
         }
-        let lease = try await target.lease(request(targetLocked: false))
+        let lease = try await target.lease(request(foundLocked: false))
         try await unlocking.value
         await target.release(lease, reason: .cancelled)
-        #expect(power.sleeps.count == 1)
+        #expect(power.locks.count == 1)
     }
 
-    @Test("A Mac that was unlocked all along is left awake at release")
+    @Test("A Mac that was unlocked all along is left unlocked and awake at release")
     func leavesUnlockedMacAlone() async throws {
         let power = FakeDisplayPower()
-        let target = target(power, relocksOnRelease: true)
+        let target = target(power)
         let lease = try await target.lease(request())
         await target.release(lease, reason: .completed)
+        #expect(power.locks.isEmpty)
         #expect(power.sleeps.isEmpty)
-        #expect(!power.displayIsAsleep)
+        #expect(!power.screenIsLocked)
     }
 
-    @Test("With relocking off, a Mac found locked is left as the session ends it")
-    func relockOff() async throws {
+    @Test("A lease taken over from a holder that died is locked again first, if that holder found it locked")
+    func deadHolderRelocks() async throws {
         let power = FakeDisplayPower()
         let target = target(power)
-        let lease = try await target.lease(request(targetLocked: true))
-        await target.release(lease, reason: .completed)
-        #expect(power.sleeps.isEmpty)
-    }
-
-    @Test("A lease refused as locked doesn't sleep the display: it never had the Mac")
-    func refusedLeaseDoesNotRelock() async throws {
-        let power = FakeDisplayPower(locked: true)
-        let target = target(power, relocksOnRelease: true)
-        await #expect(throws: DisplayTargetError.self) {
-            _ = try await target.lease(request(targetLocked: true))
+        _ = try await target.lease(request(foundLocked: true, isHolderAlive: { false }))
+        await #expect(throws: DisplayTargetError.targetUnavailable(MacHostDisplayTarget.lockedReason)) {
+            _ = try await target.lease(request())
         }
-        #expect(power.sleeps.isEmpty)
+        #expect(power.locks.count == 1, "the dead holder's session never released, so the next lease locks it")
     }
 }
 #endif

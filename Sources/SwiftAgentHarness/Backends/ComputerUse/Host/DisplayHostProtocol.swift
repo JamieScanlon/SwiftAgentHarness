@@ -76,7 +76,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
     public var initiator: ComputerUseInitiator
     public var userPresent: Bool
     /// Absent from an older client's request, which reads as unlocked.
-    public var targetLocked: Bool
+    public var foundLocked: Bool
 
     public init(_ request: LeaseRequest) {
         self.target = request.target
@@ -87,7 +87,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         self.delivery = request.delivery
         self.initiator = request.initiator
         self.userPresent = request.userPresent
-        self.targetLocked = request.targetLocked
+        self.foundLocked = request.foundLocked
     }
 
     public init(from decoder: any Decoder) throws {
@@ -100,7 +100,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
         delivery = try container.decode(ComputerUseDeliveryPolicy.self, forKey: .delivery)
         initiator = try container.decode(ComputerUseInitiator.self, forKey: .initiator)
         userPresent = try container.decode(Bool.self, forKey: .userPresent)
-        targetLocked = try container.decodeIfPresent(Bool.self, forKey: .targetLocked) ?? false
+        foundLocked = try container.decodeIfPresent(Bool.self, forKey: .foundLocked) ?? false
     }
 
     func leaseRequest(isHolderAlive: @escaping @Sendable () async -> Bool) -> LeaseRequest {
@@ -113,7 +113,7 @@ public struct DisplayHostLeaseRequest: Sendable, Codable, Hashable {
             delivery: delivery,
             initiator: initiator,
             userPresent: userPresent,
-            targetLocked: targetLocked,
+            foundLocked: foundLocked,
             isHolderAlive: isHolderAlive
         )
     }

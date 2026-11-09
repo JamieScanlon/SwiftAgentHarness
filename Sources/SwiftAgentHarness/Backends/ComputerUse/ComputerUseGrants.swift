@@ -250,6 +250,12 @@ public struct ComputerUseAppPolicy: Sendable, Hashable {
         return ruling
     }
 
+    /// Terminals and IDEs, file managers, system settings, and automation: apps whose reach is far broader than the
+    /// app, so a remote takeover never reaches them unless the operator opts in.
+    public func hasBroadReach(_ app: AppIdentity) -> Bool {
+        (clickOnly + broadBlastRadius).contains { $0.matches(app) }
+    }
+
     /// Domain grants limit what can be done on a page, not what can be seen.
     public static let browserVisibilityWarning =
         "Observations show whatever page its windows display, on any domain; domain grants decide only where it can act."

@@ -38,13 +38,16 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// from the Mac. The Mac's own display-sleep and lock settings apply again after release. Off by default.
         public var wakesDisplay: Bool
         /// How long a lease waits for a locked Mac to be unlocked before refusing it, for a user who unlocks it
-        /// remotely as they approve the session. Only the lease waits; a Mac that locks mid-session is refused at
-        /// once. Zero, the default, refuses a locked Mac straight away.
+        /// remotely as they approve the session. The display is kept awake meanwhile. Only the lease waits; a Mac
+        /// that locks mid-session is refused at once. Zero, the default, refuses a locked Mac straight away.
+        ///
+        /// A session that found the Mac locked always locks it again at release.
         public var unlockTimeout: Duration
-        /// Sleeps the display at release when the session found the Mac locked, so that, with the Mac set to ask
-        /// for its password immediately, it's locked again. With a delay before the password is asked for, the Mac
-        /// stays unlocked until the delay passes. Off by default.
-        public var relocksOnRelease: Bool
+        /// Broad-reach apps (see ``appPolicy``) that a remote takeover may still reach. A live viewer's input
+        /// otherwise never reaches a terminal, an IDE, a file manager, or system settings, whatever the grant says.
+        public var remoteTakeoverBundleIDs: Set<String>
+        /// Decides which apps have broad reach. Give it the registry reviewer's policy when that isn't the default.
+        public var appPolicy: ComputerUseAppPolicy
         var axBudget: MacAXTraversalBudget
         var permissionProbe: any MacPermissionProbing
         var eventPoster: any MacEventPosting
@@ -54,6 +57,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
         var displayPower: any MacDisplayPowering
         /// How long a lease waits for a woken display to report it is awake.
         var wakeTimeout: Duration
+        /// How long release waits for an explicit lock to take before sleeping the display instead.
+        var relockTimeout: Duration
 
         public init(
             id: DisplayTargetID = MacHostDisplayTarget.defaultID,
@@ -64,12 +69,14 @@ public actor MacHostDisplayTarget: DisplayTarget {
             embeddedInSignedApp: Bool = false,
             wakesDisplay: Bool = false,
             unlockTimeout: Duration = .zero,
-            relocksOnRelease: Bool = false
+            remoteTakeoverBundleIDs: Set<String> = [],
+            appPolicy: ComputerUseAppPolicy = .default
         ) {
             self.init(id: id, excludedBundleIDs: excludedBundleIDs, permissionProbe: LiveMacPermissionProbe(), eventPoster: LiveMacEventPoster())
             self.wakesDisplay = wakesDisplay
             self.unlockTimeout = unlockTimeout
-            self.relocksOnRelease = relocksOnRelease
+            self.remoteTakeoverBundleIDs = remoteTakeoverBundleIDs
+            self.appPolicy = appPolicy
             self.liveFrames = liveFrames
             self.liveFrameLongEdge = liveFrameLongEdge
             self.stopKey = stopKey
@@ -85,14 +92,17 @@ public actor MacHostDisplayTarget: DisplayTarget {
             axBudget: MacAXTraversalBudget = .default,
             deliveryProbe: (any MacDeliveryProbing)? = nil,
             displayPower: any MacDisplayPowering = LiveMacDisplayPower(),
-            wakeTimeout: Duration = .seconds(3)
+            wakeTimeout: Duration = .seconds(3),
+            relockTimeout: Duration = .seconds(2)
         ) {
             self.deliveryProbe = deliveryProbe
             self.displayPower = displayPower
             self.wakeTimeout = wakeTimeout
+            self.relockTimeout = relockTimeout
             self.wakesDisplay = false
             self.unlockTimeout = .zero
-            self.relocksOnRelease = false
+            self.remoteTakeoverBundleIDs = []
+            self.appPolicy = .default
             self.id = id
             self.excludedBundleIDs = excludedBundleIDs
             self.permissionProbe = permissionProbe
@@ -116,7 +126,8 @@ public actor MacHostDisplayTarget: DisplayTarget {
         /// No live view.
         case off
         /// The granted apps' windows, as the agent sees them, for the user's own Mac. Where another window covers a
-        /// granted one, that part is blanked. A viewer's input reaches granted apps only.
+        /// granted one, that part is blanked. During a takeover, a viewer's input reaches only the app the handoff is
+        /// for, and never a broad-reach app the operator hasn't opted in.
         case grantedApps
         /// The whole main display with every app but the excluded ones, for a VM guest, where nothing on screen is
         /// anyone else's. A viewer's input goes wherever it points.
@@ -169,8 +180,10 @@ public actor MacHostDisplayTarget: DisplayTarget {
     private var stopKeyMonitor: MacStopKeyMonitor?
     /// Held from lease to release while ``Configuration/wakesDisplay`` is on.
     private var wakeAssertions: [UInt32] = []
-    /// The lease was found locked, so release locks the Mac again when ``Configuration/relocksOnRelease`` is on.
+    /// The session found the Mac locked, so release locks it again. Set until a release does.
     private var relocksAtRelease = false
+    /// The app the takeover is for: the working app when it started. A viewer's input reaches it alone.
+    private var takeoverApp: MacRunningApp?
     private var power: any MacDisplayPowering { configuration.displayPower }
     private let logger = Logger(label: "SwiftAgentHarness.ComputerUse.MacHost")
 
@@ -211,9 +224,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
         }
         let lease = Lease(request: granted, issuedAt: Date())
         try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
+        // A holder that died never released, so a Mac it was handed unlocked is still waiting to be locked again.
+        if relocksAtRelease { await relock() }
         do {
-            let foundLocked = try await prepareDisplay(for: request.agentID)
-            relocksAtRelease = foundLocked || request.targetLocked
+            let foundLocked = try await prepareDisplay(for: request)
+            relocksAtRelease = foundLocked || request.foundLocked
         } catch {
             endWake()
             _ = await lock.release(leaseID: lease.id)
@@ -237,21 +252,44 @@ public actor MacHostDisplayTarget: DisplayTarget {
         return lease
     }
 
-    /// Wakes the display when configured to, then refuses a locked Mac once ``Configuration/unlockTimeout`` passes
-    /// without the user unlocking it: past the lock screen only the user's password gets anywhere. Returns whether
-    /// the Mac was locked.
-    private func prepareDisplay(for agentID: String) async throws -> Bool {
-        if configuration.wakesDisplay {
-            endWake()
-            wakeAssertions = power.holdAwake(reason: "Computer use: \(agentID)")
-            // A display that never reports waking still gets its lease; capture says if it can't see the screen.
-            let deadline = ContinuousClock.now + configuration.wakeTimeout
-            while power.displayIsAsleep, ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            await capture.invalidate()
+    /// Wakes the display when configured to, when the user unlocked the Mac for this session, or while the lease
+    /// waits for that unlock, then refuses a locked Mac once ``Configuration/unlockTimeout`` passes: past the lock
+    /// screen only the user's password gets anywhere. Returns whether the Mac was locked.
+    private func prepareDisplay(for request: LeaseRequest) async throws -> Bool {
+        endWake()
+        let waitsForUnlock = configuration.unlockTimeout > .zero && power.screenIsLocked
+        if configuration.wakesDisplay || request.foundLocked || waitsForUnlock {
+            try await wake(for: request.agentID)
         }
-        return try await awaitUnlock()
+        let foundLocked = try await awaitUnlock()
+        // The grant dialog told the user an unlocked Mac stays awake until the run ends.
+        if foundLocked, wakeAssertions.isEmpty { try await wake(for: request.agentID) }
+        return foundLocked
+    }
+
+    private func wake(for agentID: String) async throws {
+        wakeAssertions = power.holdAwake(reason: "Computer use: \(agentID)")
+        // A display that never reports waking still gets its lease; capture says if it can't see the screen.
+        let deadline = ContinuousClock.now + configuration.wakeTimeout
+        while power.displayIsAsleep, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        await capture.invalidate()
+    }
+
+    /// Locks the Mac explicitly, falling back to sleeping the display when the lock doesn't take.
+    private func relock() async {
+        relocksAtRelease = false
+        logger.info("Locking this Mac again, as the session found it")
+        power.lockScreen()
+        let deadline = ContinuousClock.now + configuration.relockTimeout
+        while !power.screenIsLocked, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        if !power.screenIsLocked {
+            logger.info("The explicit lock didn't take; sleeping the display instead")
+            power.sleepDisplay()
+        }
     }
 
     private func awaitUnlock() async throws -> Bool {
@@ -293,11 +331,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
     public func release(_ lease: Lease, reason: ReleaseReason) async {
         guard await lock.release(leaseID: lease.id) else { return }
         endWake()
-        if relocksAtRelease, configuration.relocksOnRelease {
-            logger.info("Sleeping the display to lock this Mac again, as the session found it")
-            power.sleepDisplay()
-        }
-        relocksAtRelease = false
+        if relocksAtRelease { await relock() }
         stopKeyMonitor?.stop()
         stopKeyMonitor = nil
         eventHub.finish(lease.id)
@@ -467,6 +501,7 @@ public actor MacHostDisplayTarget: DisplayTarget {
         liveHeldButton = nil
         lastLivePoint = nil
         takeoverActive = on
+        takeoverApp = on ? await workingApp() : nil
     }
 
     // MARK: - Live frames
@@ -497,10 +532,11 @@ public actor MacHostDisplayTarget: DisplayTarget {
         liveFrameSpace = space
     }
 
-    /// A viewer's input during takeover. The stop key never passes. With ``LiveFrames/grantedApps`` it reaches
-    /// granted apps only, at any tier, since takeover is the user acting: pointer events where a granted app's
-    /// window is on top, keys and text while a granted app is in front, and global shortcuts only with the
-    /// system-keys flag. A drag's release outside them lands where the drag last was, so no button stays held.
+    /// A viewer's input during takeover. The stop key never passes. With ``LiveFrames/grantedApps`` it reaches only
+    /// the app the takeover is for, at any tier, since takeover is the user acting, and never a broad-reach app the
+    /// operator hasn't opted in: pointer events where its window is on top, keys and text delivered to its process
+    /// whatever is in front, and global shortcuts only with its system-keys flag. A drag's release outside it lands
+    /// where the drag last was, so no button stays held.
     public func liveInput(_ lease: Lease, _ viewerInput: DisplayLiveViewInput) async throws {
         try await requireLease(lease)
         guard configuration.liveFrames != .off, takeoverActive, let liveFrameSpace else { return }
@@ -509,51 +545,61 @@ public actor MacHostDisplayTarget: DisplayTarget {
             return
         }
         var viewerInput = viewerInput
+        var delivery = MacInputDelivery.foreground
         if configuration.liveFrames == .grantedApps {
-            guard let allowed = await grantedAppsInput(viewerInput, space: liveFrameSpace) else { return }
-            viewerInput = allowed
+            guard let allowed = await handoffAppInput(viewerInput, space: liveFrameSpace) else { return }
+            (viewerInput, delivery) = allowed
         }
         let events = MacLiveInput.events(for: viewerInput, space: liveFrameSpace, held: liveHeldButton)
         if case .mouse(let action, let x, let y, let button, _, _) = viewerInput {
             if action == .down { liveHeldButton = button } else if action == .up { liveHeldButton = nil }
             lastLivePoint = CGPoint(x: x, y: y)
         }
-        await input.post(events, delivery: .foreground)
+        await input.post(events, delivery: delivery)
     }
 
-    /// `viewerInput` as it may reach granted apps, or `nil` when it may not.
-    private func grantedAppsInput(_ viewerInput: DisplayLiveViewInput, space: MacLiveFrameSpace) async -> DisplayLiveViewInput? {
-        let windows = await workspace.windows()
-        let frontmost = await workspace.frontmostApp()
+    /// `viewerInput` as it may reach the takeover's app, with how to deliver it, or `nil` when it may not. Keys go to
+    /// the app's process, so nothing that comes to the front between a check and the delivery receives them.
+    private func handoffAppInput(
+        _ viewerInput: DisplayLiveViewInput,
+        space: MacLiveFrameSpace
+    ) async -> (DisplayLiveViewInput, MacInputDelivery)? {
+        guard let app = takeoverApp, takesRemoteInput(app),
+              await workspace.runningApp(pid: app.pid)?.launchDate == app.launchDate
+        else { return nil }
         let gate = MacLiveInputGate(
-            grantedPIDs: await grantedPIDs(in: windows, also: frontmost),
-            windows: windows,
-            frontmost: frontmost?.pid,
-            frontmostFlags: frontmost.map { grants.flags(forApp: $0.identity.bundleID) } ?? [],
+            handoffPID: app.pid,
+            windows: await workspace.windows(),
+            flags: grants.flags(forApp: app.identity.bundleID),
             systemShortcuts: configuration.systemShortcuts
         )
         switch viewerInput {
         case .mouse(let action, let x, let y, let button, let count, let modifiers):
-            if gate.allows(point: space.point(x, y)) { return viewerInput }
+            if gate.allows(point: space.point(x, y)) { return (viewerInput, .foreground) }
             guard action == .up, liveHeldButton != nil, let last = lastLivePoint else { return nil }
-            return .mouse(.up, x: last.x, y: last.y, button: button, clickCount: count, modifiers: modifiers)
+            return (.mouse(.up, x: last.x, y: last.y, button: button, clickCount: count, modifiers: modifiers), .foreground)
         case .wheel(let x, let y, _, _, _):
-            return gate.allows(point: space.point(x, y)) ? viewerInput : nil
+            return gate.allows(point: space.point(x, y)) ? (viewerInput, .foreground) : nil
         case .key(let down, let key, let code, _, _, let modifiers):
             // A release never reaches anything new, and dropping it could leave a key held.
-            guard down else { return viewerInput }
-            return gate.allowsKeys && gate.allows(MacLiveInput.combos(key: key, code: code, modifiers: modifiers)) ? viewerInput : nil
+            guard !down || gate.allows(MacLiveInput.combos(key: key, code: code, modifiers: modifiers)) else { return nil }
+            return (viewerInput, .process(app.pid))
         case .text:
-            return gate.allowsKeys ? viewerInput : nil
+            return (viewerInput, .process(app.pid))
         }
     }
 
-    /// The processes among `windows`' owners, and `also`, that are granted apps other than this one.
-    private func grantedPIDs(in windows: [MacWindowEntry], also app: MacRunningApp? = nil) async -> Set<pid_t> {
+    private func takesRemoteInput(_ app: MacRunningApp) -> Bool {
+        guard grantedBundleIDs.contains(app.identity.bundleID) else { return false }
+        return !configuration.appPolicy.hasBroadReach(app.identity)
+            || configuration.remoteTakeoverBundleIDs.contains(app.identity.bundleID)
+    }
+
+    /// The processes among `windows`' owners that are granted apps other than this one.
+    private func grantedPIDs(in windows: [MacWindowEntry]) async -> Set<pid_t> {
         let granted = grantedBundleIDs
         var pids: Set<pid_t> = []
-        if let app, app.pid != getpid(), granted.contains(app.identity.bundleID) { pids.insert(app.pid) }
-        for pid in Set(windows.map(\.pid)) where pid != getpid() && !pids.contains(pid) {
+        for pid in Set(windows.map(\.pid)) where pid != getpid() {
             if let running = await workspace.runningApp(pid: pid), granted.contains(running.identity.bundleID) { pids.insert(pid) }
         }
         return pids

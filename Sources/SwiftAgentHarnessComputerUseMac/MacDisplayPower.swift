@@ -13,6 +13,8 @@ protocol MacDisplayPowering: Sendable {
     var displayIsAsleep: Bool { get }
     /// The lock screen is up, so nothing but the user's password gets past it.
     var screenIsLocked: Bool { get }
+    /// Locks the session now, as the Lock Screen command (⌃⌘Q) does.
+    func lockScreen()
     /// Sleeps the display now, as `pmset displaysleepnow` does. With the Mac set to ask for its password
     /// immediately, this locks it.
     func sleepDisplay()
@@ -48,6 +50,18 @@ struct LiveMacDisplayPower: MacDisplayPowering {
     var screenIsLocked: Bool {
         guard let session = CGSessionCopyCurrentDictionary() as NSDictionary? else { return false }
         return session["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    func lockScreen() {
+        // Synthesizing the system's own lock shortcut is acceptable only because locking can never make the Mac
+        // less safe. A private event source keeps the user's held modifiers out of it.
+        let source = CGEventSource(stateID: .privateState)
+        let q: CGKeyCode = 12
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: q, keyDown: down) else { continue }
+            event.flags = [.maskControl, .maskCommand]
+            event.post(tap: .cghidEventTap)
+        }
     }
 
     func sleepDisplay() {
