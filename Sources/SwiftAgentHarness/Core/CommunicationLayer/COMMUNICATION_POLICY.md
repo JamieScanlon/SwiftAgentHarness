@@ -156,6 +156,7 @@ Tool lifecycle terminality contract: `tool.callStarted` is required when the run
 
 - **`conversation/{id}/events`** carries the **streaming/runtime** timeline (`messagesRefresh`, `contentDelta`, `runtimeLifecycle`, `streamDone`, checkpoint events): all rows carry envelope `seq`; persisted replay anchors remain `messageSeq` / `checkpointSeq`.
 - **`conversation/{id}/state`** is the **authoritative** state-transition channel. `ConversationStatePayload.orchestration` is the only supported websocket source for orchestration state transitions.
+- **Pending approvals** are part of state, not only events. The `execApprovalRequired` surface intent on `events` is live-only, so `ConversationStatePayload.pendingApprovals` lists every approval still waiting (`approvalID`, `kind`, `title`, `command`, `presentation`, `requestedAt`), and the state is rebroadcast whenever one is raised, resolved, or withdrawn. A client that subscribes after an approval was raised (a phone back from suspension, a second device, a relaunch) recovers the card from the subscribe snapshot and resolves it with `POST /api/approvals/{approvalID}`. The field is omitted when nothing is waiting.
 
 ---
 

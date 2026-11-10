@@ -831,6 +831,7 @@ public actor APILayer {
             activeCallProvider: makeActiveCallProvider(),
             projectedCostProvider: makeProjectedCostProvider(),
             projectionBudgetProvider: makeProjectionBudgetProvider(),
+            pendingApprovalsProvider: makePendingApprovalsProvider(),
             orchestrationOverride: orchestrationOverride
         )
         logger.debug(
@@ -838,6 +839,29 @@ public actor APILayer {
         )
         await publisher.publishConversationState(conversationID: conversationID, payload: payload)
         //logger.debug("refreshConversationStateOnWire published conversationID=\(conversationID.uuidString)")
+    }
+
+    func makePendingApprovalsProvider() -> ConversationStateSnapshotBuilder.PendingApprovalsProvider {
+        let store = execApprovalStore
+        return { conversationID in await store.pendingApprovals(conversationID: conversationID) }
+    }
+
+    /// Replaces the exec approval store whose pending approvals state snapshots list. Defaults to
+    /// ``ExecApprovalStore/shared``.
+    func setExecApprovalStore(_ store: ExecApprovalStore) {
+        execApprovalStore = store
+    }
+
+    /// Rebroadcasts a conversation's state whenever one of its approvals is raised, resolved, or withdrawn, so
+    /// subscribed clients see the pending set change. Returns once the watch is in place.
+    func startWatchingPendingApprovals() async {
+        pendingApprovalWatch?.cancel()
+        let changes = await execApprovalStore.pendingApprovalChanges()
+        pendingApprovalWatch = Task { [weak self] in
+            for await conversationID in changes {
+                await self?.refreshConversationStateOnWire(conversationID: conversationID)
+            }
+        }
     }
 
     /// Builds a closure that resolves ``ModelStatePayload`` for a model from the wire-bound
@@ -1012,6 +1036,7 @@ public actor APILayer {
                 )
             }
         }
+        Task { [weak self] in await self?.startWatchingPendingApprovals() }
         configureRESTRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
         configureWebSocketRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
     }
@@ -1032,6 +1057,8 @@ public actor APILayer {
      */
     public func stop() async {
         logger.info("Shutting down API server...")
+        pendingApprovalWatch?.cancel()
+        pendingApprovalWatch = nil
         if let running = app?.running {
             running.stop()
             _ = try? await running.onStop.get()
@@ -1113,6 +1140,9 @@ public actor APILayer {
     /// ``NilBudgetReporting`` (returns `nil`) for tests; production replaces this via
     /// ``setBudgetReporting(_:)`` during server composition.
     private var budgetReporting: any BudgetReporting = NilBudgetReporting()
+
+    private var execApprovalStore: ExecApprovalStore = .shared
+    private var pendingApprovalWatch: Task<Void, Never>?
 
     private let logger: Logger
     
@@ -1199,6 +1229,7 @@ public actor APILayer {
         let wireConversation = chatGateway.conversation
         let wireRuntime = chatGateway.runtime
         let wireBudgetReporting: any BudgetReporting = budgetReporting
+        let wirePendingApprovals = makePendingApprovalsProvider()
         let wireTenancyPolicy = tenancyPolicySettings
         
         // WebSocket route for chat
@@ -1388,6 +1419,7 @@ public actor APILayer {
                             conversationSession: wireConversation,
                             chatRuntime: wireRuntime,
                             budgetReporting: wireBudgetReporting,
+                            pendingApprovalsProvider: wirePendingApprovals,
                             modelManager: wireModelManager,
                             resumeTokenHMACSecret: wireResumeTokenSecret,
                             inboundDedupeDefaultTtlSeconds: wireInboundDedupeDefaultTtl,

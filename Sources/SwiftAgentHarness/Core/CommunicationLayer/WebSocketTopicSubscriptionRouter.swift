@@ -17,6 +17,7 @@ enum WebSocketTopicSubscriptionRouter {
         conversationSession: APILayerConversationManaging?,
         chatRuntime: APILayerChatRuntimeManaging?,
         budgetReporting: any BudgetReporting = NilBudgetReporting(),
+        pendingApprovalsProvider: ConversationStateSnapshotBuilder.PendingApprovalsProvider? = nil,
         modelManager: APILayerModelManaging?,
         resumeTokenHMACSecret: String? = nil,
         inboundDedupeDefaultTtlSeconds: Int = 600,
@@ -203,7 +204,8 @@ enum WebSocketTopicSubscriptionRouter {
                             poolStateProvider: poolStateProvider,
                             activeCallProvider: activeCallProvider,
                             projectedCostProvider: projectedCostProvider,
-                            projectionBudgetProvider: projectionBudgetProvider
+                            projectionBudgetProvider: projectionBudgetProvider,
+                            pendingApprovalsProvider: pendingApprovalsProvider
                         )
                     }
                 } catch {

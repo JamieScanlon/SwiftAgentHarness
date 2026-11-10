@@ -69,6 +69,7 @@ Resolved by `SandboxConfigResolver`:
 - `ChannelExecApprovalDelivery` — posts approval cards on trigger channel surfaces (mock transport today)
 - `/approve <id> [durable]` — CLI fallback resolution
 - `POST /api/exec-approvals/:id` — REST resolution
+- `pendingApprovals(conversationID:)` — what is still waiting, listed on `conversation/{id}/state` as `pendingApprovals`; `pendingApprovalChanges()` announces each raise, resolve, and `withdraw(id:)` so the state is rebroadcast. A default delivery whose wait ends unanswered withdraws its approval.
 - `answeredOffTarget` — a resolving client's own word that it is away from what the approval is about (a phone answering for a Mac); `ExecApprovalDelivering.requestAnswer` returns it with the result
 
 ### Sandbox-denial escalation

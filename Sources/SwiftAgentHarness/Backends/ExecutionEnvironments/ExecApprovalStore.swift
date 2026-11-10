@@ -26,6 +26,8 @@ public actor ExecApprovalStore {
     private var commands: [String: String] = [:]
     private var scopesByID: [String: ExecApprovalScope] = [:]
     private var allowsDurableBypassByID: [String: Bool] = [:]
+    private var summariesByID: [String: PendingApprovalSummary] = [:]
+    private var pendingWatchers: [UUID: AsyncStream<UUID>.Continuation] = [:]
     private var grantStore: any ExecApprovalGrantStore
     private var denialHygieneHandler: any ExecApprovalDenialHygieneHandling = NoOpExecApprovalDenialHygieneHandler.shared
 
@@ -54,6 +56,7 @@ public actor ExecApprovalStore {
         commands.removeAll()
         scopesByID.removeAll()
         allowsDurableBypassByID.removeAll()
+        summariesByID.removeAll()
         grantStore = InMemoryExecApprovalGrantStore()
         denialHygieneHandler = NoOpExecApprovalDenialHygieneHandler.shared
         await coordinator.resetForTesting()
@@ -64,11 +67,21 @@ public actor ExecApprovalStore {
         command: String,
         scope: ExecApprovalScope,
         allowsDurableBypass: Bool = true,
-        presentation: ApprovalPresentation? = nil
+        presentation: ApprovalPresentation? = nil,
+        title: String? = nil,
+        requestedAt: Date = Date()
     ) async {
         commands[id] = command
         scopesByID[id] = scope
         allowsDurableBypassByID[id] = allowsDurableBypass
+        summariesByID[id] = PendingApprovalSummary(
+            approvalID: id,
+            kind: PendingApprovalSummary.execKind,
+            title: title ?? command,
+            command: command,
+            presentation: presentation,
+            requestedAt: requestedAt
+        )
         // Exec uses a caller-supplied wait timeout, so the registration timeout is a
         // large placeholder; the deny default only applies if a tool-style wait is used.
         _ = await coordinator.register(
@@ -78,6 +91,50 @@ public actor ExecApprovalStore {
             timeoutResolution: .deny,
             timeoutSource: "exec.timeout"
         )
+        announceChange(in: scope.conversationID)
+    }
+
+    /// Approvals still waiting in a conversation, oldest first.
+    public func pendingApprovals(conversationID: UUID) -> [PendingApprovalSummary] {
+        summariesByID.values
+            .filter { scopesByID[$0.approvalID]?.conversationID == conversationID }
+            .sorted { ($0.requestedAt, $0.approvalID) < ($1.requestedAt, $1.approvalID) }
+    }
+
+    /// Ids of conversations whose pending approvals changed: one was raised, resolved, or withdrawn.
+    public func pendingApprovalChanges() -> AsyncStream<UUID> {
+        let (changes, continuation) = AsyncStream<UUID>.makeStream()
+        let watcher = UUID()
+        pendingWatchers[watcher] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.stopWatching(watcher) }
+        }
+        return changes
+    }
+
+    /// Takes back an approval nobody answered, such as one whose run stopped waiting, so it is no longer pending.
+    public func withdraw(id: String) async {
+        guard let scope = forget(id: id) else { return }
+        await coordinator.resolve(id: id, decision: .cancelled, source: "exec.withdrawn")
+        announceChange(in: scope.conversationID)
+    }
+
+    @discardableResult
+    private func forget(id: String) -> ExecApprovalScope? {
+        commands.removeValue(forKey: id)
+        allowsDurableBypassByID.removeValue(forKey: id)
+        summariesByID.removeValue(forKey: id)
+        return scopesByID.removeValue(forKey: id)
+    }
+
+    private func stopWatching(_ watcher: UUID) {
+        pendingWatchers.removeValue(forKey: watcher)
+    }
+
+    private func announceChange(in conversationID: UUID) {
+        for watcher in pendingWatchers.values {
+            watcher.yield(conversationID)
+        }
     }
 
     public func pendingScope(id: String) -> ExecApprovalScope? {
@@ -137,9 +194,9 @@ public actor ExecApprovalStore {
               ) else {
             return nil
         }
-        let command = commands.removeValue(forKey: id)
-        scopesByID.removeValue(forKey: id)
-        let allowsDurableBypass = allowsDurableBypassByID.removeValue(forKey: id) ?? true
+        let command = commands[id]
+        let allowsDurableBypass = allowsDurableBypassByID[id] ?? true
+        forget(id: id)
         if approved, durable, allowsDurableBypass, let command {
             await addDurableApproval(command: command)
         }
@@ -151,6 +208,7 @@ public actor ExecApprovalStore {
             reason: approved ? nil : (reason ?? "denied"),
             answeredOffTarget: answeredOffTarget
         ) else { return nil }
+        announceChange(in: pendingScope.conversationID)
         if !approved, let command {
             await denialHygieneHandler.poisonPriorMatchingToolResults(
                 conversationID: pendingScope.conversationID,

@@ -154,7 +154,8 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
             command: request.command,
             scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
-            presentation: request.presentation
+            presentation: request.presentation,
+            title: request.title
         )
         let deferred = ExecApprovalAnswer(result: .deferred(request.presentation.textFallback(approvalID: request.id)))
         guard let route else {
@@ -268,7 +269,8 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
             command: request.command,
             scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
-            presentation: request.presentation
+            presentation: request.presentation,
+            title: request.title
         )
         await onPending?(request)
         if let outcome = await store.waitForOutcome(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
@@ -277,6 +279,7 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
         // With the indefinite default, a `nil` resolution only happens when the
         // awaiting run is stopped/cancelled. Notify so the surface can dismiss the
         // stale prompt.
+        await store.withdraw(id: request.id)
         await onCleared?(request.id)
         return ExecApprovalAnswer(result: .denied("exec approval cancelled"))
     }
