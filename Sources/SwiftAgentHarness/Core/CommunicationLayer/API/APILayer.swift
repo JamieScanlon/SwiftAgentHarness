@@ -687,6 +687,16 @@ public actor APILayer {
         self.triggerChannelAdminRegistrar = registrar
     }
 
+    /// Routes the host adds under `/api`, after the harness's own, for both ``start()`` and
+    /// ``makeEmbeddedApplication()``. Set before either.
+    ///
+    /// They sit behind the same client-session middleware and access-token resolution as the harness's routes, so a
+    /// handler reads the caller from ``APIRequestCaller``. Under strict tenancy every request to them needs an
+    /// authenticated owner. A host route that would answer requests a harness route answers is not registered.
+    public func setHostRouteRegistrar(_ register: (@Sendable (any RoutesBuilder) -> Void)?) {
+        hostRouteRegistrar = register
+    }
+
     private var startupService: ConversationStartupService?
 
     /// Binds the harness startup service for composition-root wiring (``setMCPManager(_:)``, etc.).
@@ -1089,6 +1099,7 @@ public actor APILayer {
 
     private var triggerWebhookRegistrar: TriggerWebhookRouteRegistrar?
     private var triggerChannelAdminRegistrar: TriggerChannelAdminRouteRegistrar?
+    private var hostRouteRegistrar: (@Sendable (any RoutesBuilder) -> Void)?
 
     private var contextCompactionPreviewSettings: ContextCompactionPreviewAPISettings = .disabled
     private var httpPreconditionPolicySettings: HTTPPreconditionPolicySettings = .disabled
@@ -1196,6 +1207,13 @@ public actor APILayer {
         // Inside `api`, unlike the webhook registrar above: these handlers derive an owner authority
         // from the principal `ClientSessionMiddleware` binds, which is only bound on this group.
         triggerChannelAdminRegistrar?.register(on: api, dependencies: dependencies)
+        if let hostRouteRegistrar {
+            hostRouteRegistrar(HostRoutesBuilder(
+                base: api.grouped(HostRouteTenancyMiddleware(tenancyPolicy: tenancyPolicySettings)),
+                harnessRoutes: app.routes.all.map { (method: $0.method, path: $0.path) },
+                logger: logger
+            ))
+        }
     }
     
     /**

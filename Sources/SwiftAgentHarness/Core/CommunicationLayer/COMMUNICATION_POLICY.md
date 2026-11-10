@@ -36,6 +36,13 @@ Authenticated tenancy uses **`Authorization: Bearer <JWT>`** on REST (`ClientSes
 
 TLS/session identity at upgrade remains deployment-owned; topic checks above complement but do not replace perimeter controls.
 
+### Host routes under `/api`
+
+A host adds its own REST routes with ``APILayer/setHostRouteRegistrar(_:)``, set before ``APILayer/start()`` or ``APILayer/makeEmbeddedApplication()``. They mount on the `api` group after the harness's routes, so `ClientSessionMiddleware` and bearer-token resolution apply, and a handler reads the caller from ``APIRequestCaller/authenticatedOwnerAccountID``. Two rules keep them from weakening the harness:
+
+- **Strict tenancy covers every host route.** The harness can't tell a host read from a write, so when ``requireAuthenticatedTenantOnAPI`` is on, any request to a host route without an authenticated owner gets `401`. Scoping the host's own data to that owner is the host's job.
+- **No shadowing.** A host route that could match a request a harness route with the same method matches (a parameter or catch-all segment overlaps anything; constants compare case-insensitively) is not registered, and the harness logs an error naming both.
+
 ### Harness control frames (`kind`)
 
 - **Inbound:** Multiplexed control uses [`CommClientControlMessage`](ModelWireModels.swift): **`subscribe`**, **`unsubscribe`**, **`ack`**, and **`dedupe_check_and_set`**. Before Codable decode, [`WebSocketCommClientControlValidator`](WebSocketCommClientControlValidator.swift) enforces the same shape as [`comm-client-control.schema.json`](../../../openapi/schemas/ws/comm-client-control.schema.json). Allowed keys include **`kind`**, **`topic`**, **`since`**, **`sinceMessageSeq`**, **`sinceCheckpointSeq`**, **`resumeToken`** (for `subscribe`), **`upTo`** (for `ack`), **`dedupeKey`**, **`dedupeTtlSeconds`** (for `dedupe_check_and_set`); no extras. Validation and routing failures return **`{"kind":"error","message":"..."}`**. Successful dedupe returns **`{"kind":"dedupe_result","firstSighting":true|false}`**. Legacy inbound **`type:`** mutation frames are **removed**; frames with a `type` discriminator and no `kind` are rejected at validation with an explicit migration error. Control-plane mutations use REST only; observation uses harness **`kind`** subscribe on topic streams.
