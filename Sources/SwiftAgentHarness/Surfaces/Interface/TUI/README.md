@@ -22,6 +22,7 @@ await app.setHost(RuntimeTUIHost(
     session: agentRuntimeSessionService,
     conversationID: conversationID,
     ownerAccountID: conversation.ownerAccountID,
+    computerUse: harnessRuntimeSession.computerUseControl,   // when computer use is installed
     onQuitRequested: { await app.stop(); exit(0) }
 ))
 await app.registerSurface(conversationID: conversationID)   // rich message-tool output
@@ -37,9 +38,30 @@ await app.setHost(ClosureTUIAppHost(
     cancelTurn: { await transport.cancelRun() },
     quit: { await shutdown() },
     resolveApproval: { id, action in await transport.resolveExecApproval(id, action) },
-    slashCommandRegistry: { await transport.conversationScopedRegistry() }
+    slashCommandRegistry: { await transport.conversationScopedRegistry() },
+    resolveComputerUseRequest: { id, resolution in await transport.resolveComputerUseRequest(id, resolution) },
+    stopComputerUse: { await transport.stopComputerUse() },
+    setComputerUseTakeover: { on in await transport.setComputerUseTakeover(on) },
+    computerUseLiveView: { lifecycleID, role in await transport.computerUseLiveView(lifecycleID, role: role) },
+    endComputerUseObservers: { lifecycleID in await transport.endComputerUseObservers(lifecycleID) }
 ))
 ```
+
+The computer-use closures map onto `POST /api/conversations/{id}/computer-use/requests/{requestID}`, `…/stop`,
+`…/takeover`, `…/runs/{lifecycleID}/live-view` (with `{"role": "observer"}` to share) and
+`DELETE …/runs/{lifecycleID}/live-view/observers`.
+
+### Computer use
+
+While a computer-use specialist runs, a line above the status line shows the target, step, app, and last
+action. **Ctrl-T** takes over the screen (and hands it back), **Ctrl-X** stops the conversation's
+sessions, **Ctrl-O** shows a live-view link under the line for each run whose target serves one, and **Ctrl-G** shares
+a view-only link to pass on, or stops sharing. Taking over
+such a run shows its link without asking. All four work while a dialog is open. The link is printed as its own
+OSC 8 hyperlink label, so it can be copied where hyperlinks aren't supported, and drops off once it expires. A question opens a dialog with a text field, and a handoff opens one
+with *Hand back control* and *Decline*. Esc or Ctrl-C declines either one. Requests that arrive while another
+dialog is open wait their turn. Approval cards show a computer-use crop as its alt-text placeholder, because the
+overlay is composited into base rows and can't hold graphics escapes.
 
 Attach the event stream per conversation:
 
@@ -48,6 +70,9 @@ let streaming = TUIRunStreamingService(hub: conversationEventsTopicHub)
 await streaming.attach(conversationID: conversationID, app: app)
 defer { await streaming.detach(conversationID: conversationID) }
 ```
+
+`attach` returns only once the subscription is live. Transient events (deltas, lifecycle) are
+never replayed, so attach before sending the turn, not after.
 
 ### Host rules
 

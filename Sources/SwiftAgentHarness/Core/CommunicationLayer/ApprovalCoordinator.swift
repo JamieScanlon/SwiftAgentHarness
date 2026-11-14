@@ -10,19 +10,24 @@ public struct ApprovalOutcome: Sendable, Equatable {
     /// `runtimeAuto`). Opaque to the coordinator.
     public var kind: String?
     public var decidedAt: Date
+    /// The answering client said it is away from what the approval is about, such as a phone answering for a
+    /// Mac. Clients declare it themselves, so it may only ever make the harness stricter.
+    public var answeredOffTarget: Bool
 
     public init(
         decision: ApprovalDecision,
         source: String,
         reason: String? = nil,
         kind: String? = nil,
-        decidedAt: Date = Date()
+        decidedAt: Date = Date(),
+        answeredOffTarget: Bool = false
     ) {
         self.decision = decision
         self.source = source
         self.reason = reason
         self.kind = kind
         self.decidedAt = decidedAt
+        self.answeredOffTarget = answeredOffTarget
     }
 }
 
@@ -151,7 +156,8 @@ public actor ApprovalCoordinator {
         source: String,
         reason: String? = nil,
         kind: String? = nil,
-        decidedAt: Date = Date()
+        decidedAt: Date = Date(),
+        answeredOffTarget: Bool = false
     ) -> ApprovalOutcome? {
         guard pending.removeValue(forKey: id) != nil else { return nil }
         let outcome = ApprovalOutcome(
@@ -159,7 +165,8 @@ public actor ApprovalCoordinator {
             source: source,
             reason: reason,
             kind: kind,
-            decidedAt: decidedAt
+            decidedAt: decidedAt,
+            answeredOffTarget: answeredOffTarget
         )
         resolutions[id] = outcome
         resumeWaiters(for: id, with: outcome)

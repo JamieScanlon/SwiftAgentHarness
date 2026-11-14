@@ -93,6 +93,50 @@ extension AgentRuntimeSessionService {
         )
     }
 
+    /// Re-dispatches a call after an approval resolution, with the approval folded into a fresh policy snapshot.
+    func redispatchApprovedToolCall(
+        call: ToolCallRequest,
+        toolCallID: String?,
+        conversationID: UUID,
+        runID: UUID?,
+        orchestrator: SwiftAgentKitOrchestrator,
+        configuration: AgentRuntimeTurnConfiguration
+    ) async -> ToolDispatchOutcome {
+        let approvalConfig = await configurationApplyingToolApprovals(
+            configuration,
+            conversationID: conversationID,
+            runID: runID
+        )
+        guard let conversation = await runtimeConversation(id: conversationID) else {
+            return .denied(
+                AgentLoopToolDispatch.toolResultMessage(
+                    toolCallId: toolCallID,
+                    content: "Tool dispatch denied: conversation not found."
+                )
+            )
+        }
+        let entries = await allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
+        let refreshedSnapshot = await buildToolTurnPolicySnapshot(
+            allEntries: entries,
+            conversation: conversation,
+            configuration: approvalConfig
+        )
+        return await AgentLoopToolDispatch.dispatch(
+            call: call,
+            conversationID: conversationID,
+            runID: runID,
+            orchestrator: orchestrator,
+            snapshot: refreshedSnapshot,
+            configuration: approvalConfig,
+            conversation: conversation,
+            gateway: toolSystemGateway,
+            parentLookup: { [deps] id in
+                await deps.persistenceDomain.modelConversation(id: id)
+            },
+            spawnService: subAgentSpawnServiceForRuntime()
+        )
+    }
+
     func waitForToolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
@@ -355,14 +399,40 @@ extension AgentRuntimeSessionService {
                 guard case .approvalRequired(let toolName, let toolCallID) = initial else {
                     return initial
                 }
-                if runtimePolicy.stopOnApprovalRequest == true {
-                    return initial
-                }
                 let evaluation = snapshot.availabilitySnapshots.first(where: { $0.entry.name == toolName })
                 let route = evaluation?.decision.approvalRoute ?? .user
                 let isElevated = evaluation?.decision.isElevated ?? false
+                let approvalConversationID = await self.toolApproval.approvalConversationID(
+                    for: conversationID,
+                    toolName: toolName
+                )
+                // Rules already resolved this call to *ask* (deny rules and the killswitch won earlier), so the
+                // classifier can only turn it into allow-once before the human is asked or the run parks.
+                if await self.toolApproval.classifierAutoApproval(
+                    conversationID: approvalConversationID,
+                    runID: runID,
+                    call: call,
+                    route: route,
+                    isElevated: isElevated,
+                    transcript: conversation?.messages ?? [],
+                    iteration: iteration,
+                    modelID: modelID,
+                    lifecycleEmitter: lifecycleEmitter
+                ) {
+                    return await self.redispatchApprovedToolCall(
+                        call: call,
+                        toolCallID: toolCallID,
+                        conversationID: conversationID,
+                        runID: runID,
+                        orchestrator: orchestrator,
+                        configuration: configuration
+                    )
+                }
+                if runtimePolicy.stopOnApprovalRequest == true {
+                    return initial
+                }
                 _ = await self.registerPendingToolApproval(
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID,
                     call: call,
                     route: route,
@@ -392,14 +462,14 @@ extension AgentRuntimeSessionService {
                             source: "runtime.toolDispatch"
                         )
                     ),
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID
                 )
                 let binding = ToolCallApprovalBinding.from(call: call)
                 let resolution: ToolApprovalResolution
                 do {
                     resolution = try await self.waitForToolApprovalResolution(
-                        conversationID: conversationID,
+                        conversationID: approvalConversationID,
                         runID: runID,
                         binding: binding,
                         route: route
@@ -436,44 +506,19 @@ extension AgentRuntimeSessionService {
                                 source: "runtime.approvalTimeout"
                             )
                         ),
-                        conversationID: conversationID,
+                        conversationID: approvalConversationID,
                         runID: runID
                     )
                 }
                 switch resolution.status {
                 case .approved:
-                    let approvalConfig = await self.configurationApplyingToolApprovals(
-                        configuration,
-                        conversationID: conversationID,
-                        runID: runID
-                    )
-                    guard let conversation = await self.runtimeConversation(id: conversationID) else {
-                        return .denied(
-                            AgentLoopToolDispatch.toolResultMessage(
-                                toolCallId: toolCallID,
-                                content: "Tool dispatch denied: conversation not found."
-                            )
-                        )
-                    }
-                    let entries = await self.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
-                    let refreshedSnapshot = await self.buildToolTurnPolicySnapshot(
-                        allEntries: entries,
-                        conversation: conversation,
-                        configuration: approvalConfig
-                    )
-                    return await AgentLoopToolDispatch.dispatch(
+                    return await self.redispatchApprovedToolCall(
                         call: call,
+                        toolCallID: toolCallID,
                         conversationID: conversationID,
                         runID: runID,
                         orchestrator: orchestrator,
-                        snapshot: refreshedSnapshot,
-                        configuration: approvalConfig,
-                        conversation: conversation,
-                        gateway: self.toolSystemGateway,
-                        parentLookup: { [deps = self.deps] id in
-                            await deps.persistenceDomain.modelConversation(id: id)
-                        },
-                        spawnService: self.subAgentSpawnServiceForRuntime()
+                        configuration: configuration
                     )
                 case .denied:
                     let denyContent: String
@@ -522,8 +567,12 @@ extension AgentRuntimeSessionService {
                 let evaluation = snapshot.availabilitySnapshots.first(where: { $0.entry.name == toolName })
                 let route = evaluation?.decision.approvalRoute ?? .user
                 let isElevated = evaluation?.decision.isElevated ?? false
+                let approvalConversationID = await self.toolApproval.approvalConversationID(
+                    for: conversationID,
+                    toolName: toolName
+                )
                 _ = await self.registerPendingToolApproval(
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID,
                     call: call,
                     route: route,
@@ -553,12 +602,15 @@ extension AgentRuntimeSessionService {
                             source: "runtime.toolDispatch"
                         )
                     ),
-                    conversationID: conversationID,
+                    conversationID: approvalConversationID,
                     runID: runID
                 )
             },
             isHaltingFn: { [self] toolName, entries in
                 await self.runtimeIsHaltingToolCall(toolName: toolName, effectiveEntries: entries)
+            },
+            batchHaltedFn: { [deps] toolCallID in
+                await deps.computerUse.nativeFailures.takeFailure(toolCallID: toolCallID)
             }
         )
         let conversationPort = SessionRuntimeConversationPort(
@@ -582,16 +634,17 @@ extension AgentRuntimeSessionService {
                 await self.subAgentSpawnServiceForRuntime()?.cancelActiveInvocationsForParent(
                     parentConversationID: conversationID
                 )
+                // Peek, not take: the run result applies the same reason once the loop returns.
+                let notedReason = await self.cancellationReason(runID: runID)
                 do {
                     try await self.routingPersistRunLifecycleTranscriptMarker(
                         conversationID: conversationID,
-                        payload: RunLifecycleTranscriptMarkerPayload(
-                            kind: .run_cancelled,
+                        payload: .cancelled(
                             runId: runID,
-                            reason: "task_cancelled_iter_\(iteration)",
+                            fallbackReason: "task_cancelled_iter_\(iteration)",
                             terminalReason: ConversationRunTerminalReason(
                                 category: .externalCancellation,
-                                detail: "task_cancelled"
+                                detail: notedReason ?? "task_cancelled"
                             )
                         )
                     )
@@ -656,8 +709,31 @@ extension AgentRuntimeSessionService {
             contextCompaction: deps.conversationTransformConfiguration.contextCompaction,
             modeRegistry: deps.modeRegistry,
             logger: deps.logger,
-            settlementSink: deps.modelCompletionSettlementSink
+            settlementSink: deps.modelCompletionSettlementSink,
+            skillShortlist: makeSkillShortlistPort()
         )
+    }
+
+    private func makeSkillShortlistPort() -> (@Sendable (ModelConversation, UUID?) async -> String?)? {
+        guard let gate = deps.decisionConsumers.skillFilter else { return nil }
+        return { [self] conversation, runID in
+            await self.skillShortlistNote(gate: gate, conversation: conversation, runID: runID)
+        }
+    }
+
+    /// The skill-filter shortlist for the turn's latest user request, as an injected note.
+    func skillShortlistNote(gate: SkillFilterDecisionGate, conversation: ModelConversation, runID: UUID?) async -> String? {
+        guard let request = conversation.messages.last(where: {
+            $0.role == .user && !HarnessInjectedMessageMetadata.isHarnessInjected($0)
+        })?.content else { return nil }
+        let candidates = await orchestratorRuntime.skillCandidates(for: conversation)
+        let patches = await DecisionRolePatchLoader.patches(
+            for: conversation, modeRegistry: deps.modeRegistry, logger: deps.logger
+        )
+        guard let shortlist = await gate.shortlist(
+            userRequest: request, skills: candidates, conversationID: conversation.id, runID: runID, rolePatches: patches
+        ) else { return nil }
+        return SkillFilterDecisionGate.reminder(for: shortlist)
     }
 }
 

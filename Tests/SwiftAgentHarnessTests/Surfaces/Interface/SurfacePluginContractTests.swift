@@ -52,6 +52,7 @@ struct SurfacePluginContractTests {
         // Honest absences rather than stubs.
         #expect(!plugin.surfaceCapabilities.threading)
         #expect(!plugin.surfaceCapabilities.typingIndicators)
+        #expect(plugin.surfaceCapabilities.computerUse)
         #expect(plugin.streamingCapabilities.granularity == .tokenDelta)
     }
 
@@ -76,6 +77,8 @@ struct SurfacePluginContractTests {
         #expect(shared.mediaAttachments)
         // Block-rung channel is not token streaming.
         #expect(!shared.tokenStreaming)
+        // Channels show approval cards but can't answer questions, take handoffs, or show the indicator.
+        #expect(!shared.computerUse)
         #expect(plugin.surfaceID == ChannelId.slack.rawValue)
         #expect(plugin.surfaceMeta.displayName == "mock")
         #expect(plugin.surfaceMeta.kindRaw == "socket")

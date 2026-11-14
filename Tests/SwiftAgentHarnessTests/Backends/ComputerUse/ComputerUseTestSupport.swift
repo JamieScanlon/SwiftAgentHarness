@@ -1,0 +1,418 @@
+import CoreGraphics
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+@testable import SwiftAgentHarness
+
+/// A scripted display target. Observations get sequential ids; actions are recorded and answered by `outcomes`.
+actor FakeDisplayTarget: DisplayTarget {
+    static let hostManifest = DisplayTargetManifest(
+        id: "fake-host",
+        label: "Fake host desktop",
+        platform: "macos",
+        isolation: .host,
+        perception: [.pixels, .accessibility],
+        delivery: [.background, .foreground],
+        semanticActions: [.press, .setValue, .menuPath, .launchApp, .openURL],
+        requires: [.screenCapture, .accessibility, .postEvents],
+        humanPresence: .shared
+    )
+
+    static let vmManifest = DisplayTargetManifest(
+        id: "fake-vm",
+        label: "Fake VM",
+        platform: "linux",
+        isolation: .vm,
+        perception: [.pixels, .accessibility],
+        delivery: [.background],
+        observerAccess: .vnc,
+        humanPresence: .exclusive
+    )
+
+    nonisolated let manifest: DisplayTargetManifest
+    private let lock = DisplayTargetLeaseLock()
+    private var permissionStates: [DisplayPlatformPermission: PermissionState]
+    private let now: @Sendable () -> Date
+    private var observationCounter = 0
+
+    var observedApp: AppIdentity = ComputerUseFixtures.textEdit
+    var observedURL: String?
+    /// Replaces the fixture's tiny PNG in observations, for tests that read pixels.
+    var screenshot: Data?
+    /// Trees for successive observations, in place of the fixture's.
+    var trees: [ObservationTree] = []
+    /// Window lists for successive layouts; the last repeats. Empty means the target doesn't list windows.
+    var windowLists: [[WindowInfo]] = []
+    private(set) var describeCalls = 0
+    var outcomes: @Sendable (ComputerAction, Int) -> ActionOutcome = { _, index in
+        ActionOutcome(action: index, effect: .confirmed, evidence: "fake")
+    }
+    private(set) var actCalls: [[ComputerAction]] = []
+    private(set) var observeCalls: [ObserveRequest] = []
+    private(set) var releases: [ReleaseReason] = []
+    private(set) var takeoverStates: [Bool] = []
+    /// What ``liveView(_:)`` returns.
+    var liveViewLink: DisplayLiveView?
+    private(set) var liveViewRoles: [DisplayLiveViewRole] = []
+    private(set) var observerEnds = 0
+    /// The user's viewers ``liveViewers(_:)`` reports.
+    var viewers = 0
+    var servedFrame: DisplayLiveViewFrame?
+    private(set) var liveFrameCalls = 0
+    private(set) var liveInputs: [DisplayLiveViewInput] = []
+    /// Like a remote target, work requested from a cancelled task never reaches the screen.
+    private(set) var failsWhenCancelled = false
+    /// Thrown by ``lease(_:)``, and by ``observe(_:_:)`` and ``act(_:_:)``.
+    private(set) var leaseError: DisplayTargetError?
+    private(set) var observeError: DisplayTargetError?
+    private(set) var actError: DisplayTargetError?
+    /// Runs during each observation, before it returns.
+    private(set) var onObserve: (@Sendable () async -> Void)?
+    /// Posted to the lease's events at release, as a host whose relock failed does.
+    private(set) var relockNotice: String?
+    /// What ``isLocked()`` answers.
+    private(set) var locked = false
+    /// Runs before ``isLocked()`` answers, as a slow host would.
+    private(set) var onIsLocked: (@Sendable () async -> Void)?
+    /// Each lease request's ``LeaseRequest/foundLocked``, in order.
+    private(set) var leasedLocked: [Bool] = []
+    /// Each lease request's ``LeaseRequest/remoteUnlock``, in order.
+    private(set) var leasedRemoteUnlock: [Bool] = []
+
+    init(
+        manifest: DisplayTargetManifest,
+        permissions: [DisplayPlatformPermission: PermissionState]? = nil,
+        now: @escaping @Sendable () -> Date = { ComputerUseFixtures.epoch }
+    ) {
+        self.manifest = manifest
+        self.permissionStates = permissions
+            ?? Dictionary(uniqueKeysWithValues: manifest.requires.map { ($0, PermissionState.granted) })
+        self.now = now
+    }
+
+    func setErrors(lease: DisplayTargetError? = nil, observe: DisplayTargetError? = nil, act: DisplayTargetError? = nil) {
+        leaseError = lease
+        observeError = observe
+        actError = act
+    }
+
+    func setOnObserve(_ hook: (@Sendable () async -> Void)?) {
+        onObserve = hook
+    }
+
+    func setRelockNotice(_ notice: String?) {
+        relockNotice = notice
+    }
+
+    func setLocked(_ locked: Bool) {
+        self.locked = locked
+    }
+
+    func setOnIsLocked(_ hook: (@Sendable () async -> Void)?) {
+        onIsLocked = hook
+    }
+
+    func isLocked() async -> Bool {
+        await onIsLocked?()
+        return locked
+    }
+
+    func setFailsWhenCancelled(_ fails: Bool) {
+        failsWhenCancelled = fails
+    }
+
+    func setPermission(_ permission: DisplayPlatformPermission, _ state: PermissionState) {
+        permissionStates[permission] = state
+    }
+
+    func setObserved(app: AppIdentity, url: String? = nil) {
+        observedApp = app
+        observedURL = url
+    }
+
+    func setScreenshot(_ data: Data?) {
+        screenshot = data
+    }
+
+    func setTrees(_ trees: [ObservationTree]) {
+        self.trees = trees
+    }
+
+    func setWindowLists(_ lists: [[WindowInfo]]) {
+        windowLists = lists
+    }
+
+    func setOutcomes(_ outcomes: @escaping @Sendable (ComputerAction, Int) -> ActionOutcome) {
+        self.outcomes = outcomes
+    }
+
+    func lease(_ request: LeaseRequest) async throws -> Lease {
+        leasedLocked.append(request.foundLocked)
+        leasedRemoteUnlock.append(request.remoteUnlock)
+        if let leaseError { throw leaseError }
+        let lease = Lease(request: request, issuedAt: now())
+        try await lock.acquire(leaseID: lease.id, holder: .init(id: request.agentID, isAlive: request.isHolderAlive))
+        return lease
+    }
+
+    func release(_ lease: Lease, reason: ReleaseReason) async {
+        if failsWhenCancelled, Task.isCancelled { return }
+        if await lock.release(leaseID: lease.id) {
+            releases.append(reason)
+            if let relockNotice { eventHub.post(.relockFailed(relockNotice), to: lease.id) }
+            eventHub.finish(lease.id)
+        }
+    }
+
+    func permissions() async -> PermissionSnapshot {
+        PermissionSnapshot(states: permissionStates)
+    }
+
+    func describe(_ lease: Lease) async throws -> TargetLayout {
+        try await requireLease(lease)
+        describeCalls += 1
+        return TargetLayout(
+            displays: [DisplayInfo(id: "main", frame: ComputerUseFixtures.geometry.capturedRect, scaleFactor: 2, isPrimary: true)],
+            windows: windowLists.isEmpty ? nil : windowLists[min(describeCalls, windowLists.count) - 1],
+            focusedApp: observedApp
+        )
+    }
+
+    func observe(_ lease: Lease, _ request: ObserveRequest) async throws -> DisplayObservation {
+        try await requireLease(lease)
+        if let observeError { throw observeError }
+        await onObserve?()
+        observeCalls.append(request)
+        observationCounter += 1
+        var observation = ComputerUseFixtures.observation(
+            id: "o_\(observationCounter)",
+            app: observedApp,
+            url: observedURL,
+            at: now(),
+            withImage: request.modes.contains(.pixels)
+        )
+        if let screenshot { observation.image?.data = screenshot }
+        if !request.modes.contains(.accessibility) {
+            observation.tree = nil
+        } else if observationCounter <= trees.count {
+            observation.tree = trees[observationCounter - 1]
+        }
+        return observation
+    }
+
+    func act(_ lease: Lease, _ batch: ActionBatch) async throws -> [ActionOutcome] {
+        try await requireLease(lease)
+        if let actError { throw actError }
+        actCalls.append(batch.actions)
+        var results: [ActionOutcome] = []
+        for (index, action) in batch.actions.enumerated() {
+            let outcome = outcomes(action, index)
+            results.append(outcome)
+            if outcome.effect.stopsBatch { break }
+        }
+        return results
+    }
+
+    func setLiveViewLink(_ link: DisplayLiveView?) { liveViewLink = link }
+
+    func liveView(_ lease: Lease, role: DisplayLiveViewRole) async throws -> DisplayLiveView? {
+        try await requireLease(lease)
+        liveViewRoles.append(role)
+        return liveViewLink.map { DisplayLiveView(id: $0.id, url: $0.url, viewOnly: $0.viewOnly || role == .observer, expiresAt: $0.expiresAt, role: role) }
+    }
+
+    func setViewers(_ count: Int) { viewers = count }
+    var connections: [DisplayLiveViewConnection] = []
+    func setConnections(_ connections: [DisplayLiveViewConnection]) { self.connections = connections }
+    func liveConnections(_ lease: Lease) async throws -> [DisplayLiveViewConnection] {
+        try await requireLease(lease)
+        return connections
+    }
+    func revokeLiveView(_ lease: Lease, id: UUID) async throws -> Bool {
+        try await requireLease(lease)
+        let before = connections.count
+        connections.removeAll { $0.id == id }
+        return connections.count < before
+    }
+    nonisolated let eventHub = DisplayTargetEventHub()
+    func events(_ lease: Lease) async -> AsyncStream<DisplayTargetEvent> { eventHub.stream(for: lease.id) }
+    var leaseDownloads: [DisplayDownload] = []
+    func setDownloads(_ downloads: [DisplayDownload]) { leaseDownloads = downloads }
+    func downloads(_ lease: Lease) async -> [DisplayDownload] { leaseDownloads }
+
+    func setServedFrame(_ frame: DisplayLiveViewFrame?) { servedFrame = frame }
+
+    func liveFrame(_ lease: Lease) async throws -> DisplayLiveViewFrame? {
+        try await requireLease(lease)
+        liveFrameCalls += 1
+        return servedFrame
+    }
+
+    func liveInput(_ lease: Lease, _ input: DisplayLiveViewInput) async throws {
+        try await requireLease(lease)
+        liveInputs.append(input)
+    }
+
+    func liveViewers(_ lease: Lease) async throws -> Int {
+        try await requireLease(lease)
+        return viewers
+    }
+
+    func endObservers(_ lease: Lease) async throws {
+        try await requireLease(lease)
+        observerEnds += 1
+    }
+
+    func takeover(_ lease: Lease, on: Bool) async throws {
+        if failsWhenCancelled { try Task.checkCancellation() }
+        try await requireLease(lease)
+        takeoverStates.append(on)
+    }
+
+    private func requireLease(_ lease: Lease) async throws {
+        guard await lock.holds(leaseID: lease.id) else { throw DisplayTargetError.leaseNotHeld }
+    }
+}
+
+enum ComputerUseFixtures {
+    static let textEdit = AppIdentity(bundleID: "com.apple.TextEdit", category: "public.app-category.productivity")
+    static let terminal = AppIdentity(bundleID: "com.apple.Terminal", category: "public.app-category.developer-tools")
+    static let safari = AppIdentity(bundleID: "com.apple.Safari", category: "public.app-category.productivity")
+    static let systemSettings = AppIdentity(bundleID: "com.apple.systempreferences", category: "public.app-category.utilities")
+    static let epoch = Date(timeIntervalSince1970: 1_790_000_000)
+
+    static let geometry = ScreenshotGeometry(
+        capturedRect: DisplayRect(x: 0, y: 0, width: 1440, height: 900),
+        imageSize: ImagePixelSize(width: 1280, height: 800),
+        scaleFactor: 2
+    )
+
+    static func elements(app: AppIdentity = textEdit, url: String? = nil) -> [String: ElementRef] {
+        [
+            "e1": ElementRef(id: "e1", role: "AXToolbar", app: app, url: url),
+            "e2": ElementRef(id: "e2", role: "AXButton", label: "Bold", frame: DisplayRect(x: 10, y: 10, width: 30, height: 20), app: app, url: url),
+            "e5": ElementRef(id: "e5", role: "AXTextArea", frame: DisplayRect(x: 0, y: 60, width: 1440, height: 800), app: app, url: url),
+            "e6": ElementRef(id: "e6", role: "AXButton", label: "Save", frame: DisplayRect(x: 1300, y: 860, width: 80, height: 24), app: app, url: url),
+            "e7": ElementRef(id: "e7", role: "AXSecureTextField", label: "Password", app: app, url: url, isSecureInput: true),
+            "e8": ElementRef(id: "e8", role: "AXButton", label: "Delete account", app: app, url: url),
+            "e9": ElementRef(id: "e9", role: "textbox", app: app, url: url, inputPurpose: "cc-number"),
+        ]
+    }
+
+    static func observation(
+        id: ObservationID,
+        app: AppIdentity = textEdit,
+        url: String? = nil,
+        at: Date = epoch,
+        withImage: Bool = true
+    ) -> DisplayObservation {
+        DisplayObservation(
+            id: id,
+            at: at,
+            target: ObservationTarget(
+                app: app,
+                pid: 4242,
+                processStart: epoch.addingTimeInterval(-3600),
+                windowID: "w1",
+                url: url,
+                bounds: geometry.capturedRect
+            ),
+            image: withImage
+                ? ObservationImage(blobRef: "blob:\(id)", data: ToolImageFixtures.tinyPNG, geometry: geometry, capturedAt: at)
+                : nil,
+            tree: ObservationTree(
+                text: "window app=\(app.bundleID) obs=\(id)\n[e2] button \"Bold\"\n[e5] textarea\n[e6] button \"Save\"",
+                elements: elements(app: app, url: url),
+                capturedAt: at.addingTimeInterval(0.05)
+            )
+        )
+    }
+}
+
+extension ComputerUseFixtures {
+    /// An installation with the oversight coordinator wired to `publisher`.
+    static func installation(publisher: RecordingIntentPublisher, targets: [any DisplayTarget] = []) -> ComputerUseInstallation {
+        let installation = ComputerUseInstallation()
+        installation.install(
+            ComputerUseConfiguration(
+                registry: try! DisplayTargetRegistry(targets: targets),
+                defaults: ComputerUseSpecialistDefaults(
+                    target: FakeDisplayTarget.hostManifest.id,
+                    budgets: ComputerUseBudgetPolicy(defaultSteps: 12, ceilingSteps: 12, maxDuration: .seconds(600))
+                ),
+                approveGrants: { _ in nil }
+            ),
+            publish: { await publisher.publish($0, $1) }
+        )
+        return installation
+    }
+
+    /// Registers a live specialist session working for `parent`, as delegate dispatch would.
+    @discardableResult
+    static func registerLiveSession(
+        in installation: ComputerUseInstallation,
+        parent: UUID,
+        lifecycleID: String,
+        childID: UUID = UUID()
+    ) async throws -> (ComputerUseSession, FakeDisplayTarget) {
+        let target = FakeDisplayTarget(manifest: FakeDisplayTarget.hostManifest, now: { Date() })
+        let lease = try await target.lease(LeaseRequest(
+            target: target.manifest.id,
+            agentID: "computer-use:\(lifecycleID)",
+            grants: [.app(bundleID: textEdit.bundleID, tier: .full)],
+            budgets: ComputerUseBudgets(steps: 12, maxDuration: .seconds(600)),
+            initiator: .operator,
+            userPresent: true
+        ))
+        let session = ComputerUseSession(
+            target: target,
+            lease: lease,
+            configuration: ComputerUseSessionConfiguration(task: ComputerUseTaskContext(userRequest: ["Save the file."]))
+        )
+        await installation.sessions.register(
+            ComputerUseSessionEntry(session: session, parentConversationID: parent, lifecycleID: lifecycleID, targetLabel: target.manifest.label),
+            for: childID
+        )
+        return (session, target)
+    }
+
+    /// Starts a question from `lifecycleID` and waits until it is pending.
+    static func pendingQuestion(
+        _ question: String,
+        coordinator: ComputerUseOversightCoordinator,
+        conversationID: UUID,
+        lifecycleID: String
+    ) async throws -> (ComputerUsePendingRequest, Task<ComputerUseRequestResolution, Never>) {
+        let asking = Task {
+            await coordinator.ask(conversationID: conversationID, lifecycleID: lifecycleID, target: FakeDisplayTarget.hostManifest.label, question: question)
+        }
+        for _ in 0..<500 {
+            if let request = await coordinator.pending(conversationID: conversationID).first(where: { $0.prompt == question }) {
+                return (request, asking)
+            }
+            await Task.yield()
+        }
+        asking.cancel()
+        throw CancellationError()
+    }
+}
+
+extension ComputerUseFixtures {
+    /// A real PNG sized as ``geometry`` says (1280×800 for a 1440×900 pt capture).
+    static func pngScreenshot(width: Int = 1280, height: Int = 800) throws -> Data {
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw CocoaError(.featureUnsupported) }
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let image = context.makeImage() else { throw CocoaError(.featureUnsupported) }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.featureUnsupported) }
+        return data as Data
+    }
+}

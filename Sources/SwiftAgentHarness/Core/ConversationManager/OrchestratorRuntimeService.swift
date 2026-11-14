@@ -361,11 +361,19 @@ public actor OrchestratorRuntimeService {
                 enrichedMetadata[SystemPromptAssemblyMetadataKeys.replaySpecDigest] = assembly.replaySpecDigest
             }
         }
-        if enrichedMetadata.isEmpty, thinkingConfig == nil {
+        var nativeDialect: ComputerUseNativeDialect?
+        if let conversationID = conversation?.id,
+           let session = await deps.computerUse.sessions.session(for: conversationID) {
+            nativeDialect = session.configuration.nativeDialect
+        }
+        if enrichedMetadata.isEmpty, thinkingConfig == nil, nativeDialect == nil {
             return nil
         }
 
         var payload: [String: JSON] = [:]
+        if let nativeDialect {
+            payload[ComputerUseNativeDialect.parameterKey] = nativeDialect.wireParameters
+        }
         if !enrichedMetadata.isEmpty {
             payload["systemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
             payload["contextEngineSystemPromptMetadata"] = .object(enrichedMetadata.mapValues { .string($0) })
@@ -567,6 +575,117 @@ public actor OrchestratorRuntimeService {
         return (batch.parameterSchemasByName, batch.strictByName)
     }
 
+    /// Skills the mode profile and routing policy allow for `conversation`, filtered the same way the system prompt
+    /// filters its skills index.
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate] {
+        guard let loader = await skillActivation.skillLoader(for: conversation.id),
+              let metadata = try? await loader.loadMetadata()
+        else { return [] }
+        let policyContext = await installedModePolicy.modePolicyContext(for: conversation)
+        return metadata
+            .filter { meta in
+                policyContext.resolvedProfile.skills.isSkillAllowed(name: meta.name, context: policyContext)
+                    && ModeProfileSkillsSlice.isSkillAllowedByRoutingPolicy(name: meta.name, conversation: conversation)
+            }
+            .map { SkillCandidate(name: $0.name, description: $0.description) }
+    }
+
+    /// Outbound guardrail check for structured delivery, or `nil` when the battery is off.
+    private func outboundGuardrailCheck() -> (@Sendable (String, UUID) async -> GuardrailVerdict)? {
+        guard let battery = deps.decisionConsumers.guardrails, !battery.configuration.outbound.isEmpty else { return nil }
+        let persistenceDomain = deps.persistenceDomain
+        let modeRegistry = deps.modeRegistry
+        let logger = deps.logger
+        return { text, conversationID in
+            let patches = await DecisionRolePatchLoader.patches(
+                for: conversationID, persistenceDomain: persistenceDomain, modeRegistry: modeRegistry, logger: logger
+            )
+            return await battery.evaluate(.outbound, text: text, conversationID: conversationID, rolePatches: patches)
+        }
+    }
+
+    /// Builds the memory-write gate check for this conversation, or `nil` when the gate is off.
+    private func memoryWriteGateValidator(
+        activeConversation: ModelConversation?
+    ) -> (@Sendable (String, String?, String) async throws -> Void)? {
+        guard let gate = deps.decisionConsumers.memoryWriteGate else { return nil }
+        let conversationID = activeConversation.map { $0.parentConversationID ?? $0.id }
+        let persistenceDomain = deps.persistenceDomain
+        let modeRegistry = deps.modeRegistry
+        let logger = deps.logger
+        return { path, priorContent, newContent in
+            let patches = await DecisionRolePatchLoader.patches(
+                for: conversationID, persistenceDomain: persistenceDomain, modeRegistry: modeRegistry, logger: logger
+            )
+            let decision = await gate.evaluate(
+                path: path, priorContent: priorContent, newContent: newContent,
+                conversationID: conversationID, rolePatches: patches
+            )
+            if case .deny(let reason) = decision {
+                throw MemoryWriteGateDeniedError(reason: reason)
+            }
+        }
+    }
+
+    /// Approval delivery for one conversation: native channel cards when its trigger came from a capable channel,
+    /// otherwise a pending approval published to the conversation's events topic.
+    func execApprovalDelivery(for activeConversation: ModelConversation?, sessionKey: String? = nil) async -> any ExecApprovalDelivering {
+        let sessionKey = sessionKey ?? activeConversation?.id.uuidString ?? UUID().uuidString
+        let conversationID = activeConversation?.id
+        let topics = topicPublication
+        let execApprovalPending: @Sendable (ExecApprovalRequest) async -> Void = { request in
+            guard let conversationID, let topics else { return }
+            let intent = ClientSurfaceIntent(
+                kind: .execApprovalRequired,
+                label: request.title,
+                approvalID: request.id,
+                command: request.command,
+                presentation: request.presentation
+            )
+            guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+            await topics.publishConversationTopicEventIfConfigured(
+                conversationID: conversationID,
+                payload: .surfaceIntentJSONUTF8(utf8)
+            )
+        }
+        let execApprovalCleared: @Sendable (String) async -> Void = { approvalID in
+            guard let conversationID, let topics else { return }
+            let intent = ClientSurfaceIntent(
+                kind: .execApprovalCleared,
+                approvalID: approvalID
+            )
+            guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+            await topics.publishConversationTopicEventIfConfigured(
+                conversationID: conversationID,
+                payload: .surfaceIntentJSONUTF8(utf8)
+            )
+        }
+        let execApprovalScope: ExecApprovalScope? = activeConversation.map {
+            ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
+        }
+        return await ExecApprovalDeliveryFactory.make(
+            scope: execApprovalScope ?? ExecApprovalScope(
+                conversationID: UUID(uuidString: sessionKey) ?? UUID(),
+                ownerAccountID: nil
+            ),
+            channelRegistry: channelRegistry,
+            metadata: activeConversation?.metadata,
+            onPending: execApprovalPending,
+            onCleared: execApprovalCleared
+        )
+    }
+
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)? {
+        await execApprovalDelivery(for: conversation)
+    }
+
+    /// Publishes a transient surface intent on a conversation's events topic.
+    func publishSurfaceIntent(_ intent: ClientSurfaceIntent, conversationID: UUID) async {
+        guard let topics = topicPublication,
+              let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
+        await topics.publishConversationTopicEventIfConfigured(conversationID: conversationID, payload: .surfaceIntentJSONUTF8(utf8))
+    }
+
     private func buildToolManager(
         systemPrompt: SystemPrompt,
         skillLoader: SkillLoader?,
@@ -641,6 +760,7 @@ public actor OrchestratorRuntimeService {
                 resolveDeliveryMetadata: {
                     Self.messageDeliveryMetadata(from: messageConv)
                 },
+                outboundGuardrail: outboundGuardrailCheck(),
                 logger: logger
             )
         )
@@ -648,6 +768,16 @@ public actor OrchestratorRuntimeService {
             TerminationToolProvider(
                 dataProvider: toolData,
                 logger: logger
+            )
+        )
+        let searchConv = activeConversation
+        providers.append(
+            ToolSearchToolProvider(
+                resolveConversationID: { ConversationScope.current?.selfID ?? searchConv?.id },
+                catalog: deps.deferredTools,
+                load: { [weak self] conversationID, names in
+                    await self?.persistLoadedDeferredTools(names, conversationID: conversationID)
+                }
             )
         )
         let modeConv = activeConversation
@@ -693,47 +823,7 @@ public actor OrchestratorRuntimeService {
             )
             let sessionKey = activeConversation?.id.uuidString ?? UUID().uuidString
             let conversationID = activeConversation?.id
-            let topics = topicPublication
-            let execApprovalPending: @Sendable (ExecApprovalRequest) async -> Void = { request in
-                guard let conversationID, let topics else { return }
-                let intent = ClientSurfaceIntent(
-                    kind: .execApprovalRequired,
-                    label: request.title,
-                    approvalID: request.id,
-                    command: request.command,
-                    presentation: request.presentation
-                )
-                guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
-                await topics.publishConversationTopicEventIfConfigured(
-                    conversationID: conversationID,
-                    payload: .surfaceIntentJSONUTF8(utf8)
-                )
-            }
-            let execApprovalCleared: @Sendable (String) async -> Void = { approvalID in
-                guard let conversationID, let topics else { return }
-                let intent = ClientSurfaceIntent(
-                    kind: .execApprovalCleared,
-                    approvalID: approvalID
-                )
-                guard let utf8 = try? String(data: JSONEncoder().encode(intent), encoding: .utf8) else { return }
-                await topics.publishConversationTopicEventIfConfigured(
-                    conversationID: conversationID,
-                    payload: .surfaceIntentJSONUTF8(utf8)
-                )
-            }
-            let execApprovalScope: ExecApprovalScope? = activeConversation.map {
-                ExecApprovalScope(conversationID: $0.id, ownerAccountID: $0.ownerAccountID)
-            }
-            let approvalDelivery = await ExecApprovalDeliveryFactory.make(
-                scope: execApprovalScope ?? ExecApprovalScope(
-                    conversationID: UUID(uuidString: sessionKey) ?? UUID(),
-                    ownerAccountID: nil
-                ),
-                channelRegistry: channelRegistry,
-                metadata: activeConversation?.metadata,
-                onPending: execApprovalPending,
-                onCleared: execApprovalCleared
-            )
+            let approvalDelivery = await execApprovalDelivery(for: activeConversation, sessionKey: sessionKey)
             let execRuntime = ExecRuntimeService(
                 workspaceRoot: workspaceRoot,
                 approvalDelivery: approvalDelivery,
@@ -805,6 +895,7 @@ public actor OrchestratorRuntimeService {
                             throw PreCompactionFlushWriteToolError(message: message)
                         }
                     },
+                    validateMemoryWrite: memoryWriteGateValidator(activeConversation: activeConversation),
                     logger: logger,
                     sessionStoreRoot: SessionPersistenceConfiguration.sessionStoreRoot,
                     sessionAgentId: SessionPersistenceConfiguration.sessionAgentId,
@@ -867,6 +958,31 @@ public actor OrchestratorRuntimeService {
                 pluginGroupID: context.pluginGroupID
             ))
         }
+        if let computerUse = deps.computerUse.configuration {
+            // A specialist child drives its leased session; every other conversation may delegate to one.
+            if let conversationID = activeConversation?.id,
+               let session = await deps.computerUse.sessions.session(for: conversationID) {
+                if let native = session.configuration.nativeDialect {
+                    let failures = deps.computerUse.nativeFailures
+                    switch native.toolset.vendor {
+                    case .anthropic:
+                        providers.append(ComputerUseNativeToolProvider(session: session, toolset: native.toolset, failures: failures))
+                    case .openAI:
+                        providers.append(ComputerUseOpenAIToolProvider(session: session, failures: failures))
+                    case .gemini:
+                        providers.append(ComputerUseGeminiToolProvider(session: session, dialect: native, failures: failures))
+                    }
+                    providers.append(ComputerUseToolProvider(session: session, offering: ComputerUseToolProvider.nativeCompanionToolNames))
+                } else {
+                    providers.append(ComputerUseToolProvider(session: session))
+                }
+            } else {
+                providers.append(ComputerUseDelegateToolProvider(
+                    targets: await computerUse.registry.manifests,
+                    defaults: computerUse.defaults
+                ))
+            }
+        }
         let runtimePipeline = await installedSessionCollaborator.runtimeToolResultMiddlewarePipeline()
         providers = providers.map { provider in
             TransformingToolProvider(
@@ -880,6 +996,13 @@ public actor OrchestratorRuntimeService {
             providers: providers,
             descriptorValidationMode: toolDescriptorValidationMode(deps.toolPolicy.descriptorValidationMode)
         )
+    }
+
+    internal func testing_buildToolManager(
+        systemPrompt: SystemPrompt,
+        activeConversation: ModelConversation?
+    ) async -> ToolManager {
+        await buildToolManager(systemPrompt: systemPrompt, skillLoader: nil, activeConversation: activeConversation)
     }
 
     internal func testing_buildToolManagerToolNames(

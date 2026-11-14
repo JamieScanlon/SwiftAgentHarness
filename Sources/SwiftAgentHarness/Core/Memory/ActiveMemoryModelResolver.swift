@@ -31,7 +31,7 @@ enum ActiveMemoryModelResolver: Sendable {
         switch session {
         case .ollama, .lmStudio:
             return [.ollama, .lmStudio]
-        case .openAIAPI, .anthropic:
+        case .openAIAPI, .anthropic, .gemini:
             return [session]
         }
     }

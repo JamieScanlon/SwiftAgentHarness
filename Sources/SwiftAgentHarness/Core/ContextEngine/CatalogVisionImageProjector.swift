@@ -86,6 +86,13 @@ enum CatalogVisionImageProjector {
         logger: Logger?
     ) -> Message {
         guard !message.images.isEmpty else { return message }
+        // Tool images are not catalog attachments; the tool-result formatting stack governs them.
+        if message.role == .tool {
+            guard !modelSupportsVision else { return message }
+            var copy = message
+            copy.images = []
+            return copy
+        }
         var copy = message
         var projectedImages: [Message.Image] = []
         projectedImages.reserveCapacity(message.images.count)

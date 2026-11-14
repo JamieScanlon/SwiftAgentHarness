@@ -37,6 +37,9 @@ enum SubAgentA2ADelegateStreamMapping {
             case .failed, .rejected, .canceled:
                 mapped.phase = .failed
                 mapped.error = "a2a_task_\(state.rawValue)"
+            case .inputRequired, .authRequired:
+                mapped.phase = .running
+                mapped.awaitingInput = true
             default:
                 mapped.phase = .running
             }

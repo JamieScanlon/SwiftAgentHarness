@@ -15,6 +15,12 @@ protocol ConversationCatalogServicing: Sendable {
     func readTranscriptEntries(conversationID: UUID, request: SessionTranscriptReadRequest) async throws -> [SessionTranscriptEntry]
     func conversationEventsBackfill(conversationID: UUID, since: Int?) async throws -> ConversationEventsBackfillResponse
     func registryOwnerAccountID() async -> UUID?
+    /// A blob the conversation's attachments or messages reference; `nil` for any other blob, even one that exists.
+    func conversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob?
+}
+
+extension ConversationCatalogServicing {
+    func conversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? { nil }
 }
 
 protocol ConversationControlPlaneServicing: Sendable {

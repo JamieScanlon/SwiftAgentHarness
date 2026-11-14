@@ -128,6 +128,8 @@ struct AgentRuntimeRunContext {
     let runtimeLifecyclePublish: (@Sendable (RuntimeLifecycleEventPayload) async -> Void)?
     /// Optional explicit emitter override used by executeTurn wrappers.
     var lifecycleEmitterOverride: AgentRuntimeLifecycleEmitter?
+    /// Why the run was cancelled, when its canceller said, read when a cancelled run ends.
+    var cancellationDetail: (@Sendable () async -> String?)? = nil
 
     func withLifecycleEmitter(_ emitter: AgentRuntimeLifecycleEmitter) -> AgentRuntimeRunContext {
         var context = self
@@ -187,6 +189,21 @@ struct AgentRuntimeRunResult {
 
     static func completed(reason: ConversationRunTerminalReason) -> Self {
         .init(terminalState: .completed, terminalReason: reason, errorPolicy: nil, underlyingError: nil)
+    }
+
+    /// A cancelled result whose terminal detail names why it was cancelled; other results are unchanged.
+    func applyingCancellationDetail(_ detail: String?) -> Self {
+        guard terminalState == .cancelled, let detail else { return self }
+        return .init(
+            terminalState: terminalState,
+            terminalReason: ConversationRunTerminalReason(
+                category: terminalReason?.category ?? .externalCancellation,
+                boundedReason: terminalReason?.boundedReason,
+                detail: detail
+            ),
+            errorPolicy: errorPolicy,
+            underlyingError: underlyingError
+        )
     }
 
     static func cancelled(reason: ConversationRunTerminalReason? = nil, error: Error? = nil) -> Self {
@@ -261,7 +278,10 @@ extension AgentRuntimeExecuting {
                 conversationID: context.conversationID,
                 runID: context.runID
             )
-            let runtimeResult = await runTurn(context.withLifecycleEmitter(emitter))
+            var runtimeResult = await runTurn(context.withLifecycleEmitter(emitter))
+            if runtimeResult.terminalState == .cancelled, let cancellationDetail = context.cancellationDetail {
+                runtimeResult = runtimeResult.applyingCancellationDetail(await cancellationDetail())
+            }
             await emitter.emit(
                 .turnTerminal(
                     runtimeResult.terminalReason

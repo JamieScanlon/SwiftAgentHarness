@@ -119,6 +119,27 @@ actor ToolApprovalRuntimeService {
         return .user
     }
 
+    /// Where a tool call's approval is asked and answered. A sub-agent's conversation is shown by no surface, so
+    /// its approvals go to the top-level conversation it was spawned from, still keyed to the sub-agent's run.
+    /// Mode transitions stay with the conversation whose mode they change.
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID {
+        let canonical = ToolNamePolicyNormalization.canonical(toolName)
+        guard !ToolPolicyConfiguration.modeTransitionApprovalRequiredToolNames.contains(canonical) else {
+            return conversationID
+        }
+        return await rootConversationID(for: conversationID)
+    }
+
+    private func rootConversationID(for conversationID: UUID) async -> UUID {
+        var current = conversationID
+        var visited: Set<UUID> = [current]
+        while let parent = await deps.persistenceDomain.modelConversation(id: current)?.parentConversationID,
+              visited.insert(parent).inserted {
+            current = parent
+        }
+        return current
+    }
+
     func configurationApplyingToolApprovals(
         _ configuration: HarnessRuntimeSession.Configuration,
         conversationID: UUID,
@@ -140,6 +161,16 @@ actor ToolApprovalRuntimeService {
                 route: route
             )
         )
+        let root = await rootConversationID(for: conversationID)
+        if root != conversationID {
+            // Approvals answered in the user's conversation for this sub-agent's run, on whichever route asked.
+            out.preApprovedCallBindings.formUnion(
+                await stateStore.approvedCallBindings(conversationID: root, runID: runID, route: nil)
+            )
+            out.preApprovedToolNames.formUnion(
+                await stateStore.approvedToolNames(conversationID: root, runID: runID, route: nil)
+            )
+        }
         let ownerAccountID = await ownerAccountID(for: conversationID)
         out.preApprovedToolNames.formUnion(
             await permissionRules.grantedToolNames(
@@ -228,6 +259,11 @@ actor ToolApprovalRuntimeService {
         )
     }
 
+    /// Whether any tool approval for `runID` is still waiting on a person, wherever it is routed.
+    func hasPendingApproval(runID: UUID) async -> Bool {
+        await stateStore.hasPendingApproval(runID: runID)
+    }
+
     @discardableResult
     func registerPendingToolApproval(
         conversationID: UUID,
@@ -275,6 +311,70 @@ actor ToolApprovalRuntimeService {
             ),
             toolCallId: call.id
         )
+    }
+
+    /// Classifier-assisted gating for a call the rules resolved to *ask*. Returns `true` when the gatekeeper cleared
+    /// it, after recording an `allow-once` resolution labeled `classifier`. Never persists a durable grant.
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int? = nil,
+        modelID: UUID? = nil,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter? = nil
+    ) async -> Bool {
+        guard let gate = deps.toolApprovalClassifierGate else { return false }
+        let outcome = await gate.evaluate(ToolApprovalClassifierInput(
+            conversationID: conversationID,
+            runID: runID,
+            accountID: await ownerAccountID(for: conversationID),
+            toolName: call.name,
+            arguments: call.arguments,
+            route: route,
+            isElevated: isElevated,
+            transcript: transcript,
+            rolePatches: await DecisionRolePatchLoader.patches(
+                for: conversationID,
+                persistenceDomain: deps.persistenceDomain,
+                modeRegistry: deps.modeRegistry,
+                logger: deps.logger
+            )
+        ))
+        guard case .allowOnce(let reason, _) = outcome else { return false }
+        let binding = ToolCallApprovalBinding.from(call: call)
+        _ = await registerPendingToolApproval(
+            conversationID: conversationID,
+            runID: runID,
+            call: call,
+            route: route,
+            isElevated: isElevated
+        )
+        await applyToolApprovalResolution(
+            conversationID: conversationID,
+            runID: runID,
+            binding: binding,
+            route: route,
+            status: .approved,
+            source: ToolApprovalResolutionKind.classifier.rawValue,
+            reason: reason,
+            kind: .classifier,
+            decision: .allowOnce,
+            policyReason: ToolAvailabilityBlockReason.approvalRequired.rawValue,
+            publicationSource: "runtime.approvalClassifier",
+            iteration: iteration,
+            modelID: modelID,
+            approvalSpec: approvalContractSpec(
+                toolName: call.name,
+                route: route,
+                isElevated: isElevated,
+                arguments: call.arguments
+            ),
+            lifecycleEmitter: lifecycleEmitter
+        )
+        return true
     }
 
     func toolApprovalResolution(
@@ -358,10 +458,14 @@ actor ToolApprovalRuntimeService {
         modelID: UUID?,
         lifecycleEmitter: AgentRuntimeLifecycleEmitter
     ) async {
-        let expired = await stateStore.consumeTimedOutApprovals(
+        var expired = await stateStore.consumeTimedOutApprovals(
             conversationID: conversationID,
             runID: runID
         )
+        let root = await rootConversationID(for: conversationID)
+        if root != conversationID {
+            expired += await stateStore.consumeTimedOutApprovals(conversationID: root, runID: runID)
+        }
         for entry in expired {
             await applyToolApprovalResolution(
                 conversationID: entry.conversationID,

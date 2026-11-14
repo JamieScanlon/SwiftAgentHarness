@@ -833,6 +833,29 @@ struct APILayerConversationsModule: APILayerRESTEndpointModule {
             }
         }
 
+        conversationsPath.get(":id", "blobs", ":blobID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let blobID = req.parameters.get("blobID"),
+                  let blob = await dependencies.conversation.apiConversationBlob(conversationID: uuid, blobID: blobID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Blob not found")
+            }
+            let etag = "\"\(blob.contentHash)\""
+            if APILayer.ifNoneMatchSatisfied(currentETag: etag, headerValue: APILayer.ifNoneMatchHeader(from: req.headers)) {
+                return APILayer.notModifiedResponse(etag: etag)
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: .contentType, value: blob.mediaType)
+            headers.add(name: .cacheControl, value: "private, max-age=31536000, immutable")
+            APILayer.addETag(etag, to: &headers)
+            return Response(status: .ok, headers: headers, body: .init(data: blob.data))
+        }
+
         conversationsPath.get(":id", "plan") { req async -> Response in
             guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
                 return APILayerRESTErrorResponse.invalidConversationID()
@@ -2565,6 +2588,7 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var approved: Bool
         var durable: Bool?
         var reason: String?
+        var answeredOffTarget: Bool?
     }
 
     /// Unified resolve body on the spec's decision vocabulary. `decision` is
@@ -2575,6 +2599,9 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         var approved: Bool?
         var durable: Bool?
         var reason: String?
+        /// The client's own word that it is away from what the approval is about, such as a phone answering
+        /// for a Mac. It only ever makes the harness stricter.
+        var answeredOffTarget: Bool?
     }
 
     private struct ExecApprovalGrantsResponse: Content {
@@ -2619,7 +2646,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 store: store,
                 approved: body.approved,
                 durable: body.durable ?? false,
-                reason: body.reason ?? "denied via api.rest"
+                reason: body.reason ?? "denied via api.rest",
+                answeredOffTarget: body.answeredOffTarget ?? false
             ) {
             case .forbidden(let response):
                 return response
@@ -2669,7 +2697,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
                 store: store,
                 approved: approved,
                 durable: durable,
-                reason: body.reason ?? "denied via api.rest"
+                reason: body.reason ?? "denied via api.rest",
+                answeredOffTarget: body.answeredOffTarget ?? false
             ) {
             case .forbidden(let response):
                 return response
@@ -2693,7 +2722,8 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
         store: ExecApprovalStore,
         approved: Bool,
         durable: Bool,
-        reason: String?
+        reason: String?,
+        answeredOffTarget: Bool
     ) async -> ExecApprovalRESTResolveOutcome {
         guard let pendingScope = await store.pendingScope(id: id) else {
             return .notFound
@@ -2711,10 +2741,315 @@ struct APILayerExecApprovalsModule: APILayerRESTEndpointModule {
             ownerScope: APISessionContext.authenticatedOwnerAccountID,
             approved: approved,
             durable: durable,
-            reason: reason
+            reason: reason,
+            answeredOffTarget: answeredOffTarget
         ) else {
             return .notFound
         }
         return .resolved(resolution)
+    }
+}
+
+/// The user's controls over computer-use specialists: answer or hand back a pending request, stop, and take over.
+struct APILayerComputerUseModule: APILayerRESTEndpointModule {
+    let moduleName: String = "computer-use"
+
+    private struct RequestResolutionBody: Content {
+        var action: String
+        var answer: String?
+        var note: String?
+    }
+
+    private struct TakeoverBody: Content {
+        var on: Bool
+        var lifecycleID: String?
+    }
+
+    private struct SessionsChangedResponse: Content {
+        var lifecycleIDs: [String]
+    }
+
+    private struct AuditBody: Content {
+        var marked: Bool
+    }
+
+    private struct LiveViewBody: Content {
+        var role: DisplayLiveViewRole?
+    }
+
+    private struct LiveViewConnectionsResponse: Encodable {
+        var connections: [DisplayLiveViewConnection]
+    }
+
+    private struct ReplaysResponse: Content {
+        var replays: [ComputerUseReplaySummary]
+    }
+
+    private static func unavailable() -> Response {
+        APILayerRESTErrorResponse.error(status: .notFound, message: "Computer use is not available on this host")
+    }
+
+    private static func json<T: Encodable>(_ value: T) -> Response {
+        guard let data = try? JSONEncoder.computerUseControl.encode(value) else {
+            return APILayerRESTErrorResponse.error(status: .internalServerError, message: "Could not encode the response")
+        }
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "application/json")
+        return Response(status: .ok, headers: headers, body: .init(data: data))
+    }
+
+    private static func resolution(from body: RequestResolutionBody) -> ComputerUseRequestResolution? {
+        switch body.action {
+        case "answer":
+            guard let answer = body.answer?.trimmingCharacters(in: .whitespacesAndNewlines), !answer.isEmpty else { return nil }
+            return .answered(answer)
+        case "hand-back":
+            return .handedBack(note: body.note)
+        case "decline":
+            return .declined
+        default:
+            return nil
+        }
+    }
+
+    func registerRoutes(on api: RoutesBuilder, dependencies: APILayerRouteDependencies) {
+        let conversationsPath = api.grouped("conversations")
+
+        conversationsPath.get(":id", "computer-use") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            return Self.json(await control.status(conversationID: uuid))
+        }
+
+        conversationsPath.post(":id", "computer-use", "requests", ":requestID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let requestID = req.parameters.get("requestID"), !requestID.isEmpty else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid computer-use request ID")
+            }
+            guard let body = try? req.content.decode(RequestResolutionBody.self), let resolution = Self.resolution(from: body) else {
+                return APILayerRESTErrorResponse.error(
+                    status: .badRequest,
+                    message: "Expected {\"action\": \"answer\" | \"hand-back\" | \"decline\"}; \"answer\" needs a non-empty answer"
+                )
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            switch await control.resolve(requestID: requestID, conversationID: uuid, resolution: resolution) {
+            case .resolved:
+                return Response(status: .ok)
+            case .notFound:
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Computer-use request not found")
+            case .wrongKind:
+                return APILayerRESTErrorResponse.error(
+                    status: .conflict,
+                    message: "A question takes \"answer\" or \"decline\"; a handoff takes \"hand-back\" or \"decline\""
+                )
+            }
+        }
+
+        conversationsPath.post(":id", "computer-use", "stop") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            return Self.json(SessionsChangedResponse(lifecycleIDs: await control.stop(conversationID: uuid)))
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            return Self.json(ReplaysResponse(replays: await control.replays(conversationID: uuid)))
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays", ":lifecycleID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let replay = await control.replay(conversationID: uuid, lifecycleID: lifecycleID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Computer-use replay not found")
+            }
+            return Self.json(replay)
+        }
+
+        conversationsPath.get(":id", "computer-use", "replays", ":lifecycleID", "thumbnails", ":observationID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let observationID = req.parameters.get("observationID"),
+                  let image = await control.replayThumbnail(conversationID: uuid, lifecycleID: lifecycleID, observationID: observationID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Replay thumbnail not found")
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: .contentType, value: image.mediaType)
+            return Response(status: .ok, headers: headers, body: .init(data: image.data))
+        }
+
+        conversationsPath.post(":id", "computer-use", "runs", ":lifecycleID", "audit") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let body = try? req.content.decode(AuditBody.self) else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected {\"marked\": Bool}")
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            guard let lifecycleID = req.parameters.get("lifecycleID"),
+                  let status = await control.setAuditMark(body.marked, conversationID: uuid, lifecycleID: lifecycleID)
+            else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "Computer-use run not found")
+            }
+            return Self.json(status)
+        }
+
+        conversationsPath.post(":id", "computer-use", "runs", ":lifecycleID", "live-view") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            var role = DisplayLiveViewRole.user
+            if (req.body.data?.readableBytes ?? 0) > 0 {
+                guard let body = try? req.content.decode(LiveViewBody.self) else {
+                    return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected {\"role\"?: \"user\" | \"observer\"}")
+                }
+                role = body.role ?? .user
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            let link: DisplayLiveView?
+            do {
+                link = try await control.liveView(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "", role: role)
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Live view failed: \(error)")
+            }
+            guard let link else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use run with a live view")
+            }
+            // The link carries a credential.
+            let response = Self.json(link)
+            response.headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+            return response
+        }
+
+        conversationsPath.delete(":id", "computer-use", "runs", ":lifecycleID", "live-view", "observers") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            do {
+                guard try await control.endObservers(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "") else {
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use run")
+                }
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Ending observers failed: \(error)")
+            }
+            return Response(status: .noContent)
+        }
+
+        conversationsPath.get(":id", "computer-use", "runs", ":lifecycleID", "live-view", "connections") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            let connections: [DisplayLiveViewConnection]?
+            do {
+                connections = try await control.liveConnections(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "")
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Listing live-view connections failed: \(error)")
+            }
+            guard let connections else {
+                return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use run")
+            }
+            return Self.json(LiveViewConnectionsResponse(connections: connections))
+        }
+
+        conversationsPath.delete(":id", "computer-use", "runs", ":lifecycleID", "live-view", "connections", ":linkID") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let linkID = req.parameters.get("linkID").flatMap(UUID.init(uuidString:)) else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Invalid link id")
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            do {
+                guard try await control.revokeLiveView(conversationID: uuid, lifecycleID: req.parameters.get("lifecycleID") ?? "", linkID: linkID) else {
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "No such live-view connection")
+                }
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Revoking the connection failed: \(error)")
+            }
+            return Response(status: .noContent)
+        }
+
+        conversationsPath.post(":id", "computer-use", "takeover") { req async -> Response in
+            guard let uuidString = req.parameters.get("id"), let uuid = UUID(uuidString: uuidString) else {
+                return APILayerRESTErrorResponse.invalidConversationID()
+            }
+            if let forbidden = await dependencies.tenancyRespondIfConversationAccessForbidden(conversationID: uuid) {
+                return forbidden
+            }
+            guard let body = try? req.content.decode(TakeoverBody.self) else {
+                return APILayerRESTErrorResponse.error(status: .badRequest, message: "Expected {\"on\": Bool, \"lifecycleID\"?: String}")
+            }
+            guard let control = await dependencies.conversation.apiComputerUseControl() else { return Self.unavailable() }
+            do {
+                let changed = try await control.setTakeover(body.on, conversationID: uuid, lifecycleID: body.lifecycleID)
+                guard !changed.isEmpty else {
+                    return APILayerRESTErrorResponse.error(status: .notFound, message: "No live computer-use session")
+                }
+                return Self.json(SessionsChangedResponse(lifecycleIDs: changed))
+            } catch {
+                return APILayerRESTErrorResponse.error(status: .conflict, message: "Takeover failed: \(error)")
+            }
+        }
+    }
+}
+
+private extension JSONEncoder {
+    static var computerUseControl: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
     }
 }

@@ -49,6 +49,25 @@ struct RunLifecycleTranscriptMarkerPayload: Codable, Sendable, Equatable {
         }
     }
 
+    /// Cancellation reasons a `run_cancelled` marker records when the run's terminal detail names one.
+    static let cancellationReasons: Set<String> = ["user-cancel", "parent-cancel", "deadline", "budget", "idle-timeout"]
+
+    /// A `run_cancelled` marker whose `reason` is the terminal detail when that names a cancellation reason,
+    /// otherwise `fallbackReason`.
+    static func cancelled(
+        runId: UUID,
+        fallbackReason: String,
+        terminalReason: ConversationRunTerminalReason?
+    ) -> RunLifecycleTranscriptMarkerPayload {
+        let named = terminalReason?.detail.flatMap { cancellationReasons.contains($0) ? $0 : nil }
+        return RunLifecycleTranscriptMarkerPayload(
+            kind: .run_cancelled,
+            runId: runId,
+            reason: named ?? fallbackReason,
+            terminalReason: terminalReason
+        )
+    }
+
     func encodedJSONString() throws -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]

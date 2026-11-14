@@ -14,7 +14,7 @@ After a tool batch completes, fire a **fast/cheap-model call, without blocking t
 - **The prompt is the product.** Instruct for a single-line label that truncates well: past-tense verb first, most distinctive noun kept, articles/connectors/long paths dropped first. Ship few-shot examples in the system prompt; enable prompt caching (the system prompt is identical every call, only the batch varies).
 - **Fire-and-forget, racing the next API call.** Kick generation off as the batch resolves and *don't await it* before dispatching the next model turn — a display label must never add latency to the loop. Wire it to the run's abort signal so cancellation kills it too. The pending promise resolves into a message or null; either is fine.
 - **A distinct message type, addressed to surfaces.** Emit `{ type: tool_use_summary, summary, precedingToolUseIds }`. The ids let a client attach the label to the right collapsed batch row. In-process stream handling skips the type entirely; it exists for the SDK/remote-client boundary where shipping full tool payloads for a progress row would be absurd. It is **not** transcript content, not model context, and never load-bearing: every consumer must render correctly when it's absent.
-- **Model selection via the Model Pool's cheap-and-fast slot** ([model-pool](../model-pool/README.md)), same as the other micro-summarizers. Do not share a prompt or a code path with them — the three have different budgets, shapes, and latency profiles, and the shared abstraction has negative value at ~100 lines each ([summarization-techniques](../context-engine/summarization-techniques.md) makes the general argument).
+- **Model selection via the Model Pool's cheap-and-fast slot** — the `background-small` role ([model-classes § Roles](../model-pool/model-classes.md#roles-the-selection-surface-for-internal-callers)), same as the other micro-summarizers. Do not share a prompt or a code path with them — the three have different budgets, shapes, and latency profiles, and the shared abstraction has negative value at ~100 lines each ([summarization-techniques](../context-engine/summarization-techniques.md) makes the general argument).
 - **Delivery pacing: exempt.** Where surfaces apply human-pacing delays to intermediate messages, tool summaries are explicitly exempt — the user is waiting on them ([streaming](../../surfaces/interface/streaming.md)).
 
 ---
@@ -43,6 +43,6 @@ Wrong shape (paragraphs, not labels), wrong budget (thousands of tokens, not thi
 ## Cross-references
 
 - [summarization-techniques](../context-engine/summarization-techniques.md) — the three-summarizer family and the no-shared-abstraction argument.
-- [model-pool](../model-pool/README.md) — the cheap/fast model slot and fallback.
+- [model-pool](../model-pool/README.md) / [model-classes](../model-pool/model-classes.md) — the cheap/fast model slot (`background-small` role) and its fallback.
 - [streaming](../../surfaces/interface/streaming.md) — pacing exemption for tool summaries.
 - [agent-orchestration](../sub-agent-pool/agent-orchestration.md) — the sibling *agent progress summary* for coordinator-mode sub-agents.

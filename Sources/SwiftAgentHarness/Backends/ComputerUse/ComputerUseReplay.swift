@@ -1,0 +1,284 @@
+import Foundation
+import SwiftAgentKit
+import Synchronization
+
+/// A thumbnail the session keeps of one observation, for the post-run replay. Observations themselves are
+/// dropped once they fall out of the citing window.
+public struct ComputerUseReplayFrame: Sendable, Equatable {
+    public var observationID: ObservationID
+    public var at: Date
+    public var app: String?
+    public var image: PresentationImage
+}
+
+/// A replay thumbnail as stored: the image lives in the session blob store.
+public struct ComputerUseReplayThumbnail: Sendable, Codable, Equatable {
+    public var observationID: ObservationID
+    public var at: Date
+    public var app: String?
+    public var width: Int
+    public var height: Int
+    public var mediaType: String
+    public var blobID: String
+}
+
+/// A replay's listing row.
+public struct ComputerUseReplaySummary: Sendable, Codable, Equatable {
+    public var lifecycleID: String
+    public var target: String
+    public var startedAt: Date
+    public var endedAt: Date
+    public var terminalReason: ComputerUseTerminalReason?
+    public var steps: Int
+    public var actionCount: Int
+    public var thumbnailCount: Int
+    public var auditMarked: Bool = false
+    /// When the replay and its images expire; `nil` while they are held.
+    public var expiresAt: Date?
+}
+
+/// What a specialist session did, for the user to review afterwards: the action log plus observation thumbnails.
+/// It is a record for humans, not a script to re-execute.
+public struct ComputerUseReplay: Sendable, Codable, Equatable {
+    public var sessionID: UUID
+    public var parentConversationID: UUID
+    public var lifecycleID: String
+    public var target: String
+    public var startedAt: Date
+    public var endedAt: Date
+    public var terminalReason: ComputerUseTerminalReason?
+    public var steps: Int
+    public var records: [ComputerUseActionRecord]
+    public var thumbnails: [ComputerUseReplayThumbnail]
+    /// Budget extensions, ceiling questions, and how the session ended.
+    public var events: [ComputerUseSessionEvent] = []
+    /// The run's screenshot blobs, which follow the replay's retention.
+    public var screenshotBlobIDs: [String] = []
+
+    public var summary: ComputerUseReplaySummary {
+        ComputerUseReplaySummary(
+            lifecycleID: lifecycleID,
+            target: target,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            terminalReason: terminalReason,
+            steps: steps,
+            actionCount: records.count,
+            thumbnailCount: thumbnails.count
+        )
+    }
+}
+
+extension ComputerUseReplay {
+    /// Builds the replay from a finished session, storing each thumbnail through `storeThumbnail`, which returns
+    /// the blob id.
+    init(
+        session: ComputerUseSession,
+        parentConversationID: UUID,
+        lifecycleID: String,
+        targetLabel: String,
+        endedAt: Date = Date(),
+        storeThumbnail: (Data) throws -> String
+    ) async throws {
+        var thumbnails: [ComputerUseReplayThumbnail] = []
+        for frame in await session.replayFrames {
+            guard let data = frame.image.inlineData else { continue }
+            thumbnails.append(ComputerUseReplayThumbnail(
+                observationID: frame.observationID,
+                at: frame.at,
+                app: frame.app,
+                width: frame.image.width ?? 0,
+                height: frame.image.height ?? 0,
+                mediaType: frame.image.mime ?? "image/png",
+                blobID: try storeThumbnail(data)
+            ))
+        }
+        self.init(
+            sessionID: session.id,
+            parentConversationID: parentConversationID,
+            lifecycleID: lifecycleID,
+            target: targetLabel,
+            startedAt: session.startedAt,
+            endedAt: endedAt,
+            terminalReason: await session.terminalReason,
+            steps: await session.stepCount,
+            records: await session.auditLog,
+            thumbnails: thumbnails,
+            events: await session.events
+        )
+    }
+}
+
+extension JSONEncoder {
+    /// Storage form of a replay document. Dates keep full precision; REST re-encodes them as ISO-8601.
+    static var computerUseReplay: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+}
+
+extension JSONDecoder {
+    static var computerUseReplay: JSONDecoder { JSONDecoder() }
+}
+
+/// Blob-store access for a replay's images, bound when the replay is recorded.
+struct ComputerUseBlobAccess: Sendable {
+    var load: @Sendable (String) throws -> Data
+    var setExpiry: @Sendable (String, Date?) throws -> Void
+}
+
+struct ComputerUseReplayIndexEntry: Sendable {
+    var replay: ComputerUseReplay
+    /// The stored replay document.
+    var documentBlobID: String
+    /// Every blob the run's retention covers: screenshots, thumbnails, and the replay document.
+    var blobIDs: [String]
+    var releasedAt: Date
+    var auditMarked: Bool
+    var expiresAt: Date?
+    var access: ComputerUseBlobAccess
+
+    var summary: ComputerUseReplaySummary {
+        var summary = replay.summary
+        summary.auditMarked = auditMarked
+        summary.expiresAt = expiresAt
+        return summary
+    }
+}
+
+/// Recent replays per user conversation, newest first, so surfaces can list and open them. Expired replays drop
+/// out.
+actor ComputerUseReplayIndex {
+    typealias Discovery = @Sendable (UUID) async -> [ComputerUseReplayIndexEntry]
+
+    private let capacityPerConversation: Int
+    private let now: @Sendable () -> Date
+    private var entries: [UUID: [ComputerUseReplayIndexEntry]] = [:]
+    private var discovered: Set<UUID> = []
+    /// Rebuilds a conversation's replays from durable state, so they outlive the process. Run once per
+    /// conversation, on first access.
+    private nonisolated let discovery = Mutex<Discovery?>(nil)
+
+    init(capacityPerConversation: Int = 50, now: @escaping @Sendable () -> Date = { Date() }) {
+        self.capacityPerConversation = max(1, capacityPerConversation)
+        self.now = now
+    }
+
+    nonisolated func setDiscovery(_ discover: Discovery?) {
+        discovery.withLock { $0 = discover }
+    }
+
+    func record(_ entry: ComputerUseReplayIndexEntry) {
+        insert([entry], parent: entry.replay.parentConversationID, replacing: true)
+    }
+
+    func summaries(parent conversationID: UUID) async -> [ComputerUseReplaySummary] {
+        await discoverIfNeeded(conversationID)
+        return live(conversationID).map(\.summary)
+    }
+
+    func entry(parent conversationID: UUID, lifecycleID: String) async -> ComputerUseReplayIndexEntry? {
+        await discoverIfNeeded(conversationID)
+        return live(conversationID).first { $0.replay.lifecycleID == lifecycleID }
+    }
+
+    private func discoverIfNeeded(_ conversationID: UUID) async {
+        guard !discovered.contains(conversationID), let discover = discovery.withLock({ $0 }) else { return }
+        discovered.insert(conversationID)
+        insert(await discover(conversationID), parent: conversationID, replacing: false)
+    }
+
+    /// Entries recorded in this process win over rediscovered ones for the same run.
+    private func insert(_ new: [ComputerUseReplayIndexEntry], parent: UUID, replacing: Bool) {
+        var list = entries[parent] ?? []
+        for entry in new {
+            let existing = list.firstIndex { $0.replay.lifecycleID == entry.replay.lifecycleID }
+            if let existing {
+                guard replacing else { continue }
+                list.remove(at: existing)
+            }
+            list.append(entry)
+        }
+        list.sort { $0.replay.endedAt > $1.replay.endedAt }
+        entries[parent] = Array(list.prefix(capacityPerConversation))
+    }
+
+    func updateRetention(parent conversationID: UUID, lifecycleID: String, auditMarked: Bool, expiresAt: Date?) {
+        guard let index = entries[conversationID]?.firstIndex(where: { $0.replay.lifecycleID == lifecycleID }) else { return }
+        entries[conversationID]?[index].auditMarked = auditMarked
+        entries[conversationID]?[index].expiresAt = expiresAt
+    }
+
+    private func live(_ conversationID: UUID) -> [ComputerUseReplayIndexEntry] {
+        let current = now()
+        return (entries[conversationID] ?? []).filter { entry in entry.expiresAt.map { $0 > current } ?? true }
+    }
+}
+
+/// Rebuilds a conversation's replays from its delegate results: each result's `actionsLog` names the stored
+/// replay document, which in turn names every blob the run's retention covers.
+enum ComputerUseReplayDiscovery {
+    /// Discovery over the parent conversation's messages, with the installation's current retention.
+    static func discovery(
+        persistence: ConversationPersistenceDomain,
+        installation: ComputerUseInstallation
+    ) -> ComputerUseReplayIndex.Discovery {
+        { [weak installation] conversationID in
+            guard let installation, let conversation = await persistence.modelConversation(id: conversationID) else { return [] }
+            return entries(
+                messages: conversation.messages,
+                harness: await persistence.harnessSessionPersistence,
+                retention: installation.retention
+            )
+        }
+    }
+
+    static func entries(
+        messages: [Message],
+        harness: any HarnessSessionPersistence,
+        retention: ComputerUseRetention
+    ) -> [ComputerUseReplayIndexEntry] {
+        let access = ComputerUseBlobAccess(
+            load: { try harness.getBlob(blobId: $0) },
+            setExpiry: { _ = try harness.setBlobExpiry(blobId: $0, expiresAt: $1) }
+        )
+        return messages.compactMap { message -> ComputerUseReplayIndexEntry? in
+            guard message.role == .tool,
+                  let documentBlobID = replayDocumentBlobID(inToolResult: message.content),
+                  let data = try? harness.getBlob(blobId: documentBlobID),
+                  let replay = try? JSONDecoder.computerUseReplay.decode(ComputerUseReplay.self, from: data),
+                  let stat = try? harness.statBlob(blobId: documentBlobID)
+            else { return nil }
+            let normalExpiry = retention.expiry(releasedAt: replay.endedAt, auditMarked: false)
+            let auditMarked = stat.durability == .ephemeral && !Self.same(stat.expiresAt, normalExpiry)
+            return ComputerUseReplayIndexEntry(
+                replay: replay,
+                documentBlobID: documentBlobID,
+                blobIDs: replay.screenshotBlobIDs + replay.thumbnails.map(\.blobID) + [documentBlobID],
+                releasedAt: replay.endedAt,
+                auditMarked: auditMarked,
+                expiresAt: stat.expiresAt,
+                access: access
+            )
+        }
+    }
+
+    /// The replay document a delegate result's `actionsLog` points at.
+    static func replayDocumentBlobID(inToolResult content: String) -> String? {
+        guard let data = content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let actionsLog = object["actionsLog"] as? String,
+              let match = actionsLog.firstMatch(of: /full log: (blob:\/\/[0-9a-fA-F]{64})/)
+        else { return nil }
+        return SessionBlobImageRef.parsePath(String(match.output.1))
+    }
+
+    private static func same(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case (let a?, let b?): return abs(a.timeIntervalSince(b)) < 1
+        default: return false
+        }
+    }
+}

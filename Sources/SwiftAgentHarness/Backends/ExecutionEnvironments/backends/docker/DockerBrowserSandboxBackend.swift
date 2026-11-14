@@ -16,9 +16,10 @@ public struct NoVNCToken: Sendable, Equatable {
 
 public enum NoVNCAuth {
     public static func issue(expirySeconds: TimeInterval = 300) -> NoVNCToken {
-        let token = UUID().uuidString
-        let password = UUID().uuidString.prefix(12).description
-        return NoVNCToken(token: token, password: String(password), expiresAt: Date().addingTimeInterval(expirySeconds))
+        let token = ObserverTokenIssuer.token()
+        // Kept short: VNC authentication reads at most eight characters of a password.
+        let password = String(ObserverTokenIssuer.token(bytes: 9).prefix(12))
+        return NoVNCToken(token: token, password: password, expiresAt: Date().addingTimeInterval(expirySeconds))
     }
 
     public static func isValid(_ token: NoVNCToken) -> Bool {

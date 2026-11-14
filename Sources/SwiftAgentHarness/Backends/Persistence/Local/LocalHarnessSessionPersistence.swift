@@ -1001,6 +1001,10 @@ final class LocalHarnessSessionPersistence: HarnessSessionPersistence, @unchecke
         try blobStore().promote(blobId: blobId)
     }
 
+    func setBlobExpiry(blobId: String, expiresAt: Date?) throws -> SessionBlobRef {
+        try blobStore().setExpiry(blobId: blobId, expiresAt: expiresAt)
+    }
+
     func deleteBlob(blobId: String) throws {
         try blobStore().delete(blobId: SessionBlobStore.normalizeBlobId(blobId))
     }

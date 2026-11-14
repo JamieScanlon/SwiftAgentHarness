@@ -280,6 +280,44 @@ struct ToolDispatchHangRecoveryTests {
         #expect(line.contains("timeoutMs=300000"))
     }
 
+    @Test("A tool that bounds its own run time is not cut off by the per-call timeout")
+    func selfBoundedToolHasNoCallTimeout() async throws {
+        let bounded = ToolRegistryEntry(
+            definition: ToolDefinition(name: "delegate_long", description: "", parameters: [], type: .function),
+            source: .local,
+            policyTags: [.boundsOwnRunTime]
+        )
+        let plain = ToolRegistryEntry(
+            definition: ToolDefinition(name: "plain", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let contract = AgentRuntimeToolDispatchContract.conservativeDefault
+        #expect(ToolDispatchWatchdog.timeoutSeconds(forToolNamed: "delegate_long", entries: [bounded, plain], contract: contract) == nil)
+        #expect(ToolDispatchWatchdog.timeoutSeconds(forToolNamed: "plain", entries: [bounded, plain], contract: contract) == contract.toolCallTimeoutSeconds)
+        #expect(ToolDispatchWatchdog.timeoutSeconds(forToolNamed: "unknown", entries: [bounded], contract: contract) == contract.toolCallTimeoutSeconds)
+
+        let context = ToolDispatchWatchdog.Context(
+            toolName: "delegate_long",
+            toolCallID: "w2",
+            runID: UUID(),
+            conversationID: UUID(),
+            mcpServerName: nil,
+            timeoutSeconds: nil,
+            watchdogIntervalSeconds: 0.05
+        )
+        let value = try await ToolDispatchWatchdog.withTimeoutAndWatchdog(context: context, logger: nil) {
+            try await Task.sleep(for: .milliseconds(300))
+            return "done"
+        }
+        #expect(value == "done")
+    }
+
+    @Test("Local-agent delegates are tagged as bounding their own run time")
+    func localAgentsBoundOwnRunTime() {
+        let tags = ComputerUseDelegateToolProvider.policyTags.map(\.rawValue)
+        #expect(tags.contains(ToolRegistryEntry.PolicyTag.boundsOwnRunTime.rawValue))
+    }
+
     @Test("watchdog emits warning while hang is below timeout")
     func watchdogEmitsWarningBeforeTimeout() async throws {
         let handler = WatchdogLogHandler()

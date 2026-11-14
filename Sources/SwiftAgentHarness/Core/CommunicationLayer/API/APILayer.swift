@@ -92,6 +92,10 @@ protocol APILayerConversationManaging: AnyObject, Sendable {
     func apiListConversationTraceSpans(conversationID: UUID, limit: Int?) async throws -> ConversationTraceResponse
     func apiListActiveSubAgentInvocations(parentConversationID: UUID) async -> [ActiveSubAgentInvocationInfo]
     func apiCancelActiveSubAgentInvocation(parentConversationID: UUID, lifecycleID: String) async throws
+    /// Controls for the computer-use specialists working for a conversation; nil when the host has no computer use.
+    func apiComputerUseControl() async -> ComputerUseControlService?
+    /// A blob this conversation references: an attachment, a message image, or an image on a pending approval card.
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob?
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,
@@ -500,6 +504,14 @@ extension APILayerConversationManaging {
         throw APILayerConversationAPIError.unsupported
     }
 
+    func apiComputerUseControl() async -> ComputerUseControlService? {
+        nil
+    }
+
+    func apiConversationBlob(conversationID: UUID, blobID: String) async -> ConversationBlob? {
+        await apiComputerUseControl()?.runBlob(conversationID: conversationID, blobID: blobID)
+    }
+
     func apiPushCompletionAnnouncement(
         conversationID: UUID,
         announce: CompletionAnnouncePayload,
@@ -675,6 +687,16 @@ public actor APILayer {
         self.triggerChannelAdminRegistrar = registrar
     }
 
+    /// Routes the host adds under `/api`, after the harness's own, for both ``start()`` and
+    /// ``makeEmbeddedApplication()``. Set before either.
+    ///
+    /// They sit behind the same client-session middleware and access-token resolution as the harness's routes, so a
+    /// handler reads the caller from ``APIRequestCaller``. Under strict tenancy every request to them needs an
+    /// authenticated owner. A host route that would answer requests a harness route answers is not registered.
+    public func setHostRouteRegistrar(_ register: (@Sendable (any RoutesBuilder) -> Void)?) {
+        hostRouteRegistrar = register
+    }
+
     private var startupService: ConversationStartupService?
 
     /// Binds the harness startup service for composition-root wiring (``setMCPManager(_:)``, etc.).
@@ -819,6 +841,7 @@ public actor APILayer {
             activeCallProvider: makeActiveCallProvider(),
             projectedCostProvider: makeProjectedCostProvider(),
             projectionBudgetProvider: makeProjectionBudgetProvider(),
+            pendingApprovalsProvider: makePendingApprovalsProvider(),
             orchestrationOverride: orchestrationOverride
         )
         logger.debug(
@@ -826,6 +849,29 @@ public actor APILayer {
         )
         await publisher.publishConversationState(conversationID: conversationID, payload: payload)
         //logger.debug("refreshConversationStateOnWire published conversationID=\(conversationID.uuidString)")
+    }
+
+    func makePendingApprovalsProvider() -> ConversationStateSnapshotBuilder.PendingApprovalsProvider {
+        let store = execApprovalStore
+        return { conversationID in await store.pendingApprovals(conversationID: conversationID) }
+    }
+
+    /// Replaces the exec approval store whose pending approvals state snapshots list. Defaults to
+    /// ``ExecApprovalStore/shared``.
+    func setExecApprovalStore(_ store: ExecApprovalStore) {
+        execApprovalStore = store
+    }
+
+    /// Rebroadcasts a conversation's state whenever one of its approvals is raised, resolved, or withdrawn, so
+    /// subscribed clients see the pending set change. Returns once the watch is in place.
+    func startWatchingPendingApprovals() async {
+        pendingApprovalWatch?.cancel()
+        let changes = await execApprovalStore.pendingApprovalChanges()
+        pendingApprovalWatch = Task { [weak self] in
+            for await conversationID in changes {
+                await self?.refreshConversationStateOnWire(conversationID: conversationID)
+            }
+        }
     }
 
     /// Builds a closure that resolves ``ModelStatePayload`` for a model from the wire-bound
@@ -935,6 +981,12 @@ public actor APILayer {
            apiAccessTokenValidator == nil {
             throw APIError.authenticationNotConfigured
         }
+        if let jwtValidator = apiAccessTokenValidator as? JWTAPIAccessTokenValidator,
+           !jwtValidator.settings.meetsMinimumHS256SecretLength {
+            throw APIError.accessTokenSecretTooShort(
+                minimumBytes: APIAccessTokenAuthenticationSettings.minimumHS256SecretByteCount
+            )
+        }
     }
 
     public func start() async throws {
@@ -994,6 +1046,7 @@ public actor APILayer {
                 )
             }
         }
+        Task { [weak self] in await self?.startWatchingPendingApprovals() }
         configureRESTRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
         configureWebSocketRoutes(app: app, chatGateway: chatGateway, modelManager: modelManager)
     }
@@ -1014,6 +1067,8 @@ public actor APILayer {
      */
     public func stop() async {
         logger.info("Shutting down API server...")
+        pendingApprovalWatch?.cancel()
+        pendingApprovalWatch = nil
         if let running = app?.running {
             running.stop()
             _ = try? await running.onStop.get()
@@ -1044,6 +1099,7 @@ public actor APILayer {
 
     private var triggerWebhookRegistrar: TriggerWebhookRouteRegistrar?
     private var triggerChannelAdminRegistrar: TriggerChannelAdminRouteRegistrar?
+    private var hostRouteRegistrar: (@Sendable (any RoutesBuilder) -> Void)?
 
     private var contextCompactionPreviewSettings: ContextCompactionPreviewAPISettings = .disabled
     private var httpPreconditionPolicySettings: HTTPPreconditionPolicySettings = .disabled
@@ -1095,6 +1151,9 @@ public actor APILayer {
     /// ``NilBudgetReporting`` (returns `nil`) for tests; production replaces this via
     /// ``setBudgetReporting(_:)`` during server composition.
     private var budgetReporting: any BudgetReporting = NilBudgetReporting()
+
+    private var execApprovalStore: ExecApprovalStore = .shared
+    private var pendingApprovalWatch: Task<Void, Never>?
 
     private let logger: Logger
     
@@ -1148,6 +1207,13 @@ public actor APILayer {
         // Inside `api`, unlike the webhook registrar above: these handlers derive an owner authority
         // from the principal `ClientSessionMiddleware` binds, which is only bound on this group.
         triggerChannelAdminRegistrar?.register(on: api, dependencies: dependencies)
+        if let hostRouteRegistrar {
+            hostRouteRegistrar(HostRoutesBuilder(
+                base: api.grouped(HostRouteTenancyMiddleware(tenancyPolicy: tenancyPolicySettings)),
+                harnessRoutes: app.routes.all.map { (method: $0.method, path: $0.path) },
+                logger: logger
+            ))
+        }
     }
     
     /**
@@ -1181,6 +1247,7 @@ public actor APILayer {
         let wireConversation = chatGateway.conversation
         let wireRuntime = chatGateway.runtime
         let wireBudgetReporting: any BudgetReporting = budgetReporting
+        let wirePendingApprovals = makePendingApprovalsProvider()
         let wireTenancyPolicy = tenancyPolicySettings
         
         // WebSocket route for chat
@@ -1370,6 +1437,7 @@ public actor APILayer {
                             conversationSession: wireConversation,
                             chatRuntime: wireRuntime,
                             budgetReporting: wireBudgetReporting,
+                            pendingApprovalsProvider: wirePendingApprovals,
                             modelManager: wireModelManager,
                             resumeTokenHMACSecret: wireResumeTokenSecret,
                             inboundDedupeDefaultTtlSeconds: wireInboundDedupeDefaultTtl,
@@ -1593,6 +1661,9 @@ public enum APIError: Error, Equatable {
 
     /// Thrown when strict tenancy is enabled but no access-token validator is configured
     case authenticationNotConfigured
+
+    /// Thrown when the configured HS256 access-token secret is shorter than `minimumBytes` UTF-8 bytes
+    case accessTokenSecretTooShort(minimumBytes: Int)
     
     /// Thrown when there's an error during server configuration
     case serverConfigurationError(String)
@@ -1602,6 +1673,8 @@ public enum APIError: Error, Equatable {
         case (.componentsNotInitialized, .componentsNotInitialized),
              (.authenticationNotConfigured, .authenticationNotConfigured):
             return true
+        case (.accessTokenSecretTooShort(let a), .accessTokenSecretTooShort(let b)):
+            return a == b
         case (.serverConfigurationError(let a), .serverConfigurationError(let b)):
             return a == b
         default:

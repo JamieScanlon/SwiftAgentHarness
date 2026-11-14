@@ -195,11 +195,11 @@ struct ConversationSearchRESTTests {
         let api = APILayer(port: 0)
         await api.setTenancyPolicySettings(TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: true))
         await api.setAPIAccessTokenAuthenticationSettings(
-            APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret")
+            APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret-0123456789abcdef")
         )
         let authA = try await HarnessAPIAccessTokenFactory.authorizationHeaderValue(
             ownerAccountID: ownerA,
-            settings: APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret")
+            settings: APIAccessTokenAuthenticationSettings(hs256Secret: "search-strict-tenant-secret-0123456789abcdef")
         )
 
         try await withApp { app in

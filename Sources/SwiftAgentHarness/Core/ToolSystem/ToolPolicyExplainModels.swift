@@ -59,7 +59,7 @@ enum ToolPolicyAvailabilityScope: String, Sendable, CaseIterable, Equatable {
 
     init?(blockReason: ToolAvailabilityBlockReason) {
         switch blockReason {
-        case .toolsDisabledForSend:
+        case .toolsDisabledForSend, .deferredUntilLoaded:
             return nil
         case .agentsDisabledForRemoteAgentTool:
             self = .enableAgents

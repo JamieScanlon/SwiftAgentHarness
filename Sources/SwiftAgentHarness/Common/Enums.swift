@@ -11,5 +11,6 @@ public enum ModelProtocol: String, Codable, Sendable {
     case openAIAPI
     case lmStudio
     case anthropic
+    case gemini
 }
 

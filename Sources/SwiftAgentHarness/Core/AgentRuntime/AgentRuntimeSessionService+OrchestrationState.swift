@@ -70,10 +70,9 @@ extension AgentRuntimeSessionService {
                 case .cancelled:
                     try await routingPersistRunLifecycleTranscriptMarker(
                         conversationID: cid,
-                        payload: RunLifecycleTranscriptMarkerPayload(
-                            kind: .run_cancelled,
+                        payload: .cancelled(
                             runId: rid,
-                            reason: markerKind ?? "user-cancel",
+                            fallbackReason: markerKind ?? "user-cancel",
                             terminalReason: terminalReason
                         )
                     )

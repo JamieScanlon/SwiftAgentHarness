@@ -162,7 +162,7 @@ actor SubAgentRemoteTransportSessionStore {
         Task { await SubAgentACPPermissionCoordinator.shared.cancelWaits(lifecycleID: request.lifecycleID) }
         let event = failedEvent(
             session: session,
-            error: "cancelled_by_operator"
+            error: request.reason ?? "cancelled_by_operator"
         )
         emit(event, lifecycleID: request.lifecycleID)
         return SubAgentTransportCancellationResult(

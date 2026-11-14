@@ -105,6 +105,41 @@ public struct AnthropicTextInferenceProvider: TextInferenceProviding {
     }
 }
 
+public struct GeminiTextInferenceProvider: TextInferenceProviding {
+    public let manifest: ProviderManifest
+    public let modelProtocol: ModelProtocol = .gemini
+
+    public init(manifest: ProviderManifest) {
+        self.manifest = manifest
+    }
+
+    public func staticCatalogEntries() -> [ProviderCatalogEntry] {
+        bundledStaticCatalogEntries(providerID: manifest.id)
+    }
+
+    public func makeAdapter(context: ProviderAdapterContext) -> any LLMProtocol {
+        ProviderLLMBridge.makeGeminiAdapter(context: context)
+    }
+
+    public func cacheTtlEligibility(_ context: ProviderSystemPromptContext) -> ProviderCacheTTLEligibility {
+        .short
+    }
+
+    public func selectPromptCacheBreakpoints(
+        _ candidates: [PromptCacheBreakpointCandidate],
+        context: ProviderPromptCacheBreakpointContext
+    ) -> ProviderPromptCacheBreakpointPlan {
+        PromptCacheBreakpointSelectionPolicy.implicit(candidates: candidates, context: context)
+    }
+
+    public func failoverError(_ error: Error) -> ProviderFailoverClassification {
+        if DefaultProviderFailoverClassifier.isCredentialExhausted(error) {
+            return .credentialExhausted
+        }
+        return DefaultProviderFailoverClassifier.classify(error)
+    }
+}
+
 public struct OllamaTextInferenceProvider: TextInferenceProviding {
     public let manifest: ProviderManifest
     public let modelProtocol: ModelProtocol = .ollama

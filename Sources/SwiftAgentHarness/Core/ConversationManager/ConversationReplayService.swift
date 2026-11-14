@@ -192,27 +192,13 @@ public actor ConversationReplayService {
                 var processedMessage = sourceMessage
                 if processedMessage.role == .tool, configuration.enableTools {
                     let toolCall = ConversationReplayRunner.toolCall(for: processedMessage, replayedMessages: replayedMessages)
-                    let rawResult = ToolResult(
-                        success: true,
-                        content: processedMessage.content,
-                        metadata: .object([:]),
-                        toolCallId: processedMessage.toolCallId
-                    )
+                    let rawResult = ToolResult(toolMessage: processedMessage)
                     let transformedResult = await messaging.applyToolResultTransform(
                         toolCall: toolCall,
                         result: rawResult,
                         conversationID: conversationID
                     )
-                    processedMessage = Message(
-                        id: processedMessage.id,
-                        role: processedMessage.role,
-                        content: transformedResult.content,
-                        timestamp: processedMessage.timestamp,
-                        images: processedMessage.images,
-                        toolCalls: processedMessage.toolCalls,
-                        toolCallId: processedMessage.toolCallId,
-                        responseFormat: processedMessage.responseFormat
-                    )
+                    processedMessage = processedMessage.replacingToolResult(transformedResult)
                 }
 
                 await messaging.appendMessagesToConversation([processedMessage], conversationID: conversationID)

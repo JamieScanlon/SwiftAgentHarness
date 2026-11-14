@@ -27,7 +27,8 @@ struct ToolSystemAvailabilitySemanticsTests {
         #expect(ToolAvailabilityBlockReason.recursionDepthExceeded.rawValue == "recursionDepthExceeded")
         #expect(ToolAvailabilityBlockReason.hostingRoutingPolicyDenied.rawValue == "hostingRoutingPolicyDenied")
         #expect(ToolAvailabilityBlockReason.routingToolWhitelist.rawValue == "routingToolWhitelist")
-        #expect(ToolAvailabilityBlockReason.allCases.count == 10)
+        #expect(ToolAvailabilityBlockReason.deferredUntilLoaded.rawValue == "deferredUntilLoaded")
+        #expect(ToolAvailabilityBlockReason.allCases.count == 11)
     }
 
     @Test("registry entries classify local mcp a2a and unknown sources deterministically")
@@ -848,6 +849,68 @@ struct ToolSystemAvailabilitySemanticsTests {
             subAgentToolClassifier: nil
         )
         #expect(decision.allowed == false)
+        #expect(decision.blockReason == .routingToolWhitelist)
+    }
+
+    @Test("computer-use specialist sees its computer-use tools")
+    func computerUseSpecialistSeesItsTools() async throws {
+        let definition = ComputerUseDelegateToolProvider.specialistDefinition(ComputerUseSpecialistProfile())
+        let registry = ModeRegistryTestSupport.makeService(seedingBuiltIns: true, modeProfileConfiguration: .empty)
+        let profile = try await registry.resolve(modeId: definition.modeProfileID)
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: makeToolsModel(),
+            systemPrompt: "sys",
+            interactionMode: profile.interactionMode,
+            routingPrefs: ConversationRoutingPrefs(
+                explicitToolPolicy: .allowlist(tools: definition.toolsAllow ?? [], skills: [])
+            )
+        )
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: ComputerUseToolProvider.observeToolName, description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let decision = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()).evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: ModePolicyContext(conversation: conversation, resolvedProfile: profile),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: .unrestricted,
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.blockReason == nil)
+        #expect(decision.isAdvertisedToModel)
+    }
+
+    @Test("routing tool allowlist hides approval-required tools not in whitelist")
+    func gatewayRoutingToolAllowlistHidesApprovalRequiredTools() {
+        let conversation = ModelConversation(
+            id: UUID(),
+            model: makeToolsModel(),
+            systemPrompt: "sys",
+            interactionMode: .agent,
+            routingPrefs: ConversationRoutingPrefs(
+                explicitToolPolicy: .allowlist(tools: ["computer_observe"], skills: [])
+            )
+        )
+        let entry = ToolRegistryEntry(
+            definition: ToolDefinition(name: "enter_plan_mode", description: "", parameters: [], type: .function),
+            source: .local
+        )
+        let decision = DefaultToolSystemGateway(visibilityGrants: ToolVisibilityGrantStore()).evaluateAvailability(
+            entry: entry,
+            conversation: conversation,
+            modePolicyContext: testModePolicyContext(
+                for: conversation,
+                tools: ModeProfileToolsSlice(allow: ["*"], deny: [], approvalPolicy: nil)
+            ),
+            configuration: .init(enableTools: true, enableAgents: true),
+            toolPolicy: ToolPolicyConfiguration(approvalRequiredToolNames: ["enter_plan_mode"]),
+            trustPolicy: .disabled,
+            subAgentToolClassifier: nil
+        )
+        #expect(decision.isAdvertisedToModel == false)
         #expect(decision.blockReason == .routingToolWhitelist)
     }
 

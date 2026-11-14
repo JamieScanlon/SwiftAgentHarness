@@ -3,6 +3,11 @@ import SwiftAgentKit
 import Testing
 @testable import SwiftAgentHarness
 
+private actor FirstPartialSignal {
+    private(set) var received = false
+    func mark() { received = true }
+}
+
 private actor PhaseRecorder {
     private(set) var phases: [ModelInvocationPhase] = []
     func append(_ phase: ModelInvocationPhase) {
@@ -160,8 +165,8 @@ struct LifecycleReportingLLMErroredTests {
         #expect(!phases.contains(.errored))
     }
 
-    /// FIXME: Flaky under full-suite load — cancellation timing can miss `.cancelled` in recorded phases.
-    /// Revisit with deterministic stream/cancellation synchronization before treating failures as regressions.
+    /// Waits on observable state (first partial received, terminal phase recorded) instead of fixed sleeps,
+    /// so full-suite load cannot make the assertions run before the lifecycle settles.
     @Test("stream: consumer cancellation records .cancelled, not .errored")
     func streamCancelledRecorded() async throws {
         let recorder = PhaseRecorder()
@@ -181,22 +186,21 @@ struct LifecycleReportingLLMErroredTests {
             coordinator: coordinator
         )
 
+        let firstPartial = FirstPartialSignal()
         let stream = scheduled.stream([], config: LLMRequestConfig())
         let consumer = Task {
-            var receivedFirst = false
             for try await result in stream {
                 if case .stream = result {
-                    receivedFirst = true
-                }
-                if receivedFirst {
-                    continue
+                    await firstPartial.mark()
                 }
             }
         }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await HarnessAsyncTestSupport.waitUntil { await firstPartial.received })
         consumer.cancel()
         _ = try? await consumer.value
-        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await HarnessAsyncTestSupport.waitUntil {
+            await recorder.phases.contains { [.cancelled, .errored, .done].contains($0) }
+        })
 
         let phases = await recorder.phases
         #expect(phases.contains(.cancelled))

@@ -38,9 +38,42 @@ public enum ExecApprovalDeliveryResult: Sendable, Equatable {
     case deferred(String)
 }
 
+/// An approval's result, and where it was answered.
+public struct ExecApprovalAnswer: Sendable, Equatable {
+    public var result: ExecApprovalDeliveryResult
+    /// The answering client said it is away from what the approval is about, such as a phone answering for a
+    /// Mac. Clients declare it themselves, so use it only to be stricter. `false` when no client answered.
+    public var answeredOffTarget: Bool
+
+    public init(result: ExecApprovalDeliveryResult, answeredOffTarget: Bool = false) {
+        self.result = result
+        self.answeredOffTarget = answeredOffTarget
+    }
+}
+
 public protocol ExecApprovalDelivering: Sendable {
     func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult
+    /// Asks like ``requestApproval(_:headless:)`` and also says where it was answered. A delivery that can't
+    /// tell answers as on the target.
+    func requestAnswer(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalAnswer
     func sendFollowup(approvalID: String, approved: Bool) async
+}
+
+extension ExecApprovalDelivering {
+    public func requestAnswer(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalAnswer {
+        ExecApprovalAnswer(result: await requestApproval(request, headless: headless))
+    }
+}
+
+extension ExecApprovalAnswer {
+    init(_ outcome: ApprovalOutcome) {
+        switch ExecApprovalStore.execResolution(from: outcome) {
+        case .approved:
+            self.init(result: .approved, answeredOffTarget: outcome.answeredOffTarget)
+        case .denied(let reason):
+            self.init(result: .denied(reason), answeredOffTarget: outcome.answeredOffTarget)
+        }
+    }
 }
 
 struct ExecApprovalPluginRoute: Sendable {
@@ -105,28 +138,34 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
     }
 
     func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
+        await requestAnswer(request, headless: headless).result
+    }
+
+    func requestAnswer(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalAnswer {
         if headless {
-            return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
+            return ExecApprovalAnswer(result: .headlessDenied("Approval required for exec in headless mode: \(request.command)"))
         }
         if request.allowsDurableBypass,
            await store.isDurableApproved(command: request.command) {
-            return .approved
+            return ExecApprovalAnswer(result: .approved)
         }
         await store.registerPending(
             id: request.id,
             command: request.command,
             scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
-            presentation: request.presentation
+            presentation: request.presentation,
+            title: request.title
         )
+        let deferred = ExecApprovalAnswer(result: .deferred(request.presentation.textFallback(approvalID: request.id)))
         guard let route else {
-            return .deferred(request.presentation.textFallback(approvalID: request.id))
+            return deferred
         }
         guard let approval = await route.approval() else {
             // The channel went away, or was paused, between building this delivery and needing it.
             // Falling back to the text approval flow is the same answer as having had no channel at
             // all, which is the honest one.
-            return .deferred(request.presentation.textFallback(approvalID: request.id))
+            return deferred
         }
         let sendResult = await approval.deliverApproval(
             presentation: request.presentation,
@@ -135,17 +174,12 @@ struct PluginChannelExecApprovalDelivery: ExecApprovalDelivering {
             target: route.target
         )
         guard case .sent = sendResult else {
-            return .deferred(request.presentation.textFallback(approvalID: request.id))
+            return deferred
         }
-        if let resolution = await store.waitForResolution(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
-            switch resolution {
-            case .approved:
-                return .approved
-            case .denied(let reason):
-                return .denied(reason)
-            }
+        if let outcome = await store.waitForOutcome(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
+            return ExecApprovalAnswer(outcome)
         }
-        return .deferred(request.presentation.textFallback(approvalID: request.id))
+        return deferred
     }
 
     func sendFollowup(approvalID: String, approved: Bool) async {
@@ -219,34 +253,35 @@ public struct DefaultExecApprovalDelivery: ExecApprovalDelivering {
     }
 
     public func requestApproval(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalDeliveryResult {
+        await requestAnswer(request, headless: headless).result
+    }
+
+    public func requestAnswer(_ request: ExecApprovalRequest, headless: Bool) async -> ExecApprovalAnswer {
         if headless {
-            return .headlessDenied("Approval required for exec in headless mode: \(request.command)")
+            return ExecApprovalAnswer(result: .headlessDenied("Approval required for exec in headless mode: \(request.command)"))
         }
         if request.allowsDurableBypass,
            await store.isDurableApproved(command: request.command) {
-            return .approved
+            return ExecApprovalAnswer(result: .approved)
         }
         await store.registerPending(
             id: request.id,
             command: request.command,
             scope: approvalScope,
             allowsDurableBypass: request.allowsDurableBypass,
-            presentation: request.presentation
+            presentation: request.presentation,
+            title: request.title
         )
         await onPending?(request)
-        if let resolution = await store.waitForResolution(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
-            switch resolution {
-            case .approved:
-                return .approved
-            case .denied(let reason):
-                return .denied(reason)
-            }
+        if let outcome = await store.waitForOutcome(id: request.id, timeoutSeconds: waitTimeoutSeconds) {
+            return ExecApprovalAnswer(outcome)
         }
         // With the indefinite default, a `nil` resolution only happens when the
         // awaiting run is stopped/cancelled. Notify so the surface can dismiss the
         // stale prompt.
+        await store.withdraw(id: request.id)
         await onCleared?(request.id)
-        return .denied("exec approval cancelled")
+        return ExecApprovalAnswer(result: .denied("exec approval cancelled"))
     }
 
     public func sendFollowup(approvalID: String, approved: Bool) async {}

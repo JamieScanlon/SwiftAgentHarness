@@ -133,7 +133,7 @@ Crucially: the runtime forwards the Pool's normalized model events through. It d
 
 Three reasons the loop terminates, in priority order:
 
-1. **External cancellation.** `signal.aborted` becomes true (user clicked stop, parent agent cancelled, conversation-level deadline hit). Loop breaks at the next safe point — between iterations, ideally — and emits `turn.cancelled`.
+1. **External cancellation.** `signal.aborted` becomes true (user clicked stop, parent agent cancelled, the Sub-Agent Pool's [idle timeout](../sub-agent-pool/#idle-timeout-liveness-not-progress) fired on this delegate, conversation-level deadline hit). Loop breaks at the next safe point — between iterations, ideally — and emits `turn.cancelled`.
 2. **Natural stop from the model.** The assistant message has no tool calls and the stop reason is terminal (`stop_sequence`, `end_turn`). Loop breaks, emits `turn.completed`.
 3. **Bounded stop.** Iteration count exceeded `maxIterations` (default ~25), context budget exhausted, or the Tool System returned a "halt" signal (e.g., a tool that explicitly asks the loop to stop). Loop breaks, emits `turn.bounded` with the reason.
 

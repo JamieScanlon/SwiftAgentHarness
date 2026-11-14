@@ -18,6 +18,9 @@ enum ConversationStateSnapshotBuilder {
     /// Resolves projection-policy-derived context budget for a conversation.
     typealias ProjectionBudgetProvider = @Sendable (UUID) async -> ConversationContextBudget?
 
+    /// Resolves the approvals still waiting in a conversation.
+    typealias PendingApprovalsProvider = @Sendable (UUID) async -> [PendingApprovalSummary]
+
     static func build(
         conversationID: UUID,
         conversation: APILayerConversationManaging,
@@ -26,6 +29,7 @@ enum ConversationStateSnapshotBuilder {
         activeCallProvider: ActiveCallProvider? = nil,
         projectedCostProvider: ProjectedCostProvider? = nil,
         projectionBudgetProvider: ProjectionBudgetProvider? = nil,
+        pendingApprovalsProvider: PendingApprovalsProvider? = nil,
         orchestrationOverride: ConversationOrchestrationState? = nil
     ) async -> ConversationStatePayload {
         let sessionSelected = false
@@ -51,6 +55,7 @@ enum ConversationStateSnapshotBuilder {
         let activeCall = await activeCallProvider?(conversationID)
         let projectedCostUSD = await projectedCostProvider?(conversationID)
         let projectionBudget = await projectionBudgetProvider?(conversationID)
+        let pendingApprovals = await pendingApprovalsProvider?(conversationID) ?? []
         let contextBudget = makeContextBudget(
             projectionBudget: projectionBudget,
             orchestration: orchestration
@@ -81,7 +86,8 @@ enum ConversationStateSnapshotBuilder {
             branchChildren: row.branchChildren.isEmpty ? nil : row.branchChildren,
             resourceRunStatus: row.resourceRunStatus,
             currentRunID: row.currentRunID,
-            attachmentsCatalog: row.attachmentsCatalog.isEmpty ? nil : row.attachmentsCatalog
+            attachmentsCatalog: row.attachmentsCatalog.isEmpty ? nil : row.attachmentsCatalog,
+            pendingApprovals: pendingApprovals.isEmpty ? nil : pendingApprovals
         )
     }
 

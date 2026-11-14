@@ -17,7 +17,7 @@ enum ConversationEventsReplayClassifier {
             return .persistedMessage
         case .checkpoint:
             return .persistedCheckpoint
-        case .contentDelta, .streamDone, .modelLifecycle, .runtimeLifecycle, .surfaceIntent:
+        case .contentDelta, .streamDone, .modelLifecycle, .runtimeLifecycle, .surfaceIntent, .routeReceipt:
             return .transient
         }
     }

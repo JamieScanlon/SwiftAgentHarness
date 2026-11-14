@@ -118,7 +118,7 @@ struct PublicAPISurfaceTests {
         _ = AgentRuntimeTurnConfiguration(enableTools: true)
         _ = HTTPPreconditionPolicySettings(strictMode: true)
         _ = TenancyPolicySettings(requireAuthenticatedOwnerOnMutations: false)
-        _ = APIAccessTokenAuthenticationSettings(hs256Secret: "secret")
+        _ = APIAccessTokenAuthenticationSettings(hs256Secret: "public-api-surface-secret-0123456789abcdef")
         _ = TriggerTaskRunPorts(
             append: { _, _, _ in UUID() },
             latestUndelivered: { _ in nil },

@@ -12,7 +12,7 @@
     "sessionSelected": { "type": "boolean" },
     "topic": { "type": "string" },
     "interactionMode": { "type": "string" },
-    "modeProfileID": { "type": "string" }
+    "modeProfileID": { "type": "string" },
     "modelID": { "type": "string", "format": "uuid" },
     "modelName": { "type": "string" },
     "messageCount": { "type": "integer" },
@@ -56,7 +56,24 @@
       }
     },
     "resourceRunStatus": { "type": "string" },
-    "currentRunID": { "type": "string", "format": "uuid" }
+    "currentRunID": { "type": "string", "format": "uuid" },
+    "pendingApprovals": {
+      "description": "Approvals still waiting on the user, oldest first. Omitted when none are waiting. Rebroadcast whenever one is raised, resolved, or withdrawn, so a client that connects late can show and resolve it with POST /api/approvals/{approvalID}.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["approvalID", "kind", "title", "requestedAt"],
+        "properties": {
+          "approvalID": { "type": "string" },
+          "kind": { "type": "string", "description": "What is being approved: `exec` (a command, including a computer-use grant or confirmation). Clients should tolerate new kinds." },
+          "title": { "type": "string" },
+          "command": { "type": "string" },
+          "presentation": { "$ref": "approval-presentation.schema.json" },
+          "requestedAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      }
+    }
   },
   "additionalProperties": true
 }

@@ -14,9 +14,20 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["text", "context", "buttons"]
+            "enum": ["text", "context", "image", "buttons"]
           },
           "text": { "type": "string" },
+          "ref": {
+            "type": "string",
+            "description": "For an image block: a blob id of the card's conversation (fetched from GET /api/conversations/{id}/blobs/{blobID}) or a data: URL."
+          },
+          "alt": {
+            "type": "string",
+            "description": "For an image block, required: the decision-relevant facts in words. Surfaces that can't show images render only this."
+          },
+          "mime": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
           "buttons": {
             "type": "array",
             "items": {

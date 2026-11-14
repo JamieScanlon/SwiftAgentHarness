@@ -219,9 +219,13 @@ When `budgetTokens` is not specified on a `{ level }` config, the Pool looks it 
 
 **Sub-agent suppression.** Sub-agents inherit `"disabled"` as their thinking default regardless of what the parent conversation has configured, unless their spawned mode profile explicitly sets a `thinkingConfig`. Fork children should suppress thinking to control output token costs. The harness should not silently propagate a high-budget thinking config from a planning parent into every spawned sub-agent.
 
-**Classifier and background calls.** Calls made by the Pool for non-user-blocking work (yolo/permission classification, background summarization, memory consolidation) should always resolve to `"disabled"` regardless of the conversation's `thinkingConfig`, since the quality uplift does not justify the latency and token cost for those tasks.
+**Classifier and background calls.** Calls made by the Pool for non-user-blocking work (yolo/permission classification, background summarization, memory consolidation) resolve to `"disabled"` regardless of the conversation's `thinkingConfig`, since the quality uplift does not justify the latency and token cost for those tasks. Permission and safety classification is **always** disabled. Other background roles (summarization, compaction) may opt in only through an explicit `thinking` on their role binding — see [model-classes § Thinking rule for roles](./model-classes.md#roles-the-selection-surface-for-internal-callers).
 
 The provider adapter is responsible for translating the resolved `ThinkingConfig` into provider-specific wire params (e.g., Anthropic's `thinking: { type: "enabled", budget_tokens: N }` or `{ type: "auto" }` for adaptive). Nothing above the adapter sees provider-specific thinking shapes.
+
+### Model classes beyond chat
+
+The `ModelEntry` above describes a generative chat model precisely, and that is all it describes. Decision models (calibrated closed-question classifiers), embedders, rerankers, media generators, speech models, realtime sessions, and document parsers each have a different call contract, interaction pattern, and pricing unit. [`model-classes.md`](./model-classes.md) generalizes the registry: entries carry one or more **contract profiles** (`generate | decide | embed | rerank | render | transcribe | session | parse`), cost becomes a **unit-typed price vector**, internal callers select by **role** (`main`, `background-small`, `compactor`, `gatekeeper`, `embedder:<space>`, …) rather than by query, and every call emits a **route receipt**. The `capabilities` block above becomes the feature, limit and media facets of the `generate` contract profile, and the registry keeps it as a derived read-only view so existing `ModelQuery` callers keep working (they compile to a `generate` `ContractQuery`).
 
 ### Provider adapter interface
 

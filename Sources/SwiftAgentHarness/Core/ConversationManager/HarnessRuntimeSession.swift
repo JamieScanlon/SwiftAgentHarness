@@ -150,7 +150,10 @@ public actor HarnessRuntimeSession {
         compactionProviderFactory: (any ContextCompactionProviderFactoring)? = nil,
         modeRegistry: (any ModeRegistryAccessing)? = nil,
         workspacePolicy: HarnessWorkspacePolicy = .default,
-        tenancyPolicy: TenancyPolicySettings = .disabled
+        tenancyPolicy: TenancyPolicySettings = .disabled,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
@@ -219,7 +222,10 @@ public actor HarnessRuntimeSession {
             ),
             runtimeExecutorFactory: runtimeExecutorFactory,
             tenancyPolicy: tenancyPolicy,
-            workspacePolicy: workspacePolicy
+            workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -240,7 +246,10 @@ public actor HarnessRuntimeSession {
         modeRegistry: any ModeRegistryAccessing,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         tenancyPolicy: TenancyPolicySettings = .disabled,
-        workspacePolicy: HarnessWorkspacePolicy = .default
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -264,7 +273,10 @@ public actor HarnessRuntimeSession {
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             tenancyPolicy: tenancyPolicy,
-            workspacePolicy: workspacePolicy
+            workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -288,7 +300,10 @@ public actor HarnessRuntimeSession {
         modeRegistry: any ModeRegistryAccessing,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         tenancyPolicy: TenancyPolicySettings = .disabled,
-        workspacePolicy: HarnessWorkspacePolicy = .default
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -318,7 +333,10 @@ public actor HarnessRuntimeSession {
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: AgentRuntimeExecutorFactories.defaultInternal,
             tenancyPolicy: tenancyPolicy,
-            workspacePolicy: workspacePolicy
+            workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -343,7 +361,10 @@ public actor HarnessRuntimeSession {
         runtimeLaneConfiguration: RuntimeLaneConfiguration,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
         tenancyPolicy: TenancyPolicySettings = .disabled,
-        workspacePolicy: HarnessWorkspacePolicy = .default
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         makeProduction(
             persistenceDomain: persistenceDomain,
@@ -373,7 +394,10 @@ public actor HarnessRuntimeSession {
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: runtimeExecutorFactory,
             tenancyPolicy: tenancyPolicy,
-            workspacePolicy: workspacePolicy
+            workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -399,7 +423,10 @@ public actor HarnessRuntimeSession {
         runtimeLaneConfiguration: RuntimeLaneConfiguration,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory,
         tenancyPolicy: TenancyPolicySettings = .disabled,
-        workspacePolicy: HarnessWorkspacePolicy = .default
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) -> (session: HarnessRuntimeSession, services: HarnessRuntimeSessionFactory.Services) {
         let contextAssemblyRuntime = ContextAssemblyRuntimeFacade(
             persistenceDomain: persistenceDomain,
@@ -451,6 +478,9 @@ public actor HarnessRuntimeSession {
             delegateCostTracker: delegateCostTracker,
             runtimeExecutorFactory: runtimeExecutorFactory,
             workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector,
             logger: logger
         )
         let (session, services) = HarnessRuntimeSessionFactory.makeSession(
@@ -501,7 +531,10 @@ public actor HarnessRuntimeSession {
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
         tenancyPolicy: TenancyPolicySettings = .disabled,
-        workspacePolicy: HarnessWorkspacePolicy = .default
+        workspacePolicy: HarnessWorkspacePolicy = .default,
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         // One sink, shared by the budget gate that prices a completion and the turn loop that
         // records what it cost. `StandardModelLLMFactory` is a struct copied several times on the
@@ -587,6 +620,9 @@ public actor HarnessRuntimeSession {
             delegateCostTracker: delegateCostTracker,
             runtimeExecutorFactory: runtimeExecutorFactory,
             workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector,
             logger: logger
         )
         let services = HarnessRuntimeSessionFactory.makeServices(
@@ -707,7 +743,10 @@ public actor HarnessRuntimeSession {
         localAgents: LocalAgentConfiguration = .empty,
         runtimeLaneConfiguration: RuntimeLaneConfiguration = .default,
         runtimeExecutorFactory: @escaping AgentRuntimeExecutorFactory = AgentRuntimeExecutorFactories.defaultInternal,
-        workspacePolicy: HarnessWorkspacePolicy = HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true)
+        workspacePolicy: HarnessWorkspacePolicy = HarnessWorkspacePolicy(allowAmbientWorkspaceFallback: true),
+        toolApprovalClassifierGate: ToolApprovalClassifierGate? = nil,
+        decisionConsumers: DecisionConsumers = .none,
+        turnModelSelector: ModelPoolTurnSelector? = nil
     ) {
         let (resolvedScheduler, resolvedCoordinator) = ModelCallScheduler.resolveInvocationTrackingPair(
             scheduler: callScheduler,
@@ -749,7 +788,10 @@ public actor HarnessRuntimeSession {
             modeRegistry: modeRegistry ?? Self.defaultModeRegistry(workspacePolicy: workspacePolicy),
             runtimeLaneConfiguration: runtimeLaneConfiguration,
             runtimeExecutorFactory: runtimeExecutorFactory,
-            workspacePolicy: workspacePolicy
+            workspacePolicy: workspacePolicy,
+            toolApprovalClassifierGate: toolApprovalClassifierGate,
+            decisionConsumers: decisionConsumers,
+            turnModelSelector: turnModelSelector
         )
     }
 
@@ -783,6 +825,40 @@ public actor HarnessRuntimeSession {
             return
         }
         await memoryService.drainPendingWork(timeoutMs: timeoutMs)
+    }
+
+    /// Turns computer use on: conversations gain a `delegate_computer_use` tool that runs the computer-use
+    /// specialist against the configuration's display targets. Installing again replaces the configuration.
+    public nonisolated func installComputerUse(_ configuration: ComputerUseConfiguration) {
+        let orchestrator = services.orchestratorRuntimeService
+        installComputerUse(configuration) { conversationID, intent in
+            await orchestrator.publishSurfaceIntent(intent, conversationID: conversationID)
+        }
+    }
+
+    nonisolated func installComputerUse(
+        _ configuration: ComputerUseConfiguration,
+        publish: @escaping ComputerUseOversightCoordinator.Publish
+    ) {
+        let installation = runtimeDependencies.computerUse
+        installation.install(configuration, publish: publish)
+        installation.replays.setDiscovery(ComputerUseReplayDiscovery.discovery(
+            persistence: runtimeDependencies.persistenceDomain,
+            installation: installation
+        ))
+    }
+
+    /// Per-conversation computer-use controls for an in-process surface: answer requests, stop, take over.
+    public nonisolated var computerUseControl: ComputerUseControlService {
+        ComputerUseControlService(installation: runtimeDependencies.computerUse)
+    }
+
+    /// The computer-use kill switch: ends every live specialist session and releases its lease. Bind it to the
+    /// surface's stop control and global stop key; no model-facing tool can reach it.
+    public nonisolated func stopComputerUse() async {
+        for session in await runtimeDependencies.computerUse.sessions.all {
+            await session.stop()
+        }
     }
 
     internal func setDelegateCostTracker(_ tracker: (any DelegateCostTracking)?) {

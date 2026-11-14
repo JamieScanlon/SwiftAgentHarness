@@ -1,0 +1,239 @@
+import Foundation
+import Synchronization
+
+/// How the computer-use specialist sub-agent runs.
+public struct ComputerUseSpecialistProfile: Sendable {
+    /// Mode profile the child runs under; its tool surface is narrowed to the computer-use family regardless.
+    public var modeProfileID: String
+    /// The `computer-use` role binding. `nil` uses the parent conversation's model when it can see images and
+    /// call tools.
+    public var modelRef: String?
+    /// The `vision-describe` role binding, used only when the computer-use model can't see images: it answers
+    /// `computer_describe` questions about the screen. `nil` uses any registered model that can see images.
+    public var visionDescribeModelRef: String?
+    /// The `grounder` role binding, offered as `computer_locate` to find a point from a description. `nil` leaves the
+    /// role off. The grounder's coordinates are read from its `computer-use` feature, pixels by default.
+    public var grounderModelRef: String?
+    /// How long the child run may continue after its session ends, to report what it did. The run has no timeout
+    /// of its own: it ends with its lease, so extensions the lease grants are never cut short.
+    public var cleanupGraceSeconds: TimeInterval
+    /// Liveness for the child run: no event for this long cancels it with reason `idle-timeout`. Size it to the
+    /// computer-use model, at least twice its slowest turn, since some providers stream nothing while it thinks.
+    /// Time spent waiting on the user doesn't count. `nil` turns it off.
+    public var idleTimeoutSeconds: TimeInterval?
+
+    public init(
+        modeProfileID: String = "subagent-computer-use",
+        modelRef: String? = nil,
+        visionDescribeModelRef: String? = nil,
+        grounderModelRef: String? = nil,
+        cleanupGraceSeconds: TimeInterval = 30,
+        idleTimeoutSeconds: TimeInterval? = 180
+    ) {
+        self.modeProfileID = modeProfileID
+        self.modelRef = modelRef
+        self.visionDescribeModelRef = visionDescribeModelRef
+        self.grounderModelRef = grounderModelRef
+        self.cleanupGraceSeconds = max(0, cleanupGraceSeconds)
+        self.idleTimeoutSeconds = idleTimeoutSeconds.flatMap { $0 > 0 ? $0 : nil }
+    }
+}
+
+/// Everything a host supplies to turn computer use on. Install it with
+/// ``HarnessRuntimeSession/installComputerUse(_:)``.
+public struct ComputerUseConfiguration: Sendable {
+    public var registry: DisplayTargetRegistry
+    public var defaults: ComputerUseSpecialistDefaults
+    /// Shows the one start-of-session grant dialog, and says where it was answered.
+    public var answerGrants: ComputerUseGrantAnswerer
+    /// Per-action confirmation cards for consequential actions.
+    public var approvals: (any ExecApprovalDelivering)?
+    public var intentChecker: ComputerUseIntentChecker?
+    public var oversight: (any ComputerUseOversight)?
+    /// In-process observer of every specialist's activity, such as the host's "agent active" HUD. Surfaces get
+    /// the same updates as `computerUseActivity` intents on the user's conversation.
+    public var activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)?
+    public var retention: ComputerUseRetention
+    public var specialist: ComputerUseSpecialistProfile
+    /// Refuses computer-use models whose vendor stores the conversation (`dataRetention: "vendor-stored"`), for
+    /// hosts whose users or operators require that screenshots not be retained by the vendor.
+    public var requiresZeroRetention: Bool
+
+    /// With an approver that doesn't say where it was answered, which is taken as on the target.
+    public init(
+        registry: DisplayTargetRegistry,
+        defaults: ComputerUseSpecialistDefaults,
+        approveGrants: @escaping ComputerUseGrantApprover,
+        approvals: (any ExecApprovalDelivering)? = nil,
+        intentChecker: ComputerUseIntentChecker? = nil,
+        oversight: (any ComputerUseOversight)? = nil,
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
+        retention: ComputerUseRetention = ComputerUseRetention(),
+        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
+        requiresZeroRetention: Bool = false
+    ) {
+        self.init(
+            registry: registry,
+            defaults: defaults,
+            answerGrants: { await approveGrants($0).map { ComputerUseGrantAnswer(grants: $0) } },
+            approvals: approvals,
+            intentChecker: intentChecker,
+            oversight: oversight,
+            activityObserver: activityObserver,
+            retention: retention,
+            specialist: specialist,
+            requiresZeroRetention: requiresZeroRetention
+        )
+    }
+
+    public init(
+        registry: DisplayTargetRegistry,
+        defaults: ComputerUseSpecialistDefaults,
+        answerGrants: @escaping ComputerUseGrantAnswerer,
+        approvals: (any ExecApprovalDelivering)? = nil,
+        intentChecker: ComputerUseIntentChecker? = nil,
+        oversight: (any ComputerUseOversight)? = nil,
+        activityObserver: (@Sendable (ComputerUseSurfaceIntentPayload) async -> Void)? = nil,
+        retention: ComputerUseRetention = ComputerUseRetention(),
+        specialist: ComputerUseSpecialistProfile = ComputerUseSpecialistProfile(),
+        requiresZeroRetention: Bool = false
+    ) {
+        self.registry = registry
+        self.defaults = defaults
+        self.answerGrants = answerGrants
+        self.approvals = approvals
+        self.intentChecker = intentChecker
+        self.oversight = oversight
+        self.activityObserver = activityObserver
+        self.retention = retention
+        self.specialist = specialist
+        self.requiresZeroRetention = requiresZeroRetention
+    }
+}
+
+/// One live specialist session and the user's conversation it reports to.
+struct ComputerUseSessionEntry: Sendable {
+    var session: ComputerUseSession
+    var parentConversationID: UUID
+    var lifecycleID: String
+    var targetLabel: String
+}
+
+/// Live specialist sessions, keyed by the child conversation that drives them.
+actor ComputerUseSessionDirectory {
+    private var entries: [UUID: ComputerUseSessionEntry] = [:]
+
+    func register(_ entry: ComputerUseSessionEntry, for conversationID: UUID) {
+        entries[conversationID] = entry
+    }
+
+    func session(for conversationID: UUID) -> ComputerUseSession? {
+        entries[conversationID]?.session
+    }
+
+    func remove(for conversationID: UUID) {
+        entries.removeValue(forKey: conversationID)
+    }
+
+    var all: [ComputerUseSession] {
+        entries.values.map(\.session)
+    }
+
+    /// Sessions working for a user's conversation.
+    func entries(parent conversationID: UUID) -> [ComputerUseSessionEntry] {
+        entries.values.filter { $0.parentConversationID == conversationID }.sorted { $0.lifecycleID < $1.lifecycleID }
+    }
+
+    /// The child conversations of the live sessions reporting to `conversationID`.
+    func children(parent conversationID: UUID) -> [UUID] {
+        entries.filter { $0.value.parentConversationID == conversationID }.map(\.key)
+    }
+}
+
+/// The host's computer-use configuration, shared by tool building, delegate dispatch, and the control plane.
+final class ComputerUseInstallation: Sendable {
+    private let state = Mutex<ComputerUseConfiguration?>(nil)
+    private let coordinatorState = Mutex<ComputerUseOversightCoordinator?>(nil)
+    private let publishState = Mutex<ComputerUseOversightCoordinator.Publish?>(nil)
+    private let blobReaderState = Mutex<(@Sendable (String) throws -> Data)?>(nil)
+    let sessions = ComputerUseSessionDirectory()
+    let replays = ComputerUseReplayIndex()
+    let blobs = ComputerUseBlobLedger()
+    let nativeFailures = ComputerUseNativeFailures()
+
+    init() {}
+
+    var configuration: ComputerUseConfiguration? {
+        state.withLock { $0 }
+    }
+
+    /// Questions and handoffs routed to the user's surfaces; set when computer use is installed.
+    var coordinator: ComputerUseOversightCoordinator? {
+        coordinatorState.withLock { $0 }
+    }
+
+    /// Publishes a surface intent to a conversation's events topic.
+    var publish: ComputerUseOversightCoordinator.Publish? {
+        publishState.withLock { $0 }
+    }
+
+    /// Reads a stored blob, for serving the images live runs cite; set once a run stores one.
+    var readBlob: (@Sendable (String) throws -> Data)? {
+        get { blobReaderState.withLock { $0 } }
+        set { blobReaderState.withLock { $0 = newValue } }
+    }
+
+    var retention: ComputerUseRetention {
+        configuration?.retention ?? ComputerUseRetention()
+    }
+
+    /// When images a conversation's tool results store should expire, or `nil` for the durable lane. A live
+    /// specialist's session holds them a release TTL past its lease's hard limit; the reference moves with the time
+    /// ceiling and is reset at release.
+    func toolImageExpiry(conversationID: UUID) async -> Date? {
+        guard let session = await sessions.session(for: conversationID) else { return nil }
+        return sessionImageExpiry(endsAt: await session.endsAt)
+    }
+
+    /// The session's reference on its images for a lease ending at `endsAt`.
+    func sessionImageExpiry(endsAt: Date) -> Date {
+        let grace = configuration?.specialist.cleanupGraceSeconds ?? 0
+        return endsAt.addingTimeInterval(grace + retention.afterRelease.timeInterval)
+    }
+
+    func install(_ configuration: ComputerUseConfiguration, publish: ComputerUseOversightCoordinator.Publish? = nil) {
+        state.withLock { $0 = configuration }
+        if let publish {
+            publishState.withLock { $0 = publish }
+            coordinatorState.withLock { $0 = ComputerUseOversightCoordinator(publish: publish) }
+        }
+    }
+}
+
+/// Who started the run that asked for computer use. Host targets need an operator-initiated run with the user
+/// present.
+struct ComputerUseRunOrigin: Sendable, Equatable {
+    var initiator: ComputerUseInitiator
+    var userPresent: Bool
+
+    static let interactiveOwner = ComputerUseRunOrigin(initiator: .operator, userPresent: true)
+
+    init(initiator: ComputerUseInitiator, userPresent: Bool) {
+        self.initiator = initiator
+        self.userPresent = userPresent
+    }
+
+    init(laneOrigin: RunLaneOriginKind, senderIsOwner: Bool?) {
+        switch laneOrigin {
+        case .interactive, .pendingCompletionResume, .planExitDenialResume:
+            initiator = senderIsOwner == false ? .nonOwner : .operator
+            userPresent = true
+        case .trigger:
+            initiator = .trigger
+            userPresent = false
+        case .subagentSpawn:
+            initiator = senderIsOwner == false ? .nonOwner : .operator
+            userPresent = false
+        }
+    }
+}

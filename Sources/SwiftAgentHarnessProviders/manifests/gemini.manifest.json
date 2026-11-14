@@ -1,0 +1,42 @@
+{
+  "id": "gemini",
+  "label": "Google Gemini",
+  "providerEndpoints": [
+    {
+      "id": "gemini-default",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta"
+    }
+  ],
+  "providerAuthAliases": [
+    "gemini",
+    "google"
+  ],
+  "providerAuthChoices": [
+    {
+      "id": "api-key",
+      "label": "API Key",
+      "authType": "api-key",
+      "envVars": [
+        "SAH_GEMINI_API_KEY",
+        "GEMINI_API_KEY"
+      ],
+      "cliFlag": "--gemini-key",
+      "cliOption": "geminiKey",
+      "onboardingScopes": []
+    }
+  ],
+  "modelSupport": {
+    "modelPrefixes": [
+      "gemini-"
+    ]
+  },
+  "cliBackends": [],
+  "uiHints": {
+    "iconRef": "gemini-mark",
+    "category": "frontier"
+  },
+  "capabilitySlots": [
+    "text-inference"
+  ],
+  "default": true
+}

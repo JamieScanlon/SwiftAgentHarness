@@ -348,6 +348,8 @@ Three properties worth borrowing:
 
 The anti-pattern is conflating the exec sandbox image with the browser sandbox image. Browsers need GPU pass-through, Chromium dependencies, larger disk; exec sandboxes need a minimal Debian. Different containers, different lifecycles.
 
+The browser sandbox is one member of a wider family: **display targets** (managed browser, desktop container, macOS/Linux VM, host desktop, paired device) that share three things with sandbox backends: the backend id namespace, the persistent-runtime lifecycle (`describeRuntime`, `removeRuntime`, and pruning, which apply only to targets that outlive a lease, such as VMs and desktop containers), and the observer-token issuer. They have their own factory and expose a sibling observe/act contract (`DisplayTarget`) rather than extending `SandboxBackendHandle`. Their contract, grants, and safety model live in [Computer Use](../computer-use/).
+
 ### Local execution as a degenerate backend
 
 The harness must be runnable without Docker, for development and for "just on my laptop" use cases. The right shape: local execution is **a backend like any other** — same `SandboxBackendHandle` contract, same registry shape, just with a no-op container layer.

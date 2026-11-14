@@ -49,6 +49,14 @@ public final class ApprovalDialogComponent: TUIComponent, Focusable {
                 for wrapped in ANSIWrap.wrap(ANSIStyle.dim(value), width: innerWidth) {
                     lines.append(ANSIStyle.finishLine(DialogChrome.content(wrapped, width: boxWidth)))
                 }
+            case .image(let image):
+                // The overlay is composited into base rows, so graphics escapes can't be placed in it.
+                let placeholder = ANSIStyle.dim(TUITextSanitizer.sanitizeSingleLine(InlineImageRenderer.textPlaceholder(
+                    InlineImage(data: image.inlineData ?? Data(), width: image.width ?? 0, height: image.height ?? 0, altText: image.alt)
+                )))
+                for wrapped in ANSIWrap.wrap(placeholder, width: innerWidth) {
+                    lines.append(ANSIStyle.finishLine(DialogChrome.content(wrapped, width: boxWidth)))
+                }
             case .buttons:
                 break
             }

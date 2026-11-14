@@ -10,6 +10,8 @@ public struct MessageToolProvider: ToolProvider, ToolDescriptorHinting {
     private let deliveryRegistry: MessageOutputDeliveryRegistry
     private let resolveConversationID: @Sendable () async -> UUID?
     private let resolveDeliveryMetadata: @Sendable () async -> MessageOutputDeliveryMetadata
+    /// Outbound guardrail battery: `block` withholds delivery, `review` delivers and is recorded by the battery.
+    private let outboundGuardrail: (@Sendable (_ text: String, _ conversationID: UUID) async -> GuardrailVerdict)?
     private let logger: Logger?
 
     public var name: String { "MessageOutput" }
@@ -24,11 +26,13 @@ public struct MessageToolProvider: ToolProvider, ToolDescriptorHinting {
         deliveryRegistry: MessageOutputDeliveryRegistry = .shared,
         resolveConversationID: @escaping @Sendable () async -> UUID?,
         resolveDeliveryMetadata: @escaping @Sendable () async -> MessageOutputDeliveryMetadata,
+        outboundGuardrail: (@Sendable (_ text: String, _ conversationID: UUID) async -> GuardrailVerdict)? = nil,
         logger: Logger? = nil
     ) {
         self.deliveryRegistry = deliveryRegistry
         self.resolveConversationID = resolveConversationID
         self.resolveDeliveryMetadata = resolveDeliveryMetadata
+        self.outboundGuardrail = outboundGuardrail
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .custom(subsystem: "SwiftAgentHarness", component: "MessageToolProvider")
         )
@@ -89,6 +93,14 @@ public struct MessageToolProvider: ToolProvider, ToolDescriptorHinting {
             throw MessageToolError.unknownTool(toolCall.name)
         }
         let presentation = try parsePresentation(from: toolCall.arguments)
+        if let conversationID = await resolveConversationID(), let outboundGuardrail,
+           case .block(let ids) = await outboundGuardrail(presentation.textFallback(), conversationID) {
+            return ToolResult(
+                success: false,
+                content: "Delivery withheld: the message matched a guardrail (\(ids.joined(separator: ", "))). Revise it before sending.",
+                toolCallId: toolCall.id
+            )
+        }
         if let conversationID = await resolveConversationID() {
             var metadata = await resolveDeliveryMetadata()
             metadata.toolCallID = toolCall.id

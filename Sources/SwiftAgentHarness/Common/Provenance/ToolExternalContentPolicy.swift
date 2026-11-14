@@ -5,11 +5,15 @@ struct ToolExternalContentDecision: Sendable, Equatable {
     var source: ExternalContentSourceLabel
     var includeSecurityPreamble: Bool
     var from: String?
+    /// The tool envelopes its own external text and leaves its own guidance outside, so the result isn't wrapped
+    /// again as a whole. Probes still read it as external content.
+    var selfEnveloping = false
 }
 
 enum ToolExternalContentPolicy {
     private static let exemptTools: Set<String> = baseExemptTools
         .union(ToolControlPlaneClassification.TriggerTools.statusOnlyResults)
+        .union(ComputerUseToolProvider.harnessToolNames)
 
     private static let baseExemptTools: Set<String> = [
         TerminationToolProvider.finishToolName,
@@ -62,6 +66,14 @@ enum ToolExternalContentPolicy {
         }
         if webSearchTools.contains(normalized) {
             return wrapDecision(source: .webSearch, from: toolName, preamble: true)
+        }
+        if ComputerUseToolProvider.ownScreenToolNames.contains(normalized) {
+            var decision = wrapDecision(source: .screen, from: toolName, preamble: true)
+            decision.selfEnveloping = true
+            return decision
+        }
+        if ComputerUseToolProvider.screenToolNames.contains(normalized) {
+            return wrapDecision(source: .screen, from: toolName, preamble: true)
         }
         if filesystemReadTools.contains(normalized) {
             return wrapDecision(source: .api, from: toolName, preamble: false)

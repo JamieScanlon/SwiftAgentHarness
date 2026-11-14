@@ -78,10 +78,11 @@ struct ProviderManifestDecodeTests {
 
 @Suite("ProviderCapabilitySlot")
 struct ProviderCapabilitySlotTests {
-    @Test("All eleven slots are enumerated")
+    @Test("All twelve slots are enumerated")
     func allSlots() {
-        #expect(ProviderCapabilitySlot.allCases.count == 11)
+        #expect(ProviderCapabilitySlot.allCases.count == 12)
         #expect(ProviderCapabilitySlot.allCases.contains(.textInference))
         #expect(ProviderCapabilitySlot.allCases.contains(.webSearch))
+        #expect(ProviderCapabilitySlot.allCases.contains(.decision))
     }
 }

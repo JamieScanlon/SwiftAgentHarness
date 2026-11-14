@@ -144,6 +144,7 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         AgentRuntimeLifecycleEmitter
     ) async -> Void
     let isHaltingFn: @Sendable (String, [ToolRegistryEntry]) async -> Bool
+    let batchHaltedFn: (@Sendable (String) async -> Bool)?
 
     init(
         consumeApprovalTimeoutsFn: @escaping @Sendable (
@@ -187,7 +188,8 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
             UUID,
             AgentRuntimeLifecycleEmitter
         ) async -> Void,
-        isHaltingFn: @escaping @Sendable (String, [ToolRegistryEntry]) async -> Bool
+        isHaltingFn: @escaping @Sendable (String, [ToolRegistryEntry]) async -> Bool,
+        batchHaltedFn: (@Sendable (String) async -> Bool)? = nil
     ) {
         self.consumeApprovalTimeoutsFn = consumeApprovalTimeoutsFn
         self.effectiveToolsFn = effectiveToolsFn
@@ -195,6 +197,11 @@ struct SessionRuntimeToolPort: RuntimeToolPort {
         self.dispatchBatchFn = dispatchBatchFn
         self.dispatchApprovalFn = dispatchApprovalFn
         self.isHaltingFn = isHaltingFn
+        self.batchHaltedFn = batchHaltedFn
+    }
+
+    func batchHalted(afterToolCallID toolCallID: String) async -> Bool {
+        await batchHaltedFn?(toolCallID) ?? false
     }
 
     func consumeApprovalTimeouts(
@@ -431,6 +438,18 @@ enum AgentLoopToolDispatch {
         )
     }
 
+    /// The tool message for a completed result. Images ride along only on success, as SwiftAgentKit's own loops do.
+    static func toolResultMessage(for result: ToolResult, fallbackToolCallID: String?) -> Message {
+        var message = toolResultMessage(
+            toolCallId: result.toolCallId ?? fallbackToolCallID,
+            content: result.success ? result.content : (result.error ?? "Tool execution failed.")
+        )
+        if result.success {
+            message.images = result.messageImages
+        }
+        return message
+    }
+
     static func approvalPendingToolResultMessage(toolCallId: String?) -> Message {
         toolResultMessage(toolCallId: toolCallId, content: approvalPendingToolResultContent)
     }
@@ -455,7 +474,11 @@ enum AgentLoopToolDispatch {
             runID: runID,
             orchestrator: orchestrator,
             snapshot: snapshot,
-            spawnService: spawnService
+            spawnService: spawnService,
+            origin: ComputerUseRunOrigin(
+                laneOrigin: configuration.runLaneOrigin,
+                senderIsOwner: configuration.originSenderIsOwner
+            )
            ) {
             return delegateOutcome
         }
@@ -589,8 +612,7 @@ enum AgentLoopToolDispatch {
         let outcome = await orchestrator.invokeTool(request)
         switch outcome {
         case .completed(let result, _):
-            let content = result.success ? result.content : (result.error ?? "Tool execution failed.")
-            return .completed(toolResultMessage(toolCallId: result.toolCallId ?? call.id, content: content))
+            return .completed(toolResultMessage(for: result, fallbackToolCallID: call.id))
         case .pending(let handle, _):
             return .pendingHandle(
                 toolResultMessage(toolCallId: call.id, content: "Pending tool handle: \(handle.handleID)")
@@ -615,6 +637,10 @@ enum AgentLoopToolDispatch {
         spawnService: SubAgentSpawnService? = nil
     ) async -> Bool {
         for call in calls {
+            if let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
+               entry.policyTags.contains(.haltsBatchOnFailure) {
+                return true
+            }
             if let spawnService,
                let entry = snapshot.nameIndex.resolveEntry(named: call.name, in: snapshot.effectiveEntries),
                spawnService.subAgentPool.isDelegateTool(entry: entry) {
@@ -868,8 +894,7 @@ enum AgentLoopToolDispatch {
     ) -> ToolDispatchOutcome {
         switch outcome {
         case .completed(let result, _):
-            let content = result.success ? result.content : (result.error ?? "Tool execution failed.")
-            return .completed(toolResultMessage(toolCallId: result.toolCallId ?? fallbackCall.id, content: content))
+            return .completed(toolResultMessage(for: result, fallbackToolCallID: fallbackCall.id))
         case .pending(let handle, _):
             return .pendingHandle(
                 toolResultMessage(toolCallId: fallbackCall.id, content: "Pending tool handle: \(handle.handleID)")

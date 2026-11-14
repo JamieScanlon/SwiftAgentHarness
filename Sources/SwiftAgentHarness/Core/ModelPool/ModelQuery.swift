@@ -60,6 +60,9 @@ public struct ModelQuery: Sendable, Hashable {
     }
 
     public func matches(_ entry: ModelRegistryEntry) -> Bool {
+        // Legacy queries compile to a `generate` contract query; non-chat entries never match.
+        guard entry.supports(.generate) else { return false }
+        if entry.lifecycle.status == .retired { return false }
         if !mustIncludeCapabilities.isSubset(of: entry.capabilities) {
             return false
         }

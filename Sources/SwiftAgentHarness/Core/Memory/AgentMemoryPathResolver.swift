@@ -23,7 +23,7 @@ enum AgentMemoryPathResolver {
         if tenancyPolicy.requireAuthenticatedOwnerOnMutations, ownerAccountID == nil {
             throw MemoryPathValidationError.ownerAccountIDRequiredUnderStrictTenancy
         }
-        if let override = ProcessInfo.processInfo.environment[overrideEnvKey],
+        if let override = HarnessEnvironmentOverride.string(overrideEnvKey),
            !override.isEmpty {
             return try validateAbsoluteDirectory((override as NSString).expandingTildeInPath, fileManager: fileManager)
         }

@@ -46,6 +46,7 @@ Use plain HTTP for operations that are inherently request/response and don't str
 | `GET /conversations/{id}/runs` | list runs (derived from `rawEvents`) | `If-None-Match` → 304 |
 | `GET /conversations/{id}/runs/{runId}` | fetch a single run record (derived from `rawEvents`; use for reconnect / polling after WebSocket drop — prefer the data plane for live progress) | `If-None-Match` → 304; ETag is stable once run reaches a terminal outcome |
 | `GET /conversations/{id}/events?since=N` | history backfill | `If-None-Match` → 304 |
+| `GET /conversations/{id}/blobs/{blobId}` | fetch a blob that this conversation references (an attachment, or an `image` block's `ref` on a message or approval card). Same authorization as reading the conversation. A blob not referenced by this conversation is `404`, even if it exists, so blob ids can't be probed across conversations. | `ETag` is the content hash → 304; immutable |
 | `POST /conversations/{id}/projection` | on-demand projected view — the message array the model would see now, or under an alternative `AssemblyConfig` in the body. Used by transparency UIs and Engine debugging | none (stateless query) |
 | `GET /models` | list available models with capabilities | `If-None-Match` → 304 |
 | `POST /models/query` | capability-based selection | none (stateless query) |

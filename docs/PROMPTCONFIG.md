@@ -132,6 +132,8 @@ Agent-build loop behavior (`AgentHarnessConfiguration`). Integer keys are clampe
 | `orchestratorPoolIdleTTLSeconds` | Int | `300` | 30–86,400 | Idle seconds before a pooled orchestrator is evictable. |
 | `orchestratorPoolMaxEntries` | Int | `4` | 1–64 | Max resident orchestrator pool entries. |
 | `legacyStreamedTextSurfaces` | [String] | `[]` | — | Deprecated; kept for backward compatibility, no effect. |
+| `untrustedLinkSanitizer` | Bool | `true` | — | While the model's context holds wrapped external content, rewrite assistant text so remote images don't load and data-carrying links show as inert code. Applies to streamed and saved text. |
+| `untrustedLinkTrustedHosts` | [String] | `[]` | — | Hosts (and their subdomains) exempt from `untrustedLinkSanitizer`. |
 
 ## `toolPolicy`
 
@@ -178,7 +180,7 @@ Environment-kind values: `"local"`, `"docker"`, `"ssh"`, `"mcp"`, `"a2a"`, `"unk
 | `parallelEnabled` | Bool | `false` | Enable parallel tool dispatch. |
 | `plannerMode` | String | `nil` | `"serial"`, `"mixedDeterministic"`, or legacy `"allParallel"` (parsed but remapped to `mixedDeterministic` with a warning). |
 | `pendingToolTimeoutSeconds` | Double | `nil` (none) | Timeout for pending tool calls; `<= 0` → none. |
-| `toolCallTimeoutSeconds` | Double | `300` | Wall-clock bound per tool dispatch (MCP and local). `<= 0` → `300`. |
+| `toolCallTimeoutSeconds` | Double | `300` | Wall-clock bound per tool dispatch (MCP and local). `<= 0` → `300`. Tools tagged `bounds-own-run-time`, such as local-agent delegates, use their own budget instead. |
 | `toolCallWatchdogIntervalSeconds` | Double | `20` | In-flight tool watchdog heartbeat interval. `<= 0` → `20`. |
 | `onToolTimeout` | String | `"continue"` | `"continue"` appends an error tool result and keeps the loop; `"failRun"` ends the turn after the failed tool lifecycle event. |
 | `mcpReconnectOnToolTimeout` | Bool | `false` | When true, attempt a single MCP client reconnect via Kit `MCPManager.reconnectClient(named:)` after a tool timeout (does not retry the hung call). |
@@ -201,6 +203,24 @@ Each policy object:
 | `authScopeTags` | [String] | `[]` | Auth scopes granted to the delegate (e.g. `"repo:write"`). |
 | `routingDomain` | String | `nil` | Routing domain label. |
 | `tenantScope` | String | `nil` | Tenant scope label. |
+| `limits` | object | inherited | Host-set limits on the delegate's invocations. An entry without `limits` inherits the `defaults` one. |
+
+`limits` keys:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `idleTimeoutSeconds` | Number | `300` | Liveness for remote (ACP, A2A, custom-endpoint) delegates: an invocation that produces no delegate event (streamed output, a tool call, a status update, a permission request) for this long is cancelled with reason `idle-timeout`. The clock pauses while the invocation awaits approval. Clamped to `10…3600`; `0` turns it off; a value that isn't a non-negative number is ignored. Size it to the remote agent, at least twice its slowest silent stretch. The model never sets it. In-process delegates use `localAgents[].idleTimeoutSeconds` instead. |
+
+```json
+{
+  "subAgentHostingPolicy": {
+    "defaults": { "limits": { "idleTimeoutSeconds": 300 } },
+    "entries": {
+      "delegate_researcher": { "limits": { "idleTimeoutSeconds": 900 } }
+    }
+  }
+}
+```
 
 ## `modeProfiles`
 
@@ -281,6 +301,7 @@ When `policy` is `"terminal-tool"` and no recovery is configured, a default reco
 | `allow` | [String] or `"*"` | Sub-agent (delegate) allow list. `[]` = none. |
 | `maxDepth` | Int | Max spawn depth (min 0). |
 | `childModeOnSpawn` | String | Mode profile ID assigned to spawned children. |
+| `computerUse.confirmInteract` | Bool | Confirm every interact action of computer-use sessions this mode delegates, and those of every delegate below it. Only accumulates through `extends`: `false` can't undo a parent's `true`. Turning it on reaches running sessions at their next action; turning it off waits for the next session. |
 
 ### `hooks` slice
 
@@ -553,6 +574,7 @@ with a diagnostic.
 | `toolsAllow` | [String] | no | `nil` | Closed-world tool allowlist applied to the child as `routingPrefs.explicitToolPolicy`. `nil` defers to the child's mode profile; `[]` denies all tools. A present-but-malformed value **rejects the entry** rather than widening to all tools. |
 | `longRunning` | Bool | no | `false` (built-ins: `true`) | `false` blocks the model's turn until the delegate finishes and returns its report as the tool result. `true` switches to **push-based delivery**: the call returns a handle immediately and the result is announced into the parent conversation when the run finishes, through the same idempotent announce pipeline the remote transports use. The tool description tells the model which mode applies and, for background agents, not to poll. |
 | `runTimeoutSeconds` | Number | no | `240` sync / `1800` background | Wall-clock budget for the child run, clamped to `5…3600`. Omit it and the budget follows the agent's delivery mode. The synchronous default sits **below the 300s tool-call timeout** on purpose: a synchronous delegate blocks the tool call for its whole run, so a longer budget means the tool call dies first and you get a generic tool timeout instead of the delegate's own message. Background runs block nothing, so they get room to work. The `5`s floor exists because a shorter timeout can fire before the child has registered a run, leaving the cancel with nothing to stop and the run orphaned. |
+| `idleTimeoutSeconds` | Number | no | `300` | Liveness, not progress: a child run that produces no event (streamed output, including thinking deltas where the provider streams them, or a state change such as a tool call starting or finishing) for this long is cancelled with reason `idle-timeout`. The clock pauses while the child waits on an approval. Clamped to `10…3600`; `0` turns it off. Size it to the agent's model, at least twice its slowest turn, since some providers stream nothing while the model thinks. The model never sets it. |
 | `maxRecursionDepth` | Int | no | `nil` | Per-agent spawn-depth cap, folded with the mode profile's `subAgents.maxDepth` and the transport cap (the tightest wins). |
 
 ```json
@@ -565,6 +587,7 @@ with a diagnostic.
       "toolsAllow": ["read_file", "write_file", "bash"],
       "longRunning": false,
       "runTimeoutSeconds": 300,
+      "idleTimeoutSeconds": 120,
       "maxRecursionDepth": 1
     }
   }
@@ -587,12 +610,12 @@ allowlist is what survives prompt injection reaching the delegate through its `i
   can wait on a normally-backgrounded agent or background a normally-synchronous one. Omitted means
   the agent's configured mode applies; a malformed value is ignored rather than read as `false`.
 
-**Two different timeouts, two different fixes.** A delegate that runs too long can fail in two
-unrelated ways. `runTimeoutSeconds` is the harness's own budget — its message names the setting
-(`exceeded its runTimeoutSeconds budget of Ns`) so the log tells you which knob to turn. The
-tool-call timeout is separate and applies only to *synchronous* delegates, because those hold the
-tool call open for the whole run; the fix for that one is `longRunning: true`, not a larger budget.
-Raising `runTimeoutSeconds` above the tool-call timeout on a synchronous agent achieves nothing.
+**A cap and a liveness check, with different fixes.** `runTimeoutSeconds` caps total run time; it
+is not a stuck detector, and its message names the setting (`exceeded its runTimeoutSeconds budget
+of Ns`). `idleTimeoutSeconds` catches a run that has gone silent, such as a hung model stream or a
+tool call that never returns, and its message says so; that usually points at the model binding or
+a tool rather than the task. Delegate tools are tagged `bounds-own-run-time`, so the per-call
+`toolCallTimeoutSeconds` doesn't cut them off.
 
 **Background delivery.** With `longRunning: true` the delegate call returns
 `Delegate '<name>' is running in the background (handle: <tool-call-id>)` plus an explicit

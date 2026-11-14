@@ -551,7 +551,23 @@ public actor ModeRegistryService {
         if o.keys.contains("thinkingConfig") {
             copy.thinkingConfig = parseThinkingConfig(raw: o["thinkingConfig"])
         }
+        if let roles = parseRolePatches(raw: o["roles"]) {
+            copy.roles.merge(roles) { _, overlay in overlay }
+        }
         return copy
+    }
+
+    /// `"roles": {"gatekeeper": {"pin": "jev-1.13.0"}}`. Unknown or malformed rows are ignored rather than failing the profile.
+    static func parseRolePatches(raw: JSON?) -> [ModelRole: RoleBindingPatch]? {
+        guard let raw, case .object(let rows) = raw else { return nil }
+        var patches: [ModelRole: RoleBindingPatch] = [:]
+        for (role, row) in rows {
+            guard let data = try? JSONEncoder().encode(row),
+                  let patch = try? JSONDecoder().decode(RoleBindingPatch.self, from: data)
+            else { continue }
+            patches[ModelRole(rawValue: role)] = patch
+        }
+        return patches
     }
 
     private static func parseThinkingConfig(raw: JSON?) -> ThinkingConfig? {
@@ -594,6 +610,16 @@ public actor ModeRegistryService {
         }
         if let raw = o.optionalString(for: "childModeOnSpawn"), let trimmed = raw.nilIfEmpty {
             copy.childModeOnSpawnProfileId = trimmed
+        }
+        if let computerUse = o["computerUse"]?.objectFields, let confirms = computerUse.optionalBool(for: "confirmInteract") {
+            if confirms {
+                copy.computerUse.confirmsInteract = true
+            } else if parent.computerUse.confirmsInteract {
+                diagnostics.append(
+                    "modeProfiles[\(profileID)] subAgents.computerUse.confirmInteract=false ignored: a profile can't loosen "
+                        + "the computer-use confirmation of the profile it extends"
+                )
+            }
         }
         return copy
     }
@@ -853,6 +879,32 @@ enum ModeProfileBuiltInCatalog {
                 tools: ModeProfileToolsSlice(allow: [], deny: []),
                 skills: ModeProfileSkillsSlice(allow: []),
                 runtime: ModeProfileRuntimeSlice(maxIterations: 1),
+                subAgents: denyAllSubAgents
+            ),
+            // The computer-use specialist loops until its task is done: its session counts steps and enforces
+            // budgets, and gates each action itself, so a turn cap or tool-level approvals would only cut it short.
+            // It ends only by calling computer_finish; a turn that stops without it is a stall.
+            ResolvedModeProfile(
+                id: "subagent-computer-use",
+                interactionMode: .agent,
+                assemblyKind: .agentBuild,
+                allowsProactiveCompactionTriggers: true,
+                appliesAgentBuildOrchestratorHarness: true,
+                builtInSeedVersion: v,
+                semanticLayerTags: [],
+                tools: ModeProfileToolsSlice(allow: ComputerUseDelegateToolProvider.specialistToolNames, deny: [], approvalPolicy: .never),
+                skills: ModeProfileSkillsSlice(allow: []),
+                runtime: ModeProfileRuntimeSlice(
+                    termination: ModeProfileTerminationSlice(
+                        policy: .terminalTool,
+                        recovery: ModeProfileTerminationRecoverySlice(
+                            strategy: .forcedToolChoice,
+                            rollbackStalledTurn: true,
+                            maxAttempts: 2,
+                            reminder: .escalating
+                        )
+                    )
+                ),
                 subAgents: denyAllSubAgents
             ),
             ResolvedModeProfile(

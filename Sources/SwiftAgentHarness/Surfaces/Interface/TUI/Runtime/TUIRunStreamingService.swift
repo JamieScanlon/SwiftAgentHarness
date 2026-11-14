@@ -34,7 +34,13 @@ public actor TUIRunStreamingService {
             conversationID: conversationID,
             snapshotMessagesJSONUTF8: snapshotMessagesJSONUTF8
         )
-        let task = Task { await source.start(driving: app) }
+        let events = await source.subscribedEvents()
+        // Subscribing suspends, so a concurrent attach for the same id may have won meanwhile.
+        guard attachments[conversationID] == nil else {
+            await source.teardown()
+            return
+        }
+        let task = Task { await ConversationStreamSurfaceDriver().consume(events: events, consumer: app) }
         attachments[conversationID] = Attachment(source: source, task: task)
     }
 

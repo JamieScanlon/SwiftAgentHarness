@@ -5,6 +5,7 @@ public enum ConversationLineageInference {
     /// Mode profiles used for machine-spawned sub-agents (least-privilege tool surfaces).
     public static let machineSubAgentModeProfileIDs: Set<String> = [
         "subagent-minimal",
+        "subagent-computer-use",
         "subagent-explore",
         "subagent-plan",
         "subagent-general",

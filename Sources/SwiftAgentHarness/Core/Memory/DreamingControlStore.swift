@@ -11,7 +11,7 @@ struct DreamingControlStore: Sendable {
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
         if let rootDirectory {
             self.rootDirectory = rootDirectory
-        } else if let override = ProcessInfo.processInfo.environment[Self.overrideEnvKey],
+        } else if let override = HarnessEnvironmentOverride.string(Self.overrideEnvKey),
                   !override.isEmpty {
             self.rootDirectory = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
         } else {

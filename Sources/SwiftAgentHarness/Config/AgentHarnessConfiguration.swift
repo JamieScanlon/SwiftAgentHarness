@@ -32,6 +32,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
     public var orchestratorPoolMaxEntries: Int
     /// Deprecated: no longer affects output policy. Kept for PromptConfig backward compatibility.
     public var legacyStreamedTextSurfaces: Set<String>
+    /// Rewrites remote images and data-carrying links in assistant text while the model's context holds external content.
+    public var untrustedLinkPolicy: UntrustedLinkPolicy
 
     public static let `default` = AgentHarnessConfiguration(
         strictAgentHarnessPrompts: true,
@@ -64,7 +66,8 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         useAgentLoop: Bool = true,
         orchestratorPoolIdleTTLSeconds: Int = 300,
         orchestratorPoolMaxEntries: Int = 4,
-        legacyStreamedTextSurfaces: Set<String> = []
+        legacyStreamedTextSurfaces: Set<String> = [],
+        untrustedLinkPolicy: UntrustedLinkPolicy = .default
     ) {
         self.strictAgentHarnessPrompts = strictAgentHarnessPrompts
         self.maxTurnLoopContinuationRounds = maxTurnLoopContinuationRounds
@@ -80,6 +83,7 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
         self.orchestratorPoolIdleTTLSeconds = orchestratorPoolIdleTTLSeconds
         self.orchestratorPoolMaxEntries = orchestratorPoolMaxEntries
         self.legacyStreamedTextSurfaces = legacyStreamedTextSurfaces
+        self.untrustedLinkPolicy = untrustedLinkPolicy
     }
 
     /// Hard stop for consecutive “chatty” (non-tool, long-text) assistant messages.
@@ -139,7 +143,11 @@ public struct AgentHarnessConfiguration: Sendable, Equatable {
             useAgentLoop: bool("useAgentLoop", default: true),
             orchestratorPoolIdleTTLSeconds: int("orchestratorPoolIdleTTLSeconds", default: 300, min: 30, max: 86_400),
             orchestratorPoolMaxEntries: int("orchestratorPoolMaxEntries", default: 4, min: 1, max: 64),
-            legacyStreamedTextSurfaces: stringSet("legacyStreamedTextSurfaces")
+            legacyStreamedTextSurfaces: stringSet("legacyStreamedTextSurfaces"),
+            untrustedLinkPolicy: UntrustedLinkPolicy(
+                enabled: bool("untrustedLinkSanitizer", default: true),
+                trustedHosts: stringSet("untrustedLinkTrustedHosts")
+            )
         )
     }
 }

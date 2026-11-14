@@ -75,6 +75,24 @@ struct LocalAgentConfigurationTests {
         #expect(definition?.maxRecursionDepth == 1)
     }
 
+    @Test("idleTimeoutSeconds is host-set liveness: a default, a configured value, and 0 to turn it off")
+    func idleTimeout() {
+        let defaulted = load(["Coding Agent": validEntry]).definition(forToolName: "delegate_coding_agent")
+        #expect(defaulted?.idleTimeoutSeconds == LocalAgentConfiguration.defaultIdleTimeoutSeconds)
+        var entry = validEntry
+        entry["idleTimeoutSeconds"] = 120
+        #expect(load(["Coding Agent": entry]).definition(forToolName: "delegate_coding_agent")?.idleTimeoutSeconds == 120)
+        entry["idleTimeoutSeconds"] = 0
+        #expect(load(["Coding Agent": entry]).definition(forToolName: "delegate_coding_agent")?.idleTimeoutSeconds == nil)
+        entry["idleTimeoutSeconds"] = 1
+        #expect(load(["Coding Agent": entry]).definition(forToolName: "delegate_coding_agent")?.idleTimeoutSeconds
+            == LocalAgentConfiguration.minimumIdleTimeoutSeconds)
+        entry["idleTimeoutSeconds"] = -5
+        let rejected = load(["Coding Agent": entry])
+        #expect(rejected.definition(forToolName: "delegate_coding_agent") == nil)
+        #expect(rejected.diagnostics.contains { $0.contains("idleTimeoutSeconds") })
+    }
+
     @Test("Absent localAgents seeds the built-in roles")
     func absentSectionSeedsBuiltIns() {
         let config = LocalAgentConfiguration.fromPromptConfigRoot([:])

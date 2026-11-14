@@ -1318,6 +1318,36 @@ public struct ConversationContextBudget: Codable, Sendable, Equatable {
     }
 }
 
+/// An approval waiting on the user, as listed on `conversation/{id}/state`. Resolve it with `POST /api/approvals/{approvalID}`.
+public struct PendingApprovalSummary: Codable, Sendable, Equatable {
+    /// An approval to run a command, including a computer-use grant or confirmation.
+    public static let execKind = "exec"
+
+    public var approvalID: String
+    /// What is being approved, such as ``execKind``. A string so a client keeps working when new kinds appear.
+    public var kind: String
+    public var title: String
+    public var command: String?
+    public var presentation: ApprovalPresentation?
+    public var requestedAt: Date
+
+    public init(
+        approvalID: String,
+        kind: String,
+        title: String,
+        command: String? = nil,
+        presentation: ApprovalPresentation? = nil,
+        requestedAt: Date
+    ) {
+        self.approvalID = approvalID
+        self.kind = kind
+        self.title = title
+        self.command = command
+        self.presentation = presentation
+        self.requestedAt = requestedAt
+    }
+}
+
 /// Payload for topic `conversation/{id}/state` (coalesced metadata + orchestration + session flags).
 public struct ConversationStatePayload: Codable, Sendable, Equatable {
     public static let schemaVersionV1 = 1
@@ -1370,6 +1400,9 @@ public struct ConversationStatePayload: Codable, Sendable, Equatable {
     public var currentRunID: UUID?
     /// Attached resources catalog (harness README: state publishes attachment changes). Omitted when empty.
     public var attachmentsCatalog: [ConversationAttachmentDescriptor]?
+    /// Approvals still waiting on the user, oldest first, so a client that connects after one was raised can show and
+    /// resolve it. Omitted when none are waiting.
+    public var pendingApprovals: [PendingApprovalSummary]?
 
     public init(
         schemaVersion: Int = ConversationStatePayload.schemaVersionV2,
@@ -1397,7 +1430,8 @@ public struct ConversationStatePayload: Codable, Sendable, Equatable {
         branchChildren: [ConversationBranchRef]? = nil,
         resourceRunStatus: ConversationResourceRunStatus? = nil,
         currentRunID: UUID? = nil,
-        attachmentsCatalog: [ConversationAttachmentDescriptor]? = nil
+        attachmentsCatalog: [ConversationAttachmentDescriptor]? = nil,
+        pendingApprovals: [PendingApprovalSummary]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.conversationID = conversationID
@@ -1425,6 +1459,7 @@ public struct ConversationStatePayload: Codable, Sendable, Equatable {
         self.resourceRunStatus = resourceRunStatus
         self.currentRunID = currentRunID
         self.attachmentsCatalog = attachmentsCatalog
+        self.pendingApprovals = pendingApprovals
     }
 
     /// After ``ConversationStateTopicHub`` broadcasts a tombstone for a deleted conversation.
@@ -1468,6 +1503,8 @@ public struct ConversationTopicEventPayload: Codable, Sendable {
         case checkpoint
         /// Client surface intent (`ClientSurfaceIntent` JSON in ``jsonUTF8``).
         case surfaceIntent
+        /// Model Pool route receipt (`RouteReceiptWire` JSON in ``jsonUTF8``): which model answered and why.
+        case routeReceipt
     }
 
     public var semanticKind: SemanticKind
@@ -1507,6 +1544,11 @@ public struct ConversationTopicEventPayload: Codable, Sendable {
     /// UTF-8 JSON encoding of ``ConversationCheckpointTopicEventWire`` (`semanticKind == .checkpoint`).
     public static func checkpointJSONUTF8(_ utf8: String) -> ConversationTopicEventPayload {
         ConversationTopicEventPayload(semanticKind: .checkpoint, jsonUTF8: utf8)
+    }
+
+    /// UTF-8 JSON encoding of ``RouteReceiptWire`` (`semanticKind == .routeReceipt`).
+    public static func routeReceiptJSONUTF8(_ utf8: String) -> ConversationTopicEventPayload {
+        ConversationTopicEventPayload(semanticKind: .routeReceipt, jsonUTF8: utf8)
     }
 
     /// UTF-8 JSON encoding of ``ClientSurfaceIntent`` (`semanticKind == .surfaceIntent`).

@@ -95,11 +95,14 @@ MessagePresentation = {
     | { type: "divider" }
     | { type: "buttons", buttons: Array<{ id, label, style? }> }
     | { type: "select",  options: Array<{ id, label }> }
+    | { type: "image",   ref: string, alt: string, mime?: string }   // blob ref; alt is required
   >
 }
 ```
 
-This is the entire portable vocabulary. It is deliberately small: anything richer is a renderer concern. The same payload describes an agent message, a CLI status line, and an approval card — which is exactly why approval delivery can be portable while approval classification stays per-tool.
+This is the entire portable vocabulary. The `image` block exists for approval cards that must show what the action targets (a crop of the screen region a computer-use action will click). Core degrades it to its `alt` text on surfaces that can't render images, so `alt` must carry the decision-relevant facts on its own.
+
+**Resolving an image `ref`.** A `ref` is either a blob id of the presentation's conversation or a `data:` URL. A blob id is fetched through the conversation-scoped blob route in the [Communication Layer](../../core/communication-layer/): the surface needs the same authorization it holds for the conversation, and the route serves only blobs that conversation references. A `data:` URL is used where there is no blob store, such as a session a host drives directly. Keep those small, since they travel inline in every delivery of the card. It is deliberately small: anything richer is a renderer concern. The same payload describes an agent message, a CLI status line, and an approval card — which is exactly why approval delivery can be portable while approval classification stays per-tool.
 
 ## Recommendation
 

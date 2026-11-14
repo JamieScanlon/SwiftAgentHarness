@@ -6,7 +6,7 @@ import Testing
 
 /// Minimal ``APILayerConversationManaging`` stub with one in-memory conversation row, used to drive
 /// the ``ConversationStateSnapshotBuilder`` directly without standing up SwiftData.
-private final class SnapshotConversationStub: APILayerConversationManaging, Sendable {
+final class SnapshotConversationStub: APILayerConversationManaging, Sendable {
     let conversation: ModelConversation
     init(conversation: ModelConversation) { self.conversation = conversation }
     func apiListConversationInfo() async -> [ModelConversation] { [conversation] }

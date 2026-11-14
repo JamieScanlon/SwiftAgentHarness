@@ -66,8 +66,10 @@ enum ContextEngineProjectionPolicyBuilder {
         var providerContribution: SystemPromptContribution?
         var providerEligibility: ProviderCacheTTLEligibility = .none
         var registrySupportsVision: Bool?
+        var computerUseSupport: ComputerUseModelSupport?
         if let entry = await deps.registryEntryProvider?(conversation.model.id) {
             registrySupportsVision = entry.capabilities.contains(.vision)
+            computerUseSupport = entry.profile(for: .generate).flatMap { ComputerUseModelSupport(profile: $0) }
             if let binding = entry.primaryBinding {
                 providerEligibility = ProviderRuntimeHooks.cacheTtlEligibility(binding: binding)
                 if let wire = ProviderRuntimeHooks.systemPromptContribution(binding: binding) {
@@ -111,7 +113,8 @@ enum ContextEngineProjectionPolicyBuilder {
             attachmentBlobReader: blobReader,
             useSessionTreeProjection: compactionCfg.useSessionTreeProjection,
             sessionTranscriptEntries: transcriptEntries,
-            contextPruningPolicy: contextPruningPolicy
+            contextPruningPolicy: contextPruningPolicy,
+            screenshotRetentionPolicy: ScreenshotRetentionPolicy.default.adjusted(for: computerUseSupport)
         )
     }
 

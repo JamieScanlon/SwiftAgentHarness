@@ -17,10 +17,6 @@ public enum QueuedFileWriterError: Error, Equatable {
 public enum QueuedFileWriter {
     private static let coordinator = Coordinator()
 
-    public static func resetForTesting() async {
-        await coordinator.resetForTesting()
-    }
-
     public static func write(data: Data, to path: String) async throws {
         try await coordinator.enqueue(path: path) {
             try safeWrite(data: data, to: path)
@@ -122,11 +118,6 @@ private actor Coordinator {
 
     private var queues: [String: [PendingOp]] = [:]
     private var draining: Set<String> = []
-
-    func resetForTesting() {
-        queues = [:]
-        draining = []
-    }
 
     func enqueue(path: String, perform: @Sendable @escaping () throws -> Void) async throws {
         let key = FilesystemCanonicalPath.resolve(path)

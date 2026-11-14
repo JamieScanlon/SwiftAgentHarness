@@ -173,14 +173,28 @@ public actor EmbeddedHarnessAPIClient: HarnessMutationTransporting {
         durable: Bool,
         reason: String?
     ) async throws {
-        var payload: [String: Any] = [
-            "approved": approved,
-            "durable": durable,
-        ]
-        if let reason {
-            payload["reason"] = reason
+        try await resolveExecApproval(
+            session: session, approvalID: approvalID, approved: approved, durable: durable, reason: reason, answeredOffTarget: false
+        )
+    }
+
+    /// `answeredOffTarget` says the answer came from away from what the approval is about, such as a phone
+    /// answering for a Mac.
+    public func resolveExecApproval(
+        session: EmbeddedHarnessAPISession,
+        approvalID: String,
+        approved: Bool,
+        durable: Bool,
+        reason: String?,
+        answeredOffTarget: Bool
+    ) async throws {
+        struct Body: Encodable {
+            var approved: Bool
+            var durable: Bool
+            var reason: String?
+            var answeredOffTarget: Bool
         }
-        let data = try JSONSerialization.data(withJSONObject: payload)
+        let data = try JSONEncoder().encode(Body(approved: approved, durable: durable, reason: reason, answeredOffTarget: answeredOffTarget))
         var headers = HTTPHeaders()
         headers.contentType = .json
         let response = try await send(

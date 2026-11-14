@@ -5,6 +5,18 @@ enum ToolRegistryResultFormattingPolicy {
     static let exactContentObservationTagRawValue = "exact-content-observation"
     static let compactionProtectedTagRawValue = "compaction-protected"
 
+    static let geometryBoundImagesTagRawValue = "geometry-bound-images"
+
+    static func geometryBoundImagesPolicyTag() -> ToolPolicyTag {
+        ToolPolicyTag(rawValue: geometryBoundImagesTagRawValue)
+    }
+
+    /// Image parts from these tools are never resized after capture.
+    static func hasGeometryBoundImages(entry: ToolRegistryEntry?, toolName: String) -> Bool {
+        if let entry, entry.policyTags.contains(.geometryBoundImages) { return true }
+        return ComputerUseToolProvider.screenToolNames.contains(toolName.lowercased())
+    }
+
     static func exactContentObservationPolicyTag() -> ToolPolicyTag {
         ToolPolicyTag(rawValue: exactContentObservationTagRawValue)
     }

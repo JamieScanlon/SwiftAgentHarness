@@ -25,7 +25,7 @@ This document describes the **public wire contract** between a harness client an
 - **Errors:** REST failure paths return a small JSON object `{"type":"error","message":"..."}` (`ErrorEnvelope` in OpenAPI) with an appropriate 4xx/5xx status and `Content-Type: application/json`. WebSocket control-plane errors use `{"kind":"error","message":"..."}`.
 - **HTTP preconditions:** Key reads emit `ETag` and honor `If-None-Match` (**304** on match). Guarded mutations accept optional `If-Match` (conversation control-plane revision); mismatches return **412**, and strict precondition mode returns **428** when a required `If-Match` is missing.
 - **Session semantics:** Conversation-scoped routes are explicit-id based; no REST/WS “select conversation” control-plane operation exists.
-- **Authentication (strict tenancy):** When `ServerConfig.requireAuthenticatedTenantOnAPI` is true, mutating routes and tenant-scoped WS subscribe checks require **`Authorization: Bearer <JWT>`** (HS256; `sub` = owner account UUID). Configure `ServerConfig.apiAccessTokenHS256Secret` (and optional `apiAccessTokenIssuer` / `apiAccessTokenAudience`). `APILayer.start()` refuses to boot strict tenancy without a configured secret. **`X-SAH-Authenticated-Owner` is not trusted.** Reverse proxies must strip client-supplied `Authorization` and inject a validated harness JWT. Strict tenancy scopes API and topic access by owner; it does **not** isolate the process, tool execution environment, or on-disk persistence — see [COMMUNICATION_POLICY.md § Strict tenancy scope](../COMMUNICATION_POLICY.md#strict-tenancy-scope-authorization-not-isolation).
+- **Authentication (strict tenancy):** When `ServerConfig.requireAuthenticatedTenantOnAPI` is true, mutating routes and tenant-scoped WS subscribe checks require **`Authorization: Bearer <JWT>`** (HS256; `sub` = owner account UUID). Configure `ServerConfig.apiAccessTokenHS256Secret` (and optional `apiAccessTokenIssuer` / `apiAccessTokenAudience`). `APILayer.start()` refuses to boot strict tenancy without a configured secret, and refuses to boot at all with a secret shorter than 32 UTF-8 bytes. **`X-SAH-Authenticated-Owner` is not trusted.** Reverse proxies must strip client-supplied `Authorization` and inject a validated harness JWT. Strict tenancy scopes API and topic access by owner; it does **not** isolate the process, tool execution environment, or on-disk persistence — see [COMMUNICATION_POLICY.md § Strict tenancy scope](../COMMUNICATION_POLICY.md#strict-tenancy-scope-authorization-not-isolation).
 
 ---
 
@@ -107,7 +107,24 @@ When session blob storage is configured, the server stores bytes in the session 
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| POST | `/api/exec-approvals/:id` | `{"approved":<Bool>,"durable":<Bool>?,"reason":<String>?}` | **200** on success; **400** + error JSON for invalid id/body; **404** when the approval id is unknown. |
+| POST | `/api/exec-approvals/:id` | `{"approved":<Bool>,"durable":<Bool>?,"reason":<String>?,"answeredOffTarget":<Bool>?}` | **200** on success; **400** + error JSON for invalid id/body; **404** when the approval id is unknown. |
+
+### Computer use (conversation-scoped)
+
+`APILayerComputerUseModule`. Every route checks conversation tenancy and returns **404** + error JSON when the host has no computer use. Requests and activity are announced as `surfaceIntent` events on `conversation/{id}/events`.
+
+| Method | Path | Body | Response |
+|--------|------|------|----------|
+| GET | `/api/conversations/:id/computer-use` | — | `{"pending":[ComputerUsePendingRequest],"sessions":[ComputerUseSessionStatus],"targets":[ComputerUseTargetStatus]}` |
+| POST | `/api/conversations/:id/computer-use/requests/:requestID` | `{"action":"answer"\|"hand-back"\|"decline","answer":<String>?,"note":<String>?}` | **200**; **400** bad body; **404** unknown request; **409** action doesn't fit the request kind. |
+| POST | `/api/conversations/:id/computer-use/stop` | — | `{"lifecycleIDs":[String]}` (empty when nothing ran) |
+| GET | `/api/conversations/:id/computer-use/replays` | — | `{"replays":[ComputerUseReplaySummary]}`, newest first; rebuilt from the conversation's delegate results after a restart |
+| GET | `/api/conversations/:id/computer-use/replays/:lifecycleID` | — | `ComputerUseReplay`: action log plus thumbnail rows; **404** when unknown |
+| GET | `/api/conversations/:id/computer-use/replays/:lifecycleID/thumbnails/:observationID` | — | Image bytes for a thumbnail the replay lists; **404** otherwise |
+| POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/audit` | `{"marked":<Bool>}` | `ComputerUseAuditStatus`; **404** when no live or retained run matches |
+| POST | `/api/conversations/:id/computer-use/runs/:lifecycleID/live-view` | `{"role":"user"\|"observer"}`, optional | `DisplayLiveView` (`url`, `viewOnly`, `expiresAt`, `role`), sent `no-store`: a new short-lived link whose token is in the URL fragment. An observer link never carries input and is paused during takeover; **400** on another role; **404** when no live run matches or its target serves no live view (see `liveView` in the session status). |
+| DELETE | `/api/conversations/:id/computer-use/runs/:lifecycleID/live-view/observers` | — | **204**: ends the run's observer streams and revokes its observer links, keeping the user's; **404** when no live run matches. |
+| POST | `/api/conversations/:id/computer-use/takeover` | `{"on":<Bool>,"lifecycleID":<String>?}` | `{"lifecycleIDs":[String]}`; **404** when no live session matches; **409** when the target refuses. |
 
 ### Conversations
 
@@ -316,7 +333,7 @@ Embedded mode uses the same communication-layer hubs and harness envelopes as `/
 
 - `APILayer.swift` — Vapor app, `/api` + `/ws`, OAuth route, WebSocket lifecycle and control-frame handling.
 - `APILayerModuleAssembly.swift` — REST module registry (`restModules()`).
-- `APILayerRESTModules.swift` — REST route registration and handlers (status, models, conversations, capabilities, traces, messages, upload, exec-approvals).
+- `APILayerRESTModules.swift` — REST route registration and handlers (status, models, conversations, capabilities, traces, messages, upload, exec-approvals, computer-use).
 - `APILayerWebSocketModules.swift` — `APILayerWebSocketDependencies` (shared WS handler dependencies).
 - `APILayerTransportSupport.swift` — harness error/dedupe payloads and `streamingChatResponse` (chunked REST revert stream).
 - `../WebSocketTopicSubscriptionRouter.swift` — subscribe/unsubscribe routing to communication-layer topic hubs (invoked from `APILayer` WebSocket handlers).

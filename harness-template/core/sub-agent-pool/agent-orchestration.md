@@ -40,7 +40,7 @@ The Pool auto-registers a delegate tool per `AgentEntry` (see [README → Auto-r
   mode?:       "run" | "session"   // (channel surfaces) one-shot vs persistent
   cleanup?:    "delete" | "keep"   // archive policy
   sandbox?:    "inherit" | "require" // sandbox guard
-  runTimeoutSeconds?: number       // per-run timeout (0 = none)
+  runTimeoutSeconds?: number       // cap on total run time (0 = none); not a stuck detector, see the Pool's idle timeout
 }
 ```
 
@@ -70,6 +70,7 @@ requiredMcpServers: ['github']               # gate: fail if not connected
 omitClaudeMd: true                            # save tokens for narrow agents
 isolation: 'worktree'                         # default isolation policy
 background: false                             # always-async toggle
+idleTimeoutSeconds: 120                       # liveness: no events for this long → cancel (never model-set)
 ---
 
 You are a file search specialist…

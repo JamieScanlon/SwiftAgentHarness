@@ -126,7 +126,7 @@ Cancellation crosses three layers — Conversation Manager → Agent Runtime →
   "metadata": {
     "runId": "<runId>",
     "iteration": <int>,
-    "reason": "<user-cancel | parent-cancel | deadline | budget>",
+    "reason": "<user-cancel | parent-cancel | deadline | budget | idle-timeout>",
     "cancelledAt": <ts>,
     "terminalReasonCategory": "externalCancellation",
     "terminalReasonBounded": null,

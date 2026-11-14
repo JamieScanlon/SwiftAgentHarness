@@ -29,6 +29,18 @@ public actor CommunicationLayerConversationStreamSource {
         }
     }
 
+    /// Subscribes to the conversation topic before returning, so every event broadcast after this
+    /// call returns is delivered. Transient events are never replayed, so a caller that must not miss
+    /// the start of a turn should use this instead of ``events()``.
+    public func subscribedEvents() async -> AsyncStream<DecodedConversationTopicEvent> {
+        let (stream, continuation) = AsyncStream.makeStream(of: DecodedConversationTopicEvent.self)
+        continuation.onTermination = { _ in
+            Task { await self.teardown() }
+        }
+        await bindContinuation(continuation)
+        return stream
+    }
+
     public func start(driving consumer: any ConversationStreamConsumer) async {
         let stream = events()
         let driver = ConversationStreamSurfaceDriver()

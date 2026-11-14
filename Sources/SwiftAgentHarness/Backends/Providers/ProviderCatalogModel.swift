@@ -56,6 +56,10 @@ public struct ProviderCatalogEntry: Sendable {
     public var compat: ProviderModelCompat?
     public var canonicalModelKey: String?
     public var modelFamily: String?
+    /// Versioned features added to the synthesized `generate` profile (for example `computer-use`).
+    public var generateFeatures: [String: FeatureSupport]
+    public var maxImageEdgePx: Int?
+    public var maxImageTokens: Int?
 
     public init(
         registryID: UUID,
@@ -67,7 +71,10 @@ public struct ProviderCatalogEntry: Sendable {
         capabilities: Set<LLMCapability>? = nil,
         compat: ProviderModelCompat? = nil,
         canonicalModelKey: String? = nil,
-        modelFamily: String? = nil
+        modelFamily: String? = nil,
+        generateFeatures: [String: FeatureSupport] = [:],
+        maxImageEdgePx: Int? = nil,
+        maxImageTokens: Int? = nil
     ) {
         self.registryID = registryID
         self.endpointModelId = endpointModelId
@@ -79,6 +86,9 @@ public struct ProviderCatalogEntry: Sendable {
         self.compat = compat
         self.canonicalModelKey = canonicalModelKey ?? modelConfig.canonicalModelKey
         self.modelFamily = modelFamily ?? modelConfig.modelFamily
+        self.generateFeatures = generateFeatures
+        self.maxImageEdgePx = maxImageEdgePx
+        self.maxImageTokens = maxImageTokens
     }
 
     public func toRegistryEntry(
@@ -104,7 +114,7 @@ public struct ProviderCatalogEntry: Sendable {
         )
         let resolvedKey = canonicalModelKey
         let resolvedFamily = modelFamily ?? resolvedKey.flatMap(LogicalModelKey.inferredFamily(from:))
-        return ModelRegistryEntry(
+        var entry = ModelRegistryEntry(
             id: registryID,
             family: resolvedFamily,
             displayName: displayName ?? endpointModelId,
@@ -119,6 +129,14 @@ public struct ProviderCatalogEntry: Sendable {
             compat: compat,
             canonicalModelKey: resolvedKey
         )
+        if !generateFeatures.isEmpty || maxImageEdgePx != nil || maxImageTokens != nil {
+            var generate = entry.synthesizedGenerateProfile
+            generate.features.merge(generateFeatures) { _, declared in declared }
+            generate.limits.maxImageEdgePx = maxImageEdgePx ?? generate.limits.maxImageEdgePx
+            generate.limits.maxImageTokens = maxImageTokens ?? generate.limits.maxImageTokens
+            entry.contracts = [generate]
+        }
+        return entry
     }
 }
 

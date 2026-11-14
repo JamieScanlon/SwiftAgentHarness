@@ -114,6 +114,7 @@ public struct ProviderRegistration: Sendable {
     public let musicGeneration: (any MusicGenerationProviding)?
     public let webFetch: (any WebFetchProviding)?
     public let webSearch: (any WebSearchProviding)?
+    public let decision: (any DecisionProviding)?
 
     public init(
         manifest: ProviderManifest,
@@ -127,7 +128,8 @@ public struct ProviderRegistration: Sendable {
         videoGeneration: (any VideoGenerationProviding)? = nil,
         musicGeneration: (any MusicGenerationProviding)? = nil,
         webFetch: (any WebFetchProviding)? = nil,
-        webSearch: (any WebSearchProviding)? = nil
+        webSearch: (any WebSearchProviding)? = nil,
+        decision: (any DecisionProviding)? = nil
     ) {
         self.manifest = manifest
         self.textInference = textInference
@@ -141,6 +143,7 @@ public struct ProviderRegistration: Sendable {
         self.musicGeneration = musicGeneration
         self.webFetch = webFetch
         self.webSearch = webSearch
+        self.decision = decision
     }
 
     public func implementation(for slot: ProviderCapabilitySlot) -> (any Sendable)? {
@@ -167,6 +170,8 @@ public struct ProviderRegistration: Sendable {
             return webFetch
         case .webSearch:
             return webSearch
+        case .decision:
+            return decision
         }
     }
 
@@ -183,6 +188,7 @@ public struct ProviderRegistration: Sendable {
         if musicGeneration != nil { slots.insert(.musicGeneration) }
         if webFetch != nil { slots.insert(.webFetch) }
         if webSearch != nil { slots.insert(.webSearch) }
+        if decision != nil { slots.insert(.decision) }
         return slots
     }
 

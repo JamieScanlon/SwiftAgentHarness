@@ -16,6 +16,7 @@ public actor TUIApp {
     var transcript: TranscriptListComponent
     var composer: InputComposerComponent
     var statusLine: StatusLineComponent
+    var computerUseIndicator: ComputerUseIndicatorComponent
     var toolPane: ToolPaneViewComponent
     var reasoningView: ReasoningViewComponent
     var overlayHost: OverlayHostComponent
@@ -33,6 +34,12 @@ public actor TUIApp {
     private var turnActive = false
     private var accumulatedTurnText = ""
     private var activeApprovalID: String?
+    /// Computer-use requests that arrived while another dialog was open, shown in order once it closes.
+    private var queuedComputerUseRequests: [ComputerUseSurfaceIntentPayload] = []
+    /// Runs with a link request in flight, so a burst of takeover activity mints one link.
+    private var mintingLiveViews: Set<String> = []
+    /// Set while a share or stop-sharing request is in flight, so a repeated Ctrl-G doesn't undo it.
+    private var changingShare = false
     private var keyDecoder = TUIKeyDecoder()
     /// Invoked when a mode dialog selection is confirmed.
     private var onModeSelected: (@Sendable (ModeOption) -> Void)?
@@ -68,6 +75,7 @@ public actor TUIApp {
         self.transcript = TranscriptListComponent(viewportRows: max(1, terminal.rows - 6))
         self.composer = InputComposerComponent()
         self.statusLine = StatusLineComponent()
+        self.computerUseIndicator = ComputerUseIndicatorComponent()
         self.toolPane = ToolPaneViewComponent()
         self.reasoningView = ReasoningViewComponent()
         self.controlInputBridge = TUIControlInputBridge(registry: registry)
@@ -75,7 +83,7 @@ public actor TUIApp {
         let chatStack = StackComponent(children: [transcript, reasoningView])
         self.splitView = SplitComponent(primary: chatStack, secondary: toolPane)
         self.overlayHost = OverlayHostComponent(
-            base: StackComponent(focusedIndex: 2, children: [splitView, statusLine, composer])
+            base: StackComponent(focusedIndex: 3, children: [splitView, computerUseIndicator, statusLine, composer])
         )
     }
 
@@ -249,6 +257,8 @@ public actor TUIApp {
         accumulatedTurnText = ""
         statusLine.showSpinner = false
         statusLine.phase = "idle"
+        // Specialists run inside the turn, so none outlives it; this covers an end event that never arrived.
+        computerUseIndicator.clear()
         renderFrame()
     }
 
@@ -263,6 +273,7 @@ public actor TUIApp {
         turnActive = false
         statusLine.showSpinner = false
         statusLine.phase = "cancelled"
+        computerUseIndicator.clear()
         renderFrame()
     }
 
@@ -506,6 +517,28 @@ public actor TUIApp {
             await host?.quit()
             return
         }
+        // Like interrupt, computer-use controls must work over a dialog: a handoff is exactly when the user
+        // may want to stop instead.
+        if case .unhandled(let sequence) = key, computerUseIndicator.isActive {
+            switch sequence {
+            case ComputerUseShortcut.toggleTakeover:
+                await host?.setComputerUseTakeover(!computerUseIndicator.isTakenOver)
+                return
+            case ComputerUseShortcut.stop:
+                await host?.stopComputerUse()
+                return
+            case ComputerUseShortcut.liveView:
+                for lifecycleID in computerUseIndicator.liveViewSessions {
+                    await showComputerUseLiveView(lifecycleID)
+                }
+                return
+            case ComputerUseShortcut.share:
+                await toggleComputerUseSharing()
+                return
+            default:
+                break
+            }
+        }
 
         // Overlays capture the rest. Routing straight to the composer — the previous
         // behaviour — left approval dialogs decorative: Enter submitted the composer
@@ -567,10 +600,16 @@ public actor TUIApp {
             await completeApproval(approvalID: dialog.approvalID, actionID: decision)
             return
         }
+        if let dialog = overlayHost.overlay as? ComputerUseRequestDialogComponent,
+           let resolution = dialog.takeResolution() {
+            await host?.resolveComputerUseRequest(requestID: dialog.requestID, resolution: resolution)
+            dismissOverlay()
+            return
+        }
         if let dialog = overlayHost.overlay as? ModeDialogComponent,
            let option = dialog.takeSelection() {
             onModeSelected?(option)
-            overlayHost.dismissOverlay()
+            dismissOverlay()
         }
     }
 
@@ -613,8 +652,19 @@ public actor TUIApp {
 
     private func restoreComposerFocus() {
         activeApprovalID = nil
+        // The dismiss callback hops through a task, so the next queued dialog may already be up.
+        guard !overlayHost.hasOverlay else { return }
         composer.isFocused = true
         renderFrame()
+    }
+
+    /// Closes the open dialog and shows the next queued computer-use request in the same actor turn, so no
+    /// keystroke can land on the composer in between.
+    private func dismissOverlay() {
+        overlayHost.dismissOverlay()
+        if !queuedComputerUseRequests.isEmpty {
+            showComputerUseRequest(queuedComputerUseRequests.removeFirst())
+        }
     }
 
     // MARK: - Approvals
@@ -640,13 +690,17 @@ public actor TUIApp {
                 actionID: ApprovalDecision.deny.rawValue
             )
         }
-        overlayHost.dismissOverlay()
+        // Same reasoning: a closed question or handoff would otherwise leave the specialist waiting.
+        if let dialog = overlayHost.overlay as? ComputerUseRequestDialogComponent {
+            await host?.resolveComputerUseRequest(requestID: dialog.requestID, resolution: .declined)
+        }
+        dismissOverlay()
         renderFrame()
     }
 
     private func completeApproval(approvalID: String, actionID: String) async {
         await host?.resolveApproval(approvalID: approvalID, actionID: actionID)
-        overlayHost.dismissOverlay()
+        dismissOverlay()
     }
 
     /// Presents a mode picker as a modal overlay. `ModeDialogComponent` existed but was
@@ -662,7 +716,7 @@ public actor TUIApp {
     public func dismissApproval(approvalID: String?) {
         guard overlayHost.hasOverlay else { return }
         if let approvalID, let active = activeApprovalID, approvalID != active { return }
-        overlayHost.dismissOverlay()
+        dismissOverlay()
     }
 
     private func handleSurfaceIntent(_ intent: ClientSurfaceIntent) async {
@@ -674,9 +728,71 @@ public actor TUIApp {
             // Resolved elsewhere (another surface, an expiry). Without this the modal
             // stays on screen forever with no way to dismiss it.
             dismissApproval(approvalID: intent.approvalID)
+        case .computerUseRequest:
+            guard let request = intent.computerUse, request.requestID != nil else { return }
+            if overlayHost.hasOverlay {
+                queuedComputerUseRequests.append(request)
+            } else {
+                showComputerUseRequest(request)
+            }
+        case .computerUseRequestCleared:
+            guard let requestID = intent.computerUse?.requestID else { return }
+            queuedComputerUseRequests.removeAll { $0.requestID == requestID }
+            if let dialog = overlayHost.overlay as? ComputerUseRequestDialogComponent, dialog.requestID == requestID {
+                dismissOverlay()
+            }
+        case .computerUseActivity:
+            guard let activity = intent.computerUse else { return }
+            computerUseIndicator.apply(activity)
+            if activity.status == .ended, let notice = activity.notice {
+                transcript.appendMessage(TUIMessage(role: .system, content: TUITextSanitizer.sanitizeSingleLine(notice)))
+            }
+            // Taking over a target the user can't otherwise see (a headless browser) is useless without its view, and
+            // watch mode goes on only while the user watches it.
+            if activity.status == .takenOver || activity.status == .waitingForLiveView,
+               activity.liveView == true, let lifecycleID = activity.lifecycleID,
+               computerUseIndicator.liveView(for: lifecycleID) == nil {
+                await showComputerUseLiveView(lifecycleID)
+            }
         case .openFileForEdit:
             break
         }
+    }
+
+    private func showComputerUseRequest(_ request: ComputerUseSurfaceIntentPayload) {
+        installOverlayDismissHandler()
+        composer.isFocused = false
+        let showsLiveView = request.lifecycleID.flatMap(computerUseIndicator.liveView(for:)) != nil
+        let sharedScreen = request.lifecycleID.map(computerUseIndicator.sharesScreen) ?? false
+        overlayHost.show(ComputerUseRequestDialogComponent(request: request, showsLiveView: showsLiveView, sharedScreen: sharedScreen))
+        renderFrame()
+    }
+
+    private func showComputerUseLiveView(_ lifecycleID: String) async {
+        guard mintingLiveViews.insert(lifecycleID).inserted else { return }
+        defer { mintingLiveViews.remove(lifecycleID) }
+        guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID, role: .user) else { return }
+        computerUseIndicator.setLiveView(link, for: lifecycleID)
+        renderFrame()
+    }
+
+    /// Stops sharing every shared run when any is shared, so one press always ends it; shares every run otherwise.
+    private func toggleComputerUseSharing() async {
+        guard !changingShare else { return }
+        changingShare = true
+        defer { changingShare = false }
+        let shared = computerUseIndicator.sharedSessions
+        if shared.isEmpty {
+            for lifecycleID in computerUseIndicator.liveViewSessions {
+                guard let link = await host?.computerUseLiveView(lifecycleID: lifecycleID, role: .observer) else { continue }
+                computerUseIndicator.setObserverLink(link, for: lifecycleID)
+            }
+        } else {
+            for lifecycleID in shared where await host?.endComputerUseObservers(lifecycleID: lifecycleID) == true {
+                computerUseIndicator.stopSharing(lifecycleID)
+            }
+        }
+        renderFrame()
     }
 
     // MARK: - Autocomplete

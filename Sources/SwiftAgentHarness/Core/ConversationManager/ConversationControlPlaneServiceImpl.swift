@@ -224,6 +224,13 @@ actor ConversationControlPlaneServiceImpl: ConversationControlPlaneServicing {
                 thinkingConfig: routingModelOptions.thinkingConfig,
                 skipControlPlaneRevisionBump: true
             )
+            if let roles = routingModelOptions.roles {
+                try await deps.persistenceDomain.updateConversationRolePatches(
+                    conversationID: conversationID,
+                    roles: roles,
+                    skipControlPlaneRevisionBump: true
+                )
+            }
         }
         if let routingToolPolicy = patch.routingToolPolicy {
             try await updateConversationRoutingToolPolicy(

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SwiftAgentHarness HTTP API
-  version: 1.37.0
+  version: 1.38.0
   description: |
     Control plane for SwiftAgentHarness (Vapor `/api` group). Does not include WebSocket `/ws` —
     see `asyncapi.yaml` and `schemas/ws/` for harness-shaped envelopes.
@@ -100,6 +100,8 @@ info:
 
     **v1.37.0:** **`POST /conversations/{id}/revert`** commits HTTP **200** to the wire before the first assistant token (early chunked-body flush, typically a leading `\n` keepalive) so clients that wait on response headers / first byte are not blocked by provider TTFT or model cold-start. The success body remains raw UTF-8 assistant text chunks; leading flush bytes are ignorable whitespace only (not JSON error framing).
 
+    **v1.38.0:** Computer use: **`GET /conversations/{id}/computer-use`** lists pending questions and handoffs, live specialist sessions, and each target's live **`locked`** state; **`POST …/computer-use/requests/{requestID}`** answers a question or handoff; **`POST …/computer-use/stop`** and **`…/takeover`** control a running session; run audit, live-view links (observers, connections) and replays with thumbnails live under **`…/computer-use/runs/{lifecycleID}`** and **`…/computer-use/replays`**. **`GET /conversations/{id}/blobs/{blobID}`** serves conversation blobs (including approval-card images). Approval resolution accepts optional **`answeredOffTarget`**. WebSocket (AsyncAPI 1.1.0): **`ConversationStatePayload.pendingApprovals`** lists approvals still waiting, rebroadcast on raise, resolve and withdraw; client-surface intents add **`computerUseRequest`**, **`computerUseRequestCleared`** and **`computerUseActivity`**; approval presentations add **`image`** blocks; route receipts are documented in **`route-receipt-wire.schema.json`**. All additive.
+
 servers:
   - url: "{origin}/api"
     description: Replace `{origin}` with server origin (scheme + host + port); paths below are relative to `/api`.
@@ -118,6 +120,11 @@ tags:
     description: File upload for chat attachments
   - name: ExecApprovals
     description: Exec-approval resolution and durable command grants
+  - name: ComputerUse
+    description: |
+      User controls over computer-use specialists working for a conversation. Requests and activity are
+      announced on `conversation/{id}/events` as `surfaceIntent` events (`computerUseRequest`,
+      `computerUseRequestCleared`, `computerUseActivity`); these routes answer and steer them.
 
 paths:
   /status:
@@ -445,6 +452,50 @@ paths:
           description: Not modified for matching If-None-Match
         "400":
           description: Invalid conversation id or backfill request.
+
+  /conversations/{id}/blobs/{blobID}:
+    get:
+      operationId: getConversationBlob
+      tags: [Conversations]
+      summary: A blob this conversation references
+      description: >-
+        Serves an attachment, a message image, or an image block's `ref` on a message or approval card of this
+        conversation. Needs the same access as reading the conversation. A blob the conversation doesn't reference is
+        `404` even when it exists, so blob ids can't be probed across conversations. The `ETag` is the blob id, which
+        is the SHA-256 of the bytes; blobs never change, so responses are cacheable as immutable.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: blobID
+          in: path
+          required: true
+          description: A 64-character hex blob id.
+          schema:
+            type: string
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The blob's bytes, with its media type
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "304":
+          description: The client's copy is current
+        "404":
+          description: The conversation doesn't reference this blob, or the blob is gone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /conversations/{id}/plan:
     get:
@@ -1739,6 +1790,429 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /conversations/{id}/computer-use:
+    get:
+      operationId: getConversationComputerUse
+      tags: [ComputerUse]
+      summary: Pending computer-use questions and handoffs, live specialist sessions, and each target's lock state
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: What is waiting on the user and what is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseControlStatus"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/requests/{requestID}:
+    post:
+      operationId: resolveComputerUseRequest
+      tags: [ComputerUse]
+      summary: Answer a question, hand control back after a handoff, or decline
+      description: |
+        A question takes `answer` (with a non-empty `answer`) or `decline`; a handoff takes `hand-back`
+        (optionally with a `note`) or `decline`. The waiting specialist resumes with the result.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: requestID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComputerUseRequestResolution"
+      responses:
+        "200":
+          description: Resolution accepted
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such pending request for this conversation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The action does not fit the request kind
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/stop:
+    post:
+      operationId: stopConversationComputerUse
+      tags: [ComputerUse]
+      summary: Kill switch for the conversation's computer-use sessions
+      description: |
+        Ends every live specialist session working for the conversation, releases its display-target lease, and
+        declines its pending requests. Idempotent: returns an empty list when nothing is running.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: The sessions that were stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseSessionsChanged"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/takeover:
+    post:
+      operationId: setConversationComputerUseTakeover
+      tags: [ComputerUse]
+      summary: Take over the screen from a computer-use specialist, or hand it back
+      description: While taken over, the specialist's capture and input are suspended.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComputerUseTakeoverRequest"
+      responses:
+        "200":
+          description: The sessions whose takeover state was set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseSessionsChanged"
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No live session (or none with `lifecycleID`), or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The display target refused the takeover
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/audit:
+    post:
+      operationId: setConversationComputerUseAuditMark
+      tags: [ComputerUse]
+      summary: Mark a computer-use run for audit, or remove the mark
+      description: |
+        A run's screenshots, thumbnails, and replay expire a fixed time after its lease is released. A marked run
+        gets the audit retention instead, which by default holds them until the mark is removed. A live run takes
+        the mark at release; a released run's images move right away.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [marked]
+              properties:
+                marked:
+                  type: boolean
+      responses:
+        "200":
+          description: The run's audit mark and expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseAuditStatus"
+        "400":
+          description: Invalid conversation id or request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live or retained run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view:
+    post:
+      operationId: createConversationComputerUseLiveViewLink
+      tags: [ComputerUse]
+      summary: Mint a live-view link for a live computer-use run
+      description: |
+        Each call mints a new link whose token is in the URL fragment. The link connects once, before
+        `expiresAt`; the connected viewer watches until the connection is revoked or the run's lease ends.
+        Viewers are view-only, and a user link's input reaches the target only while the run is taken over.
+        Sent with `Cache-Control: no-store`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A new live-view link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisplayLiveView"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live run, its target serves no live view, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to make a link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/observers:
+    delete:
+      operationId: endConversationComputerUseLiveViewObservers
+      tags: [ComputerUse]
+      summary: End a live run's observer connections and revoke its unused observer links
+      description: The user's own links and connections are kept.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Observers ended
+        "404":
+          description: No such live run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to end them
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections:
+    get:
+      operationId: listConversationComputerUseLiveViewConnections
+      tags: [ComputerUse]
+      summary: The viewers connected to a live run's live view
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connected viewers, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections]
+                properties:
+                  connections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DisplayLiveViewConnection"
+        "404":
+          description: No such live run, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to list them
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/runs/{lifecycleID}/live-view/connections/{linkID}:
+    delete:
+      operationId: revokeConversationComputerUseLiveViewConnection
+      tags: [ComputerUse]
+      summary: End one live-view connection, or revoke its link if it hasn't connected
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: linkID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Revoked
+        "400":
+          description: Invalid link id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: No such live run or link, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The target failed to revoke it
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/replays:
+    get:
+      operationId: listConversationComputerUseReplays
+      tags: [ComputerUse]
+      summary: Recent computer-use replays for the conversation, newest first
+      description: After a restart the listing is rebuilt from the conversation's delegate results, whose actionsLog names each stored replay. Expired replays are left out.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Replay listing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replays]
+                properties:
+                  replays:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ComputerUseReplaySummary"
+        "404":
+          description: Conversation not found, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/replays/{lifecycleID}:
+    get:
+      operationId: getConversationComputerUseReplay
+      tags: [ComputerUse]
+      summary: One specialist run's action log and observation thumbnails
+      description: A record for review. It is not a script, and re-executing it is not supported.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerUseReplay"
+        "404":
+          description: No such replay for this conversation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /conversations/{id}/computer-use/replays/{lifecycleID}/thumbnails/{observationID}:
+    get:
+      operationId: getConversationComputerUseReplayThumbnail
+      tags: [ComputerUse]
+      summary: A thumbnail the replay lists
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: lifecycleID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: observationID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image bytes
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: The replay doesn't list this observation, or the host has no computer use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   securitySchemes:
     HarnessAccessBearer:
@@ -2815,6 +3289,38 @@ components:
       properties:
         thinkingConfig:
           $ref: "#/components/schemas/ThinkingConfig"
+        roles:
+          type: object
+          description: Per-conversation role overrides keyed by role id (for example `gatekeeper`). Omit to leave stored overrides unchanged; send `{}` to clear them.
+          additionalProperties:
+            $ref: "#/components/schemas/RoleBindingPatch"
+
+    RoleBindingPatch:
+      type: object
+      description: Partial role binding; set fields override the bound role, later layers win.
+      properties:
+        minGuarantee:
+          type: string
+          enum: [free-text, json-mode, schema-strict, logprobs, calibrated-distribution]
+        pin:
+          type: string
+        fallback:
+          type: array
+          items:
+            type: string
+        priority:
+          type: string
+          enum: [foreground, background]
+        locality:
+          type: string
+          enum: [any, local-only, no-vendor-retention]
+        budget:
+          type: object
+          properties:
+            maxUSDPerCall:
+              type: number
+            maxLatencyMs:
+              type: number
 
     ConversationPatchResponse:
       type: object
@@ -3311,6 +3817,286 @@ components:
             type: string
           description: Command names with durable grants, sorted ascending.
 
+    ComputerUsePendingRequest:
+      type: object
+      required: [id, kind, conversationID, prompt, target, createdAt]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [question, handoff]
+        conversationID:
+          type: string
+          format: uuid
+          description: The user's conversation, which delegated the task.
+        lifecycleID:
+          type: string
+          description: The delegate call that started the specialist.
+        prompt:
+          type: string
+        reason:
+          type: string
+          description: Why a handoff is needed (login, 2fa, captcha, payment, ambiguous, consequential).
+        target:
+          type: string
+          description: The display target's label.
+        createdAt:
+          type: string
+          format: date-time
+
+    ComputerUseSessionStatus:
+      type: object
+      required: [lifecycleID, target, step, maxSteps, takenOver, liveView, sharedScreen]
+      properties:
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        step:
+          type: integer
+        maxSteps:
+          type: integer
+        takenOver:
+          type: boolean
+        liveView:
+          type: boolean
+          description: Whether the run's target serves a live view.
+        sharedScreen:
+          type: boolean
+          description: Whether the run's target is someone's own screen, such as their Mac, which the user may be at. A handoff there can be done at the machine as well as through the live view.
+
+    ComputerUseTargetStatus:
+      type: object
+      required: [id, label, locked]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        locked:
+          type: boolean
+          description: Whether the target's OS session is locked, asked of the target when the status is read. A target that doesn't answer within 2 seconds reads false, so treat only true as locked; a client that unlocks the target remotely checks this immediately before typing.
+
+    ComputerUseControlStatus:
+      type: object
+      required: [pending, sessions, targets]
+      properties:
+        pending:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUsePendingRequest"
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseSessionStatus"
+        targets:
+          type: array
+          description: Every registered display target, by id.
+          items:
+            $ref: "#/components/schemas/ComputerUseTargetStatus"
+
+    ComputerUseRequestResolution:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [answer, hand-back, decline]
+        answer:
+          type: string
+          description: Required (non-empty) with `answer`.
+        note:
+          type: string
+          description: Optional with `hand-back`.
+
+    ComputerUseTakeoverRequest:
+      type: object
+      required: ["on"]
+      properties:
+        "on":
+          type: boolean
+        lifecycleID:
+          type: string
+          description: Limit to one session; omitted applies to every live session for the conversation.
+
+    ComputerUseReplaySummary:
+      type: object
+      required: [lifecycleID, target, startedAt, endedAt, steps, actionCount, thumbnailCount]
+      properties:
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        terminalReason:
+          type: string
+        steps:
+          type: integer
+        actionCount:
+          type: integer
+        thumbnailCount:
+          type: integer
+        auditMarked:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the replay and its images expire. Absent while they are held.
+
+    DisplayLiveView:
+      type: object
+      required: [id, url, viewOnly, expiresAt, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The link's id; the connection it makes is listed and revoked under it.
+        role:
+          type: string
+          enum: [user, observer]
+        url:
+          type: string
+          description: The viewer page, with the link's token in the URL fragment.
+        viewOnly:
+          type: boolean
+          description: Whether the link's input was being ignored when it was minted; it carries input during takeover.
+        expiresAt:
+          type: string
+          format: date-time
+          description: After this the link no longer connects.
+
+    DisplayLiveViewConnection:
+      type: object
+      required: [id, role, connectedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The id of the link the viewer connected with.
+        role:
+          type: string
+          enum: [user, observer]
+        connectedAt:
+          type: string
+          format: date-time
+
+    ComputerUseAuditStatus:
+      type: object
+      required: [lifecycleID, auditMarked, released]
+      properties:
+        lifecycleID:
+          type: string
+        auditMarked:
+          type: boolean
+        released:
+          type: boolean
+          description: False while the run is live; the mark takes effect at release.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Absent while the images are held.
+
+    ComputerUseReplayThumbnail:
+      type: object
+      required: [observationID, at, width, height, mediaType, blobID]
+      properties:
+        observationID:
+          type: string
+        at:
+          type: string
+          format: date-time
+        app:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        mediaType:
+          type: string
+        blobID:
+          type: string
+
+    ComputerUseActionRecord:
+      type: object
+      description: One action-log line. Typed text in `canonical` is replaced by its hash.
+      required: [step, at, kind, canonical, binding, observations, actionClass, decision, reason, effect]
+      properties:
+        step:
+          type: integer
+        at:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        canonical:
+          type: string
+        binding:
+          type: string
+        observations:
+          type: array
+          items:
+            type: string
+        actionClass:
+          type: string
+        decision:
+          type: string
+        reason:
+          type: string
+        intentVerdict:
+          type: string
+        effect:
+          type: string
+        evidence:
+          type: string
+
+    ComputerUseReplay:
+      type: object
+      required: [sessionID, parentConversationID, lifecycleID, target, startedAt, endedAt, steps, records, thumbnails]
+      properties:
+        sessionID:
+          type: string
+          format: uuid
+        parentConversationID:
+          type: string
+          format: uuid
+        lifecycleID:
+          type: string
+        target:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        terminalReason:
+          type: string
+        steps:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseActionRecord"
+        thumbnails:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComputerUseReplayThumbnail"
+
+    ComputerUseSessionsChanged:
+      type: object
+      required: [lifecycleIDs]
+      properties:
+        lifecycleIDs:
+          type: array
+          items:
+            type: string
+
     ExecApprovalResolutionRequest:
       type: object
       required: [approved]
@@ -3323,6 +4109,9 @@ components:
         reason:
           type: string
           description: Optional denial reason.
+        answeredOffTarget:
+          type: boolean
+          description: "The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock."
 
     ApprovalDecision:
       type: string
@@ -3346,6 +4135,9 @@ components:
         reason:
           type: string
           description: Optional denial reason.
+        answeredOffTarget:
+          type: boolean
+          description: "The resolving client's own word that it is away from what the approval is about, such as a phone answering for a Mac. Defaults to false. It only ever makes the harness stricter: a computer-use grant answered off the target marks a remote unlock."
 
     SimpleTypeResponse:
       type: object

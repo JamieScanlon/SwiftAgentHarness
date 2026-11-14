@@ -62,7 +62,7 @@ public struct EmbeddedHarnessHost: Sendable {
         await apiLayer.setHTTPPreconditionPolicySettings(httpPreconditions)
         if tenancyPolicy.requireAuthenticatedOwnerOnMutations {
             await apiLayer.setAPIAccessTokenAuthenticationSettings(
-                APIAccessTokenAuthenticationSettings(hs256Secret: "embedded-host-test-secret")
+                APIAccessTokenAuthenticationSettings(hs256Secret: "embedded-host-test-secret-0123456789abcdef")
             )
         }
         await apiLayer.setCommunicationWireResources(

@@ -11,6 +11,8 @@ enum ToolApprovalResolutionKind: String, Sendable, Codable {
     case manual
     case timeoutDefault
     case runtimeAuto
+    /// Allow-once from classifier-assisted gating (the `gatekeeper` decide role).
+    case classifier
 }
 
 struct ToolApprovalResolution: Sendable, Codable, Equatable {
@@ -238,6 +240,11 @@ actor ToolApprovalStateStore {
             else { return nil }
             return key.binding
         }
+    }
+
+    /// Whether any approval for `runID` is still waiting on a person.
+    func hasPendingApproval(runID: UUID) -> Bool {
+        resolutions.contains { key, value in key.runID == runID && value.status == .pending }
     }
 
     func resolveBindingForAPI(

@@ -1,0 +1,37 @@
+name: "iOS build"
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [SwiftAgentHarness, SwiftAgentHarnessProviders]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .derivedData/SourcePackages
+          key: spm-ios-${{ hashFiles('Package.swift') }}
+          restore-keys: spm-ios-
+      - name: Build ${{ matrix.scheme }} for the iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -scheme '${{ matrix.scheme }}' \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .derivedData \
+            -skipPackagePluginValidation \
+            -skipMacroValidation

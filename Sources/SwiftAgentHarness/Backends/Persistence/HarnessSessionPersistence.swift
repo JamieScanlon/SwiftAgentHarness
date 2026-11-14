@@ -140,6 +140,10 @@ protocol HarnessSessionPersistence: CatalogPersistence, TranscriptPersistence {
 
     func promoteBlob(blobId: String) throws -> SessionBlobRef
 
+    /// Sets an ephemeral blob's expiry (`nil` holds it until set again). A durable blob is returned unchanged:
+    /// content addressing means another owner may hold the same bytes.
+    func setBlobExpiry(blobId: String, expiresAt: Date?) throws -> SessionBlobRef
+
     /// Hard delete: removes durable or ephemeral bytes regardless of catalog references.
     /// Caller asserts purge intent (GDPR, admin, delete-everywhere). Ordinary attachment detach must not call this.
     func deleteBlob(blobId: String) throws
@@ -496,6 +500,11 @@ extension HarnessSessionPersistence {
     func promoteBlob(blobId: String) throws -> SessionBlobRef {
         _ = blobId
         throw SessionPersistenceError.unsupportedOperation("promoteBlob")
+    }
+
+    func setBlobExpiry(blobId: String, expiresAt: Date?) throws -> SessionBlobRef {
+        _ = (blobId, expiresAt)
+        throw SessionPersistenceError.unsupportedOperation("setBlobExpiry")
     }
 
     func deleteBlob(blobId: String) throws {

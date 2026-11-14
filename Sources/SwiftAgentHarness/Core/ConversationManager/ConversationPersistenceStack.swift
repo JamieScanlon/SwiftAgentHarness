@@ -565,7 +565,8 @@ final class ConversationPersistenceStack {
             harness: harness,
             conversationManager: conversationManager,
             attachmentTrustRaw: message.inputTrustRaw,
-            addedBy: addedBy
+            addedBy: addedBy,
+            keepsEphemeralBlobs: message.role == .tool
         )
         let persistedMessage = Message(
             id: message.id,

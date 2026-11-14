@@ -674,15 +674,23 @@ final class InMemoryHarnessSessionPersistence: HarnessSessionPersistence, @unche
                 throw SessionPersistenceError.transcriptPayloadInvalid(reason: "ephemeral blob requires ttlSeconds")
             }
             let blobId = SessionBlobStore.sha256Hex(data)
-            if var existing = blobs[blobId] {
-                if existing.trashedAt != nil {
-                    existing.trashedAt = nil
-                    blobs[blobId] = existing
-                }
-                return existing.ref
-            }
             let now = Date()
             let expiresAt = durability == .ephemeral ? now.addingTimeInterval(TimeInterval(ttlSeconds ?? 120)) : nil
+            if var existing = blobs[blobId] {
+                existing.trashedAt = nil
+                if existing.ref.durability == .ephemeral {
+                    if durability == .durable {
+                        // A durable holder must not inherit an ephemeral holder's expiry.
+                        existing.ref.durability = .durable
+                        existing.ref.expiresAt = nil
+                        existing.lane = nil
+                    } else if let current = existing.ref.expiresAt, let expiresAt, expiresAt > current {
+                        existing.ref.expiresAt = expiresAt
+                    }
+                }
+                blobs[blobId] = existing
+                return existing.ref
+            }
             let ref = SessionBlobRef(
                 id: blobId,
                 mimeType: SessionBlobMIME.sniff(data: data, hint: mimeType),
@@ -748,6 +756,19 @@ final class InMemoryHarnessSessionPersistence: HarnessSessionPersistence, @unche
     func blobPath(blobId: String) throws -> URL? {
         _ = blobId
         return nil
+    }
+
+    func setBlobExpiry(blobId: String, expiresAt: Date?) throws -> SessionBlobRef {
+        try sync {
+            let id = SessionBlobStore.normalizeBlobId(blobId)
+            guard var stored = blobs[id] else {
+                throw SessionPersistenceError.blobNotFound(blobId: id)
+            }
+            guard stored.ref.durability == .ephemeral else { return stored.ref }
+            stored.ref.expiresAt = expiresAt
+            blobs[id] = stored
+            return stored.ref
+        }
     }
 
     func promoteBlob(blobId: String) throws -> SessionBlobRef {

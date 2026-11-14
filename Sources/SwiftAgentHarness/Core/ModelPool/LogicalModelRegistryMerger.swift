@@ -123,8 +123,31 @@ enum LogicalModelRegistryMerger {
             performance: coalesceOptional(sortedSources.map(\.performance)),
             routing: authoritative.routing ?? bindings.first?.routing,
             compat: authoritative.compat ?? coalesceOptional(sortedSources.map(\.compat)),
-            canonicalModelKey: key
+            canonicalModelKey: key,
+            contracts: mergedContracts(sortedSources),
+            compatGroup: authoritative.compatGroup ?? coalesceOptional(sortedSources.map(\.compatGroup)),
+            lifecycle: authoritative.lifecycle,
+            prices: authoritative.prices,
+            locality: authoritative.locality ?? coalesceOptional(sortedSources.map(\.locality)),
+            roles: orderedUnion(sortedSources.map(\.roles))
         )
+    }
+
+    /// Union of contract profiles across sources (first source wins per contract). Stays empty, meaning
+    /// "synthesize generate", only when every source is a legacy chat row.
+    private static func mergedContracts(_ sources: [ModelRegistryEntry]) -> [ContractProfile] {
+        guard sources.contains(where: { !$0.contracts.isEmpty }) else { return [] }
+        var seen = Set<ModelContract>()
+        var merged: [ContractProfile] = []
+        for profile in sources.flatMap(\.contractProfiles) where seen.insert(profile.contract).inserted {
+            merged.append(profile)
+        }
+        return merged
+    }
+
+    private static func orderedUnion(_ lists: [[String]]) -> [String] {
+        var seen = Set<String>()
+        return lists.flatMap { $0 }.filter { seen.insert($0).inserted }
     }
 
     private static func sourceRank(

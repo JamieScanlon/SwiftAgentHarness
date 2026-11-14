@@ -79,14 +79,14 @@ actor ConversationMessagingRuntimeService {
         var messages: [Message] = []
         messages.reserveCapacity(inputMessages.count)
         var replayContext = updatedConversation.messages
-        let spillWriter = HarnessSessionPersistenceSpillWriter(
-            persistence: await persistenceDomain.harnessSessionPersistence
-        )
+        let harnessPersistence = await persistenceDomain.harnessSessionPersistence
+        let spillWriter = HarnessSessionPersistenceSpillWriter(persistence: harnessPersistence)
         let persistencePipeline = persistenceToolResultMiddlewarePipeline(
             conversationID: conversationID,
             spillWriter: spillWriter,
             logger: logger
         )
+        let toolImageExpiry = await deps.computerUse.toolImageExpiry(conversationID: conversationID)
         for message in inputMessages {
             guard message.role == .tool else {
                 messages.append(message)
@@ -97,23 +97,19 @@ actor ConversationMessagingRuntimeService {
             let transformedResult = await persistencePipeline.apply(
                 stage: .persistence,
                 toolCall: toolCall,
-                result: ToolResult(
-                    success: true,
-                    content: message.content,
-                    metadata: .object([:]),
-                    toolCallId: message.toolCallId
-                )
+                result: ToolResult(toolMessage: message)
             )
-            let rewrittenMessage = Message(
-                id: message.id,
-                role: message.role,
-                content: transformedResult.content,
-                timestamp: message.timestamp,
-                images: message.images,
-                toolCalls: message.toolCalls,
-                toolCallId: message.toolCallId,
-                responseFormat: message.responseFormat
+            let (rewrittenMessage, storedBlobIDs) = ToolMessageImageOffload.offload(
+                message.replacingToolResult(transformedResult),
+                harness: harnessPersistence,
+                ephemeralUntil: toolImageExpiry
             )
+            if let toolImageExpiry {
+                // Another holder of the same bytes may keep them longer; the store gets the latest reference.
+                for expiry in await deps.computerUse.blobs.hold(storedBlobIDs, childConversationID: conversationID, until: toolImageExpiry) {
+                    _ = try? harnessPersistence.setBlobExpiry(blobId: expiry.blobID, expiresAt: expiry.expiresAt)
+                }
+            }
             messages.append(rewrittenMessage)
             replayContext.append(rewrittenMessage)
         }
@@ -470,6 +466,13 @@ actor ConversationMessagingRuntimeService {
                     await self.applyToolResultTransform(toolCall: toolCall, result: result)
                 },
                 ToolResultMiddlewareRegistration(
+                    id: "injection-probe",
+                    stage: .runtimeDelivery,
+                    order: 150
+                ) { toolCall, result in
+                    await self.applyInjectionProbeMiddleware(toolCall: toolCall, result: result)
+                },
+                ToolResultMiddlewareRegistration(
                     id: "external-content-envelope",
                     stage: .runtimeDelivery,
                     order: 200
@@ -478,6 +481,30 @@ actor ConversationMessagingRuntimeService {
                 },
             ]
         )
+    }
+
+    /// Injection probe on external content only (results the envelope will wrap). It can only prepend a warning;
+    /// the envelope at order 200 still wraps the content, so caution is never removed.
+    private func applyInjectionProbeMiddleware(toolCall: ToolCall, result: ToolResult) async -> ToolResult {
+        guard let probe = deps.decisionConsumers.injectionProbe else { return result }
+        let entry = await toolEntryLookup.entry(named: toolCall.name)
+        let external = ToolExternalContentPolicy.resolve(toolName: toolCall.name, entry: entry)
+        guard external.shouldWrap else { return result }
+        let conversationID = await runtimeScopedConversationID()
+        let patches = await DecisionRolePatchLoader.patches(
+            for: conversationID, persistenceDomain: deps.persistenceDomain, modeRegistry: deps.modeRegistry, logger: deps.logger
+        )
+        var knownSecrets: [String] = []
+        if let conversationID, let session = await deps.computerUse.sessions.session(for: conversationID) {
+            knownSecrets = await session.knownSecrets()
+        }
+        guard let warning = await probe.warning(
+            toolName: toolCall.name,
+            content: ComputerUseSecrets.probeInput(result.content, source: external.source, known: knownSecrets),
+            conversationID: conversationID,
+            rolePatches: patches
+        ) else { return result }
+        return result.replacingText(warning + "\n" + result.content)
     }
 
     private func applyExternalContentMiddleware(toolCall: ToolCall, result: ToolResult) async -> ToolResult {
@@ -512,12 +539,7 @@ actor ConversationMessagingRuntimeService {
             toolResultContent: result.content
         )
         guard content != result.content else { return result }
-        return ToolResult(
-            success: result.success,
-            content: content,
-            metadata: result.metadata,
-            toolCallId: result.toolCallId
-        )
+        return result.replacingText(content)
     }
 
     /// Applies host-registered runtime-delivery middleware (the ``registerAgentToolResultMiddleware``
@@ -744,7 +766,7 @@ actor ConversationMessagingRuntimeService {
         toolName: String,
         entry: ToolRegistryEntry?,
         spillWriter: HarnessSessionPersistenceSpillWriter,
-        modelSupportsVision: Bool
+        modelImages: ModelImageSupport
     ) -> ToolResultFormattingSpillContext {
         ToolResultFormattingSpillContext(
             conversationID: conversationID,
@@ -752,15 +774,26 @@ actor ConversationMessagingRuntimeService {
             entry: entry,
             spillWriter: spillWriter,
             logger: logger,
-            modelSupportsVision: modelSupportsVision
+            modelSupportsVision: modelImages.vision,
+            modelMaxImageEdgePx: modelImages.maxImageEdgePx
         )
     }
 
-    private func modelSupportsVision(conversationID: UUID) async -> Bool {
+    private struct ModelImageSupport {
+        var vision: Bool
+        var maxImageEdgePx: Int?
+    }
+
+    /// Vision support and image caps for the conversation's model; caps come from its registry `generate` profile.
+    private func modelImageSupport(conversationID: UUID) async -> ModelImageSupport {
         guard let conversation = await persistenceDomain.modelConversation(id: conversationID) else {
-            return false
+            return ModelImageSupport(vision: false)
         }
-        return conversation.model.capabilities.contains(.vision)
+        let profile = await deps.registryEntryProvider?(conversation.model.id)?.profile(for: .generate)
+        return ModelImageSupport(
+            vision: conversation.model.capabilities.contains(.vision),
+            maxImageEdgePx: profile?.effectiveMaxImageEdgePx
+        )
     }
 
     private func persistenceToolResultMiddlewarePipeline(
@@ -777,13 +810,13 @@ actor ConversationMessagingRuntimeService {
                     order: 100
                 ) { toolCall, result in
                     let entry = await self.toolEntryLookup.entry(named: toolCall.name)
-                    let supportsVision = await self.modelSupportsVision(conversationID: conversationID)
+                    let modelImages = await self.modelImageSupport(conversationID: conversationID)
                     let spillContext = await self.toolResultFormattingSpillContext(
                         conversationID: conversationID,
                         toolName: toolCall.name,
                         entry: entry,
                         spillWriter: spillWriter,
-                        modelSupportsVision: supportsVision
+                        modelImages: modelImages
                     )
                     return ToolResultFormattingStack.apply(
                         result: result,
@@ -814,13 +847,13 @@ actor ConversationMessagingRuntimeService {
         let spillWriter = HarnessSessionPersistenceSpillWriter(
             persistence: await persistenceDomain.harnessSessionPersistence
         )
-        let supportsVision = await modelSupportsVision(conversationID: conversationID)
+        let modelImages = await modelImageSupport(conversationID: conversationID)
         let spillContext = toolResultFormattingSpillContext(
             conversationID: conversationID,
             toolName: toolCall.name,
             entry: entry,
             spillWriter: spillWriter,
-            modelSupportsVision: supportsVision
+            modelImages: modelImages
         )
         return ToolResultFormattingStack.apply(
             result: result,

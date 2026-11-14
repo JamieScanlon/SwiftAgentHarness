@@ -91,7 +91,7 @@
     },
     "approvalResolutionKind": {
       "type": "string",
-      "enum": ["manual", "timeoutDefault", "runtimeAuto"]
+      "enum": ["manual", "timeoutDefault", "runtimeAuto", "classifier"]
     },
     "approvalPresentation": {
       "$ref": "approval-presentation.schema.json"

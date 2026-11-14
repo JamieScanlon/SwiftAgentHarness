@@ -5,13 +5,17 @@ public struct DefaultProviderOptions: Sendable {
     public var installBootstrapHook: Bool
     /// Host-defined API-server inference providers (any count). Empty = none registered via this path.
     public var inferenceRuntimes: [InferenceRuntimeConfig]
+    /// Host-defined decision providers (`decide` contract). Empty = no deciders; decide roles stay off.
+    public var decisionRuntimes: [DecisionRuntimeConfig]
 
     public init(
         installBootstrapHook: Bool = true,
-        inferenceRuntimes: [InferenceRuntimeConfig] = []
+        inferenceRuntimes: [InferenceRuntimeConfig] = [],
+        decisionRuntimes: [DecisionRuntimeConfig] = []
     ) {
         self.installBootstrapHook = installBootstrapHook
         self.inferenceRuntimes = inferenceRuntimes
+        self.decisionRuntimes = decisionRuntimes
     }
 }
 
@@ -29,15 +33,24 @@ public func registerDefaults(
         DefaultProviderAdapterFactories.installAll()
         if options.installBootstrapHook {
             let runtimes = options.inferenceRuntimes
+            let deciders = options.decisionRuntimes
             ProviderRegistry.installBootstrap {
-                registerDefaults(options: .init(installBootstrapHook: false, inferenceRuntimes: runtimes))
+                registerDefaults(options: .init(
+                    installBootstrapHook: false,
+                    inferenceRuntimes: runtimes,
+                    decisionRuntimes: deciders
+                ))
             }
         }
         try? registerOpenAI()
         try? registerAnthropic()
         try? registerOpenRouter()
+        try? registerGemini()
         for runtime in options.inferenceRuntimes {
             try? registerInferenceRuntime(runtime)
+        }
+        for runtime in options.decisionRuntimes {
+            try? ProviderRegistry.register(runtime.registration())
         }
     }
 }
@@ -67,6 +80,14 @@ private func registerAnthropic() throws {
         manifest: manifest,
         textInference: AnthropicTextInferenceProvider(manifest: manifest),
         mediaUnderstanding: StubMediaUnderstandingProvider(manifest: manifest)
+    ))
+}
+
+private func registerGemini() throws {
+    let manifest = try BundledProviderManifestLoader.loadManifest(for: "gemini")
+    try ProviderRegistry.register(ProviderRegistration(
+        manifest: manifest,
+        textInference: GeminiTextInferenceProvider(manifest: manifest)
     ))
 }
 
@@ -124,6 +145,7 @@ private func templateManifestID(for adapterKind: ProviderAdapterKind) -> Provide
     case .openAICompat: return "openai"
     case .anthropic: return "anthropic"
     case .openRouter: return "openrouter"
+    case .gemini: return "gemini"
     default: return adapterKind.rawValue
     }
 }

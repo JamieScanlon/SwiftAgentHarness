@@ -13,7 +13,8 @@ public enum ExecApprovalInbound {
         strictTenancy: Bool,
         ownerScope: UUID?,
         store: ExecApprovalStore = .shared,
-        reason: String? = nil
+        reason: String? = nil,
+        answeredOffTarget: Bool = false
     ) async -> ExecApprovalResolution? {
         guard let decision = ApprovalDecision.fromToken(actionID) else { return nil }
         switch decision {
@@ -24,7 +25,8 @@ public enum ExecApprovalInbound {
                 strictTenancy: strictTenancy,
                 ownerScope: ownerScope,
                 approved: true,
-                durable: false
+                durable: false,
+                answeredOffTarget: answeredOffTarget
             )
         case .allowAlways:
             return await store.resolve(
@@ -33,7 +35,8 @@ public enum ExecApprovalInbound {
                 strictTenancy: strictTenancy,
                 ownerScope: ownerScope,
                 approved: true,
-                durable: true
+                durable: true,
+                answeredOffTarget: answeredOffTarget
             )
         case .deny, .timeout, .cancelled:
             return await store.resolve(
@@ -42,7 +45,8 @@ public enum ExecApprovalInbound {
                 strictTenancy: strictTenancy,
                 ownerScope: ownerScope,
                 approved: false,
-                reason: reason ?? "denied"
+                reason: reason ?? "denied",
+                answeredOffTarget: answeredOffTarget
             )
         }
     }

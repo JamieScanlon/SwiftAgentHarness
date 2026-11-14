@@ -6,6 +6,19 @@ import SwiftAgentKit
 /// service reaches the same embedded-REST-with-runtime-fallback path Memory and Triggers use.
 typealias LocalAgentChildRunPort = @Sendable (UUID, String) async throws -> Void
 
+/// When a child run must end. Re-read after every wait, so a delegate that manages its own budget can move it.
+enum LocalAgentRunDeadline {
+    /// Returns once the deadline has passed; throws `CancellationError` when cancelled first. The deadline is read
+    /// at least every `recheck`, so one that moves earlier takes effect promptly.
+    static func wait(until deadline: @escaping @Sendable () async -> Date, recheck: Duration = .seconds(5)) async throws {
+        while true {
+            let remaining = await deadline().timeIntervalSinceNow
+            guard remaining > 0 else { return }
+            try await Task.sleep(for: min(.seconds(remaining), recheck))
+        }
+    }
+}
+
 extension SubAgentSpawnService {
     /// Outcome of a blocking in-process delegate run, derived from runtime signals rather than from
     /// whatever the child's assistant text claims.
@@ -13,6 +26,8 @@ extension SubAgentSpawnService {
         case completed(String)
         case failed(String)
         case timedOut(TimeInterval)
+        /// No event for the agent's idle timeout: a hung model call or tool, not slow work.
+        case idleTimedOut(TimeInterval)
         case cancelled
     }
 
@@ -59,52 +74,16 @@ extension SubAgentSpawnService {
 
         let childID: UUID
         do {
-            let orchestrationEntries = await subAgentPool.refreshSubAgentCatalog(conversationID: conversationID) { [orchestratorRuntime, agentRuntime] _ in
-                guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else { return [] }
-                return await orchestratorRuntime.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
-            }
-            let parentProfile = await resolvedModeProfile(for: parentConversation)
-            let parentDepth = await conversationDepth(conversationID: conversationID)
-            let preparedLaunch = try await subAgentExecutionCoordinator.prepareLaunch(
-                parentConversationID: conversationID,
+            childID = try await spawnLocalAgentChild(
+                conversationID: conversationID,
                 parentConversation: parentConversation,
-                request: SubAgentSpawnRequest(
-                    context: .isolated,
-                    taskDescription: label,
-                    prompt: instructions,
-                    subagentType: SubAgentTransportKind.inProcess.rawValue,
-                    agentID: toolEntry.name,
-                    runInBackground: runInBackground,
-                    topic: label,
-                    interactionMode: definition.modeProfileID,
-                    toolsAllow: definition.toolsAllow
-                ),
-                orchestrationEntries: orchestrationEntries,
-                modeSubAgentAllowList: parentProfile.subAgents.allow,
-                modeProfileMaxDepth: Self.effectiveMaxDepth(
-                    modeProfileMaxDepth: parentProfile.subAgents.maxDepth,
-                    definitionMaxDepth: definition.maxRecursionDepth
-                ),
-                parentDepth: parentDepth
-            )
-            // One prepared launch, one lifecycle row keyed by tool-call id, one run-lane
-            // acquisition that the terminal upsert below releases.
-            var prepared = preparedLaunch
-            if runInBackground {
-                // `planLaunch` derives the async handle from `agentID` — the delegate tool name —
-                // which collides across concurrent calls to the same agent. Key it to this tool
-                // call so completion announcements correlate to the right invocation.
-                prepared.launchPlan.asyncHandleID = lifecycleID
-            }
-            childID = try await performSpawn(
-                parentConversationID: conversationID,
-                parentConversation: parentConversation,
-                parentProfile: parentProfile,
-                parentDepth: parentDepth,
-                preparedLaunch: prepared,
-                modelOverride: modelOverride,
-                lifecycleIDOverride: lifecycleID,
-                adoptChildSelection: false
+                toolEntry: toolEntry,
+                definition: definition,
+                instructions: instructions,
+                label: label,
+                runInBackground: runInBackground,
+                lifecycleID: lifecycleID,
+                modelOverride: modelOverride
             )
         } catch {
             await finishLocalAgentLifecycle(
@@ -131,7 +110,8 @@ extension SubAgentSpawnService {
                 let outcome = await self.runLocalAgentChild(
                     childConversationID: childID,
                     prompt: instructions,
-                    timeoutSeconds: definition.runTimeoutSeconds
+                    timeoutSeconds: definition.runTimeoutSeconds,
+                    idleTimeoutSeconds: definition.idleTimeoutSeconds
                 )
                 await self.finishLocalAgentLifecycle(
                     lifecycleID: lifecycleID,
@@ -160,7 +140,8 @@ extension SubAgentSpawnService {
         let outcome = await runLocalAgentChild(
             childConversationID: childID,
             prompt: instructions,
-            timeoutSeconds: definition.runTimeoutSeconds
+            timeoutSeconds: definition.runTimeoutSeconds,
+            idleTimeoutSeconds: definition.idleTimeoutSeconds
         )
         await finishLocalAgentLifecycle(
             lifecycleID: lifecycleID,
@@ -175,6 +156,68 @@ extension SubAgentSpawnService {
                 toolCallId: call.id,
                 content: Self.toolResultContent(for: outcome, displayName: definition.displayName)
             )
+        )
+    }
+
+    /// Spawns the isolated child for an in-process delegate on the caller's lifecycle id, under the
+    /// definition's mode profile and tool allow list.
+    func spawnLocalAgentChild(
+        conversationID: UUID,
+        parentConversation: ModelConversation,
+        toolEntry: ToolRegistryEntry,
+        definition: LocalAgentDefinition,
+        instructions: String,
+        label: String,
+        runInBackground: Bool,
+        lifecycleID: String,
+        modelOverride: Model?
+    ) async throws -> UUID {
+        let orchestrationEntries = await subAgentPool.refreshSubAgentCatalog(conversationID: conversationID) { [orchestratorRuntime, agentRuntime] _ in
+            guard let orchestrator = await agentRuntime.orchestrator(for: conversationID) else { return [] }
+            return await orchestratorRuntime.allToolRegistryEntriesForOrchestration(orchestrator: orchestrator)
+        }
+        let parentProfile = await resolvedModeProfile(for: parentConversation)
+        let parentDepth = await conversationDepth(conversationID: conversationID)
+        let preparedLaunch = try await subAgentExecutionCoordinator.prepareLaunch(
+            parentConversationID: conversationID,
+            parentConversation: parentConversation,
+            request: SubAgentSpawnRequest(
+                context: .isolated,
+                taskDescription: label,
+                prompt: instructions,
+                subagentType: SubAgentTransportKind.inProcess.rawValue,
+                agentID: toolEntry.name,
+                runInBackground: runInBackground,
+                topic: label,
+                interactionMode: definition.modeProfileID,
+                toolsAllow: definition.toolsAllow
+            ),
+            orchestrationEntries: orchestrationEntries,
+            modeSubAgentAllowList: parentProfile.subAgents.allow,
+            modeProfileMaxDepth: Self.effectiveMaxDepth(
+                modeProfileMaxDepth: parentProfile.subAgents.maxDepth,
+                definitionMaxDepth: definition.maxRecursionDepth
+            ),
+            parentDepth: parentDepth
+        )
+        // One prepared launch, one lifecycle row keyed by tool-call id, one run-lane
+        // acquisition that the terminal upsert releases.
+        var prepared = preparedLaunch
+        if runInBackground {
+            // `planLaunch` derives the async handle from `agentID` — the delegate tool name —
+            // which collides across concurrent calls to the same agent. Key it to this tool
+            // call so completion announcements correlate to the right invocation.
+            prepared.launchPlan.asyncHandleID = lifecycleID
+        }
+        return try await performSpawn(
+            parentConversationID: conversationID,
+            parentConversation: parentConversation,
+            parentProfile: parentProfile,
+            parentDepth: parentDepth,
+            preparedLaunch: prepared,
+            modelOverride: modelOverride,
+            lifecycleIDOverride: lifecycleID,
+            adoptChildSelection: false
         )
     }
 
@@ -249,6 +292,7 @@ extension SubAgentSpawnService {
         case .completed: "completed"
         case .failed: "failed"
         case .timedOut: "timed out"
+        case .idleTimedOut: "idle timeout"
         case .cancelled: "cancelled"
         }
         return """
@@ -269,11 +313,34 @@ extension SubAgentSpawnService {
 
     /// Drives the child run to completion under a wall-clock budget, cancelling the child if the
     /// parent turn is cancelled or the budget expires.
-    private func runLocalAgentChild(
+    func runLocalAgentChild(
         childConversationID: UUID,
         prompt: String,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        idleTimeoutSeconds: TimeInterval? = nil
     ) async -> LocalAgentRunOutcome {
+        let end = Date().addingTimeInterval(timeoutSeconds)
+        return await runLocalAgentChild(
+            childConversationID: childConversationID,
+            prompt: prompt,
+            deadline: { end },
+            budgetSeconds: timeoutSeconds,
+            idleTimeoutSeconds: idleTimeoutSeconds
+        )
+    }
+
+    /// Drives the child run to completion before `deadline`, which is re-read so it can move, cancelling the
+    /// child if the parent turn is cancelled, the deadline passes, or the child produces nothing for
+    /// `idleTimeoutSeconds`. The child reports its events into `liveness` through ``DelegateLiveness/current``.
+    func runLocalAgentChild(
+        childConversationID: UUID,
+        prompt: String,
+        deadline: @escaping @Sendable () async -> Date,
+        budgetSeconds: TimeInterval? = nil,
+        idleTimeoutSeconds: TimeInterval? = nil,
+        liveness: DelegateLiveness = DelegateLiveness()
+    ) async -> LocalAgentRunOutcome {
+        let started = Date()
         guard let childRun = localAgentChildRunPort else {
             return .failed("in-process delegate runtime is not configured")
         }
@@ -281,7 +348,9 @@ extension SubAgentSpawnService {
             await withTaskGroup(of: LocalAgentRunOutcome?.self) { group in
                 group.addTask {
                     do {
-                        try await childRun(childConversationID, prompt)
+                        try await DelegateLiveness.$current.withValue(liveness) {
+                            try await childRun(childConversationID, prompt)
+                        }
                         return nil
                     } catch is CancellationError {
                         return LocalAgentRunOutcome.cancelled
@@ -290,13 +359,22 @@ extension SubAgentSpawnService {
                     }
                 }
                 group.addTask {
-                    let nanoseconds = UInt64(max(1, timeoutSeconds * 1000)) * 1_000_000
                     do {
-                        try await Task.sleep(nanoseconds: nanoseconds)
+                        try await LocalAgentRunDeadline.wait(until: deadline)
                     } catch {
                         return LocalAgentRunOutcome.cancelled
                     }
-                    return LocalAgentRunOutcome.timedOut(timeoutSeconds)
+                    return LocalAgentRunOutcome.timedOut(budgetSeconds ?? Date().timeIntervalSince(started).rounded())
+                }
+                if let idleTimeoutSeconds, idleTimeoutSeconds > 0 {
+                    group.addTask {
+                        do {
+                            try await liveness.waitUntilIdle(for: idleTimeoutSeconds)
+                        } catch {
+                            return LocalAgentRunOutcome.cancelled
+                        }
+                        return LocalAgentRunOutcome.idleTimedOut(idleTimeoutSeconds)
+                    }
                 }
                 let first: LocalAgentRunOutcome?
                 if let produced = await group.next() {
@@ -315,7 +393,8 @@ extension SubAgentSpawnService {
 
         switch completion {
         case .some(let terminal):
-            await cancelChildRunForSubAgent(childConversationID: childConversationID)
+            let reason: String? = if case .idleTimedOut = terminal { Self.idleTimeoutCancelReason } else { nil }
+            await cancelChildRunForSubAgent(childConversationID: childConversationID, reason: reason)
             return terminal
         case .none:
             guard let text = await lastAssistantText(childConversationID: childConversationID) else {
@@ -332,7 +411,7 @@ extension SubAgentSpawnService {
         return conversation.messages.last(where: { $0.role == .assistant })?.content
     }
 
-    private func resolveLocalAgentModel(_ modelRef: String) async -> Model? {
+    func resolveLocalAgentModel(_ modelRef: String) async -> Model? {
         guard let reference = ModelReference.parse(modelRef),
               let ranked = deps.rankedRegistryEntriesProvider else {
             return nil
@@ -342,7 +421,7 @@ extension SubAgentSpawnService {
 
     /// Terminal lifecycle transition. Routing through `upsertSubAgentLifecycleEntry` is what
     /// releases the run-lane slot acquired during spawn.
-    private func finishLocalAgentLifecycle(
+    func finishLocalAgentLifecycle(
         lifecycleID: String,
         parentConversationID: UUID,
         childConversationID: UUID?,
@@ -388,6 +467,8 @@ extension SubAgentSpawnService {
             // Name the setting: a bare "300s timeout" is indistinguishable from the tool-call
             // timeout, which fails for an entirely different reason and has a different fix.
             return "Delegate '\(displayName)' exceeded its runTimeoutSeconds budget of \(Int(seconds))s and was cancelled."
+        case .idleTimedOut(let seconds):
+            return "Delegate '\(displayName)' produced nothing for \(Int(seconds))s (its idleTimeoutSeconds) and was cancelled. That usually points at the model or a tool call that hung rather than at the task."
         case .cancelled:
             return "Delegate '\(displayName)' was cancelled."
         }
@@ -427,11 +508,14 @@ extension SubAgentSpawnService {
 }
 
 extension SubAgentSpawnService {
+    /// The cancellation reason a child run records when its idle timeout fires.
+    static let idleTimeoutCancelReason = "idle-timeout"
+
     /// Terminal phase derived from runtime signals, never from the child's self-reported text.
     static func lifecyclePhase(for outcome: LocalAgentRunOutcome) -> SubAgentLifecyclePhase {
         switch outcome {
         case .completed: .done
-        case .failed, .timedOut, .cancelled: .failed
+        case .failed, .timedOut, .idleTimedOut, .cancelled: .failed
         }
     }
 
@@ -440,6 +524,7 @@ extension SubAgentSpawnService {
         case .completed: nil
         case .failed(let message): message
         case .timedOut(let seconds): "delegate run exceeded runTimeoutSeconds budget of \(Int(seconds))s"
+        case .idleTimedOut(let seconds): "\(idleTimeoutCancelReason): no events for \(Int(seconds))s"
         case .cancelled: "delegate run cancelled"
         }
     }

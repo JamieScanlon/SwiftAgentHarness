@@ -13,4 +13,6 @@ public enum ProviderCapabilitySlot: String, Sendable, Codable, CaseIterable, Has
     case musicGeneration = "music-generation"
     case webFetch = "web-fetch"
     case webSearch = "web-search"
+    /// Calibrated closed-question models (`decide` contract).
+    case decision
 }

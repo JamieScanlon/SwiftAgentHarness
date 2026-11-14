@@ -792,6 +792,8 @@ public struct SubAgentHostingPolicyConfiguration: Sendable {
     private let defaultPolicy: SubAgentHostingPolicy
     private let policiesByDelegateToolName: [String: SubAgentHostingPolicy]
     private let policiesByHostPersonaID: [String: SubAgentHostingPolicy]
+    private let defaultLimits: SubAgentLimits
+    private let limitsByDelegateToolName: [String: SubAgentLimits]
 
     public static let empty = SubAgentHostingPolicyConfiguration(
         defaultPolicy: SubAgentHostingPolicy(),
@@ -802,15 +804,23 @@ public struct SubAgentHostingPolicyConfiguration: Sendable {
     public init(
         defaultPolicy: SubAgentHostingPolicy,
         policiesByDelegateToolName: [String: SubAgentHostingPolicy],
-        policiesByHostPersonaID: [String: SubAgentHostingPolicy]
+        policiesByHostPersonaID: [String: SubAgentHostingPolicy],
+        defaultLimits: SubAgentLimits = SubAgentLimits(),
+        limitsByDelegateToolName: [String: SubAgentLimits] = [:]
     ) {
         self.defaultPolicy = defaultPolicy
         self.policiesByDelegateToolName = policiesByDelegateToolName
         self.policiesByHostPersonaID = policiesByHostPersonaID
+        self.defaultLimits = defaultLimits
+        self.limitsByDelegateToolName = limitsByDelegateToolName
     }
 
     public func policy(forDelegateToolName name: String) -> SubAgentHostingPolicy {
         policiesByDelegateToolName[name] ?? defaultPolicy
+    }
+
+    public func limits(forDelegateToolName name: String) -> SubAgentLimits {
+        limitsByDelegateToolName[name] ?? defaultLimits
     }
 
     public func policy(forHostPersonaID hostPersonaID: String) -> SubAgentHostingPolicy? {
@@ -838,13 +848,16 @@ public struct SubAgentHostingPolicyConfiguration: Sendable {
             return .empty
         }
         let defaultPolicy = parsePolicy(root["defaults"] as? [String: Any]) ?? SubAgentHostingPolicy()
+        let defaultLimits = parseLimits(root["defaults"] as? [String: Any], inheriting: SubAgentLimits())
         var byToolName: [String: SubAgentHostingPolicy] = [:]
         var byHostPersonaID: [String: SubAgentHostingPolicy] = [:]
+        var limitsByToolName: [String: SubAgentLimits] = [:]
         if let entries = root["entries"] as? [String: Any] {
             for (toolName, raw) in entries {
                 guard let object = raw as? [String: Any],
                       let policy = parsePolicy(object) else { continue }
                 byToolName[toolName] = policy
+                limitsByToolName[toolName] = parseLimits(object, inheriting: defaultLimits)
                 if let hostPersonaID = policy.hostPersonaID, !hostPersonaID.isEmpty {
                     byHostPersonaID[hostPersonaID] = policy
                 }
@@ -853,8 +866,19 @@ public struct SubAgentHostingPolicyConfiguration: Sendable {
         return SubAgentHostingPolicyConfiguration(
             defaultPolicy: defaultPolicy,
             policiesByDelegateToolName: byToolName,
-            policiesByHostPersonaID: byHostPersonaID
+            policiesByHostPersonaID: byHostPersonaID,
+            defaultLimits: defaultLimits,
+            limitsByDelegateToolName: limitsByToolName
         )
+    }
+
+    /// Reads a policy object's `limits`. A missing or invalid `idleTimeoutSeconds` keeps the inherited value.
+    private static func parseLimits(_ raw: [String: Any]?, inheriting inherited: SubAgentLimits) -> SubAgentLimits {
+        guard let limits = raw?["limits"] as? [String: Any],
+              let rawIdle = limits["idleTimeoutSeconds"],
+              let configured = SubAgentLimits(configuredIdleTimeoutSeconds: rawIdle)
+        else { return inherited }
+        return configured
     }
 
     private static func parsePolicy(_ raw: [String: Any]?) -> SubAgentHostingPolicy? {

@@ -24,4 +24,7 @@ public enum ToolAvailabilityBlockReason: String, Sendable, CaseIterable, Equatab
     case hostingRoutingPolicyDenied
     /// Conversation-level `routing.toolWhitelist` intersection rejects this tool.
     case routingToolWhitelist
+    /// A `defer-loading` tool the conversation hasn't loaded through `tool_search` yet. Not a policy block: once
+    /// loaded it is offered as policy allows.
+    case deferredUntilLoaded
 }

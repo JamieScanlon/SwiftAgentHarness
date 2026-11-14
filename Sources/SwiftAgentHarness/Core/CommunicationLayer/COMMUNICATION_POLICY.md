@@ -32,9 +32,16 @@ Implementation lives under this folder; the HTTP gateway ([`APILayer`](../API/AP
 
 ### Connection-time identity
 
-Authenticated tenancy uses **`Authorization: Bearer <JWT>`** on REST (`ClientSessionMiddleware`) and WebSocket upgrade (`/ws`). Tokens are HS256 JWTs verified with ``ServerConfig/apiAccessTokenHS256Secret``; the owner principal is the JWT **`sub`** claim (UUID string). When ``requireAuthenticatedTenantOnAPI`` is enabled, ``APILayer/start()`` fails closed unless a validator secret is configured. Deployments must strip client-origin **`Authorization`** (and legacy **`X-SAH-Authenticated-Owner`**) at the reverse proxy and inject a short-lived harness JWT minted after IdP/session validation.
+Authenticated tenancy uses **`Authorization: Bearer <JWT>`** on REST (`ClientSessionMiddleware`) and WebSocket upgrade (`/ws`). Tokens are HS256 JWTs verified with ``ServerConfig/apiAccessTokenHS256Secret``; the owner principal is the JWT **`sub`** claim (UUID string). When ``requireAuthenticatedTenantOnAPI`` is enabled, ``APILayer/start()`` fails closed unless a validator secret is configured. The secret must be at least 32 UTF-8 bytes (RFC 7518 §3.2); a shorter configured secret makes ``APILayer/start()`` throw `accessTokenSecretTooShort` and the validator reject every token. Deployments must strip client-origin **`Authorization`** (and legacy **`X-SAH-Authenticated-Owner`**) at the reverse proxy and inject a short-lived harness JWT minted after IdP/session validation.
 
 TLS/session identity at upgrade remains deployment-owned; topic checks above complement but do not replace perimeter controls.
+
+### Host routes under `/api`
+
+A host adds its own REST routes with ``APILayer/setHostRouteRegistrar(_:)``, set before ``APILayer/start()`` or ``APILayer/makeEmbeddedApplication()``. They mount on the `api` group after the harness's routes, so `ClientSessionMiddleware` and bearer-token resolution apply, and a handler reads the caller from ``APIRequestCaller/authenticatedOwnerAccountID``. Two rules keep them from weakening the harness:
+
+- **Strict tenancy covers every host route.** The harness can't tell a host read from a write, so when ``requireAuthenticatedTenantOnAPI`` is on, any request to a host route without an authenticated owner gets `401`. Scoping the host's own data to that owner is the host's job.
+- **No shadowing.** A host route that could match a request a harness route with the same method matches (a parameter or catch-all segment overlaps anything; constants compare case-insensitively) is not registered, and the harness logs an error naming both.
 
 ### Harness control frames (`kind`)
 
@@ -156,6 +163,7 @@ Tool lifecycle terminality contract: `tool.callStarted` is required when the run
 
 - **`conversation/{id}/events`** carries the **streaming/runtime** timeline (`messagesRefresh`, `contentDelta`, `runtimeLifecycle`, `streamDone`, checkpoint events): all rows carry envelope `seq`; persisted replay anchors remain `messageSeq` / `checkpointSeq`.
 - **`conversation/{id}/state`** is the **authoritative** state-transition channel. `ConversationStatePayload.orchestration` is the only supported websocket source for orchestration state transitions.
+- **Pending approvals** are part of state, not only events. The `execApprovalRequired` surface intent on `events` is live-only, so `ConversationStatePayload.pendingApprovals` lists every approval still waiting (`approvalID`, `kind`, `title`, `command`, `presentation`, `requestedAt`), and the state is rebroadcast whenever one is raised, resolved, or withdrawn. A client that subscribes after an approval was raised (a phone back from suspension, a second device, a relaunch) recovers the card from the subscribe snapshot and resolves it with `POST /api/approvals/{approvalID}`. The field is omitted when nothing is waiting.
 
 ---
 

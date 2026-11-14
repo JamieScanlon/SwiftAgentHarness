@@ -75,6 +75,30 @@ struct A2ASubAgentTransportAdapterTests {
         #expect(mapped?.completionUsage == nil)
     }
 
+    @Test("An A2A task that needs input or auth is running and awaiting input; other states are not")
+    func inputRequiredAwaitsInput() {
+        let session = RemoteTransportSession(
+            correlation: SubAgentTransportInvocationCorrelation(
+                lifecycleID: "lifecycle-3",
+                transportKind: .a2a,
+                sessionHandleID: "agent-1",
+                completionHandleID: "handle-3"
+            ),
+            parentConversationID: UUID(),
+            delegateToolName: "delegate_agent",
+            defaultTrustLevel: SubAgentTrustLevel.knownParty.rawValue,
+            permissionPolicy: SubAgentPermissionPolicy.auto.rawValue,
+            status: .running
+        )
+        for state in [A2ATaskState.inputRequired, .authRequired] {
+            let mapped = SubAgentA2ADelegateStreamMapping.map(event: .statusUpdate(taskID: "t", state: state, final: false), session: session)
+            #expect(mapped?.phase == .running)
+            #expect(mapped?.awaitingInput == true)
+        }
+        let working = SubAgentA2ADelegateStreamMapping.map(event: .statusUpdate(taskID: "t", state: .working, final: false), session: session)
+        #expect(working?.awaitingInput == false)
+    }
+
     @Test("stream mapping maps completion metadata to completion usage")
     func streamMappingMapsCompletionMetadata() {
         let session = RemoteTransportSession(

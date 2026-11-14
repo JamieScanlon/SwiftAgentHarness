@@ -8,6 +8,8 @@ public enum DecodedConversationTopicEvent: Sendable {
     case runtimeLifecycle(RuntimeLifecycleEventPayload, seq: Int?, turnOrdinal: Int?)
     case committedMessages([Message], seq: Int?, turnOrdinal: Int?)
     case surfaceIntent(ClientSurfaceIntent, seq: Int?, turnOrdinal: Int?)
+    /// Which model answered a pool call and why; ``RouteReceiptWire/summary`` is ready to render.
+    case routeReceipt(RouteReceiptWire, seq: Int?, turnOrdinal: Int?)
     case modelLifecycle(seq: Int?, turnOrdinal: Int?)
     case checkpoint(seq: Int?, turnOrdinal: Int?)
     case unknown(semanticKind: String?, seq: Int?, turnOrdinal: Int?)
@@ -118,6 +120,13 @@ public enum ConversationTopicWireDecoding {
                 return .unknown(semanticKind: payload.semanticKind.rawValue, seq: seq, turnOrdinal: turnOrdinal)
             }
             return .surfaceIntent(intent, seq: seq, turnOrdinal: turnOrdinal)
+        case .routeReceipt:
+            guard let jsonUTF8 = payload.jsonUTF8,
+                  let data = jsonUTF8.data(using: .utf8),
+                  let receipt = try? JSONDecoder().decode(RouteReceiptWire.self, from: data) else {
+                return .unknown(semanticKind: payload.semanticKind.rawValue, seq: seq, turnOrdinal: turnOrdinal)
+            }
+            return .routeReceipt(receipt, seq: seq, turnOrdinal: turnOrdinal)
         case .modelLifecycle:
             return .modelLifecycle(seq: seq, turnOrdinal: turnOrdinal)
         case .checkpoint:

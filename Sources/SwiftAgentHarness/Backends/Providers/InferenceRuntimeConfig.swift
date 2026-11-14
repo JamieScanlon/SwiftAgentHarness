@@ -14,6 +14,7 @@ public struct ProviderAdapterKind: RawRepresentable, Hashable, Sendable, Codable
     public static let openAICompat = Self(rawValue: "openai-compat")
     public static let anthropic = Self(rawValue: "anthropic")
     public static let openRouter = Self(rawValue: "openrouter")
+    public static let gemini = Self(rawValue: "gemini")
 }
 
 /// Host-supplied configuration for an API-server inference provider instance.

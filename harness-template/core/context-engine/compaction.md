@@ -165,7 +165,7 @@ Whichever you choose, log the threshold breach and the savings of each compactio
 - **Cache-aware microcompact.** Use a `cache_edits`-style API to delete tool results from a cached prefix without invalidating the cache. Saves substantial prompt-cache rebuild costs at scale.
 - **Time-based microcompact.** If >2.5 hours have passed since the last assistant message, the server-side cache has likely expired anyway — pre-emptively clear old tool results before the request rather than discovering it post-hoc.
 - **Forked-agent summarizer with shared cache.** Spin up the summarizer as a sub-agent that inherits the parent's cached system prompt + tool schema. The summary call doesn't pay cache-creation costs.
-- **Auxiliary summarizer model.** Use a cheaper, faster model for summarization than for the main loop, falling back to the main model if unavailable. Be aware you may lose tool-use fidelity with a much smaller summarizer.
+- **Auxiliary summarizer model.** Use a cheaper, faster model for summarization than for the main loop, falling back to the main model if unavailable — the `compactor` role in [model-classes](../model-pool/model-classes.md#roles-the-selection-surface-for-internal-callers), resolved through the Pool like every other call. Be aware you may lose tool-use fidelity with a much smaller summarizer.
 - **TTL-aware tool-result pruning between compactions.** A separate, lighter-weight pass (`contextPruning.mode = "cache-ttl"`) trims old `toolResult` blocks before the prompt-cache TTL expires (default 5m), lowering cache-write size on the next request without changing the on-disk transcript. Auto-enabled for Anthropic profiles. Different cadence and scope from compaction; the two are complementary.
 
 ### Pre-compaction memory flush

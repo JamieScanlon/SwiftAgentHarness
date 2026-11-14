@@ -69,6 +69,13 @@ private enum SlashCommandMemorySupport {
         )
     }
 
+    /// Guards against the override being dropped (and the real memory directory being used).
+    static func isInside(_ path: String, _ directory: URL) -> Bool {
+        let file = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        let dir = directory.resolvingSymlinksInPath().path
+        return file.hasPrefix(dir + "/")
+    }
+
     static func withIsolatedMemory<T>(
         _ body: (HarnessRuntimeSession, UUID, URL, URL) async throws -> T
     ) async throws -> T {
@@ -79,34 +86,28 @@ private enum SlashCommandMemorySupport {
         let workRoot = root.appendingPathComponent("workspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workRoot, withIntermediateDirectories: true)
 
-        let previousOverride = ProcessInfo.processInfo.environment[memoryOverrideEnvKey]
-        setenv(memoryOverrideEnvKey, memoryDir.path, 1)
-        defer {
-            if let previousOverride {
-                setenv(memoryOverrideEnvKey, previousOverride, 1)
-            } else {
-                unsetenv(memoryOverrideEnvKey)
-            }
-            try? FileManager.default.removeItem(at: root)
-        }
+        defer { try? FileManager.default.removeItem(at: root) }
 
-        let container = try makeContainer()
-        let manager = makeManager(container: container)
-        let model = makeModel()
-        let conversationID = try await manager.createConversation(
-            with: model,
-            userSystemPrompt: "sys",
-            cwd: workRoot.path
-        )
-        return try await body(manager, conversationID, workRoot, memoryDir)
+        // Task-scoped rather than setenv: other suites resolve the same key concurrently.
+        return try await HarnessEnvironmentOverride.$overrides.withValue([memoryOverrideEnvKey: memoryDir.path]) {
+            let container = try makeContainer()
+            let manager = makeManager(container: container)
+            let model = makeModel()
+            let conversationID = try await manager.createConversation(
+                with: model,
+                userSystemPrompt: "sys",
+                cwd: workRoot.path
+            )
+            return try await body(manager, conversationID, workRoot, memoryDir)
+        }
     }
 }
 
-@Suite("Slash command /memory", .serialized, .timeLimit(.minutes(1)))
+@Suite("Slash command /memory", .timeLimit(.minutes(1)))
 struct SlashCommandMemoryTests {
     @Test("/memory default resolves MEMORY.md and emits surface intent")
     func memoryDefaultEmitsSurfaceIntent() async throws {
-        try await SlashCommandMemorySupport.withIsolatedMemory { manager, conversationID, _, _ in
+        try await SlashCommandMemorySupport.withIsolatedMemory { manager, conversationID, _, memoryDirectory in
             let recorder = SlashMemoryTopicRecorder()
             await manager.setConversationTopicPublisher(recorder)
             let response = try #require(
@@ -117,6 +118,7 @@ struct SlashCommandMemoryTests {
             #expect(intents[0].kind == .openFileForEdit)
             #expect(intents[0].scope == "memory")
             #expect(intents[0].filePath.hasSuffix("MEMORY.md"))
+            #expect(SlashCommandMemorySupport.isInside(intents[0].filePath, memoryDirectory))
             #expect(FileManager.default.fileExists(atPath: intents[0].filePath))
             let topicIntents = await recorder.surfaceIntents()
             #expect(topicIntents.count == 1)
@@ -137,6 +139,7 @@ struct SlashCommandMemoryTests {
             #expect(intents[0].kind == .openFileForEdit)
             #expect(intents[0].label == "topic.md")
             #expect(intents[0].filePath.hasSuffix("topic.md"))
+            #expect(SlashCommandMemorySupport.isInside(intents[0].filePath, memoryDirectory))
         }
     }
 

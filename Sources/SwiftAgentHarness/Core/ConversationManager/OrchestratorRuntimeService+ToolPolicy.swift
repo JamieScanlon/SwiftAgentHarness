@@ -260,9 +260,9 @@ extension OrchestratorRuntimeService {
         let modeCtx = await installedModePolicy.modePolicyContext(for: conversation)
         let runtimeConfiguration = AgentRuntimeTurnConfiguration(managerConfiguration: configuration)
         let groupIndex = ToolPolicyGroupIndex.build(from: allEntries)
-        return allEntries
+        let decisions = allEntries
             .map { entry in
-                RuntimeToolAvailabilitySnapshot(
+                (
                     entry: entry,
                     decision: toolSystemGateway.evaluateAvailability(
                         entry: entry,
@@ -276,7 +276,26 @@ extension OrchestratorRuntimeService {
                     )
                 )
             }
+        let resolved = DeferredToolLoading.resolve(decisions, conversation: conversation)
+        await deps.deferredTools.setCandidates(DeferredToolLoading.candidates(resolved), for: conversation.id)
+        return resolved
+            .map { RuntimeToolAvailabilitySnapshot(entry: $0.entry, decision: $0.decision) }
             .sorted { $0.entry.name < $1.entry.name }
+    }
+
+    /// Records tools `tool_search` loaded, so the conversation's next turn snapshot offers them.
+    func persistLoadedDeferredTools(_ names: [String], conversationID: UUID) async {
+        guard !names.isEmpty, var conversation = await deps.persistenceDomain.modelConversation(id: conversationID) else { return }
+        conversation.metadata = DeferredToolLoading.mergingLoadedToolNames(Set(names), into: conversation.metadata)
+        conversation.updatedAt = Date()
+        await deps.persistenceDomain.replaceConversationInRegistry(conversation)
+        if let metadata = conversation.metadata {
+            do {
+                try await deps.persistenceDomain.persistConversationMetadataToCache(conversationID: conversationID, metadata: metadata)
+            } catch {
+                deps.logger?.warning("[ToolSearch] Failed to persist loaded tools for \(conversationID): \(error)")
+            }
+        }
     }
 
     func buildToolTurnPolicySnapshot(

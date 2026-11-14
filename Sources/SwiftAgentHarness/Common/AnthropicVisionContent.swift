@@ -15,7 +15,7 @@ enum AnthropicVisionContent {
         )
         return visionImages.compactMap { image in
             guard let data = image.imageData else { return nil }
-            let mediaType = SessionBlobMIME.sniff(data: data, hint: nil)
+            let mediaType = image.mediaType ?? SessionBlobMIME.sniff(data: data, hint: nil)
             return [
                 "type": "image",
                 "source": [

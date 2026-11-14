@@ -1,0 +1,17 @@
+{
+  "providerId": "gemini",
+  "models": {
+    "gemini-3.8-flash": {
+      "features": {
+        "computer-use": {
+          "supported": true,
+          "version": "computer_use",
+          "params": {
+            "coordinates": "normalized-1000",
+            "maxEdgePx": 1440
+          }
+        }
+      }
+    }
+  }
+}

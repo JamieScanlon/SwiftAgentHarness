@@ -40,6 +40,17 @@ protocol ToolApprovalRuntimeServicing: Sendable {
         isElevated: Bool,
         requestedAt: Date
     ) async -> Bool
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool
     func toolApprovalResolution(
         conversationID: UUID,
         runID: UUID?,
@@ -52,9 +63,14 @@ protocol ToolApprovalRuntimeServicing: Sendable {
         binding: ToolCallApprovalBinding,
         route: ToolApprovalRoute
     ) async throws -> ToolApprovalResolution
+    /// The conversation a tool call's approval is asked and answered in.
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID
 }
 
 protocol OrchestratorRuntimeToolPolicyServicing: Sendable {
+    /// Skills the conversation's mode and routing policy allow, for the skill pre-filter.
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate]
+
     func allToolRegistryEntriesForOrchestration(orchestrator: SwiftAgentKitOrchestrator) async -> [ToolRegistryEntry]
     func buildToolTurnPolicySnapshot(
         allEntries: [ToolRegistryEntry],
@@ -159,6 +175,8 @@ protocol AgentRuntimeOrchestrationEmitting: Sendable {
 }
 
 protocol AgentRuntimeRunControlling: Sendable {
+    /// Records why `runID` is about to be cancelled, for its terminal reason's detail.
+    func noteCancellationReason(_ reason: String, runID: UUID) async
     func cancelGeneration(for conversationID: UUID) async
     func cancelGeneration() async
     func cancelActiveRunForAPI(conversationID: UUID, runID: UUID) async throws
@@ -249,4 +267,39 @@ protocol ConversationToolDataProviding: Sendable {
 
 protocol SubAgentOrchestratorRuntimeServicing: OrchestratorRuntimeToolPolicyServicing {
     func setupOrchestrator(with selectedModel: Model, activeConversation preferredConversation: ModelConversation?) async
+    /// Approval delivery for a conversation, so a sub-agent's approvals reach the user's surfaces.
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)?
+}
+
+extension SubAgentOrchestratorRuntimeServicing {
+    func approvalDelivery(for conversation: ModelConversation) async -> (any ExecApprovalDelivering)? {
+        nil
+    }
+}
+
+extension OrchestratorRuntimeToolPolicyServicing {
+    func skillCandidates(for conversation: ModelConversation) async -> [SkillCandidate] {
+        []
+    }
+}
+
+extension ToolApprovalRuntimeServicing {
+    func approvalConversationID(for conversationID: UUID, toolName: String) async -> UUID {
+        conversationID
+    }
+
+    /// Classifier-assisted gating is off unless the conformer implements it.
+    func classifierAutoApproval(
+        conversationID: UUID,
+        runID: UUID?,
+        call: ToolCallRequest,
+        route: ToolApprovalRoute,
+        isElevated: Bool,
+        transcript: [Message],
+        iteration: Int?,
+        modelID: UUID?,
+        lifecycleEmitter: AgentRuntimeLifecycleEmitter?
+    ) async -> Bool {
+        false
+    }
 }

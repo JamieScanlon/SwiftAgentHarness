@@ -32,14 +32,16 @@ The source tree mirrors the template's architecture one-to-one:
 | `Sources/SwiftAgentHarness/Core/ConversationManager` | [Conversation Manager](../harness-template/core/conversation-manager/README.md) |
 | `Sources/SwiftAgentHarness/Core/CommunicationLayer` | [Communication Layer](../harness-template/core/communication-layer/README.md) |
 | `Sources/SwiftAgentHarness/Backends/{Providers,Persistence,ExecutionEnvironments}` | [Providers](../harness-template/backends/providers/README.md) / [Persistence](../harness-template/backends/persistence/README.md) / [Execution Environments](../harness-template/backends/execution-environments/README.md) |
+| `Sources/SwiftAgentHarness/Backends/ComputerUse` | [Computer Use](../harness-template/backends/computer-use/README.md) |
 | `Sources/SwiftAgentHarness/Surfaces/{Interface,Triggers}` | [Interface](../harness-template/surfaces/interface/README.md) / [Triggers](../harness-template/surfaces/triggers/README.md) |
 | `Sources/SwiftAgentHarness/Cross-Cutting` | [Extensibility](../harness-template/cross-cutting/extensibility/README.md) / [Observability](../harness-template/cross-cutting/observability/README.md) |
 | `Sources/SwiftAgentHarnessProviders` | Bundled provider plugins |
 
-## The two products
+## The products
 
 - **`SwiftAgentHarness`** — the harness itself. No providers are registered by default.
 - **`SwiftAgentHarnessProviders`** — bundled provider plugins (OpenAI, Anthropic, Ollama, LM Studio, OpenRouter, and a generic OpenAI-compat adapter for any local endpoint). Link it and call `SwiftAgentHarnessProviders.bootstrap()` once at startup, or supply your own providers through `ProviderRegistry`.
+- **`SwiftAgentHarnessComputerUseMac`** — the macOS display target for computer use (ScreenCaptureKit, Accessibility, input events). macOS only; see [Computer use](./COMPUTER_USE.md#the-macos-driver).
 
 ## Key entry-point types
 

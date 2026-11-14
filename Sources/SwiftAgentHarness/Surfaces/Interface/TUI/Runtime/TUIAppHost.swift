@@ -29,6 +29,22 @@ public protocol TUIAppHost: AnyObject, Sendable {
     /// Conversation-scoped command registry for autocomplete. Returning `nil` falls back
     /// to the built-in set, which omits conversation-scoped commands and skills.
     func slashCommandRegistry() async -> SlashCommandRegistry?
+
+    /// Answers, hands back, or declines a computer-use question or handoff the surface showed.
+    func resolveComputerUseRequest(requestID: String, resolution: ComputerUseRequestResolution) async
+
+    /// The computer-use kill switch for this conversation.
+    func stopComputerUse() async
+
+    /// Takes over the screen from the computer-use specialist, or hands it back.
+    func setComputerUseTakeover(_ on: Bool) async
+
+    /// A new live-view link to a computer-use run, or `nil` when the run has ended or its target serves none.
+    /// An observer link is view-only, for someone other than the user.
+    func computerUseLiveView(lifecycleID: String, role: DisplayLiveViewRole) async -> DisplayLiveView?
+
+    /// Disconnects every observer of a computer-use run and invalidates its observer links. Returns whether it did.
+    func endComputerUseObservers(lifecycleID: String) async -> Bool
 }
 
 public extension TUIAppHost {
@@ -36,6 +52,11 @@ public extension TUIAppHost {
     func quit() async {}
     func resolveApproval(approvalID: String, actionID: String) async {}
     func slashCommandRegistry() async -> SlashCommandRegistry? { nil }
+    func resolveComputerUseRequest(requestID: String, resolution: ComputerUseRequestResolution) async {}
+    func stopComputerUse() async {}
+    func setComputerUseTakeover(_ on: Bool) async {}
+    func computerUseLiveView(lifecycleID: String, role: DisplayLiveViewRole) async -> DisplayLiveView? { nil }
+    func endComputerUseObservers(lifecycleID: String) async -> Bool { false }
 }
 
 /// A host assembled from closures.
@@ -48,19 +69,34 @@ public final class ClosureTUIAppHost: TUIAppHost {
     private let onQuit: @Sendable () async -> Void
     private let onResolveApproval: @Sendable (String, String) async -> Void
     private let onRegistry: @Sendable () async -> SlashCommandRegistry?
+    private let onResolveComputerUseRequest: @Sendable (String, ComputerUseRequestResolution) async -> Void
+    private let onStopComputerUse: @Sendable () async -> Void
+    private let onSetComputerUseTakeover: @Sendable (Bool) async -> Void
+    private let onComputerUseLiveView: @Sendable (String, DisplayLiveViewRole) async -> DisplayLiveView?
+    private let onEndComputerUseObservers: @Sendable (String) async -> Bool
 
     public init(
         submit: @escaping @Sendable (ComposerSubmission) async throws -> ChatStreamResponse?,
         cancelTurn: @escaping @Sendable () async -> Void = {},
         quit: @escaping @Sendable () async -> Void = {},
         resolveApproval: @escaping @Sendable (String, String) async -> Void = { _, _ in },
-        slashCommandRegistry: @escaping @Sendable () async -> SlashCommandRegistry? = { nil }
+        slashCommandRegistry: @escaping @Sendable () async -> SlashCommandRegistry? = { nil },
+        resolveComputerUseRequest: @escaping @Sendable (String, ComputerUseRequestResolution) async -> Void = { _, _ in },
+        stopComputerUse: @escaping @Sendable () async -> Void = {},
+        setComputerUseTakeover: @escaping @Sendable (Bool) async -> Void = { _ in },
+        computerUseLiveView: @escaping @Sendable (String, DisplayLiveViewRole) async -> DisplayLiveView? = { _, _ in nil },
+        endComputerUseObservers: @escaping @Sendable (String) async -> Bool = { _ in false }
     ) {
         self.onSubmit = submit
         self.onCancel = cancelTurn
         self.onQuit = quit
         self.onResolveApproval = resolveApproval
         self.onRegistry = slashCommandRegistry
+        self.onResolveComputerUseRequest = resolveComputerUseRequest
+        self.onStopComputerUse = stopComputerUse
+        self.onSetComputerUseTakeover = setComputerUseTakeover
+        self.onComputerUseLiveView = computerUseLiveView
+        self.onEndComputerUseObservers = endComputerUseObservers
     }
 
     public func submit(_ submission: ComposerSubmission) async throws -> ChatStreamResponse? {
@@ -77,6 +113,21 @@ public final class ClosureTUIAppHost: TUIAppHost {
     public func slashCommandRegistry() async -> SlashCommandRegistry? {
         await onRegistry()
     }
+
+    public func resolveComputerUseRequest(requestID: String, resolution: ComputerUseRequestResolution) async {
+        await onResolveComputerUseRequest(requestID, resolution)
+    }
+
+    public func stopComputerUse() async { await onStopComputerUse() }
+    public func setComputerUseTakeover(_ on: Bool) async { await onSetComputerUseTakeover(on) }
+
+    public func computerUseLiveView(lifecycleID: String, role: DisplayLiveViewRole) async -> DisplayLiveView? {
+        await onComputerUseLiveView(lifecycleID, role)
+    }
+
+    public func endComputerUseObservers(lifecycleID: String) async -> Bool {
+        await onEndComputerUseObservers(lifecycleID)
+    }
 }
 
 /// In-process host bound to the agent runtime.
@@ -92,11 +143,13 @@ public final class RuntimeTUIHost: TUIAppHost {
     private let strictTenancy: Bool
     private let ownerScope: UUID?
     private let onQuitRequested: @Sendable () async -> Void
+    private let computerUse: ComputerUseControlService?
 
     /// - Parameters:
     ///   - ownerAccountID: Owner of `conversationID`. Required under strict tenancy;
     ///     `SlashCommandDispatchService.execApprovalResolverContext(conversationID:)`
     ///     computes the same triple if the host has that service to hand.
+    ///   - computerUse: ``HarnessRuntimeSession/computerUseControl``, when computer use is installed.
     public init(
         session: AgentRuntimeSessionService,
         conversationID: UUID,
@@ -104,8 +157,10 @@ public final class RuntimeTUIHost: TUIAppHost {
         strictTenancy: Bool = false,
         ownerScope: UUID? = nil,
         harness: AgentHarnessConfiguration = AgentHarnessConfiguration.default,
+        computerUse: ComputerUseControlService? = nil,
         onQuitRequested: @escaping @Sendable () async -> Void = {}
     ) {
+        self.computerUse = computerUse
         self.session = session
         self.conversationID = conversationID
         self.harness = harness
@@ -144,5 +199,25 @@ public final class RuntimeTUIHost: TUIAppHost {
             strictTenancy: strictTenancy,
             ownerScope: ownerScope
         )
+    }
+
+    public func resolveComputerUseRequest(requestID: String, resolution: ComputerUseRequestResolution) async {
+        _ = await computerUse?.resolve(requestID: requestID, conversationID: conversationID, resolution: resolution)
+    }
+
+    public func stopComputerUse() async {
+        _ = await computerUse?.stop(conversationID: conversationID)
+    }
+
+    public func setComputerUseTakeover(_ on: Bool) async {
+        _ = try? await computerUse?.setTakeover(on, conversationID: conversationID, lifecycleID: nil)
+    }
+
+    public func computerUseLiveView(lifecycleID: String, role: DisplayLiveViewRole) async -> DisplayLiveView? {
+        try? await computerUse?.liveView(conversationID: conversationID, lifecycleID: lifecycleID, role: role)
+    }
+
+    public func endComputerUseObservers(lifecycleID: String) async -> Bool {
+        (try? await computerUse?.endObservers(conversationID: conversationID, lifecycleID: lifecycleID)) ?? false
     }
 }

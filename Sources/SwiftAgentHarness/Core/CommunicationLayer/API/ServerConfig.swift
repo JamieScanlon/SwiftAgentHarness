@@ -86,6 +86,7 @@ public struct ServerConfig {
     public var websocketInboundDedupeMaxTtlSeconds: Int = 3600
 
     /// HS256 secret for verifying inbound ``Authorization: Bearer`` harness access JWTs. Required when ``requireAuthenticatedTenantOnAPI`` is true.
+    /// Must be at least ``APIAccessTokenAuthenticationSettings/minimumHS256SecretByteCount`` UTF-8 bytes or ``APILayer`` refuses to start.
     public var apiAccessTokenHS256Secret: String? = nil
     /// Optional JWT `iss` claim enforcement for harness access tokens.
     public var apiAccessTokenIssuer: String? = nil

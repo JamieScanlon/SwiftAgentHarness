@@ -56,8 +56,12 @@ public enum ThinkingConfig: Codable, Sendable, Equatable {
 
 public struct ConversationRoutingModelOptions: Codable, Sendable, Equatable {
     public var thinkingConfig: ThinkingConfig?
+    /// Per-conversation role overrides (the conversation layer of role resolution). In a PATCH, `nil` leaves the
+    /// stored patches unchanged and an empty map clears them.
+    public var roles: [ModelRole: RoleBindingPatch]?
 
-    public init(thinkingConfig: ThinkingConfig? = nil) {
+    public init(thinkingConfig: ThinkingConfig? = nil, roles: [ModelRole: RoleBindingPatch]? = nil) {
         self.thinkingConfig = thinkingConfig
+        self.roles = roles
     }
 }
