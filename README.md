@@ -1,11 +1,35 @@
 # SwiftAgentHarness
 
-A modern implementation of an Agent Harness written in Swift.
+SwiftAgentHarness is a Swift 6 library for building production agent harnesses: the infrastructure that turns an LLM into a long-running, tool-using agent that can hold many conversations at once. It implements the [Agent Harness Best-Practice Template](./harness-template/README.md), a design guide included in this repository that draws on a study of six production open-source harnesses. The template explains why each layer exists, and this package provides a tested implementation of each one. It covers model routing and failover, a sandboxed tool system, sub-agent delegation, context compaction, persistent memory, and an HTTP/WebSocket gateway that any client (a TUI, a web app, a chat bridge) can drive over the same contract.
+
+## Overview
+
+The source tree mirrors the template's architecture: eight core layers, plus the backends they drive, the surfaces that consume them, and the cross-cutting concerns that span them.
+
+- **Core layers** (`Sources/SwiftAgentHarness/Core`)
+  - **Model Pool:** a model registry with capability queries, failover, budgets, cost accounting, and prompt-cache planning.
+  - **Tool System:** the only path to side effects. It covers filesystem and shell tools, approvals, MCP tools, skills, and slash commands.
+  - **Sub-Agent Pool:** delegation to child agents in process, over A2A, or over ACP.
+  - **Context Engine:** builds each turn's request through system-prompt assembly, history trimming, compaction, and memory injection.
+  - **Memory:** project-instruction files and memory the agent writes itself.
+  - **Agent Runtime:** the inner loop.
+  - **Conversation Manager:** persistent, branchable conversations.
+  - **Communication Layer:** a versioned HTTP control plane and WebSocket data plane, specified in [`openapi/`](./openapi/).
+- **Backends:** model providers, persistence (SwiftData catalog plus JSONL transcripts), sandboxed execution environments, and computer-use display targets.
+- **Surfaces:** client interfaces and non-interactive triggers such as schedules, webhooks, and channel messages, each labeled with how far its input can be trusted.
+
+The package ships three library products:
+
+| Product | Purpose |
+|---|---|
+| `SwiftAgentHarness` | The harness itself. It registers no providers by default. |
+| `SwiftAgentHarnessProviders` | Bundled provider plugins for OpenAI, Anthropic, Ollama, LM Studio, OpenRouter, and any OpenAI-compatible endpoint. |
+| `SwiftAgentHarnessComputerUseMac` | The macOS computer-use driver, built on ScreenCaptureKit, Accessibility, and input events. |
 
 ## Requirements
 
 - Swift 6.0 or later
-- Deployment targets: **macOS 13+**, **iOS 16+**, **visionOS 1+**
+- Deployment targets: **macOS 15+**, **iOS 18+**, **visionOS 2+**
 
 ## Dependencies
 

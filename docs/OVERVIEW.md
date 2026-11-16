@@ -54,4 +54,4 @@ See [QUICKSTART.md](./QUICKSTART.md) for the minimal wiring.
 
 ## Requirements
 
-Swift 6.0+, strict concurrency. macOS 13+, iOS 16+, visionOS 1+.
+Swift 6.0+, strict concurrency. macOS 15+, iOS 18+, visionOS 2+.
